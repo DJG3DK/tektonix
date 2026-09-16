@@ -272,6 +272,10 @@ app.post('/api/projects/:name/merge', requireControlSecret, async (req, res) => 
                 return res.status(409).json({ ok: false, reason: 'not_reviewed',
                     error: 'Not yet reviewed by the automated review service (polls every 2 minutes). Wait for it, or merge anyway.' });
             }
+            if (review.inProgress?.sha === tipSha) {
+                return res.status(409).json({ ok: false, reason: 'in_progress',
+                    error: 'The review service is reviewing this exact commit now. Wait for it, or merge anyway.' });
+            }
             if (review.lastReviewedSha !== tipSha) {
                 return res.status(409).json({ ok: false, reason: 'stale',
                     error: 'Newer commit(s) since the last review — re-review pending. Wait for it, or merge anyway.' });

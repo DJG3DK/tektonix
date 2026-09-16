@@ -280,7 +280,21 @@ function getOpenRouterKey() {
 // With per-task branches the base is `merge-base(live, branch)`, fixed at the
 // point the work forked. It cannot drift when live moves, so direction is
 // unambiguous by construction rather than by guard.
-async function detectNewCommit(project, cfg) {
+// A task branch is `agent/<task-id>` and nothing else. Anything else under
+// refs/heads/agent -- a manual backup taken before a rebase, a rename -- is
+// not work the agent is shipping, and reviewing it is worse than useless:
+// 2026-09-16, `agent/230eed5b-pre-rebase-backup` sat unmerged beside the live
+// task's branch, so every round found "new work" on whichever of the two the
+// previous round had not reviewed. Forty reviews of 3d-bot in a day, each
+// one overwriting the project's single review record, and the merge gate
+// refused the real task's READY as "stale" because `branch` had just been
+// clobbered by the backup branch's in-progress review.
+const TASK_BRANCH_RE = /^agent\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const ignoredRefs = new Set();
+
+// `prev` is the project's current review record; a parameter so a test can
+// drive this against a scratch repository without a state file.
+async function detectNewCommit(project, cfg, prev = loadState()[project]) {
   // The agent's workspace is now a git worktree of this same repository, so its
   // per-task branch is already a local ref here -- there is no clone to fetch
   // from and no `agent` remote in the picture. Branches are `agent/<task-id>`.
@@ -288,43 +302,59 @@ async function detectNewCommit(project, cfg) {
     'for-each-ref', '--sort=-committerdate', '--format=%(refname:short)',
     'refs/heads/agent',
   ])).output.trim();
-  const candidates = refsOut ? refsOut.split('\n').map((r) => r.trim()).filter(Boolean) : [];
+  const all = refsOut ? refsOut.split('\n').map((r) => r.trim()).filter(Boolean) : [];
+  const candidates = all.filter((r) => TASK_BRANCH_RE.test(r));
+  for (const r of all) {
+    if (candidates.includes(r) || ignoredRefs.has(`${project}:${r}`)) continue;
+    ignoredRefs.add(`${project}:${r}`);
+    log(`[${project}] ignoring ${r}: not a task branch (agent/<task-id>), so not a review unit`);
+  }
   if (!candidates.length) return null;
 
-  const state = loadState();
-  const prev = state[project];
   const liveHead = (await git(cfg.live, ['rev-parse', 'HEAD'])).output.trim();
 
-  for (const ref of candidates) {
-    const head = (await git(cfg.live, ['rev-parse', ref])).output.trim();
-    if (!head) continue;
-
-    // Already contained in live -- merged, or live moved past it. Reviewing
-    // that case is what produced inverted diffs, where a branch's additions
-    // read as deletions of everything live had gained since.
-    if (await isAncestor(cfg, head, liveHead)) continue;
-
-    // Same branch at the same tip as last round -> already reviewed. Keyed on
-    // branch AND sha so a re-tipped branch still counts as new work.
-    if (prev && prev.branch === ref && prev.lastReviewedSha === head) continue;
-
-    // Don't review a moving target: the agent's workspace must be clean. Only
-    // meaningful when the workspace is actually on this branch -- a stale
-    // branch from a finished task is not being written to.
-    const wsBranch = (await git(cfg.sandbox, ['rev-parse', '--abbrev-ref', 'HEAD'])).output.trim();
-    if (wsBranch === ref) {
-      const statusOut = (await git(cfg.sandbox, ['status', '--short'])).output.trim();
-      if (statusOut) return null;
+  // Exactly ONE branch per project is the review unit. The merge endpoint
+  // merges the branch the verdict names, so a verdict on any other branch is
+  // either useless (a finished task) or wrong (it would be merged instead).
+  // The workspace's own branch is the live task by construction; when the
+  // workspace is on main or detached, the newest branch live does not yet
+  // contain is the best guess. Older unmerged branches are never visited.
+  const wsBranch = (await git(cfg.sandbox, ['rev-parse', '--abbrev-ref', 'HEAD'])).output.trim();
+  let ref = candidates.includes(wsBranch) ? wsBranch : null;
+  if (!ref) {
+    for (const c of candidates) {
+      const h = (await git(cfg.live, ['rev-parse', c])).output.trim();
+      if (h && !(await isAncestor(cfg, h, liveHead))) { ref = c; break; }
     }
-
-    const base = (await git(cfg.live, ['merge-base', 'HEAD', head])).output.trim();
-    if (!base) {
-      log(`[${project}] ${ref} shares no history with live -- skipping rather than reviewing an unrelated tree`);
-      continue;
-    }
-    return { sha: head, branch: ref, base };
   }
-  return null;
+  if (!ref) return null;
+
+  const head = (await git(cfg.live, ['rev-parse', ref])).output.trim();
+  if (!head) return null;
+
+  // Already contained in live -- merged, or live moved past it. Reviewing
+  // that case is what produced inverted diffs, where a branch's additions
+  // read as deletions of everything live had gained since.
+  if (await isAncestor(cfg, head, liveHead)) return null;
+
+  // Same branch at the same tip as last round -> already reviewed. Keyed on
+  // branch AND sha so a re-tipped branch still counts as new work.
+  if (prev && prev.branch === ref && prev.lastReviewedSha === head) return null;
+
+  // Don't review a moving target: the agent's workspace must be clean. Only
+  // meaningful when the workspace is actually on this branch -- a stale
+  // branch from a finished task is not being written to.
+  if (wsBranch === ref) {
+    const statusOut = (await git(cfg.sandbox, ['status', '--short'])).output.trim();
+    if (statusOut) return null;
+  }
+
+  const base = (await git(cfg.live, ['merge-base', 'HEAD', head])).output.trim();
+  if (!base) {
+    log(`[${project}] ${ref} shares no history with live -- skipping rather than reviewing an unrelated tree`);
+    return null;
+  }
+  return { sha: head, branch: ref, base };
 }
 
 /**
@@ -1415,8 +1445,13 @@ async function reviewProject(project, cfg, routerKey) {
 
   log(`[${project}] reviewing ${branch} @ ${sha.slice(0, 12)} (base ${base.slice(0, 12)})`);
   {
+    // Only `inProgress` changes here. `branch`/`base`/`lastReviewedSha` stay
+    // the last VERDICT's until this review produces its own: writing `branch`
+    // at start left the record naming one branch while `lastReviewedSha`
+    // still belonged to another, and agent-review's merge gate read that
+    // pair as "newer commits since the last review" on the real task.
     const state = loadState();
-    state[project] = { ...state[project], branch, base, inProgress: { sha, branch, startedAt: new Date().toISOString(), step: 'setting up worktree' } };
+    state[project] = { ...state[project], inProgress: { sha, branch, base, startedAt: new Date().toISOString(), step: 'setting up worktree' } };
     saveState(state);
   }
 
@@ -1713,5 +1748,5 @@ if (require.main === module) {
 module.exports = {
   PROJECTS, setupWorktree, cleanupWorktree, runChecks, runBuildCheck, runDatabaseCheck, runSecretScan,
   materializeDependencyDirs, installChangedDependencies,
-  detectNewCommit, reviewWithSonnet, buildAgentMessage, applyBaseline,
+  detectNewCommit, reviewWithSonnet, buildAgentMessage, applyBaseline, TASK_BRANCH_RE,
 };
