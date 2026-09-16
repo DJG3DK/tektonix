@@ -24,73 +24,50 @@ connection closes, so a crashed process releases it with nobody cleaning up.
 
 <table>
 <tr>
-<td width="50%"><img src="docs/screenshots/modelspage1.png" alt="Model Configuration — build pipeline roles"></td>
-<td width="50%"><img src="docs/screenshots/settingspane1.png" alt="Settings — agent behaviour controls"></td>
+<td width="50%"><img src="frontend/src/assets/shots/models2.webp" alt="Model Configuration — build pipeline roles"></td>
+<td width="50%"><img src="frontend/src/assets/shots/analytics2.webp" alt="Analytics — spend, outcomes, review cost and runs"></td>
 </tr>
 <tr>
-<td><b>Every role is a named alias you can repin.</b> Planner, coder, investigator and
-test-writer each show live pricing and an optional pinned provider, so a swap is one dropdown
-rather than a config edit.</td>
-<td><b>The two switches that decide how much rope the agent gets.</b> Auto mode lets a task
-finish unattended; final merge review keeps a human between an approved diff and your live
-repo. Each one spells out exactly what you give up.</td>
+<td><b>Every role is a named alias you can repin.</b> Planner, coder, frontend coder,
+investigator and test-writer each show what the role needs, live pricing and an optional
+pinned provider, so a swap is one dropdown rather than a config edit.</td>
+<td><b>What it cost and what came of it.</b> Spend against your API balance, average fix
+cycles per task, outcomes split into done / stopped / escalated, the review gate's own bill
+per repo, and per-task runs from this box's router ledger — no tracing service required.</td>
 </tr>
 <tr>
-<td><img src="docs/screenshots/settingspane2.png" alt="Settings — notifications and configured projects"></td>
-<td><img src="docs/screenshots/analytics1.png" alt="Analytics — spend, outcomes and traces"></td>
+<td><img src="frontend/src/assets/shots/models3.webp" alt="Commit reviewer with probe results, and the planning chat tiers"></td>
+<td><img src="frontend/src/assets/shots/analytics3.webp" alt="Analytics — cost by category and repo, model usage by role"></td>
 </tr>
 <tr>
-<td><b>Add a project by pointing at a directory.</b> Each one becomes a live repo plus a git
-worktree the agent builds in. Telegram alerts are optional and cover task events and service
-restarts.</td>
-<td><b>What it cost and what came of it.</b> Spend against your API balance, average fix cycles
-per task, and outcomes split into done / stopped / escalated.</td>
+<td><b>Models are probed, not assumed.</b> The reviewer is marked strict — it forces one
+tool call — and its card says which models actually pass that, and when they were last
+probed, so you find out here rather than mid-task.</td>
+<td><b>Where the tokens actually went.</b> Spend by the kind of work and by repo, then
+per-role model usage with call counts, tokens, latency, cost and cache hit rate, so an
+expensive role is visible instead of inferred.</td>
 </tr>
 <tr>
-<td><img src="docs/screenshots/modelspage2.png" alt="Reviewer role with model capability probes"></td>
-<td><img src="docs/screenshots/analytics3.png" alt="Analytics — model usage by role"></td>
+<td><img src="frontend/src/assets/shots/models4.webp" alt="Classifier and support roles"></td>
+<td><img src="frontend/src/assets/shots/users2.webp" alt="Users — per-project access"></td>
 </tr>
 <tr>
-<td><b>Models are probed, not assumed.</b> Each role lists which models actually pass its
-requirements — strict tool calling, structured output — so you find out here rather than
-mid-task.</td>
-<td><b>Where the tokens actually went.</b> Per-role model usage with call counts, tokens and
-average latency, so an expensive role is visible instead of inferred.</td>
-</tr>
-<tr>
-<td><img src="docs/screenshots/settingspane3.png" alt="Settings — API keys and integrations"></td>
-<td><img src="docs/screenshots/analytics4.png" alt="Analytics — tool call reliability"></td>
-</tr>
-<tr>
-<td><b>Credentials live in .env, never the database.</b> Existing values come back masked to
-their last four characters — enough to confirm which key is installed, not enough to use it.</td>
-<td><b>Tool reliability over time.</b> Errors broken down by tool, so a model that has started
-failing a specific call shows up as a trend rather than a bad day.</td>
+<td><b>Support roles carry the badge their job requires.</b> The classifier needs structured
+output and nothing else; summarizer, vision and cartographer are plain completions, so the
+cheapest tier is genuinely fine there.</td>
+<td><b>A second person gets exactly the projects you tick.</b> Each user sees and works on
+the repos they are allowed, and nothing else; the admin has every one.</td>
 </tr>
 </table>
 
 <details>
-<summary>More: planning-chat routing, support roles, SMTP</summary>
+<summary>More: starting a planning session</summary>
 
-<img src="docs/screenshots/modelspage3.png" alt="Planning chat model tiers">
+<img src="frontend/src/assets/shots/dashboard2.webp" alt="Plan a project — repo and model route pickers">
 
-Planning chat runs three seats — a frontend model that sits ahead of an everyday model plus a
-harder one that a turn escalates into — with a classifier deciding EASY vs HARD. The escalation
-is sticky upward within a session, so a short follow-up can't quietly downgrade the model mid-plan.
-
-<img src="docs/screenshots/modelspage4.png" alt="Support roles">
-
-Support roles: summarizer, vision, cartographer and consolidator, each with the capability badges
-its job requires.
-
-<img src="docs/screenshots/analytics2.png" alt="Cost by category and by repo">
-
-Spend broken down by the kind of work (bug fix, feature, UI, performance) and by repo, so you can
-see which category is actually eating the budget.
-
-<img src="docs/screenshots/settingspane4.png" alt="SMTP settings">
-
-Outbound mail is optional and only used for password resets.
+A planning session starts from a repo and a model route. Auto detects frontend work and
+sends it to the frontend seat; the session remembers what it learns about the project
+between sessions, and **Build Now** hands the finished plan straight to a build task.
 
 </details>
 
