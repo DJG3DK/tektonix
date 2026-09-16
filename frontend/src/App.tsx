@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
-import { createTask, getMe, listPlanningSessions, listRepos, listTasks, logout, setAuthFailureHandler, uploadFiles } from "./api";
+import { createTask, getGitHubSettings, getMe, listPlanningSessions, listRepos, listTasks, logout, setAuthFailureHandler, uploadFiles } from "./api";
 import { ChangePasswordPage } from "./components/ChangePasswordPage";
 import { LandingPage } from "./components/LandingPage";
 import { LoginPage } from "./components/LoginPage";
@@ -68,11 +68,22 @@ function AuthenticatedApp({ user, onLogout, onUserChanged }: { user: CurrentUser
     }
   }, []);
 
+  // Repos come back already scoped to this user's own access (see
+  // GET /api/repos) -- a restricted account simply never sees a project
+  // it can't touch, no separate frontend filtering needed anywhere below.
+  // Not on the 8s poll: the list only changes when a project is provisioned
+  // (Settings -> Projects, or the planner's "New project…"), and both call
+  // this directly, so a page reload is no longer the only way to see it.
+  const refreshRepos = useCallback(async () => {
+    try {
+      setRepos(await listRepos());
+    } catch {
+      // Same tolerance as refreshTasks -- the dropdowns keep their last list.
+    }
+  }, []);
+
   useEffect(() => {
-    // Repos come back already scoped to this user's own access (see
-    // GET /api/repos) -- a restricted account simply never sees a project
-    // it can't touch, no separate frontend filtering needed anywhere below.
-    listRepos().then(setRepos).catch(() => {});
+    refreshRepos();
     refreshTasks();
     refreshPlanningSessions();
     const interval = setInterval(() => {
@@ -80,7 +91,20 @@ function AuthenticatedApp({ user, onLogout, onUserChanged }: { user: CurrentUser
       refreshPlanningSessions();
     }, 8000); // catches status/cost/title changes for anything other than the selected item
     return () => clearInterval(interval);
-  }, [refreshTasks, refreshPlanningSessions]);
+  }, [refreshRepos, refreshTasks, refreshPlanningSessions]);
+
+  // Whether "create a private GitHub repo" can work at all: admins only,
+  // asked once after sign-in. The endpoint is admin-only, so a restricted
+  // account never calls it -- it would be a guaranteed 403 for a checkbox
+  // that account cannot see anyway. Any failure just hides the checkbox.
+  const isAdmin = user.role === "admin";
+  const [githubReady, setGithubReady] = useState(false);
+  useEffect(() => {
+    if (!isAdmin) return;
+    getGitHubSettings()
+      .then((g) => setGithubReady(Boolean(g.env_token) || Object.keys(g.settings?.tokens ?? {}).length > 0))
+      .catch(() => setGithubReady(false));
+  }, [isAdmin]);
 
   async function handleCreate(goal: string, repo: string, budgetUsd: number, files: File[], route: "auto" | "frontend" | "general" = "auto") {
     setSubmitting(true);
@@ -212,7 +236,7 @@ function AuthenticatedApp({ user, onLogout, onUserChanged }: { user: CurrentUser
           </div>
         )}
         {view === "users" && user.role === "admin" && <UsersPanel repos={repos} />}
-        {view === "settings" && <SettingsPage user={user} onUserChanged={onUserChanged} />}
+        {view === "settings" && <SettingsPage user={user} onUserChanged={onUserChanged} onProjectsChanged={refreshRepos} />}
         {view === "github" && (
           <GitHubInboxView
             isAdmin={user.role === "admin"}
@@ -230,6 +254,9 @@ function AuthenticatedApp({ user, onLogout, onUserChanged }: { user: CurrentUser
           <PlanningView
             key={selectedPlanningSession?.session_id ?? "new"}
             repos={repos}
+            isAdmin={isAdmin}
+            githubReady={githubReady}
+            onProjectCreated={refreshRepos}
             session={selectedPlanningSession}
             onBuildNow={(goal, repo, budgetUsd, route) => handleCreate(goal, repo, budgetUsd, [], route)}
             buildError={createError}

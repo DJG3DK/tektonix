@@ -34,9 +34,11 @@ function rememberedSection(): SectionId {
 interface Props {
   user: CurrentUser;
   onUserChanged: (user: CurrentUser) => void;
+  /** A project was provisioned in the Projects wizard; App reloads its repos. */
+  onProjectsChanged?: () => void | Promise<void>;
 }
 
-export function SettingsPage({ user, onUserChanged }: Props) {
+export function SettingsPage({ user, onUserChanged, onProjectsChanged }: Props) {
   const [section, setSectionState] = useState<SectionId>(rememberedSection);
 
   function setSection(id: SectionId) {
@@ -397,7 +399,7 @@ export function SettingsPage({ user, onUserChanged }: Props) {
 
         {active.id === "projects" && user.role === "admin" && (
           <div className="settings-stack">
-            <ProjectsPanel />
+            <ProjectsPanel onChanged={onProjectsChanged} />
           </div>
         )}
 

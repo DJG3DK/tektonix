@@ -801,6 +801,35 @@ export async function provisionProject(body: {
   return res.json();
 }
 
+export interface CreateProjectResult {
+  ok: boolean;
+  name: string;
+  live: string;
+  steps: ProvisionStep[];
+  github: { full_name: string; html_url: string } | null;
+  message?: string;
+}
+
+/** Create a brand-new project: a directory under an allowed root with an
+ *  initial commit, optionally a private GitHub repo, then registered exactly
+ *  as the onboarding wizard would. Admin-only. */
+export async function createProject(body: {
+  name: string;
+  description?: string;
+  github?: boolean;
+  token_name?: string | null;
+}): Promise<CreateProjectResult> {
+  // A git push plus the cartographer's first pass over the new checkout can
+  // run past the default 60s; 3 minutes is the server's own ceiling for it.
+  const res = await apiFetch(`${API_BASE}/projects/create`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  }, 180_000);
+  if (!res.ok) throw new Error(await errText(res));
+  return res.json();
+}
+
 // --- Per-project deploy keys (agent/deploy_keys.py) -------------------------
 
 export interface DeployKeyStatus {

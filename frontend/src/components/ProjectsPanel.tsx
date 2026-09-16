@@ -9,6 +9,7 @@ import {
 } from "../api";
 import { DeployKeyCard } from "./DeployKeyCard";
 import { Icon } from "./Icon";
+import { StepList } from "./StepList";
 import "./ProjectsPanel.css";
 
 /* Onboarding a project the agent can work in.
@@ -58,7 +59,10 @@ function CandidateList({
   );
 }
 
-export function ProjectsPanel() {
+/** `onChanged` fires after a successful provision so App can reload its repo
+ *  list -- a project configured here used to reach the planner's Repo
+ *  dropdown only after a full page reload. */
+export function ProjectsPanel({ onChanged }: { onChanged?: () => void | Promise<void> } = {}) {
   const [existing, setExisting] = useState<Record<string, { live: string; sandbox: string }>>({});
   const [stage, setStage] = useState<Stage>("idle");
   const [path, setPath] = useState("");
@@ -130,7 +134,10 @@ export function ProjectsPanel() {
       setSteps(res.steps);
       setDoneMsg(res.message || (res.ok ? "Project configured." : "Provisioning failed."));
       setStage("done");
-      if (res.ok) void load();
+      if (res.ok) {
+        void load();
+        void onChanged?.();
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "provisioning failed");
       setStage("review");
@@ -266,15 +273,7 @@ export function ProjectsPanel() {
 
           {stage === "done" && (
             <div className="wiz-review">
-              <ul className="wiz-steps">
-                {steps.map((s) => (
-                  <li key={s.step} className={s.ok ? "ok" : "bad"}>
-                    <span>{s.ok ? "✓" : "✕"}</span>
-                    <strong>{s.step}</strong>
-                    <span className="wiz-step-detail">{s.detail}</span>
-                  </li>
-                ))}
-              </ul>
+              <StepList steps={steps} />
               {doneMsg && <p className="wiz-status">{doneMsg}</p>}
               {report && steps.some((s) => s.step === "config" && s.ok) && (
                 <>

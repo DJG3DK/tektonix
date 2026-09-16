@@ -1,0 +1,17 @@
+/* Moved out of ProjectsPanel.css when the planner's "New project..." door
+   started rendering the same list -- one set of rules, two callers. */
+.wiz-steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 7px; }
+.wiz-steps li { display: flex; gap: 9px; align-items: baseline; font-size: 12.5px; }
+.wiz-steps li.ok > span:first-child { color: var(--green, #22c55e); }
+.wiz-steps li.bad > span:first-child { color: var(--red, #f85149); }
+.wiz-steps strong { min-width: 104px; }
+.wiz-step-detail {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-faint);
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 768px) {
+  .wiz-steps strong { min-width: 0; }
+}

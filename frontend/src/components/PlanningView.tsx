@@ -2,12 +2,13 @@ import { useEffect, useRef, useState } from "react";
 import { useBudgetInput } from "../useDefaultTaskBudget";
 import { RouteBadge, RouteSelect, type RouteChoice } from "./RouteSelect";
 import { JumpToBottom } from "./JumpToBottom";
-import type { AttachmentEntry } from "../api";
-import { archivePlanningSession, createPlanningSession, uploadFiles } from "../api";
+import type { AttachmentEntry, CreateProjectResult } from "../api";
+import { archivePlanningSession, createPlanningSession, createProject, uploadFiles } from "../api";
 import type { PlanningLogEntry, PlanningSessionMeta } from "../types";
 import { usePlanningStream } from "../usePlanningStream";
 import { AutoGrowTextarea } from "./AutoGrowTextarea";
 import { cleanText, ModelBadge, parseToolCalls, relativeTime, renderWithColorSwatches, TOOL_ICONS } from "./ChatMessage";
+import { StepList } from "./StepList";
 import "./ChatMessage.css";
 import "./TaskView.css";
 import "./NewTaskPanel.css";
@@ -15,8 +16,42 @@ import "./MessageInput.css";
 import { StopButton } from "./StopButton";
 import "./PlanningView.css";
 
+/** The Repo dropdown's "New project…" door. A sentinel rather than a second
+ *  control because the question an admin is answering is the same one --
+ *  "which project am I planning?" -- and the answer "one that does not exist
+ *  yet" belongs in that list. It is never handed to createPlanningSession:
+ *  the form below turns it into a real project first. */
+const NEW_PROJECT = "__new__";
+
+// Mirrors the validator behind POST /api/projects/create so the rule shows up
+// as the operator types rather than as a 400 from the server: 1-64 chars of
+// [A-Za-z0-9._-], not starting with "." (a dot-directory would be invisible
+// in the allowed root and clash with .git-style names).
+const PROJECT_NAME_RE = /^[A-Za-z0-9_-][A-Za-z0-9._-]{0,63}$/;
+const PROJECT_NAME_RULE = "1–64 characters: letters, digits, '.', '_' or '-', and not starting with '.'";
+function isValidProjectName(name: string): boolean {
+  return PROJECT_NAME_RE.test(name);
+}
+
+export interface NewProjectForm {
+  name: string;
+  description: string;
+  github: boolean;
+}
+
 interface Props {
   repos: string[];
+  /** Only admins get the "New project…" door; the endpoint is admin-only and
+   *  a restricted account should not see a control that will 403 them. */
+  isAdmin: boolean;
+  /** Whether any GitHub token is configured (App asks once after sign-in).
+   *  Without one, offering "create a private GitHub repo" would just fail
+   *  late, so the checkbox is not shown at all. */
+  githubReady: boolean;
+  /** Awaited between creating the project and opening its planning session,
+   *  so App's repo list already contains the new name by the time the
+   *  session view renders it. */
+  onProjectCreated: (name: string) => Promise<void>;
   // null -- no session picked (or "+ New" in the sidebar) -- show the
   // start-a-session prompt instead of a conversation. Session list/
   // selection lives in App.tsx (mirroring how `selected: TaskMeta` works),
@@ -99,11 +134,49 @@ function PlanningEntry({ entry }: { entry: PlanningLogEntry }) {
   );
 }
 
-function NewSessionPanel({ repos, onStart, starting }: { repos: string[]; onStart: (repo: string, route: RouteChoice) => void; starting: boolean }) {
+function NewSessionPanel({
+  repos, isAdmin, githubReady, onStart, onCreateProject, starting, creating, error, onClearError, failed,
+}: {
+  repos: string[];
+  isAdmin: boolean;
+  githubReady: boolean;
+  onStart: (repo: string, route: RouteChoice) => void;
+  onCreateProject: (form: NewProjectForm, route: RouteChoice) => void;
+  starting: boolean;
+  creating: boolean;
+  /** Why the last Start failed (a rejected create or session call). */
+  error: string | null;
+  onClearError: () => void;
+  /** An `ok: false` create result: the form stays up over its step list. */
+  failed: CreateProjectResult | null;
+}) {
   // audit H-13: derive, don't mirror -- see NewTaskPanel for the full note.
   const [repo, setRepo] = useState("");
-  const effectiveRepo = repo || repos[0] || "";
+  // An admin with no projects yet lands straight on the form: the dropdown
+  // would otherwise be empty with "New project…" as its only entry, shown as
+  // selected by the browser while `repo` still said "" and no form appeared.
+  const newProject = isAdmin && (repo === NEW_PROJECT || (!repo && repos.length === 0));
+  // The sentinel is never the fallback repo, whatever `repo` holds -- a
+  // planning session for a project called "__new__" is not a thing.
+  const effectiveRepo = (repo && repo !== NEW_PROJECT ? repo : repos[0]) || "";
   const [route, setRoute] = useState<RouteChoice>("auto");
+  const [name, setName] = useState("");
+  const [description, setDescription] = useState("");
+  // Private repo on by default: the whole point of the door is a project that
+  // exists nowhere else yet, and the box only renders when a token can act.
+  const [github, setGithub] = useState(true);
+  const nameOk = isValidProjectName(name);
+  const busy = starting || creating;
+  const canStart = newProject ? nameOk : Boolean(effectiveRepo);
+
+  function submit() {
+    if (newProject) {
+      onCreateProject({ name, description: description.trim(), github: githubReady && github }, route);
+    } else {
+      onStart(effectiveRepo, route);
+    }
+  }
+
   return (
     <div className="planning-start-panel">
       <div className="planning-start-card">
@@ -115,17 +188,67 @@ function NewSessionPanel({ repos, onStart, starting }: { repos: string[]; onStar
         </p>
         <label className="field">
           <span>Repo</span>
-          <select value={effectiveRepo} onChange={(e) => setRepo(e.target.value)}>
+          <select value={newProject ? NEW_PROJECT : effectiveRepo} onChange={(e) => setRepo(e.target.value)} disabled={busy}>
             {repos.map((r) => (
               <option key={r} value={r}>
                 {r}
               </option>
             ))}
+            {isAdmin && <option value={NEW_PROJECT}>New project…</option>}
           </select>
         </label>
+        {newProject && (
+          <div className="planning-new-project">
+            <label className="field">
+              <span>Project name</span>
+              <input
+                type="text"
+                value={name}
+                autoFocus
+                spellCheck={false}
+                autoComplete="off"
+                placeholder="my-new-app"
+                aria-invalid={name.length > 0 && !nameOk}
+                onChange={(e) => setName(e.target.value)}
+                disabled={busy}
+              />
+              {name.length > 0 && !nameOk && (
+                <span className="planning-field-rule" role="note">{PROJECT_NAME_RULE}</span>
+              )}
+            </label>
+            <label className="field">
+              <span>Description (optional)</span>
+              <input
+                type="text"
+                value={description}
+                placeholder="One line for the README and the GitHub repo"
+                onChange={(e) => setDescription(e.target.value)}
+                disabled={busy}
+              />
+            </label>
+            {githubReady && (
+              <label className="planning-check">
+                <input type="checkbox" checked={github} onChange={(e) => setGithub(e.target.checked)} disabled={busy} />
+                <span>Create a private GitHub repo</span>
+              </label>
+            )}
+          </div>
+        )}
         <RouteSelect value={route} onChange={setRoute} />
-        <button className="submit-btn" disabled={!effectiveRepo || starting} onClick={() => onStart(effectiveRepo, route)}>
-          {starting ? "Starting..." : "Start Planning Session"}
+        {failed && (
+          <div className="planning-create-failed">
+            <StepList steps={failed.steps} />
+            {failed.message && <p className="planning-create-message">{failed.message}</p>}
+          </div>
+        )}
+        {error && (
+          <div className="planning-build-error" role="alert">
+            {error}
+            <button type="button" onClick={onClearError} aria-label="Dismiss error">×</button>
+          </div>
+        )}
+        <button className="submit-btn" disabled={!canStart || busy} onClick={submit}>
+          {creating ? "Creating project…" : starting ? "Starting..." : newProject ? "Create & Start Planning" : "Start Planning Session"}
         </button>
       </div>
     </div>
@@ -189,8 +312,11 @@ function OutcomeBanner({ session }: { session: PlanningSessionMeta | null }) {
   );
 }
 
-export function PlanningView({ repos, session, onBuildNow, onSessionCreated, buildError, onClearBuildError }: Props) {
+export function PlanningView({ repos, isAdmin, githubReady, onProjectCreated, session, onBuildNow, onSessionCreated, buildError, onClearBuildError }: Props) {
   const [starting, setStarting] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [startError, setStartError] = useState<string | null>(null);
+  const [createFailed, setCreateFailed] = useState<CreateProjectResult | null>(null);
   const [text, setText] = useState("");
   const [planOpen, setPlanOpen] = useState(true);
   const [archiving, setArchiving] = useState(false);
@@ -206,22 +332,62 @@ export function PlanningView({ repos, session, onBuildNow, onSessionCreated, bui
     logEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [stream.log.length]);
 
+  async function openSession(chosenRepo: string, route: RouteChoice) {
+    const { session_id } = await createPlanningSession(chosenRepo, route);
+    onSessionCreated({
+      session_id,
+      repo: chosenRepo,
+      route: route === "auto" ? undefined : route,
+      created_at: Date.now() / 1000,
+      updated_at: Date.now() / 1000,
+      title: null,
+      plan_markdown: null,
+      cost_usd: 0,
+    });
+  }
+
   async function handleStart(chosenRepo: string, route: RouteChoice = "auto") {
     setStarting(true);
+    setStartError(null);
     try {
-      const { session_id } = await createPlanningSession(chosenRepo, route);
-      onSessionCreated({
-        session_id,
-        repo: chosenRepo,
-        route: route === "auto" ? undefined : route,
-        created_at: Date.now() / 1000,
-        updated_at: Date.now() / 1000,
-        title: null,
-        plan_markdown: null,
-        cost_usd: 0,
-      });
+      await openSession(chosenRepo, route);
+    } catch (err) {
+      // Used to be try/finally only, so a failed create was an unhandled
+      // rejection and a button that just went back to "Start" -- same
+      // dead-button problem audit M-20 fixed for tasks.
+      setStartError(err instanceof Error ? err.message : "Could not start the session. Please try again.");
     } finally {
       setStarting(false);
+    }
+  }
+
+  async function handleCreateProject(form: NewProjectForm, route: RouteChoice) {
+    setCreating(true);
+    setStartError(null);
+    setCreateFailed(null);
+    try {
+      const result = await createProject({
+        name: form.name,
+        description: form.description || undefined,
+        github: form.github,
+      });
+      if (!result.ok) {
+        // The server reports which step died (git init vs. push vs. config)
+        // and leaves the form up so the operator can fix the cause and retry
+        // with what they typed still in place.
+        setCreateFailed(result);
+        return;
+      }
+      const name = result.name || form.name;
+      // App must know the repo before the session view names it, or the
+      // sidebar and Build Now would be pointing at a project the dropdowns
+      // have never heard of.
+      await onProjectCreated(name);
+      await openSession(name, route);
+    } catch (err) {
+      setStartError(err instanceof Error ? err.message : "Could not create the project. Please try again.");
+    } finally {
+      setCreating(false);
     }
   }
 
@@ -272,7 +438,20 @@ export function PlanningView({ repos, session, onBuildNow, onSessionCreated, bui
   }
 
   if (!session) {
-    return <NewSessionPanel repos={repos} onStart={handleStart} starting={starting} />;
+    return (
+      <NewSessionPanel
+        repos={repos}
+        isAdmin={isAdmin}
+        githubReady={githubReady}
+        onStart={handleStart}
+        onCreateProject={handleCreateProject}
+        starting={starting}
+        creating={creating}
+        error={startError}
+        onClearError={() => setStartError(null)}
+        failed={createFailed}
+      />
+    );
   }
 
   const repo = session.repo;

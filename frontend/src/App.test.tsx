@@ -1,7 +1,7 @@
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { user } from "./test/fixtures";
+import { session, user } from "./test/fixtures";
 
 // The gate order in App is: loading -> landing/login -> forced password
 // change -> forced TOTP enrolment -> the app. Each branch is a real state an
@@ -12,6 +12,16 @@ const listTasks = vi.fn(async () => []);
 const listPlanningSessions = vi.fn(async () => []);
 const listRepos = vi.fn(async () => ["3d-bot"]);
 const logout = vi.fn(async () => {});
+const getGitHubSettings = vi.fn();
+const createProject = vi.fn();
+const createPlanningSession = vi.fn();
+// The session view hydrates on mount; without this the bare fetch stub's
+// `{}` has no `meta` and the hook throws inside a state update.
+const getPlanningSession = vi.fn(async (id: string) => ({
+  meta: session({ session_id: id, repo: "my-app", title: null, plan_markdown: null }),
+  log: [],
+  running: false,
+}));
 let authFailureHandler: (() => void) | null = null;
 
 // Spread the real module and override only what this file drives. Listing
@@ -27,6 +37,10 @@ vi.mock("./api", async (importOriginal) => {
     listPlanningSessions: () => listPlanningSessions(),
     listRepos: () => listRepos(),
     logout: () => logout(),
+    getGitHubSettings: () => getGitHubSettings(),
+    createProject: (...a: unknown[]) => createProject(...a),
+    createPlanningSession: (...a: unknown[]) => createPlanningSession(...a),
+    getPlanningSession: (id: string) => getPlanningSession(id),
     setAuthFailureHandler: (fn: (() => void) | null) => {
       authFailureHandler = fn;
     },
@@ -38,6 +52,11 @@ import App from "./App";
 beforeEach(() => {
   authFailureHandler = null;
   getMe.mockReset();
+  listRepos.mockClear();
+  getGitHubSettings.mockReset();
+  getGitHubSettings.mockResolvedValue({ env_token: false, settings: { tokens: {} } });
+  createProject.mockReset();
+  createPlanningSession.mockReset();
   // Anything this file does not explicitly stub still reaches the real
   // wrapper, so give it a benign response rather than an unhandled rejection.
   vi.stubGlobal(
@@ -133,5 +152,51 @@ describe("App — initial load", () => {
     expect(screen.getByText(/loading/i)).toBeInTheDocument();
     settle(user());
     await waitFor(() => expect(screen.queryByText(/loading/i)).not.toBeInTheDocument());
+  });
+});
+
+describe("App — the planner's New project door", () => {
+  it("reloads the repo list after a project is created, before the session opens", async () => {
+    // Repos used to be fetched once at mount and never again, so a project
+    // created from the planner was invisible to every dropdown until a
+    // page reload.
+    getMe.mockResolvedValue(user());
+    createProject.mockResolvedValue({
+      ok: true, name: "my-app", live: "/srv/projects/my-app", github: null,
+      steps: [{ step: "init", ok: true, detail: "git init" }],
+    });
+    createPlanningSession.mockResolvedValue({ session_id: "s1", repo: "my-app" });
+    render(<App />);
+    await screen.findByRole("button", { name: /new plan/i });
+    await waitFor(() => expect(listRepos).toHaveBeenCalledTimes(1));
+
+    await userEvent.selectOptions(screen.getByLabelText(/^repo$/i), "__new__");
+    await userEvent.type(screen.getByLabelText(/project name/i), "my-app");
+    await userEvent.click(screen.getByRole("button", { name: /create & start/i }));
+
+    await waitFor(() => expect(createPlanningSession).toHaveBeenCalledWith("my-app", "auto"));
+    expect(listRepos).toHaveBeenCalledTimes(2);
+    expect(listRepos.mock.invocationCallOrder[1]).toBeGreaterThan(createProject.mock.invocationCallOrder[0]);
+    expect(listRepos.mock.invocationCallOrder[1]).toBeLessThan(createPlanningSession.mock.invocationCallOrder[0]);
+  });
+
+  it("probes GitHub settings for an admin and offers the private-repo box when a token exists", async () => {
+    getMe.mockResolvedValue(user());
+    getGitHubSettings.mockResolvedValue({ env_token: false, settings: { tokens: { main: { hint: "ghp_…", created_at: null } } } });
+    render(<App />);
+    await screen.findByRole("button", { name: /new plan/i });
+    await userEvent.selectOptions(screen.getByLabelText(/^repo$/i), "__new__");
+    expect(await screen.findByRole("checkbox", { name: /private github repo/i })).toBeChecked();
+  });
+
+  it("never probes GitHub settings for a non-admin", async () => {
+    // The endpoint is admin-only; a restricted account would only collect a
+    // 403 for a checkbox it cannot see.
+    getMe.mockResolvedValue(user({ role: "user" }));
+    render(<App />);
+    await screen.findByRole("button", { name: /new plan/i });
+    await waitFor(() => expect(listRepos).toHaveBeenCalled());
+    expect(getGitHubSettings).not.toHaveBeenCalled();
+    expect(screen.queryByRole("option", { name: /new project/i })).not.toBeInTheDocument();
   });
 });

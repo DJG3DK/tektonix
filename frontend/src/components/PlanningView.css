@@ -32,6 +32,48 @@
   margin-bottom: 16px;
 }
 
+/* "New project…" door (2026-09-16): the form that turns the sentinel into a
+   real project before a session opens on it. */
+.planning-new-project {
+  padding: 14px 14px 4px;
+  margin-bottom: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+.planning-new-project .field { margin-bottom: 12px; }
+.planning-new-project input[aria-invalid="true"] { border-color: var(--red, #f85149); }
+.planning-new-project .planning-field-rule {
+  /* Two classes on purpose: `.field span` (NewTaskPanel.css) outranks a
+     single class and would uppercase the sentence into a label. */
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 400;
+  font-size: 12px;
+  color: var(--red, #f85149);
+}
+.planning-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 12px;
+  font-size: 13px;
+  color: var(--text);
+  cursor: pointer;
+}
+.planning-check input { margin: 0; }
+.planning-create-failed {
+  margin-bottom: 16px;
+  padding: 12px 14px;
+  border: 1px solid rgba(248, 81, 73, 0.35);
+  border-radius: var(--radius-sm);
+  background: rgba(248, 81, 73, 0.06);
+}
+.planning-create-message { font-size: 13px; color: var(--text-dim); margin: 10px 0 0; }
+/* In the start card the error chip sits between the form and the button,
+   so it takes the row rather than floating inline beside a header button. */
+.planning-start-card .planning-build-error { display: flex; max-width: none; }
+
 /* ===== active session ===== */
 
 .planning-view {
