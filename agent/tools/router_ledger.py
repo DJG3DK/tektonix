@@ -1,6 +1,6 @@
 """The router's own per-call bill, read back into the budget.
 
-BudgetGuardMiddleware has to price every model call itself, because LiteLLM's
+BudgetGuardMiddleware has to price every model call itself, because the router's
 exact cost annotation does not survive OpenAI-compatible streaming (see
 budget_guard.py). An estimate computed from token counts and a rate table is
 only as good as the table: on 2026-09-08 a planning turn was ended at
@@ -8,17 +8,17 @@ only as good as the table: on 2026-09-08 a planning turn was ended at
 missing from OpenRouter's catalog, so its cache-read discount fell back to
 the full input rate and 4.9M mostly-cached prompt tokens were charged 8x.
 
-The router knows the true figure the moment each call completes: LiteLLM
+The router knows the true figure the moment each call completes: it
 asks OpenRouter for `usage.cost` on every request and hands it to
 services/llm-router/custom_callbacks.py, which appends one line per call to
-logs/routing.jsonl, keyed by the same `x-litellm-call-id` the proxy returned
+logs/routing.jsonl, keyed by the same `x-router-call-id` the proxy returned
 in the response headers. This module reads that record back. The tracker
 carries each call at its estimate until the router's line lands, then swaps
 in the billed cost -- so the running total the ceiling is enforced against
 is the router's own number for every call but the one that just finished.
 
 Best-effort by design: the file lives beside the router, so an agent talking
-to a router on another host (LLM_ROUTER_ROUTING_LOG unset and no local file)
+to a router on another host (MODEL_ROUTER_LEDGER unset and no local file)
 simply never resolves anything and the estimate stands, exactly as before.
 """
 
@@ -29,12 +29,12 @@ from pathlib import Path
 
 logger = logging.getLogger("tektonix")
 
-# Repo-relative, with an env override, like LLM_ROUTER_CONFIG_PATH in
+# Repo-relative, with an env override, like ROUTER_CONFIG_PATH in
 # model_rates.py. This file is agent/tools/router_ledger.py, so the router
 # lives three parents up.
 ROUTING_LOG_PATH = Path(
-    os.environ.get("LLM_ROUTER_ROUTING_LOG")
-    or (Path(__file__).resolve().parents[2] / "services" / "llm-router" / "logs" / "routing.jsonl")
+    os.environ.get("MODEL_ROUTER_LEDGER")
+    or (Path(__file__).resolve().parents[2] / "services" / "model-router" / "logs" / "routing.jsonl")
 )
 
 # routing.jsonl is appended forever and trimmed only past 5MB; a call we are

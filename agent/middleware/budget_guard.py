@@ -21,16 +21,16 @@ has to be listed explicitly per subagent, or that subagent spends
 completely unmetered against the shared budget.
 
 Cost is the router's own billed figure wherever it can be had, and an
-estimate only until then. LiteLLM's exact `response_metadata["token_usage"]
+estimate only until then. The router's exact `response_metadata["token_usage"]
 ["cost"]` is used when present, but it never is once a model call goes
 through `agent.astream_events(..., version="v3")`: that API always registers
 a `.messages` native projection, which forces every model call into a real
-token stream, and LiteLLM's extra cost annotation does not survive
+token stream, and the router's extra cost annotation does not survive
 OpenAI-compatible SSE streaming no matter what `stream_usage`/`stream_options`
 are set (the standard `usage_metadata` token counts come through fine with
 `stream_usage=True` on `llm_for_role()`). So each call is first charged at
 `agent/tools/model_rates.estimate_cost()` -- real token counts against live
-OpenRouter rates, cache-aware -- and tagged with the `x-litellm-call-id` the
+OpenRouter rates, cache-aware -- and tagged with the `x-router-call-id` the
 proxy returned in the response headers (`include_response_headers=True` on
 `llm_for_role()`). The router logs that same id with OpenRouter's actual
 `usage.cost` in logs/routing.jsonl as soon as the call completes, and
@@ -76,9 +76,9 @@ logger = logging.getLogger("tektonix")
 SETTLE_TIMEOUT_S = 2.0
 SETTLE_POLL_S = 0.1
 
-# LiteLLM's proxy sets this on every response, streaming included, and logs
+# The router sets this on every response, streaming included, and logs
 # the same value with the call's billed cost (custom_callbacks.py).
-CALL_ID_HEADER = "x-litellm-call-id"
+CALL_ID_HEADER = "x-router-call-id"
 
 
 class BudgetExceededError(Exception):
@@ -105,7 +105,7 @@ def call_id_of(msg) -> str | None:
 
 
 def _estimate_for(msg) -> float:
-    """Price one response message: LiteLLM's own cost if it came through,
+    """Price one response message: the router's own cost if it came through,
     else the cache-aware estimate, else a loud non-zero placeholder."""
     meta = getattr(msg, "response_metadata", None) or {}
     token_usage = meta.get("token_usage") or {}

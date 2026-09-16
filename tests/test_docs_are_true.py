@@ -37,7 +37,7 @@ def test_every_internal_link_resolves():
 def test_the_map_names_the_ports_the_code_actually_uses():
     """A wrong port sends a reader to the wrong process at the worst moment."""
     text = ARCH.read_text()
-    for port in ("8100", "4000", "4100", "4101"):
+    for port in ("8100", "4001", "4100", "4101"):
         assert port in text, f"architecture.md does not mention port {port}"
     assert "4101" in pathlib.Path("services/commit-reviewer/reviewer.js").read_text()
     assert "4100" in pathlib.Path("services/agent-review/server.js").read_text()

@@ -122,5 +122,5 @@ original is still there if the restore turns out to be the wrong dump.
 |---|---|---|
 | The projects' code | `/home/<project>` git checkouts | they have a remote; that is the backup |
 | `projects.json`, deploy keys, review secrets | on disk in the install | copy them with `.env` |
-| Router config and pins | `services/llm-router/config.yaml` | **not in git** — gitignored since the Models page rewrites it on every repin. Keep a copy; `config.example.yaml` is only a starting point |
+| Router config and pins | `services/model-router/config.yaml` | **not in git** — gitignored since the Models page rewrites it on every repin. Keep a copy; `config.example.yaml` is only a starting point |
 | Logs (`routing.jsonl`, pm2 logs) | on disk | rotate them; they are evidence, not state |

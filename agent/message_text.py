@@ -1,6 +1,6 @@
 """Extract the human-readable text from a LangChain message's `content`.
 
-`content` is not always a string. Depending on which provider LiteLLM is
+`content` is not always a string. Depending on which provider the router is
 proxying and whether the response streamed, an AIMessage's content can be a
 LIST of typed blocks -- and Kimi K3 via OpenRouter routinely returns e.g.
 

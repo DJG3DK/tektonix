@@ -35,7 +35,7 @@ from pathlib import Path
 logger = logging.getLogger("tektonix")
 
 ROUTING_LOG = Path(
-    os.environ.get("LLM_ROUTER_ROUTING_LOG")
+    os.environ.get("MODEL_ROUTER_LEDGER")
     or (Path(__file__).resolve().parents[1] / "services" / "llm-router" / "logs" / "routing.jsonl")
 )
 TOOL_EVENTS_LOG = Path(
@@ -69,8 +69,8 @@ def _role_and_model(row: dict) -> tuple[str | None, str]:
     """(role alias, underlying model) for one routing line.
 
     `alias` is the field to trust: the alias the client actually asked for,
-    recorded from litellm's model_group. The two older fields are crossed and
-    unreliable -- the callback records `requested_model` from litellm's kwargs
+    recorded from the router's alias. The two older fields are crossed and
+    unreliable -- the old writer recorded `requested_model` from its own kwargs
     (the RESOLVED deployment) and `routed_model` from the response (whatever
     the provider returned), so on most lines neither is an alias at all and
     the role is unrecoverable. Lines written before the router started

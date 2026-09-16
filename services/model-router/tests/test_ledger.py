@@ -2,7 +2,7 @@
 
 agent/tools/router_ledger.py (BudgetGuard's billed cost), agent/metrics.py
 (the whole Analytics page) and agent/tools/model_rates.py all parse this file.
-The field names were copied from what litellm's callback wrote, not chosen, so
+The field names were copied from what the previous writer used, not chosen, so
 a cutover needs no reader to change.
 """
 

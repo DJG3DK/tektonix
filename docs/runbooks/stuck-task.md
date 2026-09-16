@@ -40,7 +40,7 @@ working, that file is moving.
 cd /home/3d-agent
 python3 - <<'PY'
 import json, time, datetime
-rows = [json.loads(l) for l in open('services/llm-router/logs/routing.jsonl') if l.strip()]
+rows = [json.loads(l) for l in open('services/model-router/logs/routing.jsonl') if l.strip()]
 recent = [r for r in rows if r['ts'] >= time.time() - 600]
 f = lambda t: datetime.datetime.fromtimestamp(t, datetime.UTC).strftime('%H:%M:%S')
 print('calls in the last 10 min:', len(recent))
@@ -192,7 +192,7 @@ the whole fix — never delete the row.
 
 ## What not to do
 
-- **Do not restart `llm-router`** to unstick a task. A model call in flight
+- **Do not restart `model-router`** to unstick a task. A model call in flight
   dies with it and the task escalates. Stop the task first if you must.
 - **Do not restart `3d-agent` mid-pass** unless you accept losing that pass.
   A running task auto-resumes, a planning turn does not.

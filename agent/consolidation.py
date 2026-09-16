@@ -190,8 +190,8 @@ async def run_consolidation(config: Config, repo: str, checkpointer, store: Base
 
     model = ChatOpenAI(
         model="agent-consolidator",  # dedicated pin -- consolidation quality matters more than cost -- infrequent, small, background
-        base_url=config.litellm_base_url,
-        api_key=config.litellm_api_key,
+        base_url=config.router_base_url,
+        api_key=config.router_api_key,
         temperature=0,
         timeout=180,
     )

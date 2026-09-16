@@ -1,10 +1,10 @@
 """The deployment table, read from the operator's own config.yaml.
 
-Same file litellm used and the dashboard's Models page still writes to. That
-is the whole migration story: none. Point LITELLM_BASE_URL at this service and
+The same file the dashboard's Models page writes to. That
+is the whole migration story: none. Point MODEL_ROUTER_URL at this service and
 every pin, cost figure and fallback rule carries over untouched.
 
-Reloaded on change rather than at startup. litellm read the file once, so
+Reloaded on change rather than at startup. The old proxy read the file once, so
 repinning a model needed a router restart, and a restart kills every model call
 in flight across every service sharing the router -- the one operation
 docs/architecture.md tells you never to do while a task is running. Here the
@@ -28,9 +28,9 @@ logger = logging.getLogger("model-router")
 
 DEFAULT_CONFIG_PATH = Path(
     os.environ.get("MODEL_ROUTER_CONFIG")
-    or "/home/3d-agent/services/llm-router/config.yaml"
+    or str(Path(__file__).resolve().parents[1] / "config.yaml")
 )
-# Applies when a deployment does not set its own. litellm defaulted to none at
+# Applies when a deployment does not set its own. The old proxy defaulted to none at
 # all, which is how one upstream call ran 1802 seconds for 280 output tokens.
 DEFAULT_TIMEOUT_S = float(os.environ.get("MODEL_ROUTER_TIMEOUT_S", "600"))
 
@@ -65,7 +65,7 @@ class Table:
         """The alias itself, then its fallbacks -- each one only if it exists.
 
         A fallback naming a deployment that is not in the table is dropped
-        rather than attempted: litellm answered that case with "Available Model
+        rather than attempted: the old proxy answered that case with "Available Model
         Group Fallbacks=None" at the moment of failure, which is the worst
         possible time to find out.
         """
@@ -79,7 +79,7 @@ class Table:
 def _strip_provider_prefix(model: str) -> str:
     """`openrouter/deepseek/deepseek-v4.1-flash` -> `deepseek/deepseek-v4.1-flash`.
 
-    litellm used the leading segment to pick an SDK. We only ever talk to
+    The old proxy used the leading segment to pick an SDK. We only ever talk to
     OpenRouter, so it is noise -- but it stays in the file, because the file is
     the operator's and the Models page writes that form.
     """
@@ -115,12 +115,14 @@ def load(path: Path | None = None) -> Table:
         if not isinstance(entry, dict):
             continue
         alias = entry.get("model_name")
-        params = entry.get("litellm_params") or {}
+        # `params` since 2026-09-16; `litellm_params` is still read so an
+        # existing operator config.yaml keeps working across the upgrade.
+        params = entry.get("params") or entry.get("litellm_params") or {}
         model = params.get("model")
         if not alias or not model:
             continue
         if alias in deployments:
-            # litellm load-balances duplicate model_names across deployments.
+            # The old proxy load-balanced duplicate model_names across deployments.
             # Nothing here has relied on that since the tier pools were removed
             # (2026-09-13) -- every alias is one model. Keeping the first and
             # saying so beats silently picking one.

@@ -29,12 +29,12 @@ async def describe_image_bytes(image_bytes: bytes, mime: str, prompt: str | None
     # provider supporting that exact param for the vision model: none do, so
     # EVERY describe_image call 404'd ("No endpoints found that can handle
     # the requested parameters"). The 1500-token cap lives on the router's
-    # agent-vision deployment (litellm_params.max_tokens) instead -- enforced
+    # agent-vision deployment (the deployment's params.max_tokens) instead -- enforced
     # server-side, invisible to provider routing.
     model = ChatOpenAI(
         model="agent-vision",
-        base_url=os.environ.get("LITELLM_BASE_URL", "http://127.0.0.1:4000/v1"),
-        api_key=os.environ.get("LITELLM_API_KEY", os.environ.get("OPENAI_API_KEY", "")),
+        base_url=os.environ.get("MODEL_ROUTER_URL", "http://127.0.0.1:4000/v1"),
+        api_key=os.environ.get("MODEL_ROUTER_KEY", os.environ.get("OPENAI_API_KEY", "")),
         timeout=120,
     )
     response = await model.ainvoke([

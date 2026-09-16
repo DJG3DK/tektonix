@@ -7,11 +7,11 @@ change them). The rule: all roles on the Models page, all changeable."""
 import yaml
 
 from agent.model_config import MANAGED_ROLES, ROLE_REQUIREMENTS
-from agent.tools.model_rates import LLM_ROUTER_CONFIG_PATH
+from agent.tools.model_rates import ROUTER_CONFIG_PATH
 
 
 def _config_agent_aliases() -> set[str]:
-    cfg = yaml.safe_load(LLM_ROUTER_CONFIG_PATH.read_text())
+    cfg = yaml.safe_load(ROUTER_CONFIG_PATH.read_text())
     return {e["model_name"] for e in cfg.get("model_list", []) if str(e.get("model_name", "")).startswith("agent-")}
 
 
@@ -47,14 +47,14 @@ def test_readme_names_every_managed_role_alias():
 # ---------------------------------------------------------------------------
 
 def test_the_example_config_exists_and_parses():
-    """services/llm-router/config.yaml is gitignored -- the Models page
+    """services/model-router/config.yaml is gitignored -- the Models page
     rewrites it on every repin, so tracking it made each model change a diff
     and an upgrade could overwrite pins somebody chose. A fresh clone has only
     the example, and install.sh copies it into place, so the example is what
     must always be there and always be valid."""
     from pathlib import Path
 
-    example = Path("services/llm-router/config.example.yaml")
+    example = Path("services/model-router/config.example.yaml")
     assert example.is_file(), "install.sh copies this file; without it a fresh install has no aliases"
     parsed = yaml.safe_load(example.read_text())
     assert parsed.get("model_list"), "the example must define the aliases the agent asks for"
@@ -65,7 +65,7 @@ def test_the_example_covers_every_managed_role():
     install ships a Models page listing a seat its own router cannot serve."""
     from pathlib import Path
 
-    parsed = yaml.safe_load(Path("services/llm-router/config.example.yaml").read_text())
+    parsed = yaml.safe_load(Path("services/model-router/config.example.yaml").read_text())
     aliases = {e["model_name"] for e in parsed["model_list"]}
     missing = sorted(set(MANAGED_ROLES) - aliases)
     assert not missing, f"the example router config has no entry for: {missing}"
@@ -75,7 +75,7 @@ def test_no_api_key_is_written_into_the_example():
     """It is committed, so it has to be a shape rather than a secret."""
     from pathlib import Path
 
-    text = Path("services/llm-router/config.example.yaml").read_text()
+    text = Path("services/model-router/config.example.yaml").read_text()
     for line in text.splitlines():
         if "api_key:" in line:
             assert "os.environ/" in line, f"a literal key in a committed file: {line.strip()[:60]}"
@@ -87,10 +87,10 @@ def test_the_config_path_falls_back_to_the_example(tmp_path, monkeypatch):
     it, and import-time failures there read as a broken clone."""
     from agent.tools import model_rates
 
-    router = tmp_path / "services" / "llm-router"
+    router = tmp_path / "services" / "model-router"
     router.mkdir(parents=True)
     (router / "config.example.yaml").write_text("model_list: []\n")
-    monkeypatch.delenv("LLM_ROUTER_CONFIG_PATH", raising=False)
+    monkeypatch.delenv("MODEL_ROUTER_CONFIG_PATH", raising=False)
 
     assert model_rates._router_config_path(router).name == "config.example.yaml"
 
@@ -98,6 +98,6 @@ def test_the_config_path_falls_back_to_the_example(tmp_path, monkeypatch):
     assert model_rates._router_config_path(router).name == "config.yaml", \
         "the live file wins once it exists"
 
-    monkeypatch.setenv("LLM_ROUTER_CONFIG_PATH", str(tmp_path / "elsewhere.yaml"))
+    monkeypatch.setenv("MODEL_ROUTER_CONFIG_PATH", str(tmp_path / "elsewhere.yaml"))
     assert model_rates._router_config_path(router).name == "elsewhere.yaml", \
         "an explicit override still wins over both"

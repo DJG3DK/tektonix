@@ -188,7 +188,7 @@ def make_agent_tools(
             return f"ERROR: {path!r} is not a recognised image file ({mime or 'unknown type'})"
         # Routed through ChatOpenAI (not a raw httpx POST) so this call
         # participates in LangSmith tracing like every other agent-* pinned
-        # role -- a bare httpx call to litellm's REST endpoint is invisible
+        # role -- a bare httpx call to the router's REST endpoint is invisible
         # to LangSmith regardless of call volume, which is why vision usage
         # never showed up in the model-usage-by-role dashboard before.
         try:

@@ -39,13 +39,13 @@ OK, WARN, FAIL = "ok", "warn", "fail"
 # check says what breaks when it is wrong -- that is the part worth writing
 # down, because the failure never points here.
 AGENT_ENV = ROOT / ".env"
-ROUTER_ENV = ROOT / "services/llm-router/.env"
+ROUTER_ENV = ROOT / "services/model-router/.env"
 SHARED_ENV = ROOT / "services/shared/.env"
 PROJECTS_JSON = ROOT / "projects.json"
 KEYS_DIR = Path(os.environ.get("AGENT_KEYS_DIR") or (ROOT / "keys"))
 REVIEW_SECRETS = ROOT / "services/commit-reviewer/review-secrets"
 
-EXPECTED_PM2_APPS = ("tektonix", "llm-router", "agent-review", "commit-reviewer")
+EXPECTED_PM2_APPS = ("tektonix", "model-router", "agent-review", "commit-reviewer")
 
 
 @dataclass
@@ -129,7 +129,7 @@ def check_agent_env(report: Report) -> None:
     if not env:
         report.fail(".env unreadable or empty")
         return
-    required = ["LANGGRAPH_PG_DSN", "LITELLM_BASE_URL", "LITELLM_API_KEY",
+    required = ["LANGGRAPH_PG_DSN", "MODEL_ROUTER_URL", "MODEL_ROUTER_KEY",
                 "AUTH_SECRET_KEY", "ADMIN_EMAIL"]
     missing = [k for k in required if not env.get(k)]
     if missing:
@@ -157,10 +157,10 @@ def check_agent_env(report: Report) -> None:
 
 
 def check_router_pairing(report: Report) -> None:
-    """LITELLM_API_KEY (agent) must equal LITELLM_MASTER_KEY (router), or
+    """MODEL_ROUTER_KEY (agent) must equal MODEL_ROUTER_KEY (router), or
     every model call comes back 401 and the dashboard looks broken."""
-    agent_key = read_env(AGENT_ENV).get("LITELLM_API_KEY", "")
-    master = read_env(ROUTER_ENV).get("LITELLM_MASTER_KEY", "")
+    agent_key = read_env(AGENT_ENV).get("MODEL_ROUTER_KEY", "")
+    master = read_env(ROUTER_ENV).get("MODEL_ROUTER_KEY", "")
     if not agent_key or not master:
         report.warn("cannot compare the router key", "one side is missing")
         return
@@ -171,7 +171,7 @@ def check_router_pairing(report: Report) -> None:
                     f"agent {fingerprint(agent_key)} vs router {fingerprint(master)} -- every model call will 401")
 
     if not read_env(ROUTER_ENV).get("OPENROUTER_API_KEY"):
-        report.fail("services/llm-router/.env has no OPENROUTER_API_KEY", "the router has nothing to call")
+        report.fail("services/model-router/.env has no OPENROUTER_API_KEY", "the router has nothing to call")
 
 
 def check_review_secret(report: Report) -> None:
@@ -182,7 +182,7 @@ def check_review_secret(report: Report) -> None:
     legacy = read_env(ROUTER_ENV).get("REVIEW_CONTROL_SECRET", "")
 
     if legacy:
-        report.warn("REVIEW_CONTROL_SECRET is still in services/llm-router/.env",
+        report.warn("REVIEW_CONTROL_SECRET is still in services/model-router/.env",
                     "move it to services/shared/.env -- the model proxy should not carry it")
     if not agent_secret:
         report.fail(".env has no REVIEW_CONTROL_SECRET", "every merge will be refused")

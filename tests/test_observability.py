@@ -37,7 +37,7 @@ def test_redacts_postgres_dsn_password_but_keeps_rest_of_dsn():
     assert "localhost:5432/three_d_agent" in result
 
 
-def test_redacts_litellm_style_sk_key_even_without_a_suggestive_key_name():
+def test_redacts_sk_style_key_even_without_a_suggestive_key_name():
     result = _redact("raw key with no prefix: sk-router-fakekeyfakekeyfakekeyfakekeyfakekeyfake01")
     assert "fakekeyfakekeyfakekeyfakekeyfakekeyfake01" not in result
     assert "[REDACTED]" in result

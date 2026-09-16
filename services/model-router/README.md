@@ -1,46 +1,48 @@
 # model-router
 
-The agent's own router. Replaces the LiteLLM proxy.
+The agent's model router. Every model call from every process on the box —
+the agent, the demo bot, the mail agent, the trading gate — resolves its
+`agent-*` alias here, under its own key.
 
 ```
 ./venv/bin/uvicorn router.app:app --host 127.0.0.1 --port 4001
 pm2 start ecosystem.config.js          # the managed form
 ```
 
-## Why it exists
+## What it does
 
-Every one of the 21 deployments in `config.yaml` is `openrouter/...`, so
-LiteLLM was a proxy in front of a proxy: its headline feature, normalising many
-providers behind one OpenAI-compatible API, is a job OpenRouter already does.
-What we actually used was alias resolution, ordered fallbacks, a billed-cost
-figure and a callback writing our own ledger — about 600 lines of the 700-line
-config's worth of machinery.
+**Alias resolution with ordered fallbacks.** `config.yaml` maps a role name to
+a model and, optionally, to a chain to try when that model refuses. Retries
+happen on the SAME deployment first, and only for genuinely transient failures
+(429, 5xx, timeouts) — moving to a fallback on the first 429 throws away the
+model the operator pinned because a provider asked us to wait a moment.
 
-Two things it does that the proxy structurally could not:
+**Hot reload.** The file's mtime is checked per request and a changed table is
+swapped in between requests, so repinning from the dashboard does not require
+a restart — and a restart kills every model call in flight across every
+service sharing the router.
 
-**Hot reload.** LiteLLM reads its config once at startup, so repinning a model
-from the dashboard required restarting the router — which kills every model
-call in flight across every service sharing it. `docs/architecture.md` carries
-the warning: *"never restart this while a task is mid-call."* Here the file's
-mtime is checked per request and a changed table is swapped in between
-requests. Measured: repin applied, same PID, next call served by the new model.
+**Per-alias timeouts.** Each deployment sets its own. Without one, a coder call
+once sat upstream for 1,802 seconds and returned 280 tokens.
 
-**Per-alias timeouts.** Exactly one deployment had a timeout under LiteLLM. That
-is how a coder call sat upstream for 1,802 seconds and returned 280 tokens.
+**Billed cost, not estimates.** OpenRouter returns `usage.cost` per call; that
+figure goes straight into `logs/routing.jsonl` and is what every spend number
+in the dashboard reads. A rate table drifts the moment a provider reprices.
 
-It also runs on current FastAPI. The proxy pinned `fastapi==0.140.6` because
-litellm 1.96.2 imported a private helper that 0.140.7 removed.
+**A key per consumer.** Each caller holds its own key, recorded on the call as
+`caller`, so spend is answerable per consumer and any one key can be revoked
+without touching the others.
 
 ## Compatibility
 
-It reads the **same `services/llm-router/config.yaml`** — the operator's pins,
-the file the Models page writes. There is no migration.
+It reads `config.yaml` — the operator's pins, the same file the Models page
+writes.
 
 Four things are contracts, not choices, each with a caller that breaks:
 
 | contract | who depends on it |
 |---|---|
-| `x-litellm-call-id` response header | `budget_guard.call_id_of` matches spend on this exact name |
+| `x-router-call-id` response header | `budget_guard.call_id_of` matches spend on this exact name |
 | `metadata.agent_task_id` in the body | without it the ledger prices a call but cannot total a task |
 | `routing.jsonl` field names | `router_ledger.py`, `metrics.py`, `model_rates.py` all parse it |
 | `/health/liveliness`, unauthenticated | `agent/health.py` polls it with no key |

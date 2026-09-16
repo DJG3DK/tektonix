@@ -54,13 +54,13 @@ MANAGED_KEYS: tuple[ManagedKey, ...] = (
         "Models", ("llm-router",),
     ),
     ManagedKey(
-        "LITELLM_MASTER_KEY", ROUTER_ENV, "Router master key",
+        "MODEL_ROUTER_KEY", ROUTER_ENV, "Router master key",
         "The router's own auth. Every service that calls it presents this. Changing it requires updating "
-        "LITELLM_API_KEY below to match, or the agent and reviewer lose access.",
+        "MODEL_ROUTER_KEY below to match, or the agent and reviewer lose access.",
         "Models", ("llm-router", "tektonix", "commit-reviewer", "agent-review"),
     ),
     ManagedKey(
-        "LITELLM_API_KEY", AGENT_ENV, "Router key (agent side)",
+        "MODEL_ROUTER_KEY", AGENT_ENV, "Router key (agent side)",
         "What the agent presents to the router. Must equal the master key above.",
         "Models", ("tektonix",),
     ),

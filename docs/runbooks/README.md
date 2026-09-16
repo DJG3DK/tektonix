@@ -31,7 +31,7 @@ Before any of them, the cheapest question: **is everything up?**
 curl -s 127.0.0.1:8100/api/health | python3 -m json.tool   # the agent
 curl -s 127.0.0.1:4100/health     | python3 -m json.tool   # merge + deploy
 curl -s 127.0.0.1:4101/health     | python3 -m json.tool   # the reviewer
-curl -s -o /dev/null -w '%{http_code}\n' 127.0.0.1:4000/health/liveliness   # the router
+curl -s -o /dev/null -w '%{http_code}\n' 127.0.0.1:4001/health/liveliness   # the router
 pm2 list
 ```
 

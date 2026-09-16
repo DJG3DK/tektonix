@@ -74,7 +74,7 @@ def test_spend_includes_failed_attempts(ledger_file):
 
 
 def test_retries_are_visible(ledger_file):
-    """Under LiteLLM a fallback was only visible as a gap."""
+    """Before this router a fallback was only visible as a gap."""
     _write(ledger_file, [_row(attempt=1), _row(attempt=2), _row(attempt=3)])
     assert stats.summarise(ledger_file, 3600)["aliases"][0]["retries"] == 2
 

@@ -52,7 +52,7 @@ off, and `DATABASE_URL` aimed at the test database. All 49 suites pass on them.
 
 ## Model
 
-Routed through the shared LiteLLM router as the `agent-reviewer` alias, so the model is swappable
+Routed through the model router as the `agent-reviewer` alias, so the model is swappable
 from the agent's dashboard and its spend is rated and logged. It previously called OpenRouter
 directly with a hardcoded model id, which made it invisible three ways: absent from the model
 picker, no cost rates anywhere, and never seen by the router's logging callback.
@@ -81,8 +81,8 @@ worktrees/         ephemeral per-review checkouts (gitignored)
 
 ## Running it
 
-Runs under pm2 alongside the agent. It needs the router reachable at `LITELLM_BASE_URL`
-(default `http://127.0.0.1:4000`) and `LITELLM_MASTER_KEY` in the router's `.env`.
+Runs under pm2 alongside the agent. It needs the router reachable at `MODEL_ROUTER_URL`
+(default `http://127.0.0.1:4000`) and `MODEL_ROUTER_KEY` in the router's `.env`.
 
 **Zero npm dependencies** — `reviewer.js` is Node stdlib only, so there is no `package.json` and
 nothing to install. (The `require('argon2')` you may grep into is a string: a check command

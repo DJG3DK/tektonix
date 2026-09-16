@@ -457,7 +457,7 @@ Every model the agent uses is a named alias (`agent-planner`, `agent-coder`,
 `agent-coder-frontend`, `agent-investigator`, `agent-test-writer`, `agent-summarizer`, `agent-vision`,
 `agent-consolidator`, `agent-cartographer`, `agent-classifier`, `agent-planning-chat`,
 `agent-planning-chat-hard`, `agent-planning-chat-frontend`,
-`agent-demo-chat`, `agent-reviewer`) pinned in a shared LiteLLM router config. They're edited from the **Models** tab in the dashboard
+`agent-demo-chat`, `agent-reviewer`) pinned in the router's config. They're edited from the **Models** tab in the dashboard
 (`GET`/`POST /api/model-config`) — swapping a role's model is a dashboard action plus a router
 restart, no code change or redeploy. `agent/model_config.py` only ever touches these `agent-*`
 entries; the router config is shared with other services, and edits are a surgical text
@@ -581,8 +581,8 @@ services/                the rest of the system — one deployable each, all in 
                          because they are one piece and change together
   commit-reviewer/       the independent review gate (its own pm2 process)
   agent-review/          review dashboard + gated merge/deploy control (incl. deploy preflight)
-  llm-router/            shared LiteLLM proxy; every model call routes through it
-    auth-gate/           optional WebAuthn passkey gate for a public LiteLLM admin UI
+  model-router/          the model router; every model call routes through it,
+                         each caller holding its own key
   shared/                projects.json reader used by both node services
 scripts/                 seeding, backfills, store-key migration, the consolidation
                          runner + cron wrapper, and the forced-tool-call probe
@@ -633,17 +633,17 @@ createdb three_d_agent          # then put the DSN in .env
 docker build -t tektonix-sandbox:latest docker/agent-sandbox/
 
 # 2. The model router — everything resolves model aliases through it
-cd services/llm-router
+cd services/model-router
 python -m venv venv && venv/bin/pip install -r requirements.txt
-cp .env.example .env            # OpenRouter key + a master key you generate
-venv/bin/litellm --config config.yaml --port 4000 &
+cp .env.example .env            # OpenRouter key + a router key you generate
+venv/bin/uvicorn router.app:app --host 127.0.0.1 --port 4001 &
 
 # 3. The agent
 cd ../..
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env            # fill in real values -- see Configuration below
-                                # LITELLM_API_KEY must equal the router's master key
+                                # MODEL_ROUTER_KEY must equal the router's master key
 cp projects.example.json projects.json   # point at your own project checkouts
 uvicorn agent.server:app --host 127.0.0.1 --port 8100
 
@@ -692,7 +692,7 @@ All config is environment variables, loaded from `.env` (see `agent/config.py`).
 | Variable | Purpose |
 |---|---|
 | `LANGGRAPH_PG_DSN` | Postgres DSN for the checkpointer, store, and auth tables |
-| `LITELLM_BASE_URL` / `LITELLM_API_KEY` | The LiteLLM router this agent's model aliases are pinned in |
+| `MODEL_ROUTER_URL` / `MODEL_ROUTER_KEY` | The router this agent's model aliases are pinned in, and the key it calls with |
 | `DEFAULT_BUDGET_USD` | Seeds the default per-task cost ceiling (live dial: Settings → Runtime limits) |
 | `API_PORT` | Port `uvicorn` binds |
 | `AUTH_SECRET_KEY` | AES-GCM key encrypting TOTP 2FA secrets at rest (not sessions — those are opaque tokens). Must decode to 16/24/32 raw bytes: `python -c "import base64,secrets;print(base64.urlsafe_b64encode(secrets.token_bytes(32)).decode())"`. `openssl rand -hex 32` yields 48 bytes and will not work. Rotating it locks out every 2FA user permanently |

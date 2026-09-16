@@ -11,8 +11,8 @@ load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 @dataclass(frozen=True)
 class Config:
     pg_dsn: str
-    litellm_base_url: str
-    litellm_api_key: str
+    router_base_url: str
+    router_api_key: str
     default_budget_usd: float
     api_port: int
     langsmith_tracing: bool
@@ -32,8 +32,8 @@ class Config:
 def load_config() -> Config:
     return Config(
         pg_dsn=os.environ["LANGGRAPH_PG_DSN"],
-        litellm_base_url=os.environ["LITELLM_BASE_URL"],
-        litellm_api_key=os.environ["LITELLM_API_KEY"],
+        router_base_url=os.environ["MODEL_ROUTER_URL"],
+        router_api_key=os.environ["MODEL_ROUTER_KEY"],
         default_budget_usd=float(os.environ.get("DEFAULT_BUDGET_USD", "2.00")),
         api_port=int(os.environ.get("API_PORT", "8100")),
         langsmith_tracing=os.environ.get("LANGSMITH_TRACING", "").lower() == "true",

@@ -66,7 +66,7 @@ def _kill_process_group(proc: "asyncio.subprocess.Process") -> None:
 # include os.environ (audit C-2): agent-authored code runs through this path
 # (checks.py executes `npm run <script>`, and package.json is a file the agent
 # can rewrite), and inheriting os.environ handed it AUTH_SECRET_KEY,
-# LITELLM_API_KEY, the Postgres DSN, SMTP_PASS and LANGSMITH_API_KEY --
+# MODEL_ROUTER_KEY, the Postgres DSN, SMTP_PASS and LANGSMITH_API_KEY --
 # reproduced live: a rewritten test script printed the signing key and the DSN
 # and the gate still returned all_ok. A shell command needs PATH to find its
 # binaries and HOME for per-user tool config (git, npm); nothing else is

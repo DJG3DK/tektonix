@@ -41,8 +41,8 @@ def install(tmp_path, *, agent_env=None, router_env=None, shared_env=None,
 
     write(root / ".env", {
         "LANGGRAPH_PG_DSN": "postgresql://u:p@localhost:5432/db",
-        "LITELLM_BASE_URL": "http://127.0.0.1:4000/v1",
-        "LITELLM_API_KEY": ROUTER_KEY,
+        "MODEL_ROUTER_URL": "http://127.0.0.1:4000/v1",
+        "MODEL_ROUTER_KEY": ROUTER_KEY,
         "AUTH_SECRET_KEY": GOOD_KEY,
         "ADMIN_EMAIL": "a@e.com",
         "REVIEW_CONTROL_SECRET": REVIEW_SECRET,
@@ -50,7 +50,7 @@ def install(tmp_path, *, agent_env=None, router_env=None, shared_env=None,
     } if agent_env != "absent" else None)
     write(root / "services/llm-router/.env", {
         "OPENROUTER_API_KEY": "sk-or-" + secrets.token_hex(16),
-        "LITELLM_MASTER_KEY": ROUTER_KEY,
+        "MODEL_ROUTER_KEY": ROUTER_KEY,
         **(router_env or {}),
     } if router_env != "absent" else None)
     write(root / "services/shared/.env",
@@ -92,7 +92,7 @@ def test_a_healthy_installation_reports_no_failures(at, tmp_path):
 
 
 def test_a_router_key_mismatch_is_caught_and_explained(at, tmp_path):
-    root = install(tmp_path, router_env={"LITELLM_MASTER_KEY": "sk-" + secrets.token_hex(24)})
+    root = install(tmp_path, router_env={"MODEL_ROUTER_KEY": "sk-" + secrets.token_hex(24)})
     report = at(root)
     assert report.failed
     hit = [d for n, d in findings(report, doctor.FAIL) if "router key MISMATCH" in n]
@@ -112,7 +112,7 @@ def test_the_legacy_secret_location_is_a_warning_not_a_failure(at, tmp_path):
     root = install(tmp_path, router_env={"REVIEW_CONTROL_SECRET": REVIEW_SECRET})
     report = at(root)
     assert not report.failed
-    assert any("still in services/llm-router/.env" in n for n, _ in findings(report, doctor.WARN))
+    assert any("still in services/model-router/.env" in n for n, _ in findings(report, doctor.WARN))
 
 
 def test_a_short_auth_key_is_caught_with_the_openssl_trap_named(at, tmp_path):

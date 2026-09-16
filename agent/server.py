@@ -573,7 +573,7 @@ async def health():
     # it is a real pool with a liveness check on checkout -- so one SELECT 1
     # through it answers for the checkpointer and store too.
     payload = await health_checks.collect(
-        getattr(app.state, "auth_pool", None), config.litellm_base_url, PROJECTS,
+        getattr(app.state, "auth_pool", None), config.router_base_url, PROJECTS,
     )
     return _JSONResponse(payload, status_code=200 if payload["ok"] else 503)
 
@@ -4394,7 +4394,7 @@ def restart_model_router(user: User = Depends(require_full_auth)):
     surface that plainly rather than bundling this into save.
     """
     auth.require_admin(user)
-    result = model_config.restart_llm_router(config.litellm_base_url)
+    result = model_config.restart_llm_router(config.router_base_url)
     if not result["ok"]:
         # The message is what the dialog shows, so it has to say which half
         # failed: a router that never came back is a different problem from a

@@ -3,7 +3,7 @@
 Every assertion here corresponds to a specific caller that breaks if it
 changes. They are not style preferences:
 
-  * `x-litellm-call-id` is read by name in agent/middleware/budget_guard.py
+  * `x-router-call-id` is read by name in agent/middleware/budget_guard.py
     (CALL_ID_HEADER). Rename it and every task silently reverts from billed
     spend to estimated spend -- with no error anywhere.
   * `metadata.agent_task_id` is put in the body by deep_agent._call_metadata.
@@ -18,16 +18,18 @@ import json
 
 import pytest
 import yaml
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from router import app as app_module
+from router import ledger
 from router import upstream
 from router.config import Registry
 
 CONFIG = {
     "model_list": [
-        {"model_name": "agent-coder", "litellm_params": {"model": "openrouter/deepseek/flash"}},
-        {"model_name": "backup", "litellm_params": {"model": "openrouter/anthropic/haiku"}},
+        {"model_name": "agent-coder", "params": {"model": "openrouter/deepseek/flash"}},
+        {"model_name": "backup", "params": {"model": "openrouter/anthropic/haiku"}},
     ],
     "router_settings": {"fallbacks": [{"agent-coder": ["backup"]}]},
 }
@@ -122,15 +124,15 @@ def test_the_alias_resolves_to_its_model(client, monkeypatch):
 def test_the_call_id_header_is_the_name_budget_guard_reads(client, monkeypatch):
     _stub(monkeypatch, [(True, _ok())])
     r = _post(client)
-    assert app_module.CALL_ID_HEADER == "x-litellm-call-id"
-    assert r.headers.get("x-litellm-call-id")
+    assert app_module.CALL_ID_HEADER == "x-router-call-id"
+    assert r.headers.get("x-router-call-id")
 
 
 def test_the_ledger_line_matches_the_call_id_header(client, monkeypatch, tmp_path):
     _stub(monkeypatch, [(True, _ok())])
     r = _post(client)
     row = json.loads((tmp_path / "ledger.jsonl").read_text().splitlines()[-1])
-    assert row["call_id"] == r.headers["x-litellm-call-id"], (
+    assert row["call_id"] == r.headers["x-router-call-id"], (
         "budget_guard matches spend on exactly this pairing")
 
 
@@ -203,7 +205,7 @@ def test_the_whole_chain_failing_is_a_502_with_the_chain_named(client, monkeypat
     r = _post(client)
     assert r.status_code == 502
     assert r.json()["error"]["chain"] == ["agent-coder", "backup"]
-    assert r.headers.get("x-litellm-call-id")
+    assert r.headers.get("x-router-call-id")
 
 
 def test_one_ledger_line_per_attempt_shares_the_call_id(client, monkeypatch, tmp_path):
@@ -211,7 +213,7 @@ def test_one_ledger_line_per_attempt_shares_the_call_id(client, monkeypatch, tmp
     _stub(monkeypatch, [(False, "a"), (True, _ok())], status=400)
     r = _post(client)
     rows = [json.loads(line) for line in (tmp_path / "ledger.jsonl").read_text().splitlines()]
-    assert {row["call_id"] for row in rows} == {r.headers["x-litellm-call-id"]}
+    assert {row["call_id"] for row in rows} == {r.headers["x-router-call-id"]}
 
 
 # ---------------------------------------------------------------------------
@@ -220,7 +222,7 @@ def test_one_ledger_line_per_attempt_shares_the_call_id(client, monkeypatch, tmp
 
 def test_model_info_reports_the_openrouter_form(client):
     r = client.get("/v1/model/info", headers={"Authorization": "Bearer sk-test"})
-    names = {m["model_name"]: m["litellm_params"]["model"] for m in r.json()["data"]}
+    names = {m["model_name"]: m["params"]["model"] for m in r.json()["data"]}
     assert names["agent-coder"] == "openrouter/deepseek/flash"
 
 
@@ -306,7 +308,7 @@ def test_a_failure_midstream_is_not_retried(monkeypatch, client):
 def test_the_call_id_header_is_present_on_a_stream(client, monkeypatch):
     _stream_stub(monkeypatch, [["data: a\n"]])
     r = _stream(client)
-    assert r.headers.get("x-litellm-call-id")
+    assert r.headers.get("x-router-call-id")
 
 
 def test_a_streamed_call_is_ledgered_once(client, monkeypatch, tmp_path):
@@ -314,3 +316,63 @@ def test_a_streamed_call_is_ledgered_once(client, monkeypatch, tmp_path):
     _stream(client, metadata={"agent_task_id": "T9"})
     rows = [json.loads(line) for line in (tmp_path / "ledger.jsonl").read_text().splitlines()]
     assert len(rows) == 1 and rows[0]["task_id"] == "T9"
+
+
+# ---------------------------------------------------------------------------
+# per-consumer keys (2026-09-16, replacing a single shared master key)
+# ---------------------------------------------------------------------------
+
+def test_consumer_keys_parse_to_secret_keyed_labels():
+    """Keyed BY THE SECRET, not by label: a lookup is one dict hit rather than
+    a loop whose timing varies with how many consumers are configured."""
+    got = app_module._parse_consumer_keys("mail=sk-a, demo=sk-b ,,broken,=sk-c,label=")
+    assert got == {"sk-a": "mail", "sk-b": "demo"}
+
+
+def test_each_key_authorises_to_its_own_label(monkeypatch):
+    monkeypatch.setattr(app_module, "MASTER_KEY", "sk-master")
+    monkeypatch.setattr(app_module, "CONSUMER_KEYS", {"sk-mail": "mail", "sk-demo": "demo"})
+    assert app_module._authorise("Bearer sk-master") == "master"
+    assert app_module._authorise("Bearer sk-mail") == "mail"
+    assert app_module._authorise("Bearer sk-demo") == "demo"
+
+
+@pytest.mark.parametrize("header", [None, "", "sk-mail", "Basic sk-mail", "Bearer wrong"])
+def test_anything_else_is_rejected(monkeypatch, header):
+    monkeypatch.setattr(app_module, "MASTER_KEY", "sk-master")
+    monkeypatch.setattr(app_module, "CONSUMER_KEYS", {"sk-mail": "mail"})
+    with pytest.raises(HTTPException) as e:
+        app_module._authorise(header)
+    assert e.value.status_code == 401
+
+
+def test_revoking_one_consumer_does_not_affect_the_others(monkeypatch):
+    """The whole point of the split. Dropping one label must leave every other
+    caller working -- with a single shared key this was impossible."""
+    monkeypatch.setattr(app_module, "MASTER_KEY", "sk-master")
+    monkeypatch.setattr(app_module, "CONSUMER_KEYS", {"sk-demo": "demo"})
+    assert app_module._authorise("Bearer sk-demo") == "demo"
+    with pytest.raises(HTTPException):
+        app_module._authorise("Bearer sk-mail")
+    assert app_module._authorise("Bearer sk-master") == "master"
+
+
+def test_no_keys_configured_is_still_an_open_dev_run(monkeypatch):
+    monkeypatch.setattr(app_module, "MASTER_KEY", "")
+    monkeypatch.setattr(app_module, "CONSUMER_KEYS", {})
+    assert app_module._authorise(None) == "dev"
+
+
+def test_the_ledger_records_which_consumer_called(tmp_path):
+    """Attribution is the reason the label exists: spend has to be answerable
+    per consumer, not just per role."""
+    path = tmp_path / "routing.jsonl"
+    ledger.record(call_id="c1", alias="mail-chat", model="m", caller="mail", path=path)
+    entry = json.loads(path.read_text().splitlines()[0])
+    assert entry["caller"] == "mail"
+
+
+def test_caller_is_optional_so_old_readers_are_unaffected(tmp_path):
+    path = tmp_path / "routing.jsonl"
+    ledger.record(call_id="c1", alias="a", model="m", path=path)
+    assert json.loads(path.read_text())["caller"] is None

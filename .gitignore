@@ -12,9 +12,9 @@ __pycache__/
 # The router's live config. The Models page rewrites it on every repin, so
 # tracking it turned every model change into a diff the operator had to
 # explain -- and an upgrade could overwrite the pins they chose. The shape is
-# tracked instead, as services/llm-router/config.example.yaml, which
+# tracked instead, as services/model-router/config.example.yaml, which
 # install.sh copies here on a fresh install.
-services/llm-router/config.yaml
+services/model-router/config.yaml
 
 # Local run artifacts
 *.log
@@ -76,5 +76,9 @@ backups/
 /dist/
 
 # The model router's own virtualenv. Its whole point is a dependency set that
-# is NOT the agent's (current FastAPI, no litellm), so it gets its own.
+# is NOT the agent's, so it gets its own.
 services/model-router/venv/
+
+# The router's own secrets and its billed-cost ledger.
+services/model-router/.env
+services/model-router/logs/

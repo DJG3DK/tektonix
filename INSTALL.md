@@ -74,7 +74,7 @@ overwrites an existing `.env` or `projects.json`.
 
 ```bash
 # the model router first — everything resolves model aliases through it
-services/llm-router/venv/bin/litellm --config services/llm-router/config.yaml --port 4000
+services/model-router/venv/bin/uvicorn router.app:app --host 127.0.0.1 --port 4001
 
 # then the agent (serves the dashboard itself; there is no separate frontend process)
 .venv/bin/uvicorn agent.server:app --host 127.0.0.1 --port 8100
@@ -273,7 +273,7 @@ Everything lives in `.env` (see `.env.example` for the full list).
 | Variable | Notes |
 |---|---|
 | `LANGGRAPH_PG_DSN` | Postgres DSN for checkpoints, memory and users |
-| `LITELLM_BASE_URL` / `LITELLM_API_KEY` | The router. `LITELLM_API_KEY` **must equal** `LITELLM_MASTER_KEY` in `services/llm-router/.env` |
+| `MODEL_ROUTER_URL` / `MODEL_ROUTER_KEY` | The router. `MODEL_ROUTER_KEY` **must equal** `MODEL_ROUTER_KEY` in `services/llm-router/.env` |
 | `AUTH_SECRET_KEY` | Encrypts TOTP secrets at rest. **Must decode to 16, 24 or 32 raw bytes.** `openssl rand -hex 32` produces 48 bytes and will *not* work — use `python -c "import base64,secrets;print(base64.urlsafe_b64encode(secrets.token_bytes(32)).decode())"`. Rotating it locks out every 2FA user permanently |
 | `AGENT_PROJECT_ROOTS` | Colon-separated roots projects may be onboarded from |
 | `AGENT_SANDBOX_ROOT` | Where per-project worktrees are created |
@@ -292,14 +292,14 @@ pairs that must agree, and those are marked.
 3d-agent/
 ├── .env                                   the AGENT's own secrets            600
 │     LANGGRAPH_PG_DSN   AUTH_SECRET_KEY   SMTP_*   ADMIN_EMAIL
-│     LITELLM_API_KEY ─────────────────────────┐  must match ──┐
+│     MODEL_ROUTER_KEY ─────────────────────────┐  must match ──┐
 │     REVIEW_CONTROL_SECRET ───────────┐       │               │
 │     GITHUB_TOKEN (optional fallback) │       │               │
 │                                      │       │               │
 ├── services/                          │       │               │
 │   ├── llm-router/.env                │       │               │   600
 │   │     OPENROUTER_API_KEY           │       │               │
-│   │     LITELLM_MASTER_KEY ──────────┼───────┘               │
+│   │     MODEL_ROUTER_KEY ──────────┼───────┘               │
 │   │     GATE_RP_ID / GATE_ORIGIN     │   (the passkey gate)  │
 │   │                                  │                       │
 │   ├── shared/.env                    │                       │   600
@@ -509,8 +509,8 @@ Each returns 503 and names the failing dependency. For a specific symptom, see
 **The first tool call of the first task fails.** The sandbox image isn't
 built: `docker build -t tektonix-sandbox:latest docker/agent-sandbox/`
 
-**Every model call 401s.** `LITELLM_API_KEY` in `.env` doesn't match
-`LITELLM_MASTER_KEY` in `services/llm-router/.env`.
+**Every model call 401s.** `MODEL_ROUTER_KEY` in `.env` doesn't match
+`MODEL_ROUTER_KEY` in `services/llm-router/.env`.
 
 **The app won't start, complaining about the auth key.** `AUTH_SECRET_KEY`
 doesn't decode to 16/24/32 raw bytes — see §6.

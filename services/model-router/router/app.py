@@ -9,7 +9,7 @@ Deliberately small. Three routes are all anything in this deployment calls:
 The compatibility contract is not a matter of taste -- each item below is
 something that breaks a specific caller if it changes:
 
-  * `x-litellm-call-id` on every response. agent/middleware/budget_guard.py
+  * `x-router-call-id` on every response. agent/middleware/budget_guard.py
     reads that exact header name (CALL_ID_HEADER) to match a model call to its
     billed cost in the ledger. Renaming it silently reverts every task to
     estimated spend.
@@ -40,10 +40,36 @@ from router.config import Registry
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("model-router")
 
-MASTER_KEY = os.environ.get("LITELLM_MASTER_KEY") or os.environ.get("MODEL_ROUTER_KEY") or ""
+MASTER_KEY = os.environ.get("MODEL_ROUTER_KEY") or ""
+
+
+def _parse_consumer_keys(raw: str) -> dict[str, str]:
+    """`label=key,label=key` -> {key: label}.
+
+    One key per caller, replacing a single shared master key. Without
+    it every consumer on the box -- the mail agent, the demo bot, the trading
+    gate -- would have to hold a credential that can call any alias, and
+    revoking one would mean rotating all of them.
+
+    Keyed BY THE SECRET so a lookup is one dict hit and never a loop that
+    leaks timing per configured label.
+    """
+    out: dict[str, str] = {}
+    for part in raw.split(","):
+        part = part.strip()
+        if not part or "=" not in part:
+            continue
+        label, key = part.split("=", 1)
+        label, key = label.strip(), key.strip()
+        if label and key:
+            out[key] = label
+    return out
+
+
+CONSUMER_KEYS = _parse_consumer_keys(os.environ.get("MODEL_ROUTER_CONSUMER_KEYS", ""))
 OPENROUTER_KEY = os.environ.get("OPENROUTER_API_KEY", "")
-# Kept as the literal litellm spelling: budget_guard matches on it.
-CALL_ID_HEADER = "x-litellm-call-id"
+# budget_guard matches on this by name (CALL_ID_HEADER); the two move together.
+CALL_ID_HEADER = "x-router-call-id"
 # Extra tries on the SAME deployment before falling back, for transient
 # failures only (see upstream.is_transient).
 RETRIES_PER_DEPLOYMENT = int(os.environ.get("MODEL_ROUTER_RETRIES", "2"))
@@ -68,13 +94,26 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Tektonix model router", lifespan=lifespan)
 
 
-def _authorise(authorization: str | None) -> None:
-    if not MASTER_KEY:
-        return  # unset means an unguarded local dev run, same as the proxy
+def _authorise(authorization: str | None) -> str:
+    """Returns the CALLER LABEL, which the ledger records.
+
+    Unset master key still means an unguarded local dev run. A consumer key
+    authorises exactly the same surface as the master key today -- the point
+    of the split is attribution and independent revocation, not a narrower
+    grant. Per-alias scoping can hang off the same label later if it is ever
+    wanted.
+    """
+    if not MASTER_KEY and not CONSUMER_KEYS:
+        return "dev"
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(401, "missing bearer token")
-    if authorization.split(" ", 1)[1].strip() != MASTER_KEY:
-        raise HTTPException(401, "invalid token")
+    token = authorization.split(" ", 1)[1].strip()
+    if MASTER_KEY and token == MASTER_KEY:
+        return "master"
+    label = CONSUMER_KEYS.get(token)
+    if label:
+        return label
+    raise HTTPException(401, "invalid token")
 
 
 @app.get("/health/liveliness")
@@ -102,7 +141,7 @@ async def model_info(authorization: str | None = Header(default=None)):
     t = registry.table
     return {"data": [
         {"model_name": d.alias,
-         "litellm_params": {"model": f"openrouter/{d.model}"},
+         "params": {"model": f"openrouter/{d.model}"},
          "model_info": {"input_cost_per_token": d.input_cost_per_token,
                         "output_cost_per_token": d.output_cost_per_token,
                         "timeout_s": d.timeout_s}}
@@ -132,7 +171,7 @@ async def models(authorization: str | None = Header(default=None)):
 
 @app.post("/v1/chat/completions")
 async def chat_completions(request: Request, authorization: str | None = Header(default=None)):
-    _authorise(authorization)
+    caller = _authorise(authorization)
     body = await request.json()
     alias = body.get("model")
     if not alias:
@@ -149,7 +188,7 @@ async def chat_completions(request: Request, authorization: str | None = Header(
     client: httpx.AsyncClient = request.app.state.http
 
     if body.get("stream"):
-        return await _streamed(client, table, alias, body, call_id, task_id, session_id)
+        return await _streamed(client, table, alias, body, call_id, task_id, session_id, caller)
 
     # Buffered: walk the fallback chain, retrying TRANSIENT failures on each
     # deployment before moving on. Moving to a fallback on the first 429 throws
@@ -167,6 +206,7 @@ async def chat_completions(request: Request, authorization: str | None = Header(
             att.alias = name
             last = att
             ledger.record(
+                caller=caller,
                 call_id=call_id, alias=alias, model=att.usage.model or dep.model,
                 prompt_tokens=att.usage.prompt_tokens, completion_tokens=att.usage.completion_tokens,
                 cached_tokens=att.usage.cached_tokens, cost=att.usage.cost,
@@ -196,7 +236,7 @@ async def chat_completions(request: Request, authorization: str | None = Header(
                         status_code=502, headers={CALL_ID_HEADER: call_id})
 
 
-async def _streamed(client, table, alias, body, call_id, task_id, session_id):
+async def _streamed(client, table, alias, body, call_id, task_id, session_id, caller):
     """Streaming, with the fallback chain available up to the first byte.
 
     The rule is not "streams cannot fall back" -- it is that a response becomes
@@ -230,7 +270,7 @@ async def _streamed(client, table, alias, body, call_id, task_id, session_id):
                         yield chunk
                 except Exception as e:  # noqa: BLE001
                     status = getattr(getattr(e, "response", None), "status_code", None)
-                    ledger.record(call_id=call_id, alias=alias, model=dep.model,
+                    ledger.record(caller=caller, call_id=call_id, alias=alias, model=dep.model,
                                   duration_s=time.monotonic() - t0, task_id=task_id,
                                   session_id=session_id, attempt=attempt_no, error=True,
                                   error_detail=f"{type(e).__name__}: {str(e)[:300]}")
@@ -248,6 +288,7 @@ async def _streamed(client, table, alias, body, call_id, task_id, session_id):
                         await asyncio.sleep(BACKOFF_S * (2 ** retry) * (0.5 + random.random()))
                     continue
                 ledger.record(
+                    caller=caller,
                     call_id=call_id, alias=alias, model=usage.model or dep.model,
                     prompt_tokens=usage.prompt_tokens, completion_tokens=usage.completion_tokens,
                     cached_tokens=usage.cached_tokens, cost=usage.cost,

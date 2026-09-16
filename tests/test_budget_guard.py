@@ -36,7 +36,7 @@ def test_tracker_seeds_starting_cost_for_resume():
     assert tracker.total_cost == 2.5
 
 
-async def test_prefers_litellm_reported_cost_when_present():
+async def test_prefers_router_reported_cost_when_present():
     tracker = BudgetTracker(budget_usd=10.0)
     mw = BudgetGuardMiddleware(tracker)
     msg = _msg({"token_usage": {"cost": 0.0123}})
@@ -47,12 +47,12 @@ async def test_prefers_litellm_reported_cost_when_present():
     assert tracker.total_cost == 0.0123
 
 
-async def test_falls_back_to_estimate_cost_when_litellm_cost_absent(monkeypatch):
+async def test_falls_back_to_estimate_cost_when_router_cost_absent(monkeypatch):
     tracker = BudgetTracker(budget_usd=10.0)
     mw = BudgetGuardMiddleware(tracker)
     # No "cost" key in token_usage (or no token_usage at all) -- the real
     # shape once work.py moved to astream_events(version="v3") streaming,
-    # where LiteLLM's cost annotation doesn't survive.
+    # where the router's cost annotation doesn't survive.
     msg = _msg(
         {"model_name": "z-ai/glm-5.2"},
         usage_metadata={"input_tokens": 1000, "output_tokens": 200},
@@ -227,17 +227,17 @@ class FakeLedger:
 
 
 def _streamed(call_id: str, input_tokens: int, output_tokens: int, cache_read: int = 0) -> AIMessage:
-    """The real shape of a streamed call: usage counts, no LiteLLM cost, and
+    """The real shape of a streamed call: usage counts, no router cost, and
     the proxy's call id in the response headers."""
     return _msg(
-        {"model_name": "z-ai/glm-5.2", "headers": {"x-litellm-call-id": call_id}},
+        {"model_name": "z-ai/glm-5.2", "headers": {"x-router-call-id": call_id}},
         usage_metadata={"input_tokens": input_tokens, "output_tokens": output_tokens,
                         "input_token_details": {"cache_read": cache_read}},
     )
 
 
 def test_call_id_is_read_case_insensitively_from_response_headers():
-    assert call_id_of(_msg({"headers": {"X-LiteLLM-Call-Id": "abc"}})) == "abc"
+    assert call_id_of(_msg({"headers": {"X-Router-Call-Id": "abc"}})) == "abc"
     assert call_id_of(_msg({"headers": {}})) is None
     assert call_id_of(_msg({})) is None
 

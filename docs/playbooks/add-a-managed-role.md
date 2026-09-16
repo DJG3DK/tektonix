@@ -26,7 +26,7 @@ AssertionError: aliases invisible on the Models page: ['agent-your-role']
 
 ## The edits
 
-1. **`services/llm-router/config.yaml`** — a `model_list` entry whose
+1. **`services/model-router/config.yaml`** — a `model_list` entry whose
    `model_name` is `agent-<role>`. Copy the nearest existing seat, including
    its `model_info` costs: the analytics page bills from those numbers, and a
    missing cost silently reports the role as free. Read this file fresh; the

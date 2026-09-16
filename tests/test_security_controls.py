@@ -21,7 +21,7 @@ from agent.tools.shell import _safe_base_env, run_shell
 
 SECRETS = {
     "OPENROUTER_API_KEY": "sk-or-v1-should-never-leak",
-    "LITELLM_MASTER_KEY": "sk-master-should-never-leak",
+    "MODEL_ROUTER_KEY": "sk-master-should-never-leak",
     "AUTH_SECRET_KEY": "auth-should-never-leak",
     "LANGGRAPH_PG_DSN": "postgresql://user:password@host/db",
     "REVIEW_CONTROL_SECRET": "control-should-never-leak",

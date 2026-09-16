@@ -142,7 +142,7 @@ def test_a_missing_sandbox_image_names_the_build_script(all_good):
 
 
 def test_the_router_probe_uses_the_server_root_not_the_api_path():
-    """LITELLM_BASE_URL ends in /v1; LiteLLM serves liveness at the root. The
+    """MODEL_ROUTER_URL ends in /v1; the router serves liveness at the root. The
     first live run of this check returned 404 for exactly this reason."""
     assert health.router_liveness_url("http://127.0.0.1:4000/v1") == "http://127.0.0.1:4000/health/liveliness"
     assert health.router_liveness_url("http://127.0.0.1:4000/") == "http://127.0.0.1:4000/health/liveliness"

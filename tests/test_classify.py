@@ -8,8 +8,8 @@ from agent.classify import TASK_CATEGORIES, TaskClassification, classify_task
 
 
 class _FakeConfig:
-    litellm_base_url = "http://127.0.0.1:4000/v1"
-    litellm_api_key = "test-key"
+    router_base_url = "http://127.0.0.1:4000/v1"
+    router_api_key = "test-key"
 
 
 def _fake_chat_openai_class(result=None, exc=None):

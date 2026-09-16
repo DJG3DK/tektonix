@@ -283,7 +283,7 @@ async def run_shell_sandboxed(
         # container user could not write to it. Network stays on the default
         # bridge (a dedicated network blocking link-local/RFC1918 and binding
         # llm-router to 127.0.0.1 is tracked as residual infra) -- but
-        # LITELLM_MASTER_KEY is not passed in, so the reachable router surface is
+        # MODEL_ROUTER_KEY is not passed in, so the reachable router surface is
         # authenticated, not open.
         "--pids-limit", SANDBOX_PIDS_LIMIT,
         "--cap-drop", "ALL",

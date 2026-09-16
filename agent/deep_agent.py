@@ -735,12 +735,12 @@ def interrupt_on_for(auto_approve_commands: bool, repo_root: str | None = None) 
 def llm_for_role(config: Config, model_name: str, reasoning_effort: str | None = None,
                  timeout: int | None = None, callbacks: list | None = None,
                  task_id: str | None = None, session_id: str | None = None) -> ChatOpenAI:
-    # model_name is a bare LiteLLM profile alias, resolved entirely by the
+    # model_name is a bare router alias, resolved entirely by the
     # proxy, not by anything in this process.
     #
     # stream_usage=True is not optional: ChatOpenAI only auto-enables it when
     # talking to the default OpenAI base_url/client, which this custom
-    # litellm_base_url never matches. Every model call here goes through
+    # router_base_url never matches. Every model call here goes through
     # agent.astream_events(..., version="v3"), so it's invoked as a real
     # token stream rather than a single ainvoke -- and without stream_usage,
     # a streamed OpenAI-compatible response never includes
@@ -764,7 +764,7 @@ def llm_for_role(config: Config, model_name: str, reasoning_effort: str | None =
     # 2026-08-23 that agent-planning-chat (gemini-3.7-flash) called with
     # reasoning_effort="high" routinely blows past 180s -- OpenRouter itself
     # aborts the still-in-flight call ("OpenrouterException - The operation
-    # was aborted"), which litellm then surfaces to this client as an HTTP
+    # was aborted"), which the router then surfaces to this client as an HTTP
     # 400, which openai's SDK in turn raises as BadRequestError. A "high"
     # reasoning budget on a planning turn isn't on the same latency budget as
     # an interactive coordinator call, so a role that opts into high
@@ -772,8 +772,8 @@ def llm_for_role(config: Config, model_name: str, reasoning_effort: str | None =
     # site rather than eating spurious aborts on real, in-progress work.
     return ChatOpenAI(
         model=model_name,
-        base_url=config.litellm_base_url,
-        api_key=config.litellm_api_key,
+        base_url=config.router_base_url,
+        api_key=config.router_api_key,
         temperature=0,
         timeout=timeout if timeout is not None else _rs.as_int("model_call_timeout_s"),
         # ONE retry, not the openai SDK's silent default of two.
@@ -821,7 +821,7 @@ def llm_for_role(config: Config, model_name: str, reasoning_effort: str | None =
         # summarizer) still streams, because that path is cheap and harmless.
         # stream_usage above stays for exactly those calls.
         disable_streaming="tool_calling",
-        # include_response_headers: the proxy's x-litellm-call-id lands in
+        # include_response_headers: the proxy's x-router-call-id lands in
         # response_metadata["headers"], which is how BudgetGuardMiddleware
         # matches a call to the router's own billed cost for it
         # (agent/tools/router_ledger.py). Streaming included: langchain-openai
@@ -842,7 +842,7 @@ def llm_for_role(config: Config, model_name: str, reasoning_effort: str | None =
         # callback sees -- the same channel the router's routing_decision
         # already travels on -- so one line of routing.jsonl can say which
         # task spent the money. Without it the ledger can price a CALL (by
-        # x-litellm-call-id) but cannot total a TASK, which is why a restart
+        # x-router-call-id) but cannot total a TASK, which is why a restart
         # reset the displayed spend to the last checkpoint and lost everything
         # the killed pass had spent: real money, invisible.
         extra_body=_call_metadata(task_id, session_id),

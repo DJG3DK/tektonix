@@ -23,7 +23,7 @@ def test_load_config_does_not_require_the_retired_model_env_vars(monkeypatch):
     for key in ("MODEL_PLAN", "MODEL_EXECUTE", "MODEL_REFLECT"):
         monkeypatch.delenv(key, raising=False)
     cfg = load_config()
-    assert cfg.litellm_api_key
+    assert cfg.router_api_key
     assert not hasattr(cfg, "model_plan")
 
 

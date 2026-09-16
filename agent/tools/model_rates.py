@@ -2,12 +2,12 @@
 every model the LLM router's own config.yaml pins, with the config's own
 model_info rates as the fallback.
 
-Only used as a fallback for BudgetGuardMiddleware's cost read. LiteLLM's own
+Only used as a fallback for BudgetGuardMiddleware's cost read. The router's own
 computed response_metadata["token_usage"]["cost"] is preferred when present
 (it's the proxy's own exact billed cost), but that field is absent entirely
 on every call that goes through agent.astream_events(..., version="v3") --
 OpenAI-compatible streaming responses carry standard token counts
-(usage_metadata) but not LiteLLM's extra cost annotation, regardless of
+(usage_metadata) but not the router's extra cost annotation, regardless of
 stream_usage/stream_options. This computes cost from
 usage_metadata.input_tokens/output_tokens against this table instead.
 
@@ -56,18 +56,18 @@ def _router_config_path(router: Path | None = None) -> Path:
     managed-role tests all still need SOMETHING to read, or a checkout with no
     install becomes a pile of import errors. The example is that something.
     """
-    override = os.environ.get("LLM_ROUTER_CONFIG_PATH")
+    override = os.environ.get("MODEL_ROUTER_CONFIG_PATH")
     if override:
         return Path(override)
     # `router` is a parameter only so a test can ask the question about a
     # directory it built, rather than monkeypatching this module's __file__ --
     # which leaks into every later test through the module-level constant.
-    router = router or Path(__file__).resolve().parents[2] / "services" / "llm-router"
+    router = router or Path(__file__).resolve().parents[2] / "services" / "model-router"
     live = router / "config.yaml"
     return live if live.is_file() else router / "config.example.yaml"
 
 
-LLM_ROUTER_CONFIG_PATH = _router_config_path()
+ROUTER_CONFIG_PATH = _router_config_path()
 OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models"
 OPENROUTER_ENDPOINTS_URL = "https://openrouter.ai/api/v1/models/{model_id}/endpoints"
 
@@ -93,7 +93,7 @@ def _config_changed() -> bool:
     if _rates_config_mtime is None:
         return False
     try:
-        return LLM_ROUTER_CONFIG_PATH.stat().st_mtime != _rates_config_mtime
+        return ROUTER_CONFIG_PATH.stat().st_mtime != _rates_config_mtime
     except OSError:
         return False
 
@@ -103,7 +103,7 @@ def _table() -> dict[str, dict[str, float]]:
     global _rates, _rates_config_mtime
     if _rates is None or _config_changed():
         try:
-            mtime = LLM_ROUTER_CONFIG_PATH.stat().st_mtime
+            mtime = ROUTER_CONFIG_PATH.stat().st_mtime
         except OSError:
             mtime = None
         _rates = _load_rates()
@@ -170,9 +170,9 @@ def _fetch_endpoint_rates(model_id: str) -> dict[str, float] | None:
 
 def _load_rates() -> dict[str, dict[str, float]]:
     """{model_key: {"input": ..., "output": ..., "cache_read": ...}}, keyed
-    both by the raw model id litellm returns in response_metadata["model_name"]
+    both by the raw model id the router returns in response_metadata["model_name"]
     (return_raw_model_name: true strips config.yaml's own "openrouter/"
-    prefix off litellm_params.model -- mirror that here so lookups match)
+    prefix off params.model -- mirror that here so lookups match)
     and by the config alias (pinned-role calls echo the alias, not the raw
     id -- see the alias branch below).
 
@@ -182,13 +182,13 @@ def _load_rates() -> dict[str, dict[str, float]]:
     gets fixed rather than trusted.
     """
     rates: dict[str, dict[str, float]] = {}
-    cfg = yaml.safe_load(LLM_ROUTER_CONFIG_PATH.read_text())
+    cfg = yaml.safe_load(ROUTER_CONFIG_PATH.read_text())
     catalog = _fetch_catalog_rates()
     drift_reported: set[str] = set()  # one warning per raw id, however many aliases pin it
     for entry in cfg.get("model_list", []):
-        litellm_params = entry.get("litellm_params") or {}
+        params = entry.get("params") or entry.get("litellm_params") or {}
         model_info = entry.get("model_info") or {}
-        raw = litellm_params.get("model", "")
+        raw = params.get("model", "")
         stripped = raw.split("/", 1)[1] if raw.startswith("openrouter/") else raw
         input_cost = model_info.get("input_cost_per_token")
         output_cost = model_info.get("output_cost_per_token")

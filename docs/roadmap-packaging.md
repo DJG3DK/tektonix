@@ -147,9 +147,9 @@ M4.
 **Settled, 2026-09-13.** Built and run on Linux: all four health checks green,
 and a sibling container spawned by the agent container read a real repo's file
 contents *and* its git history through the map. Two things the build found that
-a review would not have: `litellm` needs its `[proxy]` extra in a clean image
-(the host install had those dependencies already, so `requirements.txt` never
-needed them), and an unset `REVIEW_CONTROL_SECRET` makes `/api/health` return
+a review would not have: the router image needs its own requirements in a
+clean image (the host install had those dependencies already, so
+`requirements.txt` never needed them), and an unset `REVIEW_CONTROL_SECRET` makes `/api/health` return
 503 forever, so the entrypoint generates one the same way it generates the
 signing key.
 

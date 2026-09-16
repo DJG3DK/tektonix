@@ -58,7 +58,7 @@ const MAX_CONSECUTIVE_FIXES = 3; // after this many NEEDS_FIXES in a row, escala
 const CHURN_WINDOW_MS = 6 * 60 * 60 * 1000; // 6h — long enough to span a bad afternoon, short enough that old churn doesn't haunt a file forever
 const CHURN_THRESHOLD = 3; // same file in findings across this many rounds -> escalate
 const DASHBOARD_URL = 'http://127.0.0.1:4100';
-const OPENROUTER_ENV_PATH = path.join(AGENT_HOME, 'services/llm-router/.env');
+const ROUTER_ENV_PATH = path.join(AGENT_HOME, 'services/model-router/.env');
 
 // audit C-4: the control port (4101) was unauthenticated on the same "localhost
 // is the boundary" assumption that url_guard already disproved -- browse_page
@@ -77,7 +77,7 @@ const REVIEW_CONTROL_SECRET = require('../shared/service-env')
 //
 // The alias (not a model id) is what makes it swappable from the dashboard; the
 // router resolves agent-reviewer -> whatever it is pinned to.
-const ROUTER_URL = process.env.LITELLM_BASE_URL || 'http://127.0.0.1:4000';
+const ROUTER_URL = process.env.MODEL_ROUTER_URL || 'http://127.0.0.1:4001';
 // Normally the router alias, so the model is swappable from the dashboard and
 // its spend is logged and rated.
 //
@@ -256,11 +256,11 @@ function computeFileChurn(project, currentFindings) {
 // The router's own key now, not the upstream OpenRouter key — the reviewer no
 // longer needs (or should hold) provider credentials directly.
 function getOpenRouterKey() {
-  const env = fs.readFileSync(OPENROUTER_ENV_PATH, 'utf8');
+  const env = fs.readFileSync(ROUTER_ENV_PATH, 'utf8');
   // Evaluation path talks to OpenRouter directly, so it needs the upstream key.
-  const want = REVIEW_DIRECT ? /OPENROUTER_API_KEY=(.+)/ : /LITELLM_MASTER_KEY=(.+)/;
+  const want = REVIEW_DIRECT ? /OPENROUTER_API_KEY=(.+)/ : /MODEL_ROUTER_KEY=(.+)/;
   const m = env.match(want);
-  if (!m) throw new Error(`key not found in ${OPENROUTER_ENV_PATH}`);
+  if (!m) throw new Error(`key not found in ${ROUTER_ENV_PATH}`);
   return m[1].trim();
 }
 

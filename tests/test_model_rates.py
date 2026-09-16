@@ -1,6 +1,6 @@
 """Unit tests for the LLM router config-backed cost-estimation fallback
 (agent/tools/model_rates.py) -- the path BudgetGuardMiddleware falls back to
-now that LiteLLM's own cost annotation doesn't survive streaming (see
+now that the router's cost annotation doesn't survive streaming (see
 budget_guard.py's module docstring). Uses the real router config on this
 host (not a fixture) -- this module has no fixture-injection point by design
 (a single process-lifetime cache), so these tests exercise the actual file
@@ -219,12 +219,31 @@ def test_rate_table_reloads_when_config_yaml_changes(monkeypatch, tmp_path):
     """Pins change from the Models page without an agent restart; a table
     cached at startup would price a repinned alias at the old model's rate."""
     cfg = tmp_path / "config.yaml"
-    cfg.write_text("model_list:\n  - model_name: agent-planner\n    litellm_params:\n      model: openrouter/vendor/old\n    model_info:\n      input_cost_per_token: 0.000001\n      output_cost_per_token: 0.000002\n")
-    monkeypatch.setattr(model_rates, "LLM_ROUTER_CONFIG_PATH", cfg)
+    cfg.write_text("model_list:\n  - model_name: agent-planner\n    params:\n      model: openrouter/vendor/old\n    model_info:\n      input_cost_per_token: 0.000001\n      output_cost_per_token: 0.000002\n")
+    monkeypatch.setattr(model_rates, "ROUTER_CONFIG_PATH", cfg)
     monkeypatch.setattr(model_rates, "_rates", None)  # a fresh load records the mtime
     assert model_rates.estimate_cost("agent-planner", 1000, 0) == 1000 * 0.000001
-    cfg.write_text("model_list:\n  - model_name: agent-planner\n    litellm_params:\n      model: openrouter/vendor/new\n    model_info:\n      input_cost_per_token: 0.000005\n      output_cost_per_token: 0.000002\n")
+    cfg.write_text("model_list:\n  - model_name: agent-planner\n    params:\n      model: openrouter/vendor/new\n    model_info:\n      input_cost_per_token: 0.000005\n      output_cost_per_token: 0.000002\n")
     import os
     os.utime(cfg, (cfg.stat().st_atime, cfg.stat().st_mtime + 5))
     assert model_rates.estimate_cost("agent-planner", 1000, 0) == 1000 * 0.000005, "repinned alias must be priced at the new model's rate"
     assert "vendor/new" in model_rates._table()
+
+
+def test_a_legacy_litellm_params_entry_is_still_priced(tmp_path, monkeypatch):
+    """The rate table has to keep reading an operator's pre-rename config.yaml
+    -- see the same back-compat case in the router's own test_config.py."""
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(
+        "model_list:\n"
+        "  - model_name: agent-planner\n"
+        "    litellm_params:\n"
+        "      model: openrouter/z-ai/glm-5.3-flash\n"
+        "    model_info:\n"
+        "      input_cost_per_token: 0.0000001\n"
+        "      output_cost_per_token: 0.0000002\n"
+    )
+    monkeypatch.setattr(model_rates, "ROUTER_CONFIG_PATH", cfg)
+    monkeypatch.setattr(model_rates, "_rates", None)
+    assert model_rates.estimate_cost("agent-planner", 1000, 0) == 1000 * 0.0000001
+    assert "z-ai/glm-5.3-flash" in model_rates._table()

@@ -56,9 +56,9 @@ const { runPreflight, formatPreflightError } = require('./preflight');
 
 const PROJECTS = loadProjects(BUILTIN_PROJECTS, { section: 'deploy' });
 
-// Mirrors config.yaml's model_list — the raw backend model strings litellm's
+// Mirrors config.yaml's model_list — the raw backend model strings the router's
 // `return_raw_model_name` puts in response.model / routing_decision.routed_model
-// (provider prefix like "openrouter/" is stripped by litellm before this point).
+// (provider prefix like "openrouter/" is stripped by the router before this point).
 // All 4 tiers are real destinations (2026-08-15) — session_affinity is off,
 // so every message is classified fresh instead of inheriting turn 1's tier.
 const ROUTING_LOG = path.join(AGENT_HOME, 'services/llm-router/logs/routing.jsonl');
@@ -383,8 +383,8 @@ app.get('/api/router/current', async (req, res) => {
 });
 
 // Read-only: model usage/routing visibility for the LLM router. Reads
-// llm-router's own routing.jsonl (a custom litellm callback logs one line
-// per completed request there) — litellm's built-in spend/usage API needs a
+// the router's own routing.jsonl (the router logs one line
+// per completed request there) — an off-the-shelf proxy's spend API would need a
 // Postgres DB we don't have set up, so this is the lightweight substitute.
 //
 // Every real turn logs TWO+ lines: the complexity classifier's own internal

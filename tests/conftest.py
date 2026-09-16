@@ -34,8 +34,8 @@ os.environ["LANGCHAIN_TRACING_V2"] = "false"
 # true everywhere.
 for _key, _placeholder in {
     "LANGGRAPH_PG_DSN": "postgresql://test:test@127.0.0.1:5432/test_placeholder",
-    "LITELLM_BASE_URL": "http://127.0.0.1:9",
-    "LITELLM_API_KEY": "test-placeholder",
+    "MODEL_ROUTER_URL": "http://127.0.0.1:9",
+    "MODEL_ROUTER_KEY": "test-placeholder",
     "AUTH_SECRET_KEY": "dGVzdC1wbGFjZWhvbGRlci0zMi1ieXRlcy1rZXktMDAwMA==",
     "SMTP_HOST": "",
     "SMTP_PORT": "587",

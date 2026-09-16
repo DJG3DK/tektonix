@@ -1,4 +1,4 @@
-# LiteLLM router configuration -- EXAMPLE.
+# Tektonix model router configuration -- EXAMPLE.
 #
 # Consumers of this router (2026-09-13):
 #   * the LangGraph agent, through its 15 pinned agent-* roles -- including
@@ -35,7 +35,7 @@
 # Repin from the dashboard (Settings -> Models) rather than by hand: it writes
 # this same file, keeps the rate table in step, and does not need a restart.
 
-# LiteLLM intelligent inference router — task-based routing over OpenRouter.
+# Tektonix model router — alias-to-model routing over OpenRouter.
 #
 # Historical note, kept because it explains how models were chosen: the tier
 # system this describes was built for OpenHands and has been removed.
@@ -116,7 +116,7 @@
 model_list:
   # ── Individual model deployments (all via OpenRouter) ─────────────────────
   # model_info cost fields pulled directly from OpenRouter's own /api/v1/models
-  # response (2026-08-14/15) — these are brand-new models not yet in litellm's
+  # response (2026-08-14/15) — these are brand-new models not yet in the
   # bundled cost map, so without this, cost tracking would silently default to
   # $0 for every request through them.
   #
@@ -144,7 +144,7 @@ model_list:
   # incident at the top of this file (weak at sustained tool-calling), no
   # reason to reach for it when clean options exist.
   - model_name: gpt-4o-mini
-    litellm_params:
+    params:
       model: openrouter/openai/gpt-4o-mini
       api_key: os.environ/OPENROUTER_API_KEY
     model_info:
@@ -169,7 +169,7 @@ model_list:
   # Anthropic's own framing is "Sonnet 4-equivalent coding at a third the
   # cost." Different provider than both existing MEDIUM members (Z.ai, Alibaba).
   - model_name: claude-haiku-4.5
-    litellm_params:
+    params:
       model: openrouter/anthropic/claude-haiku-4.5
       api_key: os.environ/OPENROUTER_API_KEY
     model_info:
@@ -181,7 +181,7 @@ model_list:
   # id, "-0813", which has to be named explicitly or you silently stay on
   # April's model forever.
   - model_name: deepseek-v4-pro
-    litellm_params:
+    params:
       model: openrouter/deepseek/deepseek-v4-pro-0813
       api_key: os.environ/OPENROUTER_API_KEY
       extra_body: {"provider": {"ignore": ["Venice"]}}  # see glm-5.2 above
@@ -217,7 +217,7 @@ model_list:
   # ── Standing REASONING-tier-only alias (2026-08-17) ────────────────────────
   # For OpenHands' planning phase: the agent's own switch_llm tool moves the
   # conversation onto this profile before drafting a plan, then back to
-  # smart-router before writing any code. This is a flat litellm load-balanced
+  # smart-router before writing any code. This is a flat load-balanced
   # group over the exact same 3 models the REASONING tier above uses — no
   # complexity_router/classifier involved, since during planning we always
   # want top-tier quality rather than a judgment call about whether this turn
@@ -232,7 +232,7 @@ model_list:
   # OpenRouter's /api/v1/models pricing on the pin date — BudgetGuard's
   # fallback rate table (agent/tools/model_rates.py) parses these same fields.
   - model_name: agent-summarizer
-    litellm_params:
+    params:
       # Repinned 2026-08-27 from deepseek/deepseek-v4-flash-0731 on latency,
       # not cost. That pin was chosen as "the cheapest tier is genuinely fine
       # here" -- true on dollars, false on wall-clock, and this role sits on
@@ -260,7 +260,7 @@ model_list:
       input_cost_per_token: 0.0000001
       output_cost_per_token: 0.0000004
   - model_name: agent-coder-frontend
-    litellm_params:
+    params:
       # The coder seat for frontend work (agent/frontend_route.py routes a
       # task here on category ui-styling, mostly-frontend paths, or the
       # operator's toggle). Pinned 2026-09-09 to kimi-k3 for frontend polish
@@ -275,7 +275,7 @@ model_list:
       input_cost_per_token: 0.000003
       output_cost_per_token: 0.000015
   - model_name: agent-investigator
-    litellm_params:
+    params:
       model: openrouter/deepseek/deepseek-v4.1-flash
       api_key: os.environ/OPENROUTER_API_KEY
       extra_body: {"provider": {"require_parameters": true}}
@@ -283,7 +283,7 @@ model_list:
       input_cost_per_token: 0.00000015
       output_cost_per_token: 0.0000006
   - model_name: agent-coder
-    litellm_params:
+    params:
       # DeepSeek V4 Pro 0423 (undated slug = the 0423 release). Promoted from
       # planner to coder 2026-08-20 after qwen3-coder showed a 15% edit-miss
       # rate and flubbed an architectural reviewer round.
@@ -294,7 +294,7 @@ model_list:
       input_cost_per_token: 0.00000009
       output_cost_per_token: 0.00000018
   - model_name: agent-planner
-    litellm_params:
+    params:
       # Gemini 3.7 Flash (operator dashboard swap 2026-08-28): plans and
       # digests reviewer feedback, lighter-weight than raw code editing.
       # Previously kimi-k3, gemini-3.7-flash, Kimi K2.7 Code, and
@@ -306,7 +306,7 @@ model_list:
       input_cost_per_token: 0.00000015
       output_cost_per_token: 0.00000047
   - model_name: agent-vision
-    litellm_params:
+    params:
       # Vision bridge for the coding agent's describe_image tool -- the
       # pinned planner/coder are text-only, so screenshots/photos attached
       # to tasks get described through this (2026-08-21).
@@ -322,7 +322,7 @@ model_list:
       input_cost_per_token: 0.00000021
       output_cost_per_token: 0.0000019
   - model_name: agent-test-writer
-    litellm_params:
+    params:
       model: openrouter/deepseek/deepseek-v4.1-flash
       api_key: os.environ/OPENROUTER_API_KEY
       extra_body: {"provider": {"require_parameters": true}}
@@ -330,7 +330,7 @@ model_list:
       input_cost_per_token: 0.00000015
       output_cost_per_token: 0.0000006
   - model_name: agent-reviewer
-    litellm_params:
+    params:
       # The commit reviewer (commit-reviewer/reviewer.js). Added 2026-08-25 —
       # it previously hardcoded 'anthropic/claude-sonnet-5' and called OpenRouter
       # DIRECTLY, bypassing this router entirely. Three things followed from
@@ -367,7 +367,7 @@ model_list:
       output_cost_per_token: 0.00001
 
   - model_name: agent-cartographer
-    litellm_params:
+    params:
       # The codebase-map builder (agent/cartographer.py). Runs on a schedule,
       # once per repo, and only when the repo's file inventory has actually
       # changed -- so this is a rare call, not a per-task one.
@@ -407,7 +407,7 @@ model_list:
       output_cost_per_token: 0.00000025
 
   - model_name: agent-consolidator
-    litellm_params:
+    params:
       # Dedicated pin (2026-08-23) so the memory-consolidation background job
       # (agent/consolidation.py) does not depend on the reasoning-tier alias
       # shared with the reviewer -- that pool is not langgraph-agent's to depend
@@ -496,7 +496,7 @@ model_list:
   # stays low and the fallback to mail-triage stays: a Pro-pool blip degrades
   # to flash instead of a dead turn.
   - model_name: mail-chat
-    litellm_params:
+    params:
       model: openrouter/deepseek/deepseek-v4-pro-0813
       timeout: 120
       extra_body: {"provider": {"require_parameters": true}, "reasoning": {"effort": "low"}}
@@ -505,7 +505,7 @@ model_list:
       output_cost_per_token: 0.00000396
 
   - model_name: mail-triage
-    litellm_params:
+    params:
       model: openrouter/deepseek/deepseek-v4-flash-0731
       extra_body: {"provider": {"require_parameters": true}}
     model_info:
@@ -513,7 +513,7 @@ model_list:
       output_cost_per_token: 0.00000018
 
   - model_name: trade-gate
-    litellm_params:
+    params:
       # Dedicated pin (2026-09-02): 3d-bot's Agent Gate (src/core/agentGate.js)
       # — the LLM entry veto/decider on strata & ctaTrend armed entries. Low
       # volume (fires only when an entry arms; the bot also enforces its own
@@ -533,7 +533,7 @@ model_list:
       output_cost_per_token: 0.000025
 
   - model_name: agent-classifier
-    litellm_params:
+    params:
       # Dedicated pin (2026-08-23): a single cheap, non-agentic call per task
       # creation (agent/classify.py) that sorts the goal into a fixed
       # taxonomy for the Analytics dashboard's cost/count-by-category
@@ -550,7 +550,7 @@ model_list:
       input_cost_per_token: 0.00000015
       output_cost_per_token: 0.0000006
   - model_name: agent-planning-chat
-    litellm_params:
+    params:
       # Dedicated pin (2026-08-23): the Planning tab's chat agent
       # (agent/planning_chat.py) -- a conversational research/design-
       # consulting role (web search, browsing pages for design reference,
@@ -585,7 +585,7 @@ model_list:
       input_cost_per_token: 0.0000010494
       output_cost_per_token: 0.0000031482
   - model_name: agent-planning-chat-hard
-    litellm_params:
+    params:
       # HARD half of the planning-chat pair -- see agent-planning-chat above
       # for the split's rationale. Qwen3.8 Max (operator dashboard swap
       # 2026-08-28; previously claude-sonnet-5, kimi-k3). NOTE for future
@@ -602,7 +602,7 @@ model_list:
       input_cost_per_token: 0.000002
       output_cost_per_token: 0.000006
   - model_name: agent-planning-chat-frontend
-    litellm_params:
+    params:
       # Planning chat for frontend sessions (agent/frontend_route.py), ahead
       # of the EASY/HARD ladder. Same model as the frontend coder so the plan
       # is written in the vocabulary that will build it. Operator's call,
@@ -614,7 +614,7 @@ model_list:
       input_cost_per_token: 0.000003
       output_cost_per_token: 0.000015
   - model_name: agent-demo-chat
-    litellm_params:
+    params:
       # Optional public demo bot -- an unauthenticated, resume-style chat
       # endpoint with web search/browse but NO repo, database or memory
       # access of any kind. Unused unless a deployment runs one.
@@ -713,17 +713,3 @@ router_settings:
     # cross-vendor escape hatch and the proven tool-caller for the structured
     # submit_review call. Complements reviewer.js's own HTTP retry/timeout.
     - agent-reviewer: ["claude-haiku-4.5", "deepseek-v4-pro"]
-
-litellm_settings:
-  drop_params: true
-  set_verbose: false
-  # Records every routed request (which model actually answered, tier, cost)
-  # to logs/routing.jsonl — powers the Router tab in the review dashboard.
-  # Uses the proxy's `callbacks` key (not success_callback/failure_callback):
-  # that's the path that actually fires CustomLogger instances for proxy-mode
-  # HTTP requests (verified — success_callback loaded the instance fine per
-  # startup logs, but never actually invoked it for real traffic).
-  callbacks: ["custom_callbacks.routing_logger"]
-
-general_settings:
-  master_key: os.environ/LITELLM_MASTER_KEY

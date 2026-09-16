@@ -91,7 +91,7 @@ _RULES = [
         "pattern": re.compile(r"(?i)\b(postgres(?:ql)?|mysql|redis|mongodb(?:\+srv)?)://[^:/\s]*:[^@/\s]+@"),
         "replace": rf"\1://{_REDACTED}@",
     },
-    # This proxy's own LiteLLM key shape (sk-...) and OpenAI-compatible keys generally.
+    # The router's own key shape (sk-...) and OpenAI-compatible keys generally.
     {"pattern": re.compile(r"\bsk-[A-Za-z0-9\-_]{16,}\b"), "replace": f"sk-{_REDACTED}"},
     # LangSmith's own key shape -- redact it too, so a key never traces
     # itself. Underscore included in the char class: the real key format

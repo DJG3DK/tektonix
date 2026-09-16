@@ -8,7 +8,7 @@ Uses a real temp config file with the same shape as the production one
 (comments, non-agent-* entries included), not a minimal fixture -- the
 surgical text-replace logic is the whole point of this module, and a
 too-simple fixture would miss exactly the kind of formatting quirk (a
-comment line inside litellm_params, a differently-named neighboring entry)
+comment line inside a params block, a differently-named neighboring entry)
 that could silently corrupt the real file.
 """
 
@@ -20,7 +20,7 @@ FAKE_CONFIG = """\
 # Shared router config -- some entries belong to another service entirely.
 model_list:
   - model_name: glm-5.2
-    litellm_params:
+    params:
       model: openrouter/z-ai/glm-5.2
       api_key: os.environ/OPENROUTER_API_KEY
     model_info:
@@ -28,7 +28,7 @@ model_list:
       output_cost_per_token: 0.00000374
 
   - model_name: reasoning-tier
-    litellm_params:
+    params:
       model: openrouter/moonshotai/kimi-k3
       api_key: os.environ/OPENROUTER_API_KEY
     model_info:
@@ -36,7 +36,7 @@ model_list:
       output_cost_per_token: 0.000015
 
   - model_name: agent-coder
-    litellm_params:
+    params:
       # A historical rationale comment, exactly like the real file has.
       model: openrouter/deepseek/deepseek-v4-pro
       api_key: os.environ/OPENROUTER_API_KEY
@@ -44,14 +44,14 @@ model_list:
       input_cost_per_token: 0.0000016
       output_cost_per_token: 0.0000032
   - model_name: agent-planner
-    litellm_params:
+    params:
       model: openrouter/moonshotai/kimi-k2.7-code
       api_key: os.environ/OPENROUTER_API_KEY
     model_info:
       input_cost_per_token: 0.00000071
       output_cost_per_token: 0.0000035
   - model_name: smart-router
-    litellm_params:
+    params:
       model: auto_router/complexity_router
     model_info:
       supports_vision: true
@@ -69,7 +69,7 @@ FAKE_CATALOG = [
 def config_path(tmp_path, monkeypatch):
     path = tmp_path / "config.yaml"
     path.write_text(FAKE_CONFIG)
-    monkeypatch.setattr(model_config, "LLM_ROUTER_CONFIG_PATH", path)
+    monkeypatch.setattr(model_config, "ROUTER_CONFIG_PATH", path)
     return path
 
 
@@ -324,7 +324,7 @@ def test_get_current_pins_is_mtime_cached_but_reparses_on_change(config_path, mo
 _H5_CONFIG = """\
 model_list:
   - model_name: agent-cartographer
-    litellm_params:
+    params:
       # a long rationale comment, like the real file
       model: openrouter/mistralai/mistral-small-3.2-24b-instruct
       api_key: os.environ/OPENROUTER_API_KEY
@@ -335,7 +335,7 @@ model_list:
       input_cost_per_token: 0.000000075
       output_cost_per_token: 0.0000003
   - model_name: agent-consolidator
-    litellm_params:
+    params:
       model: openrouter/anthropic/claude-haiku-4.5
       api_key: os.environ/OPENROUTER_API_KEY
     model_info:
@@ -348,7 +348,7 @@ def test_h5_block_pattern_matches_each_roles_own_costs_across_a_commented_block(
     import agent.model_config as mc
     path = tmp_path / "config.yaml"
     path.write_text(_H5_CONFIG)
-    monkeypatch.setattr(mc, "LLM_ROUTER_CONFIG_PATH", path)
+    monkeypatch.setattr(mc, "ROUTER_CONFIG_PATH", path)
 
     carto = mc._block_pattern("agent-cartographer").search(_H5_CONFIG)
     assert carto is not None
@@ -367,7 +367,7 @@ def test_h5_set_pins_verification_rejects_a_mismatch(monkeypatch, tmp_path):
     import agent.model_config as mc
     path = tmp_path / "config.yaml"
     path.write_text(_H5_CONFIG)
-    monkeypatch.setattr(mc, "LLM_ROUTER_CONFIG_PATH", path)
+    monkeypatch.setattr(mc, "ROUTER_CONFIG_PATH", path)
     monkeypatch.setattr(mc, "MANAGED_ROLES", {"agent-cartographer": "Cartographer"})
     catalog = [{"id": "mistralai/mistral-small-3.2-24b-instruct",
                 "input_cost_per_token": 1e-7, "output_cost_per_token": 4e-7}]
@@ -393,7 +393,7 @@ import yaml as _yaml
 from agent.model_config import _is_anthropic, _normalize_family_extras, _requires_family_extras
 
 _BLOCK_PLAIN = """  - model_name: agent-planning-chat-hard
-    litellm_params:
+    params:
       # some human comment that must survive
       model: openrouter/qwen/qwen3.8-max
       api_key: os.environ/OPENROUTER_API_KEY
@@ -404,7 +404,7 @@ _BLOCK_PLAIN = """  - model_name: agent-planning-chat-hard
 """
 
 _BLOCK_WITH_EXTRAS = """  - model_name: agent-planning-chat-hard
-    litellm_params:
+    params:
       # some human comment that must survive
       model: openrouter/anthropic/claude-sonnet-5
       api_key: os.environ/OPENROUTER_API_KEY
@@ -425,7 +425,7 @@ _BLOCK_WITH_EXTRAS = """  - model_name: agent-planning-chat-hard
 
 
 def _params(block):
-    return _yaml.safe_load(block)[0]["litellm_params"]
+    return _yaml.safe_load(block)[0]["params"]
 
 
 def test_is_anthropic_detects_both_slug_shapes():
@@ -485,19 +485,19 @@ def test_the_live_config_obeys_the_family_rule():
     the extras iff it is Anthropic. Fails the suite the moment the file
     drifts, instead of a role silently living on its fallback.
 
-    Reads through LLM_ROUTER_CONFIG_PATH rather than the literal path: the
+    Reads through ROUTER_CONFIG_PATH rather than the literal path: the
     live config is the operator's file and is gitignored, so on a fresh
     clone -- CI, a contributor's laptop -- this checks the example, which is
     what that clone would install.
     """
-    from agent.tools.model_rates import LLM_ROUTER_CONFIG_PATH
+    from agent.tools.model_rates import ROUTER_CONFIG_PATH
 
-    d = _yaml.safe_load(LLM_ROUTER_CONFIG_PATH.read_text())
+    d = _yaml.safe_load(ROUTER_CONFIG_PATH.read_text())
     for entry in d["model_list"]:
         name = entry.get("model_name") or ""
         if not name.startswith("agent-"):
             continue
-        lp = entry.get("litellm_params") or {}
+        lp = entry.get("params") or {}
         wants = _requires_family_extras(str(lp.get("model", "")))
         has = "additional_drop_params" in lp and "cache_control_injection_points" in lp
         assert has == wants, f"{name}: family extras {'missing' if wants else 'left behind'}"
@@ -512,7 +512,7 @@ from agent import model_config as _mc
 
 _PROVIDER_CONFIG = """model_list:
   - model_name: agent-coder
-    litellm_params:
+    params:
       # comment that must survive
       model: openrouter/deepseek/deepseek-v4-pro
       api_key: os.environ/OPENROUTER_API_KEY
@@ -521,7 +521,7 @@ _PROVIDER_CONFIG = """model_list:
       input_cost_per_token: 0.00000087
       output_cost_per_token: 0.00000174
   - model_name: agent-vision
-    litellm_params:
+    params:
       model: openrouter/qwen/qwen3-vl-235b-a22b-instruct
       api_key: os.environ/OPENROUTER_API_KEY
       extra_body: {"provider": {"require_parameters": true}}
@@ -529,7 +529,7 @@ _PROVIDER_CONFIG = """model_list:
       input_cost_per_token: 0.0000002
       output_cost_per_token: 0.0000008
 
-litellm_settings:
+router_settings:
   drop_params: true
 """
 
@@ -538,7 +538,7 @@ litellm_settings:
 def provider_config(tmp_path, monkeypatch):
     cfg = tmp_path / "config.yaml"
     cfg.write_text(_PROVIDER_CONFIG)
-    monkeypatch.setattr(_mc, "LLM_ROUTER_CONFIG_PATH", cfg)
+    monkeypatch.setattr(_mc, "ROUTER_CONFIG_PATH", cfg)
     _mc._PINS_CACHE.update(key=None, pins=None)
     yield cfg
     _mc._PINS_CACHE.update(key=None, pins=None)
@@ -548,7 +548,7 @@ def test_pin_a_provider_writes_only_and_disables_pool_fallback(provider_config):
     _mc.set_provider_pins({"agent-coder": "DeepSeek"})
     import yaml as _y
     lp = [e for e in _y.safe_load(provider_config.read_text())["model_list"]
-          if e["model_name"] == "agent-coder"][0]["litellm_params"]
+          if e["model_name"] == "agent-coder"][0]["params"]
     pref = lp["extra_body"]["provider"]
     assert pref["only"] == ["DeepSeek"]
     assert pref["allow_fallbacks"] is False
@@ -622,7 +622,7 @@ def test_a_router_that_answers_counts_as_restarted_even_if_pm2_complained(monkey
 
 
 def test_a_router_that_never_comes_back_is_not_a_success(monkeypatch):
-    """The other direction: pm2 exits zero and litellm dies on a bad config."""
+    """The other direction: pm2 exits zero and the router dies on a bad config."""
     monkeypatch.setattr(_mc.subprocess, "run", _fake_pm2(0))
     monkeypatch.setattr(_mc, "_wait_for_router", lambda url, limit_s=0: (False, 25.0))
 

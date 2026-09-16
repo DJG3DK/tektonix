@@ -260,7 +260,7 @@ def test_the_summary_keeps_the_field_names_the_dashboard_reads(tmp_path, monkeyp
 # Attributing a call to a role
 #
 # The router's log has three fields that could name a model, and only one of
-# them reliably names the ROLE. litellm sets kwargs["model"] to the resolved
+# them reliably names the ROLE. The old writer set kwargs["model"] to the resolved
 # deployment and the response carries whatever the provider returned, so on
 # most historical lines neither is an alias and the call cannot be attributed
 # at all -- which silently dropped the majority of this agent's traffic out of

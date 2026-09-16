@@ -11,7 +11,7 @@ One of these, and they are the same family:
 - The reviewer returning no verdict, or the consolidator failing, when the
   model behind them is fine for chat but cannot do a forced tool call.
 
-The router (`llm-router`, LiteLLM on :4000) fronts every model call under an
+The router (`model-router`, `services/model-router` on :4001) fronts every model call under an
 `agent-*` alias. A refusal there surfaces as a missing capability much further
 downstream, which is why it reads as a broken feature rather than a bad pin.
 
@@ -26,7 +26,7 @@ reason the row failed; it is the single most useful field on this page:
 cd /home/3d-agent
 python3 - <<'PY'
 import json, time, datetime
-rows = [json.loads(l) for l in open('services/llm-router/logs/routing.jsonl') if l.strip()]
+rows = [json.loads(l) for l in open('services/model-router/logs/routing.jsonl') if l.strip()]
 recent = [r for r in rows if r['ts'] >= time.time() - 24*3600]
 bad = [r for r in recent if r.get('error') or r.get('error_detail')]
 f = lambda t: datetime.datetime.fromtimestamp(t, datetime.UTC).strftime('%m-%d %H:%M')
@@ -41,14 +41,14 @@ PY
 dashboard is a view of it:
 
 ```bash
-grep -A3 'model_name: agent-' /home/3d-agent/services/llm-router/config.yaml | grep -E 'model_name|model:'
+grep -A3 'model_name: agent-' /home/3d-agent/services/model-router/config.yaml | grep -E 'model_name|model:'
 ```
 
 **Is the router even up?**
 
 ```bash
-curl -s -o /dev/null -w '%{http_code}\n' 127.0.0.1:4000/health/liveliness   # 200 expected
-pm2 logs llm-router --nostream --lines 40
+curl -s -o /dev/null -w '%{http_code}\n' 127.0.0.1:4001/health/liveliness   # 200 expected
+pm2 logs model-router --nostream --lines 40
 ```
 
 ---
@@ -77,7 +77,7 @@ After repinning, confirm with the next real call rather than assuming:
 ```bash
 python3 - <<'PY'
 import json
-rows = [json.loads(l) for l in open('/home/3d-agent/services/llm-router/logs/routing.jsonl') if l.strip()]
+rows = [json.loads(l) for l in open('/home/3d-agent/services/model-router/logs/routing.jsonl') if l.strip()]
 print(rows[-1]['requested_model'], '->', rows[-1].get('routed_model'), '| err:', rows[-1].get('error_detail'))
 PY
 ```
@@ -97,10 +97,10 @@ cd /home/3d-agent
 .venv/bin/python - <<'PY'
 import json, time, yaml
 from collections import defaultdict
-cfg = yaml.safe_load(open('services/llm-router/config.yaml'))
-pins = {e['model_name']: e['litellm_params']['model'].split('/', 1)[-1]
+cfg = yaml.safe_load(open('services/model-router/config.yaml'))
+pins = {e['model_name']: (e.get('params') or e['litellm_params'])['model'].split('/', 1)[-1]
         for e in cfg['model_list'] if e['model_name'].startswith('agent-')}
-rows = [json.loads(l) for l in open('services/llm-router/logs/routing.jsonl') if l.strip()]
+rows = [json.loads(l) for l in open('services/model-router/logs/routing.jsonl') if l.strip()]
 recent = [r for r in rows if r['ts'] >= time.time() - 24*3600 and not r.get('error')]
 seen = defaultdict(set)
 for r in recent:
@@ -149,7 +149,7 @@ badge exists for this exact failure.
 
 ## What not to do
 
-- **Do not restart `llm-router` to clear a refusal while a task is running.**
+- **Do not restart `model-router` to clear a refusal while a task is running.**
   A model call in flight dies with the process and the task escalates with
   "peer closed connection". Stop the task, restart, then resume it.
 - **Do not hand-edit `config.yaml` for a pin you can change on the Models

@@ -32,11 +32,11 @@ services:
       dockerfile: docker/router/Dockerfile
     environment:
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:?set OPENROUTER_API_KEY in .env}
-      LITELLM_MASTER_KEY: ${LITELLM_API_KEY:-sk-local-dev}
+      MODEL_ROUTER_KEY: ${MODEL_ROUTER_KEY:-sk-local-dev}
     volumes:
       # The operator's own pins, when they have a config.yaml. Without one the
       # image's example is used, which is a working default rather than a stub.
-      - ./services/llm-router/config.yaml:/app/config.yaml:ro
+      - ./services/model-router/config.yaml:/app/config.yaml:ro
       - routerlogs:/app/logs
     restart: unless-stopped
 
@@ -49,8 +49,8 @@ services:
         condition: service_healthy
     environment:
       LANGGRAPH_PG_DSN: postgresql://agent:${POSTGRES_PASSWORD:-agent}@postgres:5432/three_d_agent
-      LITELLM_BASE_URL: http://router:4000
-      LITELLM_API_KEY: ${LITELLM_API_KEY:-sk-local-dev}
+      MODEL_ROUTER_URL: http://router:4001
+      MODEL_ROUTER_KEY: ${MODEL_ROUTER_KEY:-sk-local-dev}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:?set OPENROUTER_API_KEY in .env}
       ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@example.com}
       DEFAULT_BUDGET_USD: ${DEFAULT_BUDGET_USD:-2.00}

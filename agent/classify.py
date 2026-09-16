@@ -69,8 +69,8 @@ async def classify_task(goal: str, config: Config) -> TaskClassification:
     """
     model = ChatOpenAI(
         model="agent-classifier",
-        base_url=config.litellm_base_url,
-        api_key=config.litellm_api_key,
+        base_url=config.router_base_url,
+        api_key=config.router_api_key,
         temperature=0,
         timeout=15,
     ).with_structured_output(TaskClassification)

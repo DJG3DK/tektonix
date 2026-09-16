@@ -10,9 +10,13 @@ than a convenience:
     off `alias` and the model off `requested_model`/`routed_model`.
   * agent/tools/model_rates.py falls back to it when the catalog is unreachable.
 
-So the field names below are copied from what litellm's callback wrote, not
-chosen. Two fields are new and additive: `provider` (which backend OpenRouter
-actually used) and `attempt` (which link in a fallback chain answered).
+So the field names below are copied from what the previous writer used, not
+chosen. Three fields are new and additive: `provider` (which backend OpenRouter
+actually used), `attempt` (which link in a fallback chain answered) and
+`caller` (which credential made the call, once the router started issuing a
+key per consumer instead of one shared master key). Additive because the three
+readers above key off names they already know; an unknown extra field is
+ignored by all of them, which is what made adding these safe.
 
 Costs are OpenRouter's own `usage.cost`, never computed from the rate table in
 config.yaml. The estimate and the bill disagree -- that is the entire reason
@@ -32,7 +36,7 @@ logger = logging.getLogger("model-router")
 
 LOG_PATH = Path(
     os.environ.get("MODEL_ROUTER_LEDGER")
-    or "/home/3d-agent/services/llm-router/logs/routing.jsonl"
+    or str(Path(__file__).resolve().parents[1] / "logs" / "routing.jsonl")
 )
 MAX_BYTES = int(os.environ.get("MODEL_ROUTER_LEDGER_MAX_BYTES", 50_000_000))
 _KEEP_FRACTION = 0.5
@@ -54,6 +58,7 @@ def record(
     session_id: str | None = None,
     provider: str | None = None,
     attempt: int = 1,
+    caller: str | None = None,
     error: bool = False,
     error_detail: str | None = None,
     path: Path | None = None,
@@ -84,6 +89,7 @@ def record(
         # New, additive.
         "provider": provider,
         "attempt": attempt,
+        "caller": caller,
     }
     if error:
         entry["error"] = True

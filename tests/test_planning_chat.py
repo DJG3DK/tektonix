@@ -22,8 +22,8 @@ from agent.planning_chat import build_planning_agent, classify_planning_difficul
 
 
 class _FakeConfig:
-    litellm_base_url = "http://127.0.0.1:4000/v1"
-    litellm_api_key = "test-key"
+    router_base_url = "http://127.0.0.1:4000/v1"
+    router_api_key = "test-key"
 
 
 def _fake_chat_openai_class(result=None, exc=None):

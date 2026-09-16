@@ -1,9 +1,0 @@
-{
-  "name": "llm-auth-gate",
-  "private": true,
-  "type": "module",
-  "description": "WebAuthn gate in front of the public LiteLLM admin panel",
-  "dependencies": {
-    "@simplewebauthn/server": "^13.3.3"
-  }
-}

@@ -1,6 +1,0 @@
-# Pinned: fastapi>=0.140.7 removed the internal get_flat_dependant() function
-# litellm 1.96.2's proxy still imports — breaks proxy startup entirely.
-fastapi==0.140.6
-litellm==1.96.2
-starlette==1.6.0
-uvicorn==0.52.3

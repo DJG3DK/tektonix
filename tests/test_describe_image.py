@@ -1,6 +1,6 @@
 """Unit tests for describe_image (agent/tools/agent_tools.py).
 
-Covers the switch from a raw httpx POST to litellm's REST endpoint (invisible
+Covers the switch from a raw httpx POST to the router's REST endpoint (invisible
 to LangSmith tracing no matter how often it's called) to a LangChain
 ChatOpenAI invocation -- necessary so agent-vision usage actually shows up
 in the Analytics "model usage by role" scan, the same way every other

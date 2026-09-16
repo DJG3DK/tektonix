@@ -51,8 +51,8 @@ async def _check_postgres(pool) -> dict:
 
 
 def router_liveness_url(base_url: str) -> str:
-    """LITELLM_BASE_URL points at the OpenAI-compatible API root, which is
-    ".../v1" in this deployment. LiteLLM serves liveness at the server ROOT,
+    """MODEL_ROUTER_URL points at the OpenAI-compatible API root, which is
+    ".../v1" in this deployment. The router serves liveness at the server ROOT,
     so appending to the configured value asks for /v1/health/liveliness and
     gets a 404 -- which the first run of this health check found immediately.
     Take the origin and ignore the path."""
@@ -62,7 +62,7 @@ def router_liveness_url(base_url: str) -> str:
 
 
 async def _check_router(base_url: str) -> dict:
-    """LiteLLM's own liveness route: no key, no model call, no spend."""
+    """The router's liveness route: no key, no model call, no spend."""
     url = router_liveness_url(base_url)
     try:
         async with httpx.AsyncClient(timeout=_TIMEOUT_S) as client:
@@ -103,11 +103,11 @@ def _check_review_secret() -> dict:
     return {"ok": False, "detail": "REVIEW_CONTROL_SECRET unset: merge and deploy calls will be refused"}
 
 
-async def collect(pool, litellm_base_url: str, projects: dict) -> dict:
+async def collect(pool, router_base_url: str, projects: dict) -> dict:
     """Every check, concurrently. Returns the payload and whether it is ok."""
     postgres, router, sandbox = await asyncio.gather(
         _check_postgres(pool),
-        _check_router(litellm_base_url),
+        _check_router(router_base_url),
         _check_sandbox_image(),
     )
     checks = {

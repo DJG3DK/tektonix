@@ -15,25 +15,22 @@ All of them are pm2 apps. `pm2 list` shows them; `pm2 logs <name>` tails one.
 
 | Process | Port | What it is | Restart interrupts |
 |---|---|---|---|
-| `3d-agent` | 127.0.0.1:**8100** | The agent: API, dashboard, planning chat, the task graph. `uvicorn agent.server:app` | The current work pass. A task whose Store status is `running` **auto-resumes** a few seconds after boot; a **planning turn does not** — the operator re-sends the message. Paused states (approval, merge approval, escalated) survive untouched. |
-| `llm-router` | 0.0.0.0:**4000** | LiteLLM proxy. Every model call from every process goes through it, under an `agent-*` alias | **A model call in flight dies**, and the task holding it escalates with "peer closed connection". Never restart this while a task is mid-call — stop the task first. |
+| `tektonix` | 127.0.0.1:**8100** | The agent: API, dashboard, planning chat, the task graph. `uvicorn agent.server:app` | The current work pass. A task whose Store status is `running` **auto-resumes** a few seconds after boot; a **planning turn does not** — the operator re-sends the message. Paused states (approval, merge approval, escalated) survive untouched. |
+| `model-router` | 127.0.0.1:**4001** | The model router (`services/model-router`). Every model call from every process goes through it, under an `agent-*` alias, and each caller holds its own key. | **A model call in flight dies**, and the task holding it escalates with "peer closed connection". Never restart this while a task is mid-call — stop the task first. |
 | `agent-review` | 127.0.0.1:**4100** | Review dashboard, and the only write path into a live repo: `merge` (fast-forward only) and `restart` (build + pm2) | A merge or deploy in flight. Nothing else — it holds no task state. |
 | `commit-reviewer` | 127.0.0.1:**4101** (control) | Polls each project's task branch, runs the checks, asks a model for a verdict, writes `state.json` | The review round in progress; it re-polls on boot. The gate re-asks, so nothing is lost except the round's spend. |
 
-Optional: `llm-auth-gate` (127.0.0.1:**4010**) — a WebAuthn passkey gate in
-front of the LiteLLM admin UI when that UI is on a public hostname. Nothing
-depends on it; it is a door, not a dependency.
-
 **Health.** Each one answers a local health route that makes no model call and
 costs nothing, so it is safe to poll. The path differs per process -- the
-agent serves the dashboard at `/`, so its route is under `/api`, and LiteLLM
-brings its own:
+agent serves the dashboard at `/`, so its route is under `/api`, and the
+router splits liveliness from readiness:
 
 ```
 curl -s 127.0.0.1:8100/api/health   # postgres, router, sandbox image, review secret
 curl -s 127.0.0.1:4100/health       # review secret, project checkouts, reviewer state file
 curl -s 127.0.0.1:4101/health       # review secret, projects, state.json
-curl -s 127.0.0.1:4000/health/liveliness   # LiteLLM's own
+curl -s 127.0.0.1:4001/health/liveliness   # the router is up
+curl -s 127.0.0.1:4001/health/readiness    # ...and has aliases and an upstream key
 ```
 
 Each returns `503` when a check fails, so a probe that reads only the status
@@ -54,10 +51,9 @@ which is called out explicitly.
 | Secret | File | Read by |
 |---|---|---|
 | `LANGGRAPH_PG_DSN`, `AUTH_SECRET_KEY`, `SMTP_*`, `GITHUB_TOKEN` (fallback) | `.env` | the agent |
-| `LITELLM_API_KEY` | `.env` | the agent — **must equal** `LITELLM_MASTER_KEY` below |
-| `OPENROUTER_API_KEY`, `LITELLM_MASTER_KEY` | `services/llm-router/.env` | the router; the two Node services read the OpenRouter key from here for their own model calls |
+| `MODEL_ROUTER_KEY` | `.env` | the agent — **must equal** `MODEL_ROUTER_KEY` below |
+| `OPENROUTER_API_KEY`, `MODEL_ROUTER_KEY` | `services/model-router/.env` | the router; the two Node services read the OpenRouter key from here for their own model calls |
 | `REVIEW_CONTROL_SECRET` | `.env` **and** `services/shared/.env` | the agent sends it, both Node services check it. The two copies must match |
-| `GATE_RP_ID`, `GATE_ORIGIN` | `services/llm-router/.env` | the optional passkey gate |
 | GitHub tokens for the inbox | Postgres, encrypted with `AUTH_SECRET_KEY` | the agent. Managed in Settings → GitHub, never in a file |
 | Per-project deploy keys | `keys/<project>.key` (`AGENT_KEYS_DIR`), plus whatever `~/.ssh/config` points at | git, through the host's SSH |
 | Per-project secret files copied into a review worktree | listed in `projects.json`, stored under `services/commit-reviewer/review-secrets/<project>/` | the reviewer, so checks can run |
@@ -161,8 +157,9 @@ scripts/
   backup.sh            + verify_backup_restore.sh (docs/backup.md)
   package_release.sh   a tarball with the dashboard prebuilt
 services/
-  llm-router/          LiteLLM config.yaml (the aliases and their pins; yours,
-                       gitignored, seeded from config.example.yaml)
+  model-router/        the router: config.yaml (the aliases and their pins;
+                       yours, gitignored, seeded from config.example.yaml),
+                       its .env, and logs/routing.jsonl (the billed ledger)
   agent-review/        merge + deploy control, review dashboard
   commit-reviewer/     the verdict: checks, the model review, state.json
   shared/              projects.json reader, service secrets reader

@@ -19,10 +19,10 @@ def _result(*msgs) -> LLMResult:
     return LLMResult(generations=[[ChatGeneration(message=m) for m in msgs]])
 
 
-def _msg(model="moonshotai/kimi-k3", inp=1000, out=100, litellm_cost=None, cache_read=0):
+def _msg(model="moonshotai/kimi-k3", inp=1000, out=100, router_cost=None, cache_read=0):
     meta = {"model_name": model}
-    if litellm_cost is not None:
-        meta["token_usage"] = {"cost": litellm_cost}
+    if router_cost is not None:
+        meta["token_usage"] = {"cost": router_cost}
     return AIMessage(
         content="s",
         response_metadata=meta,
@@ -31,9 +31,9 @@ def _msg(model="moonshotai/kimi-k3", inp=1000, out=100, litellm_cost=None, cache
     )
 
 
-async def test_litellm_cost_lands_in_the_tracker():
+async def test_router_cost_lands_in_the_tracker():
     tracker = BudgetTracker(budget_usd=5.0)
-    await BudgetMeterCallback(tracker).on_llm_end(_result(_msg(litellm_cost=0.07)))
+    await BudgetMeterCallback(tracker).on_llm_end(_result(_msg(router_cost=0.07)))
     assert tracker.total_cost == pytest.approx(0.07)
 
 
@@ -68,8 +68,8 @@ async def test_an_unpriced_model_charges_the_placeholder_not_zero(monkeypatch):
 async def test_accumulates_across_calls_on_the_shared_tracker():
     tracker = BudgetTracker(budget_usd=5.0, starting_cost=1.0)
     cb = BudgetMeterCallback(tracker)
-    await cb.on_llm_end(_result(_msg(litellm_cost=0.05)))
-    await cb.on_llm_end(_result(_msg(litellm_cost=0.02)))
+    await cb.on_llm_end(_result(_msg(router_cost=0.05)))
+    await cb.on_llm_end(_result(_msg(router_cost=0.02)))
     assert tracker.total_cost == pytest.approx(1.07)
 
 
@@ -87,7 +87,7 @@ async def test_meters_a_direct_ainvoke_the_way_summarization_calls_it():
     from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
 
     tracker = BudgetTracker(budget_usd=5.0)
-    msg = _msg(litellm_cost=0.03)
+    msg = _msg(router_cost=0.03)
     model = GenericFakeChatModel(messages=iter([msg]), callbacks=[BudgetMeterCallback(tracker)])
     await model.ainvoke("summarize all of this")
     assert tracker.total_cost == pytest.approx(0.03)

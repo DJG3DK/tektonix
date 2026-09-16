@@ -421,8 +421,8 @@ async def run_cartographer(
     model = init_chat_model(
         "agent-cartographer",
         model_provider="openai",
-        base_url=config.litellm_base_url,
-        api_key=config.litellm_api_key,
+        base_url=config.router_base_url,
+        api_key=config.router_api_key,
         temperature=0,
         timeout=300,
     )

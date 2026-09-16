@@ -26,7 +26,7 @@ import time
 import httpx
 import yaml
 
-from agent.tools.model_rates import LLM_ROUTER_CONFIG_PATH, OPENROUTER_MODELS_URL
+from agent.tools.model_rates import ROUTER_CONFIG_PATH, OPENROUTER_MODELS_URL
 
 MANAGED_ROLES = {
     "agent-planner": "Planner",
@@ -246,7 +246,7 @@ def _openrouter_key() -> str | None:
     import os
     if os.environ.get("OPENROUTER_API_KEY"):
         return os.environ["OPENROUTER_API_KEY"]
-    env_path = LLM_ROUTER_CONFIG_PATH.parent / ".env"
+    env_path = ROUTER_CONFIG_PATH.parent / ".env"
     try:
         for line in env_path.read_text().splitlines():
             line = line.strip()
@@ -416,21 +416,21 @@ def get_current_pins() -> dict[str, dict]:
     file, which bumps its mtime, which invalidates this cache on the next call.
     """
     try:
-        st = LLM_ROUTER_CONFIG_PATH.stat()
-        # path in the key too: tests swap LLM_ROUTER_CONFIG_PATH between temp
+        st = ROUTER_CONFIG_PATH.stat()
+        # path in the key too: tests swap ROUTER_CONFIG_PATH between temp
         # files, and two distinct files could otherwise collide on (mtime, size).
-        cache_key = (str(LLM_ROUTER_CONFIG_PATH), st.st_mtime_ns, st.st_size)
+        cache_key = (str(ROUTER_CONFIG_PATH), st.st_mtime_ns, st.st_size)
         if _PINS_CACHE["pins"] is not None and _PINS_CACHE["key"] == cache_key:
             return _PINS_CACHE["pins"]
     except OSError:
         cache_key = None
-    cfg = yaml.safe_load(LLM_ROUTER_CONFIG_PATH.read_text())
+    cfg = yaml.safe_load(ROUTER_CONFIG_PATH.read_text())
     pins: dict[str, dict] = {}
     for entry in cfg.get("model_list", []):
         name = entry.get("model_name")
         if name not in MANAGED_ROLES:
             continue
-        params = entry.get("litellm_params") or {}
+        params = entry.get("params") or entry.get("litellm_params") or {}
         info = entry.get("model_info") or {}
         raw = params.get("model", "")
         model_id = raw.split("/", 1)[1] if raw.startswith("openrouter/") else raw
@@ -489,7 +489,7 @@ def _format_rate(value: float) -> str:
 
 def _block_pattern(role: str) -> re.Pattern:
     # Matches the exact, established agent-* entry shape: a `- model_name:`
-    # line, then litellm_params (allowing any comment lines in between),
+    # line, then its params block (allowing any comment lines in between),
     # then the model: and api_key: lines, then model_info's two cost lines.
     # Scoped to one role by exact name, so it can never match a different
     # entry (including another role whose name is a prefix of this one).
@@ -623,11 +623,26 @@ def _normalize_family_extras(block: str, model_id: str) -> str:
     return block
 
 
+# The first line that starts a new TOP-LEVEL key (column 0, `name:`), which is
+# where model_list ends whatever follows it.
+_TOP_LEVEL_KEY = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*:", re.MULTILINE)
+
+
 def _role_block_span(text: str, role: str) -> tuple[int, int]:
+    """Where this role's entry begins and ends.
+
+    The end used to be hard-coded to `\nlitellm_settings:`. That was wrong in
+    two ways at once: it named a block that has now been deleted, and even
+    while it existed `router_settings:` sat between it and model_list, so the
+    LAST role's span swallowed an unrelated top-level block. Finding the next
+    top-level key is correct regardless of which blocks a config carries.
+    """
     start = text.index(f"  - model_name: {role}\n")
     nxt = text.find("  - model_name:", start + 1)
-    end = nxt if nxt != -1 else text.index("\nlitellm_settings:") + 1
-    return start, end
+    if nxt != -1:
+        return start, nxt
+    m = _TOP_LEVEL_KEY.search(text, start)
+    return start, (m.start() if m else len(text))
 
 
 def _atomic_write_config(text: str) -> None:
@@ -635,14 +650,14 @@ def _atomic_write_config(text: str) -> None:
     config and a crash mid-write can't truncate it."""
     import os
     import tempfile
-    d = str(LLM_ROUTER_CONFIG_PATH.parent)
+    d = str(ROUTER_CONFIG_PATH.parent)
     fd, tmp = tempfile.mkstemp(dir=d, prefix=".config.", suffix=".yaml.tmp")
     try:
         with os.fdopen(fd, "w") as fh:
             fh.write(text)
             fh.flush()
             os.fsync(fh.fileno())
-        os.replace(tmp, LLM_ROUTER_CONFIG_PATH)
+        os.replace(tmp, ROUTER_CONFIG_PATH)
     except Exception:
         try:
             os.unlink(tmp)
@@ -675,7 +690,7 @@ def set_provider_pins(new_pins: dict[str, str | None]) -> dict[str, str | None]:
     served by. Dashboard-driven, same contract as set_pins: surgical text
     edit, managed roles only, yaml re-parse verification before an atomic
     write, router restart required to take effect."""
-    text = LLM_ROUTER_CONFIG_PATH.read_text()
+    text = ROUTER_CONFIG_PATH.read_text()
     for role, provider in new_pins.items():
         if role not in MANAGED_ROLES:
             raise UnknownRoleError(f"{role!r} is not a role this dashboard manages")
@@ -689,7 +704,7 @@ def set_provider_pins(new_pins: dict[str, str | None]) -> dict[str, str | None]:
         text = text[:b0] + block + text[b1:]
     # verify before writing, same discipline as set_pins
     parsed = yaml.safe_load(text)
-    by_name = {e.get("model_name"): (e.get("litellm_params") or {}) for e in parsed.get("model_list", [])}
+    by_name = {e.get("model_name"): (e.get("params") or e.get("litellm_params") or {}) for e in parsed.get("model_list", [])}
     for role, provider in new_pins.items():
         pref = ((by_name.get(role) or {}).get("extra_body") or {}).get("provider") or {}
         got = (pref.get("only") or [None])[0]
@@ -716,7 +731,7 @@ def set_pins(new_pins: dict[str, str], catalog: list[dict]) -> dict[str, dict]:
     of silently keeping the old model's rates.
     """
     catalog_by_id = {m["id"]: m for m in catalog}
-    text = LLM_ROUTER_CONFIG_PATH.read_text()
+    text = ROUTER_CONFIG_PATH.read_text()
     changed: dict[str, dict] = {}
 
     for role, model_id in new_pins.items():
@@ -760,9 +775,9 @@ def set_pins(new_pins: dict[str, str], catalog: list[dict]) -> dict[str, dict]:
     parsed_models = {}
     for entry in parsed.get("model_list", []):
         name = entry.get("model_name")
-        raw = (entry.get("litellm_params") or {}).get("model", "")
+        raw = (entry.get("params") or entry.get("litellm_params") or {}).get("model", "")
         parsed_models[name] = raw.split("/", 1)[1] if raw.startswith("openrouter/") else raw
-    parsed_params = {e.get("model_name"): (e.get("litellm_params") or {}) for e in parsed.get("model_list", [])}
+    parsed_params = {e.get("model_name"): (e.get("params") or e.get("litellm_params") or {}) for e in parsed.get("model_list", [])}
     for role, model_id in new_pins.items():
         if parsed_models.get(role) != model_id:
             raise PinBlockNotFoundError(
@@ -783,7 +798,7 @@ def set_pins(new_pins: dict[str, str], catalog: list[dict]) -> dict[str, dict]:
     return changed
 
 
-# How long to wait for the router to answer again after a restart. LiteLLM
+# How long to wait for the router to answer again after a restart. The router
 # loads a large config and opens a Prisma connection at boot, so a few seconds
 # is normal; past this it is worth telling the operator rather than spinning.
 _ROUTER_BOOT_WAIT_S = 25.0
@@ -791,7 +806,7 @@ _ROUTER_BOOT_WAIT_S = 25.0
 
 def restart_llm_router(base_url: str | None = None) -> dict:
     """Restarts the shared llm-router pm2 process so a pin change actually
-    takes effect -- litellm's proxy CLI loads config.yaml once at startup,
+    takes effect -- the router reloads config.yaml on change, but a restart is
     no hot-reload. Hardcoded process name, no caller-supplied value ever
     reaches this command: this is the one thing standing between "restart
     our own dependency" and an arbitrary-process-restart primitive exposed
@@ -807,7 +822,7 @@ def restart_llm_router(base_url: str | None = None) -> dict:
     back -- and the two disagree in both directions: pm2 can print a warning
     and exit non-zero while the app restarts perfectly (the operator sees a
     failure, and their only evidence to the contrary is a Telegram alert), or
-    exit zero while litellm dies on a bad config and nothing answers. The
+    exit zero while the router dies on a bad config and nothing answers. The
     caller's dialog is only as honest as this return value.
     """
     result = subprocess.run(
@@ -834,7 +849,7 @@ def _router_liveness_url(base_url: str | None) -> str | None:
     from agent.health import router_liveness_url  # noqa: PLC0415
 
     try:
-        return router_liveness_url(base_url or load_config().litellm_base_url)
+        return router_liveness_url(base_url or load_config().router_base_url)
     except Exception:  # noqa: BLE001 -- a missing base URL must not fail the restart
         return None
 
