@@ -45,5 +45,7 @@
   }
 
   .mnav-ico { display: flex; }
-  .mnav-label { font-size: 10.5px; font-weight: 600; letter-spacing: .02em; }
+  /* Seven tabs for an admin on a 360px phone is ~51px each: the label has to
+     fit "Settings" in that, so it is a touch smaller and no longer tracked. */
+  .mnav-label { font-size: 10px; font-weight: 600; letter-spacing: 0; white-space: nowrap; }
 }

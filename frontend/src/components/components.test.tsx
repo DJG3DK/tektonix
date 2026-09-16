@@ -116,9 +116,10 @@ describe("ConsolidationStatusPanel", () => {
 describe("MobileNav", () => {
   const handlers = () => ({
     onTasks: vi.fn(),
-    onNewTask: vi.fn(),
+    onNewPlan: vi.fn(),
     onAnalytics: vi.fn(),
     onModels: vi.fn(),
+    onUsers: vi.fn(),
     onSettings: vi.fn(),
     onGitHub: vi.fn(),
   });
@@ -127,6 +128,7 @@ describe("MobileNav", () => {
     render(<MobileNav view="task" pane="list" isAdmin={false} {...handlers()} />);
     expect(screen.queryByText("Stats")).not.toBeInTheDocument();
     expect(screen.queryByText("Models")).not.toBeInTheDocument();
+    expect(screen.queryByText("Users")).not.toBeInTheDocument();
     expect(screen.getByText("Tasks")).toBeInTheDocument();
   });
 
@@ -134,6 +136,7 @@ describe("MobileNav", () => {
     render(<MobileNav view="task" pane="list" isAdmin {...handlers()} />);
     expect(screen.getByText("Stats")).toBeInTheDocument();
     expect(screen.getByText("Models")).toBeInTheDocument();
+    expect(screen.getByText("Users")).toBeInTheDocument();
   });
 
   it("routes a tap to its handler", async () => {
@@ -141,6 +144,20 @@ describe("MobileNav", () => {
     render(<MobileNav view="task" pane="main" isAdmin {...h} />);
     await userEvent.click(screen.getByText("Stats"));
     expect(h.onAnalytics).toHaveBeenCalled();
+  });
+
+  it("Plan starts a planning session, not the raw task composer", async () => {
+    // The sidebar's header buttons are hidden on a phone, so this bar is the
+    // only way to the plan-first primary action there.
+    const h = handlers();
+    render(<MobileNav view="task" pane="main" isAdmin={false} {...h} />);
+    await userEvent.click(screen.getByText("Plan"));
+    expect(h.onNewPlan).toHaveBeenCalled();
+  });
+
+  it("highlights Plan while a planning session is open", () => {
+    const { container } = render(<MobileNav view="planning" pane="main" isAdmin={false} {...handlers()} />);
+    expect(container.querySelector(".mnav-tab.is-active")?.textContent).toBe("Plan");
   });
 
   it("treats the list pane as 'Tasks' being current, whatever the view", () => {

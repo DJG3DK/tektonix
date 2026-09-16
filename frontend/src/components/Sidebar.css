@@ -379,14 +379,18 @@
     border-right: none;
   }
   .sidebar-header {
-    padding-top: calc(var(--s5) + var(--safe-t));
+    padding-top: calc(var(--s3) + var(--safe-t));
+    padding-bottom: var(--s2);
     padding-left: calc(var(--s4) + var(--safe-l));
     padding-right: calc(var(--s4) + var(--safe-r));
   }
 
+  /* The header's buttons are the bottom tab bar's job on a phone (MobileNav
+     has every one of them, Plan included). Stacked full-width they were six
+     rows, ~700px, above a list that got the third of the screen left over. */
+  .new-task-btn, .analytics-nav-btn { display: none; }
+
   /* Thumb-sized rows and controls. */
-  .new-task-btn { min-height: var(--tap); font-size: var(--fs-lg); font-weight: 650; }
-  .analytics-nav-btn { min-height: var(--tap); font-size: var(--fs-base); }
   .sidebar-item { padding: var(--s3); margin-bottom: var(--s1); }
   .sidebar-item-goal { font-size: var(--fs-base); line-height: 1.4; }
   .sidebar-item-time, .sidebar-item-cost { font-size: var(--fs-sm); }

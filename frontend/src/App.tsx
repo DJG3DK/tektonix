@@ -249,9 +249,10 @@ function AuthenticatedApp({ user, onLogout, onUserChanged }: { user: CurrentUser
         pane={mobilePane}
         isAdmin={user.role === "admin"}
         onTasks={() => setMobilePane("list")}
-        onNewTask={() => { setView("new-task"); setMobilePane("main"); }}
+        onNewPlan={() => { setSelectedPlanningSession(null); setView("planning"); setMobilePane("main"); }}
         onAnalytics={() => { setView("analytics"); setMobilePane("main"); }}
         onModels={() => { setView("models"); setMobilePane("main"); }}
+        onUsers={() => { setView("users"); setMobilePane("main"); }}
         onSettings={() => { setView("settings"); setMobilePane("main"); }}
         onGitHub={() => { setView("github"); setMobilePane("main"); }}
       />
