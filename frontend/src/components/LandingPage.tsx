@@ -150,7 +150,7 @@ export function LandingPage({ onSignIn }: Props) {
 
       <main id="top">
         <section className="lp-hero">
-          <p className="lp-eyebrow">LangGraph &middot; deepagents &middot; FastAPI + React &middot; its own model router</p>
+          <p className="lp-eyebrow">Self-hosted &middot; LangGraph &middot; deepagents &middot; FastAPI + React &middot; any model, via OpenRouter</p>
           <h1>
             An autonomous coding agent
             <br />
@@ -160,6 +160,8 @@ export function LandingPage({ onSignIn }: Props) {
             Give it a plain-English goal against a repository you have onboarded. It plans the
             work, writes the code, runs that project&rsquo;s <em>real</em> test suite, and ships
             it &mdash; with an independent review gate that must pass before anything merges.
+            Self-hosted on your own machine, against your own repositories, driving whichever
+            models you pin through OpenRouter.
           </p>
           <div className="lp-cta">
             <a className="lp-btn lp-btn-primary" href={REPO} target="_blank" rel="noopener noreferrer">

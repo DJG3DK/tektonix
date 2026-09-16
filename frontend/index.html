@@ -18,18 +18,18 @@
          shows; og:description is for social cards and is not a substitute.
 
          canonical, because the SPA fallback answers 200 with this same shell for
-         every path under /v2/. Without it a crawler can index an unbounded set
+         every path. Without it a crawler can index an unbounded set
          of URLs that are all in fact this one page. -->
-    <meta name="description" content="An autonomous coding agent that plans, writes and verifies real changes against your own repositories — running the project's real test suite and passing an independent review gate before anything merges. Source available." />
+    <meta name="description" content="A self-hosted, open-source autonomous coding agent. Give it a plain-English goal and it plans the work, writes the code, runs your project's real test suite, and passes an independent review gate before anything merges. Bring your own models through OpenRouter." />
     <link rel="canonical" href="https://tektonix.io/" />
     <meta property="og:type" content="website" />
     <meta property="og:site_name" content="Tektonix" />
     <meta property="og:title" content="Tektonix — autonomous coding agent" />
-    <meta property="og:description" content="Takes a plain-English goal, plans the work, writes the code, re-runs the project's real test suite, and ships it. Nothing merges on the agent's say-so: a second model reviews every diff in an isolated worktree first." />
+    <meta property="og:description" content="A self-hosted autonomous coding agent for your own repositories. Takes a plain-English goal, plans the work, writes the code, re-runs the project's real test suite, and ships it. Nothing merges on the agent's say-so: a second model, any model you like through OpenRouter, reviews every diff in an isolated worktree first." />
     <!-- og:image was missing until now, so the card rendered as a
-         summary_large_image with no image — a blank slab. The URL carries the
-         /v2/ prefix because nginx 302s the site root into /v2/, and a crawler
-         following a redirect for the image is not guaranteed to keep it. -->
+         summary_large_image with no image — a blank slab. Absolute, because a
+         crawler following a redirect for the image is not guaranteed to keep
+         it. -->
     <meta property="og:url" content="https://tektonix.io/" />
     <meta property="og:image" content="https://tektonix.io/og-preview.png" />
     <meta property="og:image:width" content="1200" />
@@ -38,13 +38,12 @@
     <meta name="twitter:image" content="https://tektonix.io/og-preview.png" />
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:title" content="Tektonix — autonomous coding agent" />
-    <meta name="twitter:description" content="Plans, writes, tests and ships code to real repos — with an independent review gate before anything merges." />
-    <!-- RELATIVE hrefs on purpose: this app is
-         served under /v2/ behind nginx, and a root-absolute /favicon.ico gets
-         302-redirected to /v2/ and comes back as HTML. Relative resolves to
-         /v2/favicon.ico, which the backend serves from dist/. No SVG icon —
-         the hand-drawn cube SVG is illegible at 16px (it shipped as mush on
-         the demo site until replaced with these hand-tuned PNGs). -->
+    <meta name="twitter:description" content="A self-hosted open-source coding agent. Plans, writes, tests and ships code to your real repos, with an independent review gate before anything merges. Any model, via OpenRouter." />
+    <!-- Relative hrefs, kept from when this app was served under a /v2/
+         sub-path: they resolve correctly at the root too, so there is nothing
+         to change. No SVG icon — the hand-drawn cube SVG was illegible at
+         16px (it shipped as mush on the demo site until replaced with these
+         hand-tuned PNGs). -->
     <link rel="icon" href="favicon.ico" sizes="any" />
     <link rel="icon" type="image/png" sizes="32x32" href="favicon-32x32.png" />
     <link rel="icon" type="image/png" sizes="16x16" href="favicon-16x16.png" />
