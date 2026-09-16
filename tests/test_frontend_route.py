@@ -31,7 +31,9 @@ def test_a_clear_frontend_majority_routes_frontend_even_for_a_feature():
     text = "Add a Notional column: frontend/src/pages/OpenPositionsPage.tsx, frontend/src/utils/format.ts, frontend/src/utils/positions.ts and a note in docs/README.md"
     d = classify_frontend(text, category="feature")
     assert d.is_frontend
-    assert d.reason == "3 of 3 named files are frontend"
+    # Three frontend files and no backend file trips the quorum branch, which
+    # is the more specific reason for the same decision.
+    assert d.reason == "3 frontend files named, no backend files"
 
 
 def test_any_named_backend_path_routes_general_whatever_the_count():
@@ -188,3 +190,39 @@ def test_a_settled_planning_category_reaches_the_route_decision():
     source = inspect.getsource(srv._run_planning_turn_bg)
     assert 'classify_frontend(text, _meta_val.get("category")' in source
     assert "classify_frontend(text, None" not in source
+
+
+# ---------------------------------------------------------------------------
+# a backend WORD must not outrank an unambiguous list of frontend FILES
+# (3DSteals, 2026-09-16)
+# ---------------------------------------------------------------------------
+
+def test_a_prose_backend_word_does_not_beat_several_frontend_files():
+    """The live miss: a storefront error-state task naming four .tsx files and
+    zero backend files routed to the general coder because the word "endpoint"
+    appeared in a sentence describing what already existed. It then stalled in
+    a tool loop on the weaker seat."""
+    text = ("Make a dead API visible on the storefront. The API's health endpoint already works; "
+            "this is about apps/storefront/src/components/LoadError.tsx, "
+            "apps/storefront/src/pages/HomePage.tsx, apps/storefront/src/pages/ShopPage.tsx and "
+            "apps/storefront/src/pages/ProductDetailPage.tsx.")
+    d = classify_frontend(text)
+    assert d.is_frontend, d.reason
+    assert "no backend files" in d.reason
+
+
+def test_one_frontend_file_beside_a_backend_word_still_routes_general():
+    """The guard on the above. One component mentioned next to a migration is
+    the 2026-09-09 case and must not flip: the migration is the whole risk."""
+    d = classify_frontend("Add a migration so the ShopPage.tsx filter can read the new column")
+    assert d.route == "general" and "migration" in d.reason
+
+
+def test_a_named_backend_file_still_wins_outright():
+    """A backend PATH is the strong signal and the quorum must not weaken it,
+    however many components sit beside it."""
+    text = ("apps/api/prisma/schema.prisma plus apps/storefront/src/a.tsx, "
+            "apps/storefront/src/b.tsx, apps/storefront/src/c.tsx, apps/storefront/src/d.tsx")
+    d = classify_frontend(text)
+    assert d.route == "general"
+    assert "schema.prisma" in d.reason

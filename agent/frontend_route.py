@@ -59,6 +59,18 @@ BACKEND_EXTS = frozenset({".sql", ".prisma", ".py", ".go", ".rs", ".java", ".rb"
 BACKEND_KEYWORDS = ("migration", "schema", "database", "prisma", "sql", "endpoint", "controller", "foreign key", " fk ", "orm", "backfill")
 # A frontend majority has to be clear, not a coin flip.
 FRONTEND_MAJORITY = 2 / 3
+# How many frontend files it takes for a backend WORD in the prose to stop
+# outranking them. A backend PATH always wins regardless (see the 2026-09-09
+# note above) -- this is only about vocabulary.
+#
+# Three, because one is genuinely ambiguous and several is not: "add a
+# migration so ShopPage.tsx can read the new column" names one component and
+# is backend work, while a task naming three or more frontend files and zero
+# backend ones is frontend work whose description happens to say "endpoint".
+# The live case (2026-09-16) was a storefront error-state task that named four
+# .tsx files, no backend files at all, and routed to the general coder because
+# the word "endpoint" appeared in a sentence about what was already built.
+FRONTEND_PATH_QUORUM = 3
 FRONTEND_DIRS = frozenset({"frontend", "web", "client", "ui", "components", "pages", "views", "layouts", "styles", "css"})
 FRONTEND_EXTS = frozenset({".tsx", ".jsx", ".css", ".scss", ".less", ".html", ".vue", ".svelte"})
 CODE_EXTS = FRONTEND_EXTS | frozenset({".ts", ".js", ".mjs", ".cjs", ".py", ".go", ".rs", ".java", ".rb", ".php", ".sql", ".sh", ".json", ".yaml", ".yml", ".prisma"})
@@ -141,14 +153,24 @@ def _is_backend_path(path: str) -> bool:
     return any(p in BACKEND_DIRS for p in parts[:-1]) and not _is_frontend_path(path)
 
 
-def backend_signals(text: str) -> list[str]:
-    """Named backend paths and backend keywords in the request, for the reason string."""
-    fe, other = named_paths(text)
-    hits = [p for p in other if _is_backend_path(p)]
+def backend_paths(text: str) -> list[str]:
+    """Backend FILES the request names. The strong signal: a task that edits
+    schema.prisma is backend work however many components it also touches."""
+    _fe, other = named_paths(text)
+    return [p for p in other if _is_backend_path(p)]
+
+
+def backend_keywords(text: str) -> list[str]:
+    """Backend VOCABULARY in the prose. Weaker than a path -- a sentence can
+    say "endpoint" while every file the task names is a component."""
     lowered = (text or "").lower()
     # Whole words only: "orm" must not fire on "format.ts", "sql" not on "mysql".
-    hits += [kw.strip() for kw in BACKEND_KEYWORDS if re.search(_word(kw.strip()), lowered)]
-    return hits
+    return [kw.strip() for kw in BACKEND_KEYWORDS if re.search(_word(kw.strip()), lowered)]
+
+
+def backend_signals(text: str) -> list[str]:
+    """Both kinds, for the reason string and for callers that want either."""
+    return backend_paths(text) + backend_keywords(text)
 
 
 def named_paths(text: str) -> tuple[list[str], list[str]]:
@@ -183,12 +205,26 @@ def classify_frontend(text: str, category: str | None = None, override: str | No
         return RouteDecision(override, "operator's choice")
     if category in FRONTEND_CATEGORIES:
         return RouteDecision(FRONTEND, f"category {category}")
-    backend = backend_signals(text)
-    if backend:
-        shown = ", ".join(dict.fromkeys(backend))[:120]
+    # A named backend FILE ends it: that is the 2026-09-09 lesson, and the
+    # risk it protects (a migration inside a mostly-frontend diff) is real.
+    b_paths = backend_paths(text)
+    if b_paths:
+        shown = ", ".join(dict.fromkeys(b_paths))[:120]
         return RouteDecision(GENERAL, f"backend work named: {shown}")
+
     fe, other = named_paths(text)
     total = len(fe) + len(other)
+    b_words = backend_keywords(text)
+
+    # No backend file anywhere, and several frontend ones: the files are better
+    # evidence than a word in a sentence about them.
+    if len(fe) >= FRONTEND_PATH_QUORUM and not other:
+        return RouteDecision(FRONTEND, f"{len(fe)} frontend files named, no backend files")
+
+    if b_words:
+        shown = ", ".join(dict.fromkeys(b_words))[:120]
+        return RouteDecision(GENERAL, f"backend work named: {shown}")
+
     if fe and len(fe) >= FRONTEND_MAJORITY * total:
         return RouteDecision(FRONTEND, f"{len(fe)} of {total} named files are frontend")
     if fe and other:
