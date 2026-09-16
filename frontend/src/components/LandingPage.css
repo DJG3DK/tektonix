@@ -441,6 +441,11 @@
 
 .lp-planning-copy .lp-sub + .lp-sub { margin-top: var(--s5); }
 
+/* The planning shot sits inside the copy column, not as a third grid child --
+   .lp-planning is two columns, so a third child would start a new row under
+   the prose and leave the facts list stranded beside empty space. */
+.lp-planning-shot { margin: var(--s6) 0 0; }
+
 .lp-facts {
   display: flex;
   flex-direction: column;

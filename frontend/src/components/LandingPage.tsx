@@ -1,14 +1,11 @@
 import logoUrl from "../assets/tektonix-logo.png";
-import shotDashboard from "../assets/shots/dashboard.webp";
-import shotModelRoles from "../assets/shots/modelspage1.webp";
-import shotProbes from "../assets/shots/modelspage2.webp";
-import shotRoles from "../assets/shots/modelspage4.webp";
-import shotBehaviour from "../assets/shots/settingspane1.webp";
-import shotProjects from "../assets/shots/settingspane2.webp";
-import shotKeys from "../assets/shots/settingspane3.webp";
-import shotSpend from "../assets/shots/analytics1.webp";
-import shotUsage from "../assets/shots/analytics3.webp";
-import shotTools from "../assets/shots/analytics4.webp";
+import shotPipeline from "../assets/shots/models2.webp";
+import shotAnalytics from "../assets/shots/analytics2.webp";
+import shotLedger from "../assets/shots/analytics3.webp";
+import shotReviewer from "../assets/shots/models3.webp";
+import shotSupport from "../assets/shots/models4.webp";
+import shotUsers from "../assets/shots/users2.webp";
+import shotPlanning from "../assets/shots/dashboard2.webp";
 import "./LandingPage.css";
 
 const REPO = "https://github.com/DJG3DK/tektonix";
@@ -64,69 +61,37 @@ const STAGES = [
 
 const FEATURES = [
   {
-    img: shotRoles,
-    alt: "Support roles — summarizer, vision, cartographer and consolidator, each with capability badges",
-    title: "Every role is a named alias you can repin",
-    body: `Planner, coder (and a separate frontend coder), investigator and test-writer drive
-      the build; summarizer, vision, cartographer and consolidator support it. Each carries
-      live pricing, the capability badges its job requires, and an optional pinned provider
-      — so swapping a model is one dropdown rather than a config edit and a restart. The
-      router behind those aliases is ours: a small FastAPI service with typed fallback
-      chains, retries only on genuinely transient upstream failures, and hot config reload.`,
-  },
-  {
-    img: shotBehaviour,
-    alt: "Settings — auto mode and final merge review switches",
-    title: "Two switches decide how much rope the agent gets",
-    body: `Auto mode lets a task finish unattended. Final merge review keeps a human between an
-      approved diff and your live repo. Each switch spells out exactly what you give up by
-      turning it on.`,
-  },
-  {
-    img: shotSpend,
-    alt: "Analytics — spend, outcomes and trace data",
-    title: "What it cost, and what came of it",
-    body: `Spend against your API balance, average fix cycles per task, and outcomes split into
-      done, stopped and escalated. Every figure is the provider's own billed cost for that
-      call, read back from the router's ledger — not a rate-table estimate, which drifts the
-      moment a provider changes its pricing. The review gate's spend is tracked separately:
-      the agent's budget and the gate's are different things.`,
-  },
-  {
-    img: shotProbes,
-    alt: "Reviewer role listing models that pass its capability probes",
-    title: "Models are probed, not assumed",
-    body: `Each role lists which models actually pass its requirements — strict tool calling,
-      structured output — so you find out here rather than four minutes into a task.`,
-  },
-  {
-    img: shotProjects,
-    alt: "Settings — configured projects and notification options",
-    title: "Add a project by pointing at a directory",
-    body: `Onboarding inspects it, proposes a configuration and asks you to confirm. Anything it
-      cannot verify arrives switched off with the reason attached. Each project becomes a live
-      repo plus the git worktree the agent builds in.`,
-  },
-  {
-    img: shotUsage,
-    alt: "Analytics — per-role model usage with call counts, tokens and latency",
+    img: shotLedger,
+    alt: "Analytics — per-role model usage with call counts, tokens, latency, cost and cache rate",
     title: "Where the tokens actually went",
-    body: `Per-role model usage with call counts, tokens and average latency, so an expensive role
-      is something you can see rather than something you infer from the bill.`,
+    body: `Every role's real usage, read from the router's own per-call ledger: calls, tokens,
+      average latency, what it cost, and how much of it was served from cache. An expensive
+      role is something you can see here rather than infer from the bill at the end of the
+      month.`,
   },
   {
-    img: shotTools,
-    alt: "Analytics — tool call reliability and error rates over time",
-    title: "Tool reliability as a trend",
-    body: `Errors broken down by tool, so a model that has started failing one specific call shows
-      up as a trend rather than as a bad day.`,
+    img: shotReviewer,
+    alt: "The commit reviewer's role, showing how many probed models meet its requirements",
+    title: "Models are probed, not assumed",
+    body: `The reviewer needs strict tool calling and a forced response shape, and most models
+      do not have both. Each role lists the ones that actually passed its probes — 134 of 253
+      on the last run — so you find out here rather than four minutes into a task.`,
   },
   {
-    img: shotKeys,
-    alt: "Settings — API keys and integrations, masked to the last four characters",
-    title: "Credentials live in .env, never the database",
-    body: `Existing values come back masked to their last four characters — enough to confirm
-      which key is installed, not enough to use it.`,
+    img: shotSupport,
+    alt: "Support roles — classifier, summarizer, vision and cartographer, each with capability badges",
+    title: "The support roles are separate on purpose",
+    body: `Classifier, summarizer, vision and cartographer do not need what the coder needs, and
+      paying coder prices for them is waste. Each says plainly what it requires — structured
+      output only, plain completion, a large context window — and each is pinned on its own.`,
+  },
+  {
+    img: shotUsers,
+    alt: "Users — per-project access control and adding a user",
+    title: "People get the projects they need, not all of them",
+    body: `An account is scoped to named projects, and everything follows that scope: the task
+      list, planning sessions, analytics. Admins see everything; a teammate added for one
+      repository cannot start work against another.`,
   },
 ];
 
@@ -148,12 +113,8 @@ const CONTROLS = [
     body: "When it hits a gated action, or calls ask_user to ask you something rather than guess, the request appears in the task stream and your answer goes back into the same paused thread.",
   },
   {
-    title: "Projects are confined to known roots",
-    body: "A project can only be onboarded from inside AGENT_PROJECT_ROOTS, judged after symlinks resolve. The worktree location and project name are derived by the server, never taken from a request.",
-  },
-  {
-    title: "Check commands are matched, not accepted",
-    body: "The commands the gate runs are matched against what the server itself proposed, so a client cannot introduce a new one for the review or deploy service to execute.",
+    title: "The server decides what runs, and where",
+    body: "A project can only be onboarded from inside AGENT_PROJECT_ROOTS, judged after symlinks resolve, and its worktree location and name are derived rather than taken from the request. The commands the gate runs are matched against what the server itself proposed, so a client cannot introduce a new one for the review or deploy service to execute.",
   },
   {
     title: "No task is a dead end",
@@ -224,7 +185,7 @@ export function LandingPage({ onSignIn }: Props) {
             <div className="lp-chrome" aria-hidden="true">
               <span /> <span /> <span />
             </div>
-            <img src={shotModelRoles} alt="The model configuration screen of the Tektonix dashboard" />
+            <img src={shotPipeline} alt="Model configuration — the build pipeline roles, each with its own pinned model and live pricing" />
           </figure>
         </section>
 
@@ -261,16 +222,17 @@ export function LandingPage({ onSignIn }: Props) {
                 <span /> <span /> <span />
               </div>
               <img
-                src={shotDashboard}
-                alt="The dashboard — planning sessions and build tasks grouped by category in the sidebar, with the credit balance below"
+                src={shotAnalytics}
+                alt="The dashboard — spend, outcomes and per-repo cost, with planning sessions and tasks grouped by category in the sidebar"
               />
             </div>
             <figcaption>
-              Planning sessions and build tasks sit together in the sidebar, each grouped by the
-              same six-way category the classifier assigns, with search and a per-repo filter
-              across both. Running tasks get their own always-visible group, so a refresh mid-task
-              never buries the thing you are watching. Remaining router credit sits at the bottom
-              and turns red under 15%, so running dry is something you see coming.
+              Planning sessions and build tasks share one sidebar, grouped by the same category
+              the classifier assigns and filterable per repo. Spend, outcomes and average fix
+              cycles sit up front — the review gate&rsquo;s own cost counted separately, because
+              the agent&rsquo;s budget and the gate&rsquo;s are different things. Remaining credit
+              sits at the bottom and turns red under 15%, so running dry is something you see
+              coming.
             </figcaption>
           </figure>
           <div className="lp-features">
@@ -307,6 +269,17 @@ export function LandingPage({ onSignIn }: Props) {
               fresh every turn, then sticky upward within a session &mdash; a short
               follow-up cannot quietly downgrade the model mid-plan.
             </p>
+            <figure className="lp-shot lp-planning-shot">
+              <div className="lp-chrome" aria-hidden="true">
+                <span /> <span /> <span />
+              </div>
+              <img
+                src={shotPlanning}
+                alt="Starting a planning session — choosing the repository and the model route"
+                loading="lazy"
+                decoding="async"
+              />
+            </figure>
           </div>
           <ul className="lp-facts">
             <li>
