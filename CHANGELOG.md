@@ -1,6 +1,51 @@
 # Changelog
 
-## Unreleased
+## v0.6.0 — a name of its own, a router of its own, and a console that knows where you are
+
+**2026-09-16**
+
+Sixty commits on top of v0.5.0. The agent is called Tektonix and lives at
+tektonix.io; the LiteLLM proxy is gone and a router this repo owns has taken
+its place; the dashboard's numbers now come from this box rather than from
+LangSmith; and the Settings page became a rail with one section at a time.
+
+### Tektonix
+
+3D-Agent is now Tektonix, everywhere it is user-visible: the dashboard, the
+landing page, the sign-in card, OG cards, the TOTP issuer, the router's
+OpenRouter headers, the sandbox image tag, the release tarball and the GitHub
+repository (`DJG3DK/tektonix`). The other businesses on the same box —
+3DSteals, 3dwebcatchers, 3dcryptobots.com — are untouched. The dashboard is
+served at `/` on its own domain, `tektonix.io`, with `www` redirecting; the
+old `/v2/` subpath on agent.3dcryptobots.com redirects surgically so the other
+tool that shares that host keeps its login.
+
+The mark is a plumb line and the palette is called Drafting: dark charcoal
+with a gold accent. The landing page was reshot in it and condensed (features
+8 → 4, controls 7 → 6), and the hero copy no longer describes a tier system
+that was removed weeks ago. For search: a real `robots.txt`, a sitemap,
+structured data, and the landing page is prerendered at build time so a
+crawler with JavaScript off sees the page rather than an empty root div.
+
+### The model router is ours
+
+`services/model-router` replaces the LiteLLM proxy. All 21 deployments were
+`openrouter/...`, so the proxy was a proxy in front of a proxy; what was
+actually used was alias resolution, ordered fallbacks, a billed cost figure
+and a callback into our own ledger, and the router does those four things
+directly. It also retries transient failures, falls back on a stream up to
+the first byte, keeps a stats view of the ledger, runs under pm2 and is
+linted and tested in CI.
+
+**Breaking:** LiteLLM is removed — the process, the package, its admin panel,
+the WebAuthn gate, its vhosts and its cert. Five consumers were on `:4000`,
+and only two were findable by grepping `.env` files. Every one now resolves
+through the router on `:4001` **with its own key**; anything of yours still
+pointing at `:4000` will stop. The cutover and rollback are in
+`docs/runbooks/model-router-cutover.md`.
+
+The dead tier system (SIMPLE / MEDIUM / COMPLEX / REASONING) is gone from the
+router and from the Models page, which now says what it actually controls.
 
 ### The model pins are yours
 
@@ -16,6 +61,73 @@ it belongs with your backups; a new managed role has to be added to the
 example as well as to your live config, and a test enforces that; and a
 checkout that has never been installed still reads the example, so the rate
 table and the Models page work in a fresh clone.
+
+### The dashboard's numbers come from this box
+
+Three Analytics panels — per-role model usage, tool reliability, run health —
+were read back out of LangSmith, which made an optional third-party service
+load-bearing for "what is this agent doing", and cost a core: LangSmith's
+input masking walked every run's payload on the event loop that serves the
+dashboard. The panels now read the router's ledger and the tool-event table
+here. Per-role usage is one row per role and says where each number comes
+from; the ledger records the alias the client asked for, not only the model
+it resolved to, so a role's traffic is no longer split ten ways.
+
+### Settings is a rail
+
+The Settings page was one 4,334px scroll of every card the deployment has,
+at three different widths, with two unrelated cards both titled "GitHub". It
+is now a rail — Account, Agent behavior, Notifications, Projects, GitHub,
+Runtime limits, Environment, Audit log, with admin-only sections hidden from
+accounts that cannot use them — and one section at a time, each in a single
+readable column.
+
+### Bash is for running things
+
+Measured live: one test-writer subagent made 229 bash calls against one edit
+and one write, patching JavaScript through Python heredocs while holding
+`read`, `write` and `edit` the whole time. Every bash call starts a container,
+so that is wall-clock, not style. The tool descriptions now say what each is
+for, the read and shell nudges catch what the model actually types, the repo
+tools accept `file_path` so a name slip is not a cliff, and an
+empty-but-successful command says what it did.
+
+### Planning and build
+
+A planning session's transcript is kept where a restart cannot take it: the
+in-memory buffer died with the process and the checkpoint's message list is
+rewritten on every compaction, so a 78-minute turn had no readable history.
+The build summarization ceiling is raised from 80k tokens and is tunable —
+a coder rode the old ceiling for an hour, re-reading its own output after
+each compaction discarded it. A reworded plan step is the same step, the
+step counter cannot go backwards, and a verify pass with no diff can still
+reach a conclusion.
+
+Auto mode covers GitHub inbox tasks: a Dependabot fix that cannot change a
+version string unattended was not safer, only slower. The merge gate still
+applies to every one of them.
+
+### Operating it
+
+A health watchdog restarts only what a restart can fix: it polls each
+service's live and ready probes, so a process that is alive but wedged, or
+healthy in front of a dead database, is distinguished from one that died — the
+silent outage the operator hit before. It covers 3DSteals, 3d-bot and its
+compute service. The pm2 memory cap is declared, with its cost stated.
+
+Performance: tool-call streaming is off (langchain-core re-parsed the whole
+accumulated argument JSON on every chunk — 25 seconds of CPU for one 734-token
+call), the plan-check nag no longer edits the system message so the cached
+prompt prefix survives, and a task's bill is durable.
+
+### Packaging
+
+Two seams for the container bundle (`AGENT_HOST_PATH_MAP`, so bind-mount
+sources resolve against the host the Docker daemon actually sees), then the
+bundle itself: postgres + router + agent as a compose stack, one command on
+any host with Docker, all four health checks green on Linux. Windows is the
+next test. `docs/roadmap-packaging.md` has the plan, including the CLI and
+GitHub-hosted projects.
 
 ## v0.5.0 — work that arrives on its own, ten stacks it can check, and a box a second person can run
 
