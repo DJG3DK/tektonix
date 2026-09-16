@@ -1,0 +1,16 @@
+# Tektonix — https://tektonix.io
+#
+# There was no robots.txt here until 2026-09-16, which was worse than having
+# none: the SPA fallback answered /robots.txt with the landing page itself,
+# HTTP 200 and text/html, so every crawler asking for a crawl policy received
+# a web page instead. A 404 at least means "no policy"; a 200 of HTML is a
+# malformed one.
+
+User-agent: *
+Allow: /
+
+# The API answers JSON to an authenticated session and 401 to everyone else.
+# Nothing there is indexable and crawling it only burns budget.
+Disallow: /api/
+
+Sitemap: https://tektonix.io/sitemap.xml

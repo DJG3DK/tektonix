@@ -53,6 +53,26 @@
          so the tab title is the first thing a visitor reads, not just a label
          on an operator's pinned tab. Matches og:title. -->
     <title>Tektonix — autonomous coding agent</title>
+    <!-- Structured data. Static in the HTML head on purpose: the page is a
+         React SPA, and a crawler that does not execute JavaScript sees only
+         this shell — anything the app injects after hydration may never be
+         read. Claims here are limited to what the page itself states, because
+         schema.org markup that overstates is worse than none. -->
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "SoftwareApplication",
+        "name": "Tektonix",
+        "applicationCategory": "DeveloperApplication",
+        "operatingSystem": "Linux, or any host running Docker",
+        "url": "https://tektonix.io/",
+        "description": "An autonomous coding agent that takes a plain-English goal, plans the work, writes the code, re-runs the project's real test suite, and ships it — with an independent review gate that must pass before anything merges.",
+        "codeRepository": "https://github.com/DJG3DK/tektonix",
+        "license": "https://polyformproject.org/licenses/noncommercial/1.0.0/",
+        "isAccessibleForFree": true,
+        "screenshot": "https://tektonix.io/og-preview.png"
+      }
+    </script>
   </head>
   <body>
     <div id="root"></div>
