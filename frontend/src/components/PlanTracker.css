@@ -1,7 +1,10 @@
+/* Both rows wrap: a twelve-step plan is ~370px of circles, which on a
+   390px phone ran off the right edge with no scrollbar to say so. */
 .plan-tracker {
   display: flex;
   align-items: center;
-  gap: 12px;
+  flex-wrap: wrap;
+  gap: 8px 12px;
 }
 
 .plan-tracker-summary {
@@ -13,6 +16,7 @@
 
 .plan-tracker-steps {
   display: flex;
+  flex-wrap: wrap;
   gap: 5px;
 }
 

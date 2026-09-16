@@ -113,7 +113,9 @@ export function TaskView({ task, stream, setGeneration }: Props) {
             <span className="task-view-budget-cap">${task.budget_usd.toFixed(0)}</span>
           </div>
         </div>
-        <h1 className="task-view-goal">{task.goal}</h1>
+        {/* The goal is not repeated here: it already opens the log below as
+            the first message, and on a phone the clamped copy of it pushed
+            the live stream down to a third of the screen. */}
         <PlanTracker plan={stream.plan} />
       </div>
 
