@@ -22,8 +22,12 @@
  * overwritten by generated config. Projects onboarded through the wizard
  * have no built-in entry, so they run entirely on projects.json.
  *
- * Read fresh on each call (cheap, small file) so a project onboarded at
- * runtime is picked up without restarting these services.
+ * Read fresh on each call (cheap, small file), and both services call it
+ * per poll tick / per request instead of binding the result at startup.
+ * Until 2026-09-16 they bound it once, so a project created or given
+ * checks at runtime was invisible until a pm2 restart: the reviewer never
+ * polled the new repo, and the agent's wait_for_review timed out against
+ * a verdict that could not arrive.
  */
 
 const fs = require('fs');

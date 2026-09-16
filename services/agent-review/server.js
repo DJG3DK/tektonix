@@ -54,7 +54,13 @@ try {
 const { loadProjects, healthProjectsCheck } = require('../shared/projects-config');
 const { runPreflight, formatPreflightError } = require('./preflight');
 
-const PROJECTS = loadProjects(BUILTIN_PROJECTS, { section: 'deploy' });
+// A function, never a constant bound at startup -- same fix as the
+// reviewer's currentProjects() (2026-09-16): a project created from the
+// dashboard did not exist here until pm2 restarted this service, so its
+// first merge answered 404 on a project the agent could plainly see.
+function currentProjects() {
+    return loadProjects(BUILTIN_PROJECTS, { section: 'deploy' });
+}
 
 // Mirrors config.yaml's model_list — the raw backend model strings the router's
 // `return_raw_model_name` puts in response.model / routing_decision.routed_model
@@ -88,7 +94,7 @@ function run(cmd, args, cwd) {
 const git = (cwd, args) => run('git', args, cwd);
 
 function projectOr404(req, res) {
-    const p = PROJECTS[req.params.name];
+    const p = currentProjects()[req.params.name];
     if (!p) { res.status(404).json({ error: `unknown project "${req.params.name}"` }); return null; }
     return p;
 }
@@ -127,7 +133,7 @@ app.use(express.json());
 app.use(rateLimit({ windowMs: 60 * 1000, limit: 600, standardHeaders: 'draft-7', legacyHeaders: false }));
 
 app.get('/api/projects', (req, res) => {
-    res.json(Object.keys(PROJECTS));
+    res.json(Object.keys(currentProjects()));
 });
 
 // Read-only: what's ready to merge, and can it fast-forward cleanly.
@@ -224,7 +230,7 @@ app.get('/health', (req, res) => {
         // Onboarding, not the merged map, is what this answers for: see
         // healthProjectsCheck in services/shared/projects-config.js, which
         // both health routes share so they cannot drift apart.
-        projects: healthProjectsCheck(PROJECTS),
+        projects: healthProjectsCheck(currentProjects()),
         // The reviewer's verdict file is what gates every merge; unreadable
         // means the gate cannot answer and merges fail closed. Absent before
         // commit-reviewer has ever run, which is the same fresh-install case
@@ -317,7 +323,8 @@ app.post('/api/projects/:name/merge', requireControlSecret, async (req, res) => 
 
 // Explicit, separate from merge — deploying (rebuilding + restarting the
 // live process to actually pick up merged code) is a deliberate second
-// action, never implicit. Runs each project's build steps (see PROJECTS)
+// action, never implicit. Runs each project's build steps (projects.json's
+// deploy section, or builtin-projects.local.js)
 // BEFORE any pm2 restart, in declared order — for a monorepo project that's the API
 // compiling before it restarts, then the two static frontends rebuilding
 // with no restart of their own (nginx just serves whatever's newest on

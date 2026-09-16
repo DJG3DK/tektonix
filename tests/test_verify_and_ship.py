@@ -36,6 +36,24 @@ def _stub_task_branch(monkeypatch):
     monkeypatch.setattr(vs, "ensure_task_branch", _ok)
 
 
+@pytest.fixture(autouse=True)
+def autodetect_calls(monkeypatch):
+    """Record the post-merge check-detection hook instead of running it: the
+    real one asks the reviewer over HTTP and, on this host, would find the
+    live service. Tests that need an entry back set `entry` on the list."""
+    class _Calls(list):
+        entry = None
+
+    calls = _Calls()
+
+    async def _record(repo):
+        calls.append(repo)
+        return calls.entry
+
+    monkeypatch.setattr(vs, "autodetect_checks_if_none", _record)
+    return calls
+
+
 def _state(**overrides):
     s = initial_state(task_id="t1", goal="do the thing", repo="test-repo", budget_usd=1.0)
     s.update(overrides)
@@ -399,6 +417,58 @@ async def test_deploy_fails_escalates_but_preserves_committed_sha(monkeypatch):
     )
 
 
+# ---------------------------------------------------------------------------
+# post-merge check detection (agent/project_checks.py)
+# ---------------------------------------------------------------------------
+
+
+def _ready_and_shipped(monkeypatch, deployed):
+    monkeypatch.setattr(vs, "run_all_checks", _fake_checks(all_ok=True))
+    monkeypatch.setattr(vs, "git_diff", _fake_return("diff --git a/x b/x\n+1"))
+    monkeypatch.setattr(vs, "git_commit", _fake_return({"ok": True}))
+    monkeypatch.setattr(vs, "current_sha", _fake_return("deadbeef"))
+    monkeypatch.setattr(vs, "trigger_check", _fake_return(None))
+    monkeypatch.setattr(vs, "wait_for_review", _fake_review(verdict="READY"))
+    monkeypatch.setattr(vs, "merge_and_deploy", _fake_return(deployed))
+
+
+async def test_successful_ship_runs_check_detection_and_logs_its_entry(monkeypatch, autodetect_calls):
+    _ready_and_shipped(monkeypatch, {"ok": True})
+    autodetect_calls.entry = {
+        "node": "verify_and_ship", "step_id": None, "cost_usd": 0.0, "timestamp": "2026-09-16T00:00:00Z",
+        "summary": "configured detected checks for test-repo: lint", "detail": "lint: npm run lint",
+    }
+
+    result = await vs._verify_and_ship(_state(require_merge_review=False), config=None)
+
+    assert vs._is_terminal(result) is True
+    assert autodetect_calls == ["test-repo"]
+    summaries = [e["summary"] for e in result["execution_log"]]
+    assert summaries[-2:] == ["merged and deployed", "configured detected checks for test-repo: lint"], \
+        "the hook's entry rides along after the deploy entry"
+
+
+async def test_successful_ship_with_nothing_to_detect_logs_nothing_extra(monkeypatch, autodetect_calls):
+    _ready_and_shipped(monkeypatch, {"ok": True})
+    result = await vs._verify_and_ship(_state(require_merge_review=False), config=None)
+    assert autodetect_calls == ["test-repo"]
+    assert [e["summary"] for e in result["execution_log"]][-1] == "merged and deployed"
+
+
+async def test_failed_deploy_never_runs_check_detection(monkeypatch, autodetect_calls):
+    _ready_and_shipped(monkeypatch, {"ok": False, "stage": "restart"})
+    result = await vs._verify_and_ship(_state(require_merge_review=False), config=None)
+    assert result["escalated"] is True
+    assert autodetect_calls == [], "nothing shipped, so nothing to detect against"
+
+
+async def test_failed_build_never_runs_check_detection(monkeypatch, autodetect_calls):
+    _ready_and_shipped(monkeypatch, {"ok": False, "stage": "build", "error": "tsc: boom"})
+    result = await vs._verify_and_ship(_state(require_merge_review=False), config=None)
+    assert result["pending_feedback"] is not None
+    assert autodetect_calls == []
+
+
 async def test_deploy_build_failure_loops_back_instead_of_escalating(monkeypatch):
     """A build-time error (e.g. an unused-var typecheck failure left behind
     by an edit) is a real, agent-fixable code error -- not an infra problem --
@@ -642,6 +712,36 @@ async def test_no_diff_pending_sha_already_in_live_concludes_without_review(monk
     assert result.get("committed_sha") is None, "shipped -- nothing left to track"
     assert (result.get("review_gate_result") or {}).get("verdict") == "READY"
     assert any("auto-merge" in (e.get("summary") or "") for e in result.get("execution_log") or [])
+
+
+async def test_auto_merged_conclusion_also_runs_check_detection(monkeypatch, tmp_path, autodetect_calls):
+    """The auto-merge path is a ship too; a project whose every merge lands
+    that way must still get its checks after the first one."""
+    import os
+    import subprocess
+
+    live = tmp_path / "live"
+    live.mkdir()
+    env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+           "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
+    subprocess.run(["git", "init", "-q"], cwd=live, check=True, env=env)
+    subprocess.run(["git", "-C", str(live), "commit", "--allow-empty", "-q", "-m", "shipped"],
+                   check=True, env=env)
+    sha = subprocess.run(["git", "-C", str(live), "rev-parse", "HEAD"],
+                         capture_output=True, text=True, check=True).stdout.strip()
+    monkeypatch.setitem(vs.PROJECTS, "test-repo", {"sandbox": str(tmp_path), "live": str(live)})
+    monkeypatch.setattr(vs, "run_all_checks", _fake_checks(all_ok=True))
+    monkeypatch.setattr(vs, "git_diff", _fake_return(""))
+    monkeypatch.setattr(vs, "current_sha", _fake_return(sha))
+    autodetect_calls.entry = {
+        "node": "verify_and_ship", "step_id": None, "cost_usd": 0.0, "timestamp": "2026-09-16T00:00:00Z",
+        "summary": "configured detected checks for test-repo: test", "detail": "test: npm test",
+    }
+
+    result = await vs._verify_and_ship(_state(no_diff_streak=0, committed_sha=sha), config=None)
+
+    assert autodetect_calls == ["test-repo"]
+    assert [e["summary"] for e in result["execution_log"]][-1] == "configured detected checks for test-repo: test"
 
 
 # ---------------------------------------------------------------------------

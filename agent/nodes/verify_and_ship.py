@@ -54,6 +54,7 @@ from agent.tools.git import current_sha, ensure_task_branch, git_commit, git_dif
 from agent import check_timing
 from agent import runtime_settings as _rs
 from agent.tools.review_gate import merge_and_deploy, trigger_check, wait_for_review
+from agent.project_checks import autodetect_checks_if_none
 from agent.tools.git import sha_in_repo
 from agent.outer_state import AgentState
 
@@ -357,18 +358,26 @@ async def _verify_and_ship_inner(state: AgentState, repo: str, repo_root: str,
             # sha, the work is shipped, so conclude instead of re-reviewing.
             live_root = (PROJECTS.get(repo) or {}).get("live")
             if live_root and await sha_in_repo(live_root, pending_sha):
+                shipped_log = [{
+                    "node": "verify_and_ship",
+                    "step_id": state["task_id"],
+                    "summary": "already merged and deployed (auto-merge on READY) -- concluding",
+                    "detail": f"live repo at {live_root} already contains pending commit {pending_sha}",
+                    "cost_usd": 0.0,
+                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                }]
+                # This is a ship too -- the merge just happened on the review
+                # service's side -- so the first-merge check detection must
+                # run here as well, or a project whose every merge lands via
+                # auto-merge would never get its checks.
+                checks_entry = await autodetect_checks_if_none(repo)
+                if checks_entry is not None:
+                    shipped_log.append(checks_entry)
                 return {
                     "committed_sha": None, "pending_merge_approval": None, "merge_approved_sha": None,  # shipped -- nothing left to track
                     "review_gate_result": {"verdict": "READY", "lastReviewedSha": pending_sha},
                     "stale_pending_review_streak": 0,
-                    "execution_log": [{
-                        "node": "verify_and_ship",
-                        "step_id": state["task_id"],
-                        "summary": "already merged and deployed (auto-merge on READY) -- concluding",
-                        "detail": f"live repo at {live_root} already contains pending commit {pending_sha}",
-                        "cost_usd": 0.0,
-                        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ"),
-                    }],
+                    "execution_log": shipped_log,
                 }
 
             prior_review = state.get("review_gate_result") or {}
@@ -745,10 +754,19 @@ async def _review_and_deploy(state: AgentState, repo: str, sha: str) -> dict:
             **_escalate(f"merge/deploy failed: {deployed}"),
         }
 
+    # The merge is live, so this is the first moment a brand-new project has
+    # real code for detection to look at. Only when the REVIEWER says it runs
+    # no checks (its built-ins can carry checks projects.json cannot see);
+    # never on a failed merge/deploy above. Never raises -- an exception here
+    # would turn a shipped task into an escalation via the outer try/except.
+    shipped_log = [log_entry, deploy_entry]
+    checks_entry = await autodetect_checks_if_none(repo)
+    if checks_entry is not None:
+        shipped_log.append(checks_entry)
     return {
         "committed_sha": None,  # shipped -- nothing left to track
         "pending_merge_approval": None,
         "merge_approved_sha": None,  # consumed by this merge; a future commit needs its own approval
         "review_gate_result": review,
-        "execution_log": [log_entry, deploy_entry],
+        "execution_log": shipped_log,
     }

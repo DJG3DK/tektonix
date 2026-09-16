@@ -119,7 +119,16 @@ try {
 // See services/shared/projects-config.js for the merge rule.
 const { loadProjects, healthProjectsCheck } = require('../shared/projects-config');
 
-const PROJECTS = loadProjects(BUILTIN_PROJECTS, { section: 'review' });
+// A function, never a constant bound at startup. Until 2026-09-16 this was
+// `const PROJECTS = loadProjects(...)`, so a project created from the
+// dashboard (or one whose checks were written after its first merge) did not
+// exist here until pm2 restarted the service: the poll never looked at its
+// branches, /check answered 404, and the agent's wait_for_review timed out
+// against a verdict that could not arrive. loadProjects reads a small file;
+// once per tick and per request is nothing.
+function currentProjects() {
+  return loadProjects(BUILTIN_PROJECTS, { section: 'review' });
+}
 
 const GITLEAKS_BIN = path.join(__dirname, 'bin', 'gitleaks');
 
@@ -805,7 +814,11 @@ async function cleanupWorktree(cfg, worktreePath) {
 
 async function runChecks(cfg, worktreePath) {
   const results = [];
-  for (const check of cfg.checks) {
+  // `|| []`: a brand-new project has no review.checks yet (its first merge is
+  // what triggers detection), and iterating undefined threw a TypeError out
+  // of reviewProject -- "review failed with an internal error", no verdict,
+  // and the agent's wait_for_review timed out.
+  for (const check of cfg.checks || []) {
     const dir = path.join(worktreePath, check.dir);
     log(`  running ${check.name} (${check.cmd} ${check.args.join(' ')}) in ${check.dir}`);
     // A check may declare its own budget; test:review runs 50 suites and
@@ -866,7 +879,7 @@ async function markPreexistingFailures(project, cfg, base, checkResults, prevBas
 
 // Mirrors ci.yml's `build` job: the build itself, then the three assertions
 // it runs after — each exists because it caught a real incident (see the
-// comments on buildCheck.assertions in PROJECTS above), not just "did the
+// comments on buildCheck.assertions in builtin-projects.local.js), not just "did the
 // build not crash".
 async function runBuildCheck(cfg, worktreePath) {
   const bc = cfg.buildCheck;
@@ -1629,7 +1642,7 @@ function startControlServer(routerKey) {
         },
         // Same rule as agent-review, and literally the same function:
         // healthProjectsCheck in services/shared/projects-config.js.
-        projects: healthProjectsCheck(PROJECTS),
+        projects: healthProjectsCheck(currentProjects()),
         state_file: (() => {
           try {
             loadState();
@@ -1669,7 +1682,7 @@ function startControlServer(routerKey) {
         return;
       }
       const out = {};
-      for (const [name, cfg] of Object.entries(PROJECTS)) {
+      for (const [name, cfg] of Object.entries(currentProjects())) {
         const checks = Array.isArray(cfg.checks) ? cfg.checks : [];
         out[name] = { checks: checks.length, names: checks.map((c) => c.name).filter(Boolean) };
       }
@@ -1697,7 +1710,7 @@ function startControlServer(routerKey) {
       return;
     }
     const project = decodeURIComponent(m[1]);
-    const cfg = PROJECTS[project];
+    const cfg = currentProjects()[project];
     if (!cfg) {
       res.writeHead(404, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ ok: false, error: `unknown project "${project}"` }));
@@ -1727,7 +1740,9 @@ async function main() {
   log('commit-reviewer started');
 
   const tick = async () => {
-    for (const [project, cfg] of Object.entries(PROJECTS)) {
+    // Re-read per tick: a project onboarded since the last tick is polled on
+    // this one, with no restart.
+    for (const [project, cfg] of Object.entries(currentProjects())) {
       try {
         await reviewProject(project, cfg, routerKey);
       } catch (err) {
@@ -1746,7 +1761,11 @@ if (require.main === module) {
 }
 
 module.exports = {
-  PROJECTS, setupWorktree, cleanupWorktree, runChecks, runBuildCheck, runDatabaseCheck, runSecretScan,
+  currentProjects,
+  // Kept for anything that still reads the old constant; it now answers
+  // fresh too rather than handing out a startup snapshot.
+  get PROJECTS() { return currentProjects(); },
+  setupWorktree, cleanupWorktree, runChecks, runBuildCheck, runDatabaseCheck, runSecretScan,
   materializeDependencyDirs, installChangedDependencies,
   detectNewCommit, reviewWithSonnet, buildAgentMessage, applyBaseline, TASK_BRANCH_RE,
 };

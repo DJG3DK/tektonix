@@ -158,6 +158,7 @@ jobs:
           node tests/test_preflight.js
           node tests/test_service_env.js
           node tests/test_health_projects.js
+          node tests/test_reviewer_projects_reload.js
 
       - name: Reviewer dependency mounts (as root — the read-only proof)
         # This one needs real bind mounts: it borrows a directory the way the

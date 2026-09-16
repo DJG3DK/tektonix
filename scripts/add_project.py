@@ -143,7 +143,8 @@ def main() -> int:
     print("\nNext:")
     print(f"  .venv/bin/python scripts/run_cartographer.py {name}   # build its codebase map")
     print("  .venv/bin/python scripts/seed_memory.py               # seed project memory")
-    print("  restart the agent so the running process picks it up")
+    print("  (no restart needed: the running agent reloads projects.json on its next")
+    print("   provision or merge, and the review services re-read it on every poll)")
     return 0
 
 
