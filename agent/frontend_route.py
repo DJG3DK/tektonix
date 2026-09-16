@@ -71,7 +71,14 @@ FRONTEND_MAJORITY = 2 / 3
 # .tsx files, no backend files at all, and routed to the general coder because
 # the word "endpoint" appeared in a sentence about what was already built.
 FRONTEND_PATH_QUORUM = 3
-FRONTEND_DIRS = frozenset({"frontend", "web", "client", "ui", "components", "pages", "views", "layouts", "styles", "css"})
+# "storefront" is here because a frontend APP legitimately contains an api/
+# directory -- its own HTTP client -- and "api" is in BACKEND_DIRS above.
+# Without it, apps/storefront/src/api/client.ts reads as a backend file and
+# one such path routes an entire storefront task to the general coder
+# (3DSteals, 2026-09-16). A backend never contains components/ or pages/,
+# so the markers are not symmetric and the frontend one should win.
+FRONTEND_DIRS = frozenset({"frontend", "web", "client", "ui", "components", "pages", "views",
+                           "layouts", "styles", "css", "storefront"})
 FRONTEND_EXTS = frozenset({".tsx", ".jsx", ".css", ".scss", ".less", ".html", ".vue", ".svelte"})
 CODE_EXTS = FRONTEND_EXTS | frozenset({".ts", ".js", ".mjs", ".cjs", ".py", ".go", ".rs", ".java", ".rb", ".php", ".sql", ".sh", ".json", ".yaml", ".yml", ".prisma"})
 FRONTEND_KEYWORDS = (

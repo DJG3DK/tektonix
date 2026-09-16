@@ -226,3 +226,27 @@ def test_a_named_backend_file_still_wins_outright():
     d = classify_frontend(text)
     assert d.route == "general"
     assert "schema.prisma" in d.reason
+
+
+def test_a_frontend_apps_own_api_client_is_not_a_backend_file():
+    """`api` is in BACKEND_DIRS, but a frontend app legitimately contains an
+    api/ directory holding its HTTP client. One such path used to mark a whole
+    storefront task as backend work and send it to the general coder, where it
+    stalled in a tool loop (3DSteals, 2026-09-16). The markers are not
+    symmetric -- a backend never contains components/ or pages/ -- so the
+    frontend one wins."""
+    from agent.frontend_route import _is_backend_path, _is_frontend_path
+    assert _is_frontend_path("apps/storefront/src/api/client.ts")
+    assert not _is_backend_path("apps/storefront/src/api/client.ts")
+    # and the real backend is untouched
+    assert _is_backend_path("apps/api/src/catalog/products.service.ts")
+    assert _is_backend_path("apps/api/prisma/schema.prisma")
+
+
+def test_the_storefront_task_that_stalled_now_routes_frontend():
+    text = ("Make a dead API visible on the storefront instead of silently empty. "
+            "apps/storefront/src/api/client.ts, apps/storefront/src/pages/HomePage.tsx, "
+            "apps/storefront/src/pages/ShopPage.tsx. The health endpoint and its controller "
+            "already work; this is about what the user sees.")
+    d = classify_frontend(text)
+    assert d.is_frontend, d.reason
