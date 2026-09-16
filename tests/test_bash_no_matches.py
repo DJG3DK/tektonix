@@ -52,7 +52,13 @@ async def test_search_that_matched_is_untouched(monkeypatch, tmp_path):
 async def test_real_failures_keep_their_output(monkeypatch, tmp_path):
     bash = await _bash(monkeypatch, tmp_path, 1, "")
     out = await bash.ainvoke({"command": "npm test"})
-    assert out == "exit_code=1\n"
+    # The point of this case: a real failure must NOT be dressed up as
+    # "no matches" -- npm test is not a search, so NO_MATCHES_RESULT must not
+    # apply. It still carries the honest exit code, now with a line saying the
+    # code is the only signal the command produced (see _describe_output).
+    assert out.startswith("exit_code=1\n")
+    assert "no matches" not in out
+    assert "non-zero exit code" in out
     bash = await _bash(monkeypatch, tmp_path, 2, "rg: unrecognized flag --bogus")
     out = await bash.ainvoke({"command": "rg --bogus x"})
     assert out.startswith("exit_code=2\nrg: unrecognized")

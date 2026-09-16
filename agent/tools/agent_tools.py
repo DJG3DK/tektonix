@@ -45,6 +45,36 @@ from agent.tools.vision import describe_image_bytes
 # many rounds is a bigger real cost driver than one single giant result.
 # Catching it earlier is the point.
 OFFLOAD_THRESHOLD_CHARS = 15_000
+
+
+def _describe_output(r: dict) -> str:
+    """What the model sees as the body of a bash result.
+
+    A command that succeeds and prints nothing used to return the empty
+    string, so the whole tool result was the characters "exit_code=0" followed
+    by a blank line. That is indistinguishable from output the tool failed to
+    capture, and retrying a result that looks like nothing happened is not
+    unreasonable.
+
+    The exit-1 case already had an answer (NO_MATCHES_RESULT below, for
+    rg/grep). This is the exit-0 half, which did not: a command like
+    `test -f x && echo yes` that prints nothing, or a filtered pipeline whose
+    filter matched nothing.
+
+    Latent, not observed: it was written while investigating a tool loop that
+    turned out to have a different cause entirely (the results there were not
+    empty). Kept because the ambiguity is real on its own terms.
+    """
+    out = r.get("output") or ""
+    if out.strip():
+        return out
+    if r.get("exit_code") == 0:
+        return ("(the command ran and exited 0, printing nothing. For a search "
+                "this means NO MATCHES -- the answer is that the pattern is "
+                "absent, not that the command failed. Re-running it will "
+                "return this same result.)")
+    return ("(no output on stdout or stderr. The non-zero exit code above is "
+            "the only signal this command produced.)")
 # Source-file reads get a much higher inline cap than bash output. A large
 # source file (tens of thousands of lines) that can never arrive whole under
 # a low cap forces the model to page through it in small windows -- dozens
@@ -257,7 +287,7 @@ def make_agent_tools(
                 timeout = 120
             timeout = min(timeout, _BASH_TIMEOUT_CEILING)
             r = await run_shell_sandboxed(command, repo_root, timeout=timeout)
-            content = f"exit_code={r['exit_code']}\n{r['output']}"
+            content = f"exit_code={r['exit_code']}\n{_describe_output(r)}"
             # Editing or reading a file through the shell costs a container
             # for work the in-process tools do for free -- see
             # agent/tools/bash_advice.py for the run that made this worth
