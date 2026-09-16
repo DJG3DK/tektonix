@@ -68,6 +68,26 @@ SERVICES = [
         "ready": "https://3dsteals.com/api/v1/health/ready",
         "pm2": "3dsteals-api",
     },
+    # 3d-bot gained these on 2026-09-16 (task 230eed5b). Probed on localhost
+    # rather than through nginx on purpose: this watchdog decides whether to
+    # restart the PROCESS, and a vhost or TLS problem is not something a pm2
+    # restart fixes -- routing it through nginx would let an edge failure
+    # trigger a restart that cannot help, which is the same mistake as
+    # restarting on readiness.
+    {
+        "name": "3d-bot",
+        "repo": "3d-bot",
+        "live": "http://127.0.0.1:14001/healthz",
+        "ready": "http://127.0.0.1:14001/readyz",
+        "pm2": "3d-bot",
+    },
+    {
+        "name": "3d-bot-compute",
+        "repo": "3d-bot",
+        "live": "http://127.0.0.1:14002/healthz",
+        "ready": "http://127.0.0.1:14002/readyz",
+        "pm2": "3d-bot-compute",
+    },
 ]
 
 
