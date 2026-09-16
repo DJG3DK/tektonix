@@ -61,7 +61,7 @@ const PROJECTS = loadProjects(BUILTIN_PROJECTS, { section: 'deploy' });
 // (provider prefix like "openrouter/" is stripped by the router before this point).
 // All 4 tiers are real destinations (2026-08-15) — session_affinity is off,
 // so every message is classified fresh instead of inheriting turn 1's tier.
-const ROUTING_LOG = path.join(AGENT_HOME, 'services/llm-router/logs/routing.jsonl');
+const ROUTING_LOG = path.join(AGENT_HOME, 'services/model-router/logs/routing.jsonl');
 const ROUTER_MODELS = [
     { backend: 'amazon/nova-micro-v1',            label: 'Nova Micro',            tier: 'SIMPLE' },
     { backend: 'openai/gpt-4o-mini',              label: 'GPT-4o mini',           tier: 'SIMPLE' },
@@ -351,7 +351,7 @@ app.post('/api/projects/:name/restart', requireControlSecret, async (req, res) =
 // Read-only, deliberately cheap: just the single most recent routing
 // decision, for the floating model badge on the review dashboard
 // (polled every few seconds — this endpoint has to stay light). Since
-// llm-router's consumers are few, "most recent entry" is a
+// the model router's consumers are few, "most recent entry" is a
 // good proxy for "what's answering the user's active conversation right now".
 //
 // Every real turn also produces a routing.jsonl line for the complexity
@@ -439,7 +439,7 @@ app.get('/api/router/stats', async (req, res) => {
 });
 
 // Read-only: OpenRouter account balance for the Router tab. Reads the key
-// straight out of llm-router's own .env (no new dependency for one value) —
+// straight out of the model router's own .env (no new dependency for one value) —
 // same key the router itself authenticates to OpenRouter with. Cached briefly
 // since this hits OpenRouter's real API, not something to poll on every tick.
 let _balanceCache = null; // { data, ts }
@@ -484,7 +484,7 @@ function requireControlSecret(req, res, next) {
 
 function readOpenRouterKey() {
     try {
-        const env = fs.readFileSync(path.join(AGENT_HOME, 'services/llm-router/.env'), 'utf8');
+        const env = fs.readFileSync(path.join(AGENT_HOME, 'services/model-router/.env'), 'utf8');
         const m = env.match(/^OPENROUTER_API_KEY=(.+)$/m);
         return m ? m[1].trim() : null;
     } catch { return null; }

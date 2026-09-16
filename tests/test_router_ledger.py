@@ -1,5 +1,5 @@
 """RouterLedger: the router's billed cost per call, read back from
-services/llm-router/logs/routing.jsonl by x-router-call-id."""
+services/model-router/logs/routing.jsonl by x-router-call-id."""
 
 import json
 

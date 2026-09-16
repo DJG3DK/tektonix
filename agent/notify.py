@@ -174,7 +174,7 @@ def diff_services(prev: dict, cur: dict) -> list[str]:
 
 async def watch_services(auth_pool, interval: float = 60.0, exclude: tuple = ("tektonix",)) -> None:
     """Poll `pm2 jlist` and alert on restarts/deaths of the OTHER services --
-    llm-router, the trading bots, the reviewers. The agent backend itself is
+    the model router, the trading bots, the reviewers. The agent backend itself is
     excluded: its own restart resets this watcher's baseline (it runs inside
     that process), so it announces itself via the startup alert instead.
     Runs forever; every failure is swallowed after logging -- constraint 1.

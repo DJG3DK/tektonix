@@ -266,7 +266,7 @@ async def lifespan(app: FastAPI):
         # pricing endpoint -- pre-warming it here means that blocking call
         # happens in a background thread before any real task needs a cost
         # estimate, not inline on the event loop the first time one does.
-        # C-1: warm_rates() reads llm-router/config.yaml; if that raises (bad
+        # C-1: warm_rates() reads model-router/config.yaml; if that raises (bad
         # path, malformed yaml) the budget ceiling silently does not exist.
         # A bare create_task swallows the exception, so attach a done-callback
         # that surfaces it loudly at startup instead of at every task's first
@@ -3860,7 +3860,7 @@ async def delete_task(task_id: str, repo: str, user: User = Depends(require_full
 async def get_model_config(user: User = Depends(require_full_auth)):
     """Current pins for this agent's own roles -- see model_config.MANAGED_ROLES
     (fifteen of them, including agent-reviewer, which the commit-reviewer
-    service resolves by alias). The remaining entries in llm-router/config.yaml
+    service resolves by alias). The remaining entries in model-router/config.yaml
     are not this agent's to set and are never exposed here: the mail agent's
     and the trading bot's aliases, plus the three fallback targets that have no
     caller of their own.
@@ -3891,7 +3891,7 @@ async def get_model_catalog(refresh: bool = False, user: User = Depends(require_
 @app.post("/api/model-config")
 async def save_model_config(req: SaveModelPinsRequest, user: User = Depends(require_full_auth)):
     """Writes new pins for one or more of this agent's own roles. Does NOT
-    restart llm-router -- the change only takes effect once that's done
+    restart model-router -- the change only takes effect once that's done
     separately via POST /api/model-config/restart, since that restart
     affects every consumer of the shared router, not just this agent, and
     should never be an automatic side effect of a save.
@@ -4252,7 +4252,7 @@ async def restart_services(req: SaveEnvKeysRequest, user: User = Depends(require
     """Restart the named services so a key change takes effect."""
     auth.require_admin(user)
     import asyncio as _a
-    allowed = {"llm-router", "tektonix", "commit-reviewer", "agent-review"}
+    allowed = {"model-router", "tektonix", "commit-reviewer", "agent-review"}
     names = [n for n in (req.updates.get("services", "") or "").split(",") if n.strip() in allowed]
     if not names:
         raise HTTPException(status_code=400, detail="no known services named")
@@ -4388,7 +4388,7 @@ async def probe_forced_tool_call(user: User = Depends(require_full_auth)):
 
 @app.post("/api/model-config/restart-router")
 def restart_model_router(user: User = Depends(require_full_auth)):
-    """Restarts llm-router so a saved pin change actually takes effect.
+    """Restarts the model router so a saved pin change actually takes effect.
     Shared-impact action: this restarts the same router the
     review service depend on, not just this agent -- the frontend must
     surface that plainly rather than bundling this into save.
@@ -4401,7 +4401,7 @@ def restart_model_router(user: User = Depends(require_full_auth)):
         # restart command pm2 refused.
         detail = ("the router did not answer its liveness route within "
                   f"{result['waited_s']:.0f}s after the restart"
-                  if result.get("restarted") else "pm2 could not restart llm-router")
+                  if result.get("restarted") else "pm2 could not restart model-router")
         raise HTTPException(500, f"{detail}\n\n{result['output']}".strip())
     return result
 

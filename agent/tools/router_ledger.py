@@ -10,7 +10,7 @@ the full input rate and 4.9M mostly-cached prompt tokens were charged 8x.
 
 The router knows the true figure the moment each call completes: it
 asks OpenRouter for `usage.cost` on every request and hands it to
-services/llm-router/custom_callbacks.py, which appends one line per call to
+the router's own ledger writer, which appends one line per call to
 logs/routing.jsonl, keyed by the same `x-router-call-id` the proxy returned
 in the response headers. This module reads that record back. The tracker
 carries each call at its estimate until the router's line lands, then swaps

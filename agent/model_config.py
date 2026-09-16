@@ -1,4 +1,4 @@
-"""Reads and edits this agent's own model pins in llm-router/config.yaml --
+"""Reads and edits this agent's own model pins in model-router/config.yaml --
 strictly scoped to the agent-* entries (see MANAGED_ROLES). The other
 entries in that file are not this agent's to set and are never read or
 written here: mail-chat/mail-triage (the mail agent), trade-gate (the
@@ -372,7 +372,7 @@ async def fetch_model_endpoints(model_id: str) -> list[dict]:
 async def get_current_pins_priced() -> dict[str, dict]:
     """get_current_pins with prices taken from OpenRouter's LIVE catalog.
 
-    The per-role `model_info` blocks in llm-router/config.yaml are written by
+    The per-role `model_info` blocks in model-router/config.yaml are written by
     hand and drift silently: on 2026-08-26 agent-coder's block still claimed
     $1.60/M input for deepseek-v4-pro, which by then actually cost $0.56/M --
     the dashboard was reporting a model as ~3x more expensive than it was, which
@@ -805,12 +805,12 @@ _ROUTER_BOOT_WAIT_S = 25.0
 
 
 def restart_llm_router(base_url: str | None = None) -> dict:
-    """Restarts the shared llm-router pm2 process so a pin change actually
+    """Restarts the model router pm2 process so a pin change actually
     takes effect -- the router reloads config.yaml on change, but a restart is
     no hot-reload. Hardcoded process name, no caller-supplied value ever
     reaches this command: this is the one thing standing between "restart
     our own dependency" and an arbitrary-process-restart primitive exposed
-    over HTTP. Affects every consumer of llm-router (the review
+    over HTTP. Affects every consumer of the model router (the review
     service, this agent), not just this agent -- callers should treat this
     as a real, shared-impact action, not a routine save side effect.
 
@@ -826,7 +826,7 @@ def restart_llm_router(base_url: str | None = None) -> dict:
     caller's dialog is only as honest as this return value.
     """
     result = subprocess.run(
-        ["pm2", "restart", "llm-router"], capture_output=True, text=True, timeout=30
+        ["pm2", "restart", "model-router"], capture_output=True, text=True, timeout=30
     )
     output = (result.stdout + result.stderr)[-2000:]
 

@@ -282,7 +282,7 @@ async def run_shell_sandboxed(
         # worktree is root-owned on the host (pm2 runs as root), so a non-root
         # container user could not write to it. Network stays on the default
         # bridge (a dedicated network blocking link-local/RFC1918 and binding
-        # llm-router to 127.0.0.1 is tracked as residual infra) -- but
+        # the model router to 127.0.0.1 is tracked as residual infra) -- but
         # MODEL_ROUTER_KEY is not passed in, so the reachable router surface is
         # authenticated, not open.
         "--pids-limit", SANDBOX_PIDS_LIMIT,

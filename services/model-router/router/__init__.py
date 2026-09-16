@@ -18,7 +18,7 @@ What it buys that the proxy could not:
     280 tokens.
   * No framework pin held hostage by a dependency's use of private APIs.
 
-It reads the SAME services/llm-router/config.yaml, deliberately: the operator's
+It reads the SAME services/model-router/config.yaml, deliberately: the operator's
 pins live there, the dashboard's Models page writes there, and a migration
 would be a second thing to get wrong on the day of a cutover.
 """

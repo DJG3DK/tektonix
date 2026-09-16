@@ -69,7 +69,7 @@ const ROUTER_ENV_PATH = path.join(AGENT_HOME, 'services/model-router/.env');
 // services/shared/service-env.js.
 const REVIEW_CONTROL_SECRET = require('../shared/service-env')
   .readServiceSecret('REVIEW_CONTROL_SECRET', AGENT_HOME);
-// Route through the shared llm-router instead of calling OpenRouter directly.
+// Route through the model router instead of calling OpenRouter directly.
 // Before this the model was a hardcoded const and the request went straight to
 // openrouter.ai, so the reviewer was invisible three ways: absent from the
 // dashboard's model picker, no cost rates anywhere, and never seen by the
@@ -77,7 +77,12 @@ const REVIEW_CONTROL_SECRET = require('../shared/service-env')
 //
 // The alias (not a model id) is what makes it swappable from the dashboard; the
 // router resolves agent-reviewer -> whatever it is pinned to.
-const ROUTER_URL = process.env.MODEL_ROUTER_URL || 'http://127.0.0.1:4001';
+// Includes /v1: the endpoint below appends '/chat/completions', and the
+// router serves that under /v1 only. The proxy this replaced accepted it at
+// the root too, so porting the port without the path yielded a 404 on every
+// review -- which surfaces as a failed review, i.e. NEEDS_FIXES, not as an
+// obvious outage.
+const ROUTER_URL = process.env.MODEL_ROUTER_URL || 'http://127.0.0.1:4001/v1';
 // Normally the router alias, so the model is swappable from the dashboard and
 // its spend is logged and rated.
 //

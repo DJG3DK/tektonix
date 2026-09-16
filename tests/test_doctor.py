@@ -30,7 +30,7 @@ def install(tmp_path, *, agent_env=None, router_env=None, shared_env=None,
             projects=None, mode=0o600):
     """A fake installation root, with only the files a test cares about."""
     root = tmp_path / "install"
-    (root / "services/llm-router").mkdir(parents=True)
+    (root / "services/model-router").mkdir(parents=True)
     (root / "services/shared").mkdir(parents=True)
 
     def write(path: Path, values: dict | None):
@@ -48,7 +48,7 @@ def install(tmp_path, *, agent_env=None, router_env=None, shared_env=None,
         "REVIEW_CONTROL_SECRET": REVIEW_SECRET,
         **(agent_env or {}),
     } if agent_env != "absent" else None)
-    write(root / "services/llm-router/.env", {
+    write(root / "services/model-router/.env", {
         "OPENROUTER_API_KEY": "sk-or-" + secrets.token_hex(16),
         "MODEL_ROUTER_KEY": ROUTER_KEY,
         **(router_env or {}),
@@ -69,7 +69,7 @@ def at(monkeypatch):
     def _at(root: Path, *, skip_external=True):
         monkeypatch.setattr(doctor, "ROOT", root)
         monkeypatch.setattr(doctor, "AGENT_ENV", root / ".env")
-        monkeypatch.setattr(doctor, "ROUTER_ENV", root / "services/llm-router/.env")
+        monkeypatch.setattr(doctor, "ROUTER_ENV", root / "services/model-router/.env")
         monkeypatch.setattr(doctor, "SHARED_ENV", root / "services/shared/.env")
         monkeypatch.setattr(doctor, "PROJECTS_JSON", root / "projects.json")
         monkeypatch.setattr(doctor, "KEYS_DIR", root / "keys")

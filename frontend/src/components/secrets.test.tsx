@@ -112,14 +112,14 @@ describe("ApiKeysPanel — a secret's real value never reaches the browser", () 
     // Restarting the router interrupts every in-flight model call, so it must
     // never be a side effect of saving a form.
     getEnvConfig.mockResolvedValue({ keys: [envKey()] });
-    saveEnvConfig.mockResolvedValue({ restart_required: ["llm-router"] });
+    saveEnvConfig.mockResolvedValue({ restart_required: ["model-router"] });
     renderPanel();
     await screen.findByLabelText("OpenRouter API key");
 
     await userEvent.type(document.querySelector("input") as HTMLInputElement, "x");
     await userEvent.click(screen.getByRole("button", { name: /save/i }));
 
-    expect(await screen.findByText(/llm-router/)).toBeInTheDocument();
+    expect(await screen.findByText(/model-router/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /restart/i })).toBeInTheDocument();
   });
 

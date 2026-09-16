@@ -228,7 +228,7 @@ model_list:
   # One FIXED model per role — no pools, no classifier, no bandit. Operator
   # decision: pin each role so cost/accuracy per model is directly attributable
   # and comparable. To swap a role's model, edit it HERE (the agent only ever
-  # names the role alias) and restart llm-router. model_info costs mirror
+  # names the role alias) and restart model-router. model_info costs mirror
   # OpenRouter's /api/v1/models pricing on the pin date — BudgetGuard's
   # fallback rate table (agent/tools/model_rates.py) parses these same fields.
   - model_name: agent-summarizer

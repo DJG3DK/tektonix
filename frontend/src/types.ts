@@ -310,7 +310,7 @@ export interface TraceSummary {
 // its model through this API (services/commit-reviewer/reviewer.js reads the
 // alias, not a model name).
 //
-// The llm-router is shared with two other services on the box, whose aliases
+// The model router is shared with two other services on the box, whose aliases
 // are deliberately not exposed here because this agent does not own them:
 // mail-chat/mail-triage (the mail agent) and trade-gate (the trading bot).
 //

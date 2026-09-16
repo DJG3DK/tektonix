@@ -53,7 +53,7 @@ and an admin email — and derives everything else. It will:
 - check every prerequisite and stop with a specific message if one is missing
 - generate `AUTH_SECRET_KEY` and a router master key **in the correct format**
   (see the footgun in §6)
-- write `.env` and `services/llm-router/.env` with `600` permissions
+- write `.env` and `services/model-router/.env` with `600` permissions
 - create the database if it doesn't exist
 - build both Python environments
 - build the sandbox container image (includes headless Chromium, so the agent
@@ -84,7 +84,7 @@ Or under pm2:
 
 ```bash
 pm2 start ecosystem.config.js
-pm2 start services/llm-router/ecosystem.config.js
+pm2 start services/model-router/ecosystem.config.js
 pm2 save
 ```
 
@@ -273,7 +273,7 @@ Everything lives in `.env` (see `.env.example` for the full list).
 | Variable | Notes |
 |---|---|
 | `LANGGRAPH_PG_DSN` | Postgres DSN for checkpoints, memory and users |
-| `MODEL_ROUTER_URL` / `MODEL_ROUTER_KEY` | The router. `MODEL_ROUTER_KEY` **must equal** `MODEL_ROUTER_KEY` in `services/llm-router/.env` |
+| `MODEL_ROUTER_URL` / `MODEL_ROUTER_KEY` | The router. `MODEL_ROUTER_KEY` **must equal** `MODEL_ROUTER_KEY` in `services/model-router/.env` |
 | `AUTH_SECRET_KEY` | Encrypts TOTP secrets at rest. **Must decode to 16, 24 or 32 raw bytes.** `openssl rand -hex 32` produces 48 bytes and will *not* work — use `python -c "import base64,secrets;print(base64.urlsafe_b64encode(secrets.token_bytes(32)).decode())"`. Rotating it locks out every 2FA user permanently |
 | `AGENT_PROJECT_ROOTS` | Colon-separated roots projects may be onboarded from |
 | `AGENT_SANDBOX_ROOT` | Where per-project worktrees are created |
@@ -297,7 +297,7 @@ pairs that must agree, and those are marked.
 │     GITHUB_TOKEN (optional fallback) │       │               │
 │                                      │       │               │
 ├── services/                          │       │               │
-│   ├── llm-router/.env                │       │               │   600
+│   ├── model-router/.env                │       │               │   600
 │   │     OPENROUTER_API_KEY           │       │               │
 │   │     MODEL_ROUTER_KEY ──────────┼───────┘               │
 │   │     GATE_RP_ID / GATE_ORIGIN     │   (the passkey gate)  │
@@ -388,12 +388,12 @@ an admin account and prints a fresh password to the log.
 | Path | What it holds |
 |---|---|
 | `.env` | The agent's secrets |
-| `services/llm-router/.env` | The router's credentials (OpenRouter key, master key) |
+| `services/model-router/.env` | The router's credentials (OpenRouter key, master key) |
 | `services/shared/.env` | `REVIEW_CONTROL_SECRET` for the two Node services |
 | `keys/` | Per-project deploy keys (mode 700) |
 | `services/commit-reviewer/review-secrets/` | Copies of each project's secret files, so its checks can run |
 | `projects.json` | Your projects (written by the wizard) |
-| `services/llm-router/config.yaml` | Your model pins (written by Settings → Models; seeded once from `config.example.yaml`) |
+| `services/model-router/config.yaml` | Your model pins (written by Settings → Models; seeded once from `config.example.yaml`) |
 | `skills/local/` | Your own domain knowledge — see `skills/local/README.md` |
 | `services/*/builtin-projects.local.js` | Optional review/deploy overrides — see the `.example` files |
 | `memory/*.md` | Per-project memory the agent maintains |
@@ -461,7 +461,7 @@ it up by hand and they disagree — or it's missing — the build runs, the revi
 passes, and then the merge is rejected, after you've paid for the whole task.
 The agent logs a warning at startup when it's unset.
 
-It used to live in `services/llm-router/.env`, because that file already
+It used to live in `services/model-router/.env`, because that file already
 existed and both services already read it for the OpenRouter key. That made
 the model proxy's config a secrets bus. The services still fall back to the
 old path with a warning, so an upgrade without re-running the installer keeps
@@ -473,7 +473,7 @@ the router's file.
 ## 8. Choosing models
 
 Everything routes through named aliases (`agent-coder`, `agent-planner`,
-`agent-reviewer`, …) defined in `services/llm-router/config.yaml`.
+`agent-reviewer`, …) defined in `services/model-router/config.yaml`.
 
 That file is **yours**, not the repo's. `install.sh` copies it from
 `config.example.yaml` on a fresh install and never touches it again, and it is
@@ -510,7 +510,7 @@ Each returns 503 and names the failing dependency. For a specific symptom, see
 built: `docker build -t tektonix-sandbox:latest docker/agent-sandbox/`
 
 **Every model call 401s.** `MODEL_ROUTER_KEY` in `.env` doesn't match
-`MODEL_ROUTER_KEY` in `services/llm-router/.env`.
+`MODEL_ROUTER_KEY` in `services/model-router/.env`.
 
 **The app won't start, complaining about the auth key.** `AUTH_SECRET_KEY`
 doesn't decode to 16/24/32 raw bytes — see §6.

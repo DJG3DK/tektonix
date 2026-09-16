@@ -153,16 +153,16 @@ def _svc(pid, restarts, status="online"):
 
 def test_snapshot_parses_pm2_jlist_shape():
     snap = snapshot_services([
-        {"name": "llm-router", "pid": 111, "pm2_env": {"restart_time": 3, "status": "online"}},
+        {"name": "model-router", "pid": 111, "pm2_env": {"restart_time": 3, "status": "online"}},
         {"name": "broken-entry"},  # tolerated, skipped fields default
     ])
-    assert snap["llm-router"] == (111, 3, "online")
+    assert snap["model-router"] == (111, 3, "online")
 
 
 def test_a_restart_is_reported_once_with_its_count():
-    prev = {"llm-router": _svc(111, 3)}
-    cur = {"llm-router": _svc(222, 4)}
-    assert diff_services(prev, cur) == ["🔄 service restarted: llm-router (restart #4)"]
+    prev = {"model-router": _svc(111, 3)}
+    cur = {"model-router": _svc(222, 4)}
+    assert diff_services(prev, cur) == ["🔄 service restarted: model-router (restart #4)"]
 
 
 def test_a_pid_change_without_counter_bump_still_reports():
@@ -174,9 +174,9 @@ def test_a_pid_change_without_counter_bump_still_reports():
 
 
 def test_a_service_going_down_reports_down_not_restart():
-    prev = {"llm-router": _svc(111, 3)}
-    cur = {"llm-router": _svc(None, 3, "errored")}
-    assert diff_services(prev, cur) == ["🔴 service DOWN: llm-router (status: errored)"]
+    prev = {"model-router": _svc(111, 3)}
+    cur = {"model-router": _svc(None, 3, "errored")}
+    assert diff_services(prev, cur) == ["🔴 service DOWN: model-router (status: errored)"]
 
 
 def test_a_service_removed_from_pm2_reports_gone():
@@ -185,7 +185,7 @@ def test_a_service_removed_from_pm2_reports_gone():
 
 
 def test_steady_state_reports_nothing():
-    snap = {"llm-router": _svc(111, 3), "my-service": _svc(4, 9)}
+    snap = {"model-router": _svc(111, 3), "my-service": _svc(4, 9)}
     assert diff_services(snap, dict(snap)) == []
 
 

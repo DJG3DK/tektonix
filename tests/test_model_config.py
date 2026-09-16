@@ -1,6 +1,6 @@
 """Unit tests for agent/model_config.py -- the dashboard's model-picker
 backend. Strictly scoped to this agent's own agent-* roles (MANAGED_ROLES);
-every other entry in llm-router/config.yaml (the shared tier system,
+every other entry in model-router/config.yaml (the shared tier system,
 reasoning-tier, smart-router) belongs to the review service and
 must never be read or written here.
 
@@ -182,7 +182,7 @@ def test_restart_llm_router_calls_pm2_with_hardcoded_name_only(monkeypatch):
     monkeypatch.setattr(model_config, "_wait_for_router", lambda url, limit_s=0: (True, 0.1))
     result = model_config.restart_llm_router()
 
-    assert calls == [["pm2", "restart", "llm-router"]]
+    assert calls == [["pm2", "restart", "model-router"]]
     assert result["ok"] is True
 
 

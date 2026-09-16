@@ -304,7 +304,7 @@ first. The app lands on **Planning**, not the raw task composer.
   failed, or never-run. That last state is the one a log tail can never show you: if cron stops
   firing entirely, an empty log looks exactly like a quiet night.
 - **Analytics** (admin only) — computed from this box's own records: the router's per-call ledger
-  (`services/llm-router/logs/routing.jsonl`) and the work node's tool-result log. Per-role model
+  (`services/model-router/logs/routing.jsonl`) and the work node's tool-result log. Per-role model
   usage carries two columns traces never could — what the router was **billed**, and how much of
   each prompt the provider served **from cache**. Spend by day, by project, and by category; the **commit reviewer's**
   own spend as its own section (the agent's budget and the gate's are different things, and until
@@ -463,7 +463,7 @@ restart, no code change or redeploy. `agent/model_config.py` only ever touches t
 entries; the router config is shared with other services, and edits are a surgical text
 replacement so everything else in the file is untouched.
 
-That config (`services/llm-router/config.yaml`) is **yours, not the repo's**. It is gitignored and
+That config (`services/model-router/config.yaml`) is **yours, not the repo's**. It is gitignored and
 seeded once from `config.example.yaml` by `install.sh`: the Models page rewrites it every time you
 repin a role, so tracking it would make each model change a diff to explain, and an upgrade could
 overwrite the pins you chose. The example's pins are one deployment's answers on one day — a shape
@@ -560,7 +560,7 @@ agent/
   github_settings.py     encrypted PATs and per-project source policy
   auth.py / mailer.py    login/2FA/session/password-reset
   classify.py            task/turn categorization, also drives Planning Chat routing
-  model_config.py        reads/edits this agent's model pins in the shared llm-router config
+  model_config.py        reads/edits this agent's model pins in the model router config
   consolidation.py       background memory-consolidation agent
   cartographer.py        per-project codebase map + recent-changes + freshness ledger
   memory_freshness.py    flags memory facts whose cited files have changed

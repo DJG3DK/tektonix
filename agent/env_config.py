@@ -30,7 +30,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 AGENT_ENV = Path(__file__).resolve().parent.parent / ".env"
-ROUTER_ENV = Path(__file__).resolve().parent.parent / "services" / "llm-router" / ".env"
+ROUTER_ENV = Path(__file__).resolve().parent.parent / "services" / "model-router" / ".env"
 
 
 @dataclass(frozen=True)
@@ -51,13 +51,13 @@ MANAGED_KEYS: tuple[ManagedKey, ...] = (
     ManagedKey(
         "OPENROUTER_API_KEY", ROUTER_ENV, "OpenRouter API key",
         "Pays for every model call. The router resolves each role's alias to a model and bills this key.",
-        "Models", ("llm-router",),
+        "Models", ("model-router",),
     ),
     ManagedKey(
         "MODEL_ROUTER_KEY", ROUTER_ENV, "Router master key",
         "The router's own auth. Every service that calls it presents this. Changing it requires updating "
         "MODEL_ROUTER_KEY below to match, or the agent and reviewer lose access.",
-        "Models", ("llm-router", "tektonix", "commit-reviewer", "agent-review"),
+        "Models", ("model-router", "tektonix", "commit-reviewer", "agent-review"),
     ),
     ManagedKey(
         "MODEL_ROUTER_KEY", AGENT_ENV, "Router key (agent side)",

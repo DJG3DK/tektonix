@@ -242,7 +242,7 @@ def estimate_cost(
 ) -> float:
     """Returns 0.0 (not a guess in either direction) if model_name is
     missing or unrecognized -- an unknown model is a signal to add it to
-    llm-router/config.yaml's model_info, not a reason to estimate blind.
+    model-router/config.yaml's model_info, not a reason to estimate blind.
 
     `cache_read_tokens` (from usage_metadata.input_token_details.cache_read)
     is billed at its own discounted rate, not the full input rate -- see
@@ -263,7 +263,7 @@ def estimate_cost(
 
 
 class UnpricedModelError(Exception):
-    """A model with no rate in llm-router/config.yaml was billed against a hard
+    """A model with no rate in model-router/config.yaml was billed against a hard
     budget ceiling. For a SPEND ceiling, "unknown price" and "free" must not be
     the same value -- 200 calls at ~1.4M tokens once tracked as $0.00 against a
     $5 ceiling that never tripped (audit C-1). Raised by estimate_cost_strict so
@@ -283,6 +283,6 @@ def estimate_cost_strict(
     if model_name and _table().get(model_name) is not None:
         return estimate_cost(model_name, input_tokens, output_tokens, cache_read_tokens)
     raise UnpricedModelError(
-        f"model {model_name!r} has no rate in llm-router/config.yaml model_info; "
+        f"model {model_name!r} has no rate in model-router/config.yaml model_info; "
         f"add it so its spend counts against the budget ceiling"
     )

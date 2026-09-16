@@ -600,7 +600,7 @@ function ModelConfigPins() {
         <div className="model-config-modal-backdrop" onClick={() => setConfirmingRestart(false)}>
           <div className="model-config-modal" role="dialog" aria-modal="true"
                aria-labelledby="restart-modal-title" onClick={(e) => e.stopPropagation()}>
-            <h2 id="restart-modal-title">Restart llm-router?</h2>
+            <h2 id="restart-modal-title">Restart the model router?</h2>
             <p>
               This restarts the shared model router. It will briefly interrupt any in-flight request from
               every service that depends on it — the review service and this agent — not just

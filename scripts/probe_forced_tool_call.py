@@ -24,7 +24,7 @@ model works reliably through our own router only because that pin excludes a
 known-bad provider. So treat this cache as a strong filter, not a guarantee:
 "ok" means at least one provider honoured it, "fail" means the one we drew did
 not. For a role that must not break, pin the provider explicitly in the router
-(see the extra_body provider settings in llm-router/config.yaml).
+(see the extra_body provider settings in model-router/config.yaml).
 
   python scripts/probe_forced_tool_call.py --limit 25          # cheap sample
   python scripts/probe_forced_tool_call.py --all               # full sweep
@@ -46,10 +46,10 @@ from dotenv import load_dotenv
 
 from agent import paths
 
-load_dotenv(paths.SERVICES_DIR / "llm-router" / ".env")
+load_dotenv(paths.SERVICES_DIR / "model-router" / ".env")
 KEY = os.environ.get("OPENROUTER_API_KEY")
 if not KEY:
-    sys.exit(f"OPENROUTER_API_KEY not found (looked in {paths.SERVICES_DIR / 'llm-router' / '.env'})")
+    sys.exit(f"OPENROUTER_API_KEY not found (looked in {paths.SERVICES_DIR / 'model-router' / '.env'})")
 
 CATALOG = "https://openrouter.ai/api/v1/models"
 CHAT = "https://openrouter.ai/api/v1/chat/completions"

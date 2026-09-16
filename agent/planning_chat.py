@@ -97,7 +97,7 @@ from deepagents.backends import StoreBackend
 logger = logging.getLogger("tektonix")
 
 # Deterministic floor, checked before the classifier call below -- mirrors
-# llm-router/config.yaml's own smart-router keyword_tier_rules philosophy
+# model-router/config.yaml's own smart-router keyword_tier_rules philosophy
 # (its exact REASONING-tier floor is "super hard", "extremely difficult",
 # "think as hard as you can", "hardest part", "spare no effort" -- echoed
 # here since classify_task's own bug-fix/feature/ui-styling/performance/

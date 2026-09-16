@@ -133,12 +133,12 @@ describe("restarting the router", () => {
   });
 
   it("shows a failure INSIDE the dialog instead of behind it", async () => {
-    api.restartLlmRouter.mockRejectedValue(new Error("pm2 could not restart llm-router"));
+    api.restartLlmRouter.mockRejectedValue(new Error("pm2 could not restart model-router"));
     const dialog = await openTheDialog();
     await userEvent.click(within(dialog).getByRole("button", { name: /Restart now/i }));
 
     const alert = await within(screen.getByRole("dialog")).findByRole("alert");
-    expect(alert).toHaveTextContent("pm2 could not restart llm-router");
+    expect(alert).toHaveTextContent("pm2 could not restart model-router");
   });
 
   it("offers a way out and a way to retry after a failure", async () => {
@@ -173,7 +173,7 @@ describe("restarting the router", () => {
  * halves were wrong. The review service resolves its model through
  * agent-reviewer, which IS on this page (28 calls in the last fortnight), and
  * the tier system's consumer is a separate coding agent -- the header of
- * services/llm-router/config.yaml says so. Flagged by the operator 2026-09-13.
+ * services/model-router/config.yaml says so. Flagged by the operator 2026-09-13.
  *
  * Asserted on meaning rather than wording: a rewrite is free, saying the
  * reviewer is excluded is not.

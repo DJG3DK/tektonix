@@ -9,7 +9,7 @@ and doing it on the event loop.
 
 Everything those panels need, this box already writes down:
 
-* `services/llm-router/logs/routing.jsonl` -- one line per model call, with
+* `services/model-router/logs/routing.jsonl` -- one line per model call, with
   the alias asked for, the model that served it, prompt and completion tokens,
   the router's BILLED cost, the duration, and (since 2026-09-12) the cached
   prompt tokens and the task the call belonged to. This is strictly better
@@ -36,7 +36,7 @@ logger = logging.getLogger("tektonix")
 
 ROUTING_LOG = Path(
     os.environ.get("MODEL_ROUTER_LEDGER")
-    or (Path(__file__).resolve().parents[1] / "services" / "llm-router" / "logs" / "routing.jsonl")
+    or (Path(__file__).resolve().parents[1] / "services" / "model-router" / "logs" / "routing.jsonl")
 )
 TOOL_EVENTS_LOG = Path(
     os.environ.get("AGENT_TOOL_EVENTS_LOG")

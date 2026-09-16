@@ -67,6 +67,6 @@ backing up), `agentdata` (generated secrets), `agentlogs`, `routerlogs`.
 
 ## Model pins
 
-`services/llm-router/config.yaml` is mounted read-only if you have one. Without
+`services/model-router/config.yaml` is mounted read-only if you have one. Without
 it the image ships `config.example.yaml`, which is a working default rather
 than a stub.
