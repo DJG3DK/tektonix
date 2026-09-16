@@ -1440,3 +1440,153 @@ def create_worktree(live: str, sandbox: str, branch: str = "agent-base") -> tupl
         # Branch left behind by a previous onboarding of the same repo.
         ok, out = _run_git(["worktree", "add", sandbox, branch], cwd=live)
     return ok, out
+
+
+# --------------------------------------------------------------------------
+# creating a project from nothing
+#
+# The onboarding wizard above takes a repo that already exists. "New project"
+# starts one: an empty directory that becomes a git repo with one commit,
+# then goes through the SAME detect -> choices -> provision path as any
+# other directory, with the recommended answers instead of a wizard.
+# --------------------------------------------------------------------------
+
+# One path component, and a valid git worktree branch prefix / key file name
+# (agent/deploy_keys._SAFE_NAME accepts the same shape). Leading dot excluded
+# so a project can never be a hidden directory or `..`; 64 chars because the
+# name is also a projects.json key and a worktree directory name.
+PROJECT_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+
+# Enough to keep the first `git status` clean in the stacks the wizard knows
+# how to detect. Deliberately short: a project-specific .gitignore is the
+# first task's job, not this template's.
+_NEW_REPO_GITIGNORE = ".env\nnode_modules/\n.venv/\n__pycache__/\ndist/\n"
+
+
+def validate_project_name(name: str, existing_names: list[str] | None = None) -> str:
+    """The name is also a directory basename, a projects.json key and a
+    deploy-key filename, so it is validated as all three at once. Returns
+    the stripped name; raises ProvisioningError otherwise."""
+    name = (name or "").strip()
+    if not name:
+        raise ProvisioningError("project name is required")
+    # `..`, `.`, and anything with a separator can never match the pattern,
+    # but say so explicitly: this name becomes os.path.join(parent, name),
+    # and a loosened pattern must not turn that into a traversal.
+    if name in (".", "..") or "/" in name or "\\" in name or "\x00" in name:
+        raise ProvisioningError("project name must be a single directory name")
+    if not PROJECT_NAME_RE.match(name):
+        raise ProvisioningError(
+            "project name must start with a letter or digit and contain only letters, "
+            "digits, '.', '_' and '-' (at most 64 characters)")
+    if name in (existing_names or []):
+        raise ProvisioningError(f"a project named {name!r} is already configured")
+    return name
+
+
+def _identity_flags(cwd: str) -> list[str]:
+    """`-c user.name/user.email` for whichever half of the git identity this
+    host lacks. A fresh install has neither, and `git commit` then refuses
+    with "Please tell me who you are" -- but an operator who HAS set one
+    must not have it overridden by a placeholder."""
+    flags: list[str] = []
+    for key, fallback in (("user.name", "Tektonix"), ("user.email", "tektonix@localhost")):
+        ok, out = _run_git(["config", "--get", key], cwd=cwd)
+        if not ok or not out.strip():
+            flags += ["-c", f"{key}={fallback}"]
+    return flags
+
+
+def create_repository(parent: str | None, name: str, *, description: str = "",
+                      existing_names: list[str] | None = None) -> str:
+    """Create <parent>/<name> as a git repository with one commit on `main`.
+
+    Returns the realpath of the new directory. Containment is checked BEFORE
+    anything touches the disk: the wizard's rule that a project must sit in
+    an allowed root applies just as much to a directory this server creates
+    as to one it is handed.
+
+    The initial commit is not optional. create_worktree() runs
+    `git worktree add -b agent-base`, and on git 2.43 a repo with zero
+    commits gives that branch no start point -- the worktree comes up on an
+    ORPHAN agent-base with no history in common with main, and the first
+    task's merge then has no merge base. One commit here is what makes the
+    worktree a worktree of something.
+    """
+    name = validate_project_name(name, existing_names)
+    parent = parent or allowed_roots()[0]
+    if not os.path.isabs(parent):
+        raise ProvisioningError("parent must be an absolute path")
+    target = os.path.join(parent, name)
+    real = assert_path_allowed(target)
+    # lexists, not exists: a dangling symlink is still something we did not
+    # create and must not replace.
+    if os.path.lexists(target) or os.path.lexists(real):
+        raise ProvisioningError(f"{real} already exists -- onboard it with the wizard instead")
+    if not os.path.isdir(parent):
+        raise ProvisioningError(f"{parent} does not exist or is not a directory")
+    try:
+        os.mkdir(real)
+    except OSError as e:
+        raise ProvisioningError(f"could not create {real}: {e.strerror or e}") from e
+
+    def _fail(what: str, out: str) -> ProvisioningError:
+        # Only the directory THIS call made. It was empty a moment ago and
+        # nothing else has a reference to it yet.
+        shutil.rmtree(real, ignore_errors=True)
+        return ProvisioningError(f"{what} failed in {real}: {out}"[:800])
+
+    ok, out = _run_git(["init", "-q", "-b", "main"], cwd=real)
+    if not ok:
+        raise _fail("git init", out)
+    try:
+        body = f"# {name}\n"
+        if description.strip():
+            body += f"\n{description.strip()}\n"
+        Path(real, "README.md").write_text(body)
+        Path(real, ".gitignore").write_text(_NEW_REPO_GITIGNORE)
+    except OSError as e:
+        raise _fail("writing README.md/.gitignore", str(e)) from e
+    ok, out = _run_git(["add", "-A"], cwd=real)
+    if not ok:
+        raise _fail("git add", out)
+    ok, out = _run_git([*_identity_flags(real), "commit", "-q", "-m", "Initial commit"], cwd=real)
+    if not ok:
+        raise _fail("git commit", out)
+    return real
+
+
+def recommended_choices(report: DetectionReport) -> dict:
+    """The answers the wizard would show pre-ticked, as a `choices` payload.
+
+    This is scripts/add_project.py's --yes rule, kept in one place so the
+    headless script and the "new project" endpoint cannot drift from each
+    other: every candidate detection marked `enabled` is accepted, every
+    flagged one (a test script that makes network calls) stays OFF, and the
+    derived-with-certainty items -- checks, build steps, dependency dirs, the
+    db env file -- are taken as detected. Nothing this function returns is
+    outside what validate_choices() would accept.
+    """
+    def _accepted(items: list[Candidate]) -> list[str]:
+        return [c.value for c in items if c.enabled]
+
+    checks = list(report.checks)
+    for r in report.risky_scripts:
+        if r.enabled:
+            # The same command validate_choices() substitutes for a flagged
+            # name, so the headless path writes exactly what the wizard would.
+            checks.append(r.check or {
+                "name": r.value, "dir": ".",
+                "cmd": report.package_manager or "npm", "args": ["run", r.value],
+                "timeoutMs": TEST_TIMEOUT_MS_DEFAULT,
+            })
+    return {
+        "secret_files": _accepted(report.secret_files),
+        "read_only_mounts": _accepted(report.read_only_mounts),
+        "pm2_apps": _accepted(report.pm2_apps),
+        "node_modules_dirs": list(report.node_modules_dirs),
+        "dependency_dirs": list(report.dependency_dirs),
+        "checks": checks,
+        "build_steps": list(report.build_steps),
+        "db_env_file": report.db_env_file,
+    }

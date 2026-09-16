@@ -87,19 +87,37 @@ def main() -> int:
     if not report.checks:
         print("  (none detected)")
 
-    secrets = _choose(report.secret_files, args.yes,
-                      "Secret files to copy into review checkouts:")
-    mounts = _choose(report.read_only_mounts, args.yes,
-                     "Read-only fixture mounts:")
-    apps = _choose(report.pm2_apps, args.yes, "pm2 apps to restart on deploy:")
-    risky = _choose(report.risky_scripts, args.yes,
-                    "Test scripts that make network calls (off unless you confirm):")
-
-    checks = list(report.checks) + [
-        {"name": r, "dir": ".", "cmd": report.package_manager or "npm",
-         "args": ["run", r], "timeoutMs": 900_000}
-        for r in risky
-    ]
+    if args.yes:
+        # The recommended answers live in provisioning so the "new project"
+        # endpoint and this script cannot disagree about what --yes means.
+        choices = prov.recommended_choices(report)
+        for label, items in (
+            ("Secret files to copy into review checkouts:", report.secret_files),
+            ("Read-only fixture mounts:", report.read_only_mounts),
+            ("pm2 apps to restart on deploy:", report.pm2_apps),
+            ("Test scripts that make network calls (off unless you confirm):", report.risky_scripts),
+        ):
+            _choose(items, True, label)     # prints what --yes accepted
+    else:
+        secrets = _choose(report.secret_files, False,
+                          "Secret files to copy into review checkouts:")
+        mounts = _choose(report.read_only_mounts, False,
+                         "Read-only fixture mounts:")
+        apps = _choose(report.pm2_apps, False, "pm2 apps to restart on deploy:")
+        risky = _choose(report.risky_scripts, False,
+                        "Test scripts that make network calls (off unless you confirm):")
+        checks = list(report.checks) + [
+            {"name": r, "dir": ".", "cmd": report.package_manager or "npm",
+             "args": ["run", r], "timeoutMs": prov.TEST_TIMEOUT_MS_DEFAULT}
+            for r in risky
+        ]
+        choices = {
+            "secret_files": secrets, "read_only_mounts": mounts, "pm2_apps": apps,
+            "node_modules_dirs": report.node_modules_dirs,
+            "dependency_dirs": report.dependency_dirs, "checks": checks,
+            "build_steps": report.build_steps, "db_env_file": report.db_env_file,
+        }
+    secrets, apps, checks = choices["secret_files"], choices["pm2_apps"], choices["checks"]
 
     if not args.yes and not _ask(f"\ncreate project {name!r}?", True):
         print("aborted")
@@ -110,11 +128,7 @@ def main() -> int:
     if not ok:
         return 1
 
-    entry = prov.config_from_choices(name, report.live, report.sandbox, {
-        "secret_files": secrets, "read_only_mounts": mounts, "pm2_apps": apps,
-        "node_modules_dirs": report.node_modules_dirs, "checks": checks,
-        "build_steps": report.build_steps, "db_env_file": report.db_env_file,
-    })
+    entry = prov.config_from_choices(name, report.live, report.sandbox, choices)
     try:
         prov.write_project_entry(_PROJECTS_CONFIG_PATH, name, entry)
     except prov.ProvisioningError as e:

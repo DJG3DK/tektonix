@@ -3980,8 +3980,8 @@ async def list_projects_config(user: User = Depends(require_full_auth)):
         "projects": PROJECTS,
         "config_path": str(_PROJECTS_CONFIG_PATH),
         "restart_required_hint": (
-            "projects.json is read at process start, so a newly added project "
-            "becomes selectable after the agent restarts."
+            "The running agent picks a newly added project up immediately; the "
+            "review and deploy services re-read projects.json on their next poll."
         ),
     }
 
@@ -4009,7 +4009,6 @@ async def provision_project_endpoint(req: ProvisionProjectRequest, user: User = 
     """
     auth.require_admin(user)
     from agent import provisioning  # noqa: PLC0415
-    from agent.config import _PROJECTS_CONFIG_PATH  # noqa: PLC0415
 
     # Re-detect rather than trust the client's copy of the report: between the
     # wizard's two calls the directory may have changed, and a hand-made
@@ -4035,17 +4034,52 @@ async def provision_project_endpoint(req: ProvisionProjectRequest, user: User = 
     except provisioning.ProvisioningError as e:
         raise HTTPException(400, str(e))
 
-    steps: list[dict] = []
+    ok, steps = await _provision_from_report(report, choices, user, req.grant_access)
+    if not ok:
+        return {"ok": False, "steps": steps}
 
-    def _public_error(e: Exception) -> str:
-        """What a step may say about a failure: a ProvisioningError's own
-        message (written for the operator), otherwise a pointer to the log
-        -- an arbitrary exception's text is not for the response (CodeQL
-        py/stack-trace-exposure)."""
-        if isinstance(e, provisioning.ProvisioningError):
-            return e.detail
-        logger.exception("provisioning step failed")
-        return "failed -- see the server log"
+    # Onboarding hands an agent bash and write access to a directory, which
+    # makes "who added this project, and when" a question worth being able to
+    # answer later.
+    await audit.record(_audit_store(), actor=user.email, action="project.onboard",
+                       target=name, detail=report.live)
+
+    return {
+        "ok": True,
+        "steps": steps,
+        "message": f"{name} is configured and live in this process.",
+    }
+
+
+def _provisioning_public_error(e: Exception) -> str:
+    """What a step may say about a failure: a ProvisioningError's own
+    message (written for the operator), otherwise a pointer to the log
+    -- an arbitrary exception's text is not for the response (CodeQL
+    py/stack-trace-exposure)."""
+    from agent import provisioning  # noqa: PLC0415
+
+    if isinstance(e, provisioning.ProvisioningError):
+        return e.detail
+    logger.exception("provisioning step failed")
+    return "failed -- see the server log"
+
+
+async def _provision_from_report(report, choices: dict, user: User,
+                                 grant_access: bool) -> tuple[bool, list[dict]]:
+    """Everything after the operator's answers are validated: worktree,
+    projects.json entry, in-process reload, knowledge seeding, access.
+
+    Shared verbatim by /api/projects/provision (the wizard) and
+    /api/projects/create (a repo this server just made), so a project that
+    arrives by either door ends up wired identically. Returns (ok, steps);
+    ok is False only when a step the project cannot exist without failed.
+    """
+    from agent import provisioning  # noqa: PLC0415
+    from agent.config import _PROJECTS_CONFIG_PATH  # noqa: PLC0415
+
+    name = report.name
+    steps: list[dict] = []
+    _public_error = _provisioning_public_error
 
     def _step(label: str, ok: bool, detail: str = "") -> None:
         steps.append({"step": label, "ok": ok, "detail": detail})
@@ -4055,7 +4089,7 @@ async def provision_project_endpoint(req: ProvisionProjectRequest, user: User = 
     ok, detail = await asyncio.to_thread(provisioning.create_worktree, report.live, report.sandbox)
     _step("worktree", ok, detail)
     if not ok:
-        return {"ok": False, "steps": steps}
+        return False, steps
 
     entry = provisioning.config_from_choices(name, report.live, report.sandbox, choices)
     try:
@@ -4063,7 +4097,7 @@ async def provision_project_endpoint(req: ProvisionProjectRequest, user: User = 
         _step("config", True, f"wrote {name} to projects.json")
     except (provisioning.ProvisioningError, OSError, ValueError) as e:
         _step("config", False, _public_error(e))
-        return {"ok": False, "steps": steps}
+        return False, steps
 
     # Load the new entry into the RUNNING process. Without this the project
     # exists in projects.json and nowhere else -- every consumer holds the
@@ -4097,7 +4131,7 @@ async def provision_project_endpoint(req: ProvisionProjectRequest, user: User = 
     except Exception as e:  # noqa: BLE001
         _step("codebase-map", False, f"{_public_error(e)} -- run scripts/run_cartographer.py {name} later")
 
-    if req.grant_access and user.allowed_repos is not None:
+    if grant_access and user.allowed_repos is not None:
         try:
             await auth.update_user_access(app.state.auth_pool, user.id,
                                           [*user.allowed_repos, name])
@@ -4105,16 +4139,133 @@ async def provision_project_endpoint(req: ProvisionProjectRequest, user: User = 
         except Exception as e:  # noqa: BLE001
             _step("access", False, _public_error(e))
 
-    # Onboarding hands an agent bash and write access to a directory, which
-    # makes "who added this project, and when" a question worth being able to
-    # answer later.
-    await audit.record(_audit_store(), actor=user.email, action="project.onboard",
-                       target=name, detail=report.live)
+    return True, steps
+
+
+class CreateProjectRequest(BaseModel):
+    # `parent` is the directory the new repo is created UNDER, never the repo
+    # path itself: the name is validated separately (one path component) and
+    # the join is re-checked for containment, so a client cannot pick an
+    # arbitrary location any more than the wizard's `path` can.
+    name: str
+    description: str = ""
+    parent: str | None = None
+    github: bool = False
+    token_name: str | None = None
+
+
+def _resolve_github_token(token_name: str | None) -> str:
+    """A stored named token, else the GITHUB_TOKEN env fallback. Raises the
+    HTTP error the endpoint should answer with; the token itself never goes
+    anywhere but the request headers in agent/github_repos.py."""
+    if token_name:
+        entry = github_settings.current()["tokens"].get(token_name)
+        if not entry:
+            raise HTTPException(400, f"no stored GitHub token named {token_name!r} (Settings -> GitHub)")
+        return github_settings.decrypt_token(config, entry["enc"])
+    if getattr(config, "github_token", None):
+        return config.github_token
+    raise HTTPException(400, "no GitHub token is configured (Settings -> GitHub)")
+
+
+@app.post("/api/projects/create")
+async def create_project_endpoint(req: CreateProjectRequest, user: User = Depends(require_full_auth)):
+    """Start a project from nothing: a git repo with one commit under an
+    allowed root, optionally mirrored to a new PRIVATE GitHub repository,
+    then provisioned exactly as the wizard would with the recommended
+    answers.
+
+    Order matters. The token is resolved before anything is created so a
+    missing token is a clean 400 with no directory left behind; the GitHub
+    steps run before detection so a push failure is reported alongside the
+    local steps rather than losing the project; and the GitHub failure is a
+    failed step, not an abort -- the repo on disk is real and usable, and
+    the operator can connect it from the deploy-key panel later.
+    """
+    auth.require_admin(user)
+    from agent import provisioning, github_repos, deploy_keys  # noqa: PLC0415
+
+    try:
+        name = provisioning.validate_project_name(req.name, list(PROJECTS))
+    except provisioning.ProvisioningError as e:
+        raise HTTPException(400, e.detail)
+
+    token: str | None = None
+    if req.github:
+        token = _resolve_github_token(req.token_name)
+
+    try:
+        live = await asyncio.to_thread(
+            provisioning.create_repository, req.parent, name,
+            description=req.description, existing_names=list(PROJECTS))
+    except provisioning.ProvisioningError as e:
+        raise HTTPException(400, e.detail)
+
+    steps: list[dict] = [{"step": "repository", "ok": True,
+                          "detail": f"initialised {live} with one commit on main"}]
+    github_info: dict | None = None
+
+    if req.github and token:
+        # Host-side push -- see agent/github_repos.py for why this is allowed
+        # here and nowhere an agent runs.
+        try:
+            created = await github_repos.create_private_repo(token, name, req.description)
+            github_info = {"full_name": created["full_name"], "html_url": created["html_url"]}
+            public_key = await asyncio.to_thread(
+                github_repos.connect_origin, live, created["ssh_url"], name)
+            await github_repos.add_deploy_key(token, created["full_name"],
+                                              f"tektonix-{name}", public_key)
+            ok, detail = await asyncio.to_thread(github_repos.push_initial, live, name)
+            steps.append({"step": "github", "ok": ok,
+                          "detail": f"{created['full_name']}: {detail}" if ok else detail})
+        except (PermissionError, LookupError, ValueError, deploy_keys.DeployKeyError) as e:
+            # These messages are written by github_repos/deploy_keys for the
+            # operator and carry neither the token nor a response body.
+            steps.append({"step": "github", "ok": False, "detail": str(e)[:400]})
+        except httpx.HTTPError as e:
+            logger.exception("github: creating the repository for %s failed", name)
+            steps.append({"step": "github", "ok": False,
+                          "detail": f"GitHub request failed ({type(e).__name__}) -- see the server log"})
+        if req.token_name and github_info:
+            # So token_for(name) -- the inbox poller, the PR tools -- reaches
+            # this repo with the same token that created it.
+            try:
+                await github_settings.save(app.state.store, config,
+                                           {"projects": {name: {"token": req.token_name}}})
+                steps.append({"step": "github-token", "ok": True,
+                              "detail": f"{name} uses the stored token {req.token_name!r}"})
+            except Exception as e:  # noqa: BLE001 -- reported, never fatal
+                steps.append({"step": "github-token", "ok": False,
+                              "detail": _provisioning_public_error(e)})
+
+    try:
+        report = await asyncio.to_thread(provisioning.detect_project, live,
+                                         existing_names=list(PROJECTS))
+        if report.blockers:
+            raise provisioning.ProvisioningError("; ".join(report.blockers))
+        choices = provisioning.validate_choices(report, provisioning.recommended_choices(report))
+    except provisioning.ProvisioningError as e:
+        steps.append({"step": "detect", "ok": False, "detail": e.detail})
+        return {"ok": False, "name": name, "live": live, "steps": steps, "github": github_info}
+    steps.append({"step": "detect", "ok": True,
+                  "detail": f"{len(report.checks)} check(s), {len(report.warnings)} warning(s)"})
+
+    ok, provision_steps = await _provision_from_report(report, choices, user, True)
+    steps.extend(provision_steps)
+    if not ok:
+        return {"ok": False, "name": name, "live": live, "steps": steps, "github": github_info}
+
+    await audit.record(_audit_store(), actor=user.email, action="project.create",
+                       target=name, detail=live,
+                       extra={"github": github_info["full_name"] if github_info else None})
 
     return {
         "ok": True,
+        "name": name,
+        "live": live,
         "steps": steps,
-        "message": f"{name} is configured and live in this process.",
+        "github": github_info,
+        "message": f"{name} is created, configured and live in this process.",
     }
 
 

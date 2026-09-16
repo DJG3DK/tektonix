@@ -51,6 +51,7 @@ _writes_since_trim = 0
 # somewhere in agent/.
 ACTIONS: dict[str, str] = {
     "project.onboard": "onboarded a project",
+    "project.create": "created a project",
     "command.approve": "approved a gated command",
     "command.reject": "rejected a gated command",
     "merge.approve": "approved a merge",

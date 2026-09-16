@@ -192,6 +192,7 @@ EXPECTED: list[tuple[str, str, str | None]] = [   ('DELETE', '/api/auth/users/{u
     ('POST', '/api/planning/sessions/{session_id}/archive', 'require_full_auth'),
     ('POST', '/api/planning/sessions/{session_id}/message', 'require_full_auth'),
     ('POST', '/api/planning/sessions/{session_id}/stop', 'require_full_auth'),
+    ('POST', '/api/projects/create', 'require_full_auth'),
     ('POST', '/api/projects/detect', 'require_full_auth'),
     ('POST', '/api/projects/provision', 'require_full_auth'),
     ('POST', '/api/projects/{name}/deploy-key', 'require_full_auth'),
