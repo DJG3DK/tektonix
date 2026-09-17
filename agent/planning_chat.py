@@ -9,7 +9,10 @@ thread_id (a plain string).
 Deliberately no write/edit/bash against the primary repo -- no
 INTERRUPT_ON-style approval gate is needed the way investigator/test-writer
 require for their bash access, since nothing here can mutate a real repo's
-source. It DOES get real, persistent memory access though (see below): a
+source. The one tool that leads to a mutation, create_project, does not
+perform it: it records a proposal, and the project is created only behind an
+admin-gated Confirm in the dashboard (server.py's new-project route, the same
+code path as POST /api/projects/create). It DOES get real, persistent memory access though (see below): a
 planning conversation that can't remember anything between sessions isn't
 much of a planning assistant, and this system already has a proven, working
 memory mechanism (build_deep_agent's own /memories//org-memory setup) --
@@ -230,6 +233,12 @@ about what you found -- that is the job, not a detour from it. If a question is 
 one turn, say what you found, say what is still open, and save the plan you can justify now; a partial \
 plan the operator can act on beats a perfect one that never gets written.
 - save_brief: pin the brief for the current request (see FIRST ACTION above).
+- create_project(name, description="", github=False): when the request is a NEW application rather than a \
+change to "{repo}" or another configured project, first ask the operator for a project name and whether a \
+private GitHub repo should be created, restate both, and only after they confirm call create_project once. \
+It creates nothing itself -- the operator gets a Confirm card and the project is created when they confirm, \
+after which this conversation continues on the new project. Do not call it again unless the operator \
+changes the name; keep planning as if the project exists.
 - THE DRAFT GATE: after a set number of repo file reads without a saved plan (Settings: "Planning reads \
 before a draft"), read_project_file closes until you call save_plan. Save early -- a draft with open \
 questions beats reading on -- then KEEP GOING in the same turn: reads reopen after the save, so investigate \
@@ -287,8 +296,14 @@ async def build_planning_agent(
     allowed_repos: list[str] | None = None,
     existing_brief: dict | None = None,
     route: str = "general",
+    is_admin: bool = False,
+    actor: str | None = None,
 ):
     """Returns (agent, plan_ref, tracker).
+
+    `is_admin`/`actor` reach make_planning_tools' create_project gate; they
+    are threaded explicitly because `allowed_repos` is None for admins and
+    for legacy unscoped accounts alike, so role cannot be read off it.
 
     `difficulty` ("EASY" or "HARD", from classify_planning_difficulty)
     picks which of the EASY/HARD planning-chat models actually answers this
@@ -323,6 +338,7 @@ async def build_planning_agent(
     github_tools = [*github_tools, make_github_inbox_tool(store, allowed_repos)]
     planning_tools, plan_ref = make_planning_tools(
         existing_plan, allowed_repos, existing_brief=existing_brief, skills_manifest=skills_manifest,
+        is_admin=is_admin, actor=actor,
     )
 
     project_memory_backend = StoreBackend(namespace=project_namespace(repo), store=store)

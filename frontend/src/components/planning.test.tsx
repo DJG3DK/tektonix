@@ -2,7 +2,8 @@ import type { ComponentProps } from "react";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { CreateProjectResult } from "../api";
+import type { CreateProjectResult, NewProjectDecisionResult } from "../api";
+import type { PlanningSessionMeta } from "../types";
 import { PlanningView } from "./PlanningView";
 
 // The planner's "New project…" door. It shares the Repo dropdown with the
@@ -12,12 +13,16 @@ import { PlanningView } from "./PlanningView";
 
 const createProject = vi.fn();
 const createPlanningSession = vi.fn();
+const decideNewProject = vi.fn();
+const getPlanningSession = vi.fn();
 vi.mock("../api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../api")>();
   return {
     ...actual,
     createProject: (...a: unknown[]) => createProject(...a),
     createPlanningSession: (...a: unknown[]) => createPlanningSession(...a),
+    decideNewProject: (...a: unknown[]) => decideNewProject(...a),
+    getPlanningSession: (...a: unknown[]) => getPlanningSession(...a),
   };
 });
 
@@ -41,6 +46,7 @@ function renderPanel(over: Partial<ComponentProps<typeof PlanningView>> = {}) {
     session: null,
     onBuildNow: vi.fn(),
     onSessionCreated: vi.fn(),
+    onSessionUpdated: vi.fn(),
     ...over,
   };
   render(<PlanningView {...props} />);
@@ -58,6 +64,8 @@ async function openDoor() {
 beforeEach(() => {
   createProject.mockReset();
   createPlanningSession.mockReset();
+  decideNewProject.mockReset();
+  getPlanningSession.mockReset();
 });
 
 describe("PlanningView — the New project door", () => {
@@ -224,5 +232,155 @@ describe("PlanningView — the ordinary start flow next to the door", () => {
     await userEvent.click(startButton());
     expect(await screen.findByRole("alert")).toHaveTextContent(/503/);
     expect(onSessionCreated).not.toHaveBeenCalled();
+  });
+});
+
+// The mid-conversation door. The agent's create_project tool only records a
+// proposal on the session; this card is where an admin turns it into a real
+// project, through the same server path as the start form's door, after
+// which the session is re-homed under the new repo.
+
+const PROPOSAL = { name: "my-app", description: "a store front", github: true };
+
+const openSession = (over: Partial<PlanningSessionMeta> = {}): PlanningSessionMeta => ({
+  session_id: "s1",
+  repo: "3d-bot",
+  created_at: 1,
+  updated_at: 1,
+  title: "a new thing",
+  plan_markdown: null,
+  cost_usd: 0,
+  new_project: PROPOSAL,
+  ...over,
+});
+
+const movedSession = (): PlanningSessionMeta => openSession({ repo: "my-app", new_project: null });
+
+function renderSession(over: Partial<ComponentProps<typeof PlanningView>> = {}) {
+  // The hook hydrates from the server on mount; hand it a meta without the
+  // proposal so the card provably renders from the session prop.
+  getPlanningSession.mockResolvedValue({
+    meta: openSession({ new_project: null }), log: [], running: false,
+  });
+  return renderPanel({ session: openSession(), ...over });
+}
+
+const confirmButton = () => screen.getByRole("button", { name: /^confirm$|creating project/i });
+const dismissButton = () => screen.getByRole("button", { name: /^dismiss$/i });
+
+describe("PlanningView — the confirm card for a proposed project", () => {
+  it("renders the proposal from session.new_project for an admin", () => {
+    renderSession();
+    const card = screen.getByRole("region", { name: /proposed new project/i });
+    expect(card).toHaveTextContent(/the agent proposes a new project/i);
+    expect(card).toHaveTextContent("my-app");
+    expect(card).toHaveTextContent("a store front");
+    expect(screen.getByRole("checkbox", { name: /private github repo/i })).toBeChecked();
+    expect(confirmButton()).toBeEnabled();
+    expect(dismissButton()).toBeEnabled();
+  });
+
+  it("shows no card without a proposal", () => {
+    getPlanningSession.mockResolvedValue({ meta: openSession({ new_project: null }), log: [], running: false });
+    renderPanel({ session: openSession({ new_project: null }) });
+    expect(screen.queryByRole("region", { name: /proposed new project/i })).not.toBeInTheDocument();
+  });
+
+  it("tells a non-admin an admin must confirm, with no buttons", () => {
+    renderSession({ isAdmin: false });
+    expect(screen.getByRole("note")).toHaveTextContent(/an admin must confirm/i);
+    expect(screen.queryByRole("button", { name: /^confirm$/i })).not.toBeInTheDocument();
+  });
+
+  it("hides the GitHub box when no token is configured", () => {
+    renderSession({ githubReady: false });
+    expect(screen.queryByRole("checkbox", { name: /github/i })).not.toBeInTheDocument();
+  });
+
+  it("confirms: decideNewProject, then onProjectCreated, then onSessionUpdated with the moved session", async () => {
+    const result: NewProjectDecisionResult = { project: okResult("my-app"), session: movedSession() };
+    decideNewProject.mockResolvedValue(result);
+    const { onProjectCreated, onSessionUpdated } = renderSession();
+
+    await userEvent.click(confirmButton());
+
+    await waitFor(() => expect(onSessionUpdated).toHaveBeenCalled());
+    expect(decideNewProject).toHaveBeenCalledWith("s1", { decision: "confirm", github: true });
+    expect(onProjectCreated).toHaveBeenCalledWith("my-app");
+    expect(onSessionUpdated).toHaveBeenCalledWith(expect.objectContaining({ session_id: "s1", repo: "my-app", new_project: null }));
+
+    // App must know the repo before the session view names it.
+    const order = [
+      decideNewProject.mock.invocationCallOrder[0],
+      (onProjectCreated as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0],
+      (onSessionUpdated as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0],
+    ];
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
+  });
+
+  it("sends the box's state, not the proposal's, when the operator unticks it", async () => {
+    decideNewProject.mockResolvedValue({ project: okResult("my-app"), session: movedSession() });
+    const { onSessionUpdated } = renderSession();
+    await userEvent.click(screen.getByRole("checkbox", { name: /private github repo/i }));
+    await userEvent.click(confirmButton());
+    await waitFor(() => expect(onSessionUpdated).toHaveBeenCalled());
+    expect(decideNewProject).toHaveBeenCalledWith("s1", { decision: "confirm", github: false });
+  });
+
+  it("shows the working label while the create is in flight", async () => {
+    let settle: (v: NewProjectDecisionResult) => void = () => {};
+    decideNewProject.mockReturnValue(new Promise<NewProjectDecisionResult>((r) => (settle = r)));
+    const { onSessionUpdated } = renderSession();
+    await userEvent.click(confirmButton());
+    expect(screen.getByRole("button", { name: /creating project/i })).toBeDisabled();
+    expect(dismissButton()).toBeDisabled();
+    settle({ project: okResult("my-app"), session: movedSession() });
+    await waitFor(() => expect(onSessionUpdated).toHaveBeenCalled());
+  });
+
+  it("dismisses: decideNewProject with 'dismiss', then the cleared session goes up", async () => {
+    decideNewProject.mockResolvedValue({ project: null, session: openSession({ new_project: null }) });
+    const { onProjectCreated, onSessionUpdated } = renderSession();
+    await userEvent.click(dismissButton());
+    await waitFor(() => expect(onSessionUpdated).toHaveBeenCalled());
+    expect(decideNewProject).toHaveBeenCalledWith("s1", { decision: "dismiss" });
+    expect(onProjectCreated).not.toHaveBeenCalled();
+    expect(onSessionUpdated).toHaveBeenCalledWith(expect.objectContaining({ repo: "3d-bot", new_project: null }));
+  });
+
+  it("renders the step list on an ok:false create and keeps the card", async () => {
+    decideNewProject.mockResolvedValue({
+      project: {
+        ok: false,
+        name: "my-app",
+        live: "/srv/projects/my-app",
+        steps: [
+          { step: "repository", ok: true, detail: "one commit on main" },
+          { step: "github", ok: false, detail: "GitHub said 422: name already exists on this account" },
+        ],
+        github: null,
+        message: "Project creation failed at github.",
+      } satisfies CreateProjectResult,
+      session: openSession(),
+    });
+    const { onProjectCreated, onSessionUpdated } = renderSession();
+    await userEvent.click(confirmButton());
+
+    expect(await screen.findByText(/name already exists on this account/)).toBeInTheDocument();
+    expect(screen.getByText(/creation failed at github/i)).toBeInTheDocument();
+    expect(onProjectCreated).not.toHaveBeenCalled();
+    expect(onSessionUpdated).not.toHaveBeenCalled();
+    // still here, still answerable
+    expect(screen.getByRole("region", { name: /proposed new project/i })).toBeInTheDocument();
+    expect(confirmButton()).toBeEnabled();
+  });
+
+  it("surfaces a rejected confirm in the error chip and keeps the card", async () => {
+    decideNewProject.mockRejectedValue(new Error("planning session is processing a message"));
+    const { onSessionUpdated } = renderSession();
+    await userEvent.click(confirmButton());
+    expect(await screen.findByRole("alert")).toHaveTextContent(/processing a message/);
+    expect(onSessionUpdated).not.toHaveBeenCalled();
+    expect(confirmButton()).toBeEnabled();
   });
 });

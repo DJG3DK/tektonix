@@ -1,11 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { AttachmentEntry } from "./api";
 import { getPlanningSession, planningStreamUrl, sendPlanningMessage } from "./api";
-import type { PlanningLogEntry, PlanningStreamEvent } from "./types";
+import type { NewProjectProposal, PlanningLogEntry, PlanningStreamEvent } from "./types";
 
 interface PlanningStreamState {
   log: PlanningLogEntry[];
   planMarkdown: string | null;
+  /** The unanswered create_project proposal, from the hydrate and from
+   *  turn_complete -- the same two sources planMarkdown has. */
+  newProject: NewProjectProposal | null;
   costUsd: number;
   running: boolean;
   hydrateError: string | null;
@@ -20,6 +23,7 @@ const SOCKET_WATCHDOG_POLL_MS = 15_000;
 const EMPTY_STATE: PlanningStreamState = {
   log: [],
   planMarkdown: null,
+  newProject: null,
   costUsd: 0,
   running: false,
   hydrateError: null,
@@ -79,7 +83,10 @@ export function usePlanningStream(sessionId: string | null) {
       try {
         const { log, running, meta } = await getPlanningSession(sessionId!);
         if (cancelled) return;
-        setState((s) => ({ ...s, log, running, planMarkdown: meta.plan_markdown, costUsd: meta.cost_usd, hydrateError: null }));
+        setState((s) => ({
+          ...s, log, running, planMarkdown: meta.plan_markdown, newProject: meta.new_project ?? null,
+          costUsd: meta.cost_usd, hydrateError: null,
+        }));
       } catch (err) {
         if (cancelled) return;
         setState((s) => ({ ...s, hydrateError: err instanceof Error ? err.message : "failed to load session" }));
@@ -132,6 +139,9 @@ export function usePlanningStream(sessionId: string | null) {
           setState((s) => ({
             ...s,
             planMarkdown: event.plan_markdown ?? s.planMarkdown,
+            // The server sends the persisted value, null included: a turn
+            // that ended with no proposal must not resurrect a dismissed one.
+            newProject: event.new_project === undefined ? s.newProject : event.new_project,
             costUsd: event.cost_usd ?? s.costUsd,
           }));
         } else if (event.type === "error") {
@@ -180,6 +190,7 @@ export function usePlanningStream(sessionId: string | null) {
             log: log.length >= s.log.length ? log : s.log,
             running,
             planMarkdown: meta.plan_markdown ?? s.planMarkdown,
+            newProject: meta.new_project ?? null,
             costUsd: meta.cost_usd ?? s.costUsd,
             sendError: null,
           }));
@@ -238,5 +249,12 @@ export function usePlanningStream(sessionId: string | null) {
     [sessionId, connect],
   );
 
-  return { ...state, sendMessage };
+  // The confirm/dismiss route answers with the session meta, which the
+  // view hands up to App; this drops the hook's own copy so a proposal the
+  // operator has answered cannot outlive the answer.
+  const clearNewProject = useCallback(() => {
+    setState((s) => (s.newProject ? { ...s, newProject: null } : s));
+  }, []);
+
+  return { ...state, sendMessage, clearNewProject };
 }

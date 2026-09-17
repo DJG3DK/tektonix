@@ -90,6 +90,7 @@ def test_the_agent_has_no_tool_that_can_change_a_control(poisoned_repo):
     ("post", "/api/auth/me/auto-approve", {"auto_approve_commands": True, "repos": ["x"]}),
     ("post", "/api/projects/x/deploy-key/generate", None),
     ("post", "/api/projects/create", {"name": "x", "github": True}),
+    ("post", "/api/planning/sessions/x/new-project", {"decision": "confirm"}),
     ("post", "/api/settings/github", {"projects": {"x": {"policies": {"dependabot_prs": "auto"}}}}),
     ("get", "/api/audit", None),
 ])

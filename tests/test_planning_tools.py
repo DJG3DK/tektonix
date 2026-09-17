@@ -298,3 +298,61 @@ async def test_a_relative_skills_dir_in_the_repo_is_still_readable(tmp_path, mon
     by_name, _ = _tools(monkeypatch, {"demo": {"sandbox": str(tmp_path)}})
     result = await by_name["read_project_file"].ainvoke({"repo": "demo", "path": "skills/notes.md"})
     assert result == "repo skill notes"
+
+
+# ---------------------------------------------------------------------------
+# create_project -- a proposal, never a creation. The tool records what the
+# operator confirmed into plan_ref; the server puts a Confirm card on the
+# session and creates the project only when an admin answers it.
+# ---------------------------------------------------------------------------
+
+
+def _admin_tools(monkeypatch, projects: dict):
+    monkeypatch.setattr("agent.tools.planning_tools.PROJECTS", projects)
+    tools, plan_ref = make_planning_tools(is_admin=True, actor="admin@example.com")
+    return {t.name: t for t in tools}, plan_ref
+
+
+def test_create_project_is_offered_to_everyone_by_default(monkeypatch):
+    """Offered unconditionally (EASY and HARD must see identical tool sets);
+    the gate is inside the tool, not in the list."""
+    by_name, _ = _tools(monkeypatch, {})
+    assert "create_project" in by_name
+
+
+def test_create_project_refuses_a_non_admin(monkeypatch):
+    by_name, plan_ref = _tools(monkeypatch, {})  # is_admin defaults False
+    result = by_name["create_project"].invoke({"name": "my-app"})
+    assert result.startswith("ERROR:")
+    assert "admin-only" in result
+    assert "new_project" not in plan_ref, "a refused call must record nothing"
+
+
+def test_create_project_refuses_a_bad_name_with_the_servers_wording(monkeypatch):
+    by_name, plan_ref = _admin_tools(monkeypatch, {})
+    result = by_name["create_project"].invoke({"name": ".hidden"})
+    assert result.startswith("ERROR:")
+    assert "must start with a letter or digit" in result
+    assert "new_project" not in plan_ref
+
+
+def test_create_project_refuses_a_duplicate_name(monkeypatch):
+    by_name, plan_ref = _admin_tools(monkeypatch, {"shop": {"sandbox": "/tmp/x"}})
+    result = by_name["create_project"].invoke({"name": "shop"})
+    assert result.startswith("ERROR:")
+    assert "'shop' is already configured" in result
+    assert "new_project" not in plan_ref
+
+
+def test_create_project_records_the_proposal_and_points_at_the_confirm_card(monkeypatch):
+    by_name, plan_ref = _admin_tools(monkeypatch, {"shop": {"sandbox": "/tmp/x"}})
+    result = by_name["create_project"].invoke(
+        {"name": " my-app ", "description": " A store front ", "github": True})
+    assert plan_ref["new_project"] == {
+        "name": "my-app", "description": "A store front", "github": True,
+        "proposed_by": "admin@example.com",
+    }
+    assert not result.startswith("ERROR:")
+    assert "Confirm" in result
+    assert "Do not call create_project again" in result
+    assert "as if the project already exists" in result

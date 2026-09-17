@@ -122,3 +122,39 @@ describe("planning socket liveness", () => {
     await waitFor(() => expect(hook.result.current.running).toBe(false));
   });
 });
+
+describe("a create_project proposal on the stream", () => {
+  const proposal = { name: "my-app", description: "a store front", github: true };
+
+  it("lands from turn_complete without waiting for a poll", async () => {
+    const hook = await startTurn();
+    const ws = sockets[sockets.length - 1];
+    act(() => ws.onmessage?.({ data: JSON.stringify({ type: "turn_complete", plan_markdown: null, cost_usd: 0.2, new_project: proposal }) }));
+    await waitFor(() => expect(hook.result.current.newProject).toEqual(proposal));
+  });
+
+  it("is cleared by a later turn that persisted none, and by clearNewProject", async () => {
+    const hook = await startTurn();
+    const ws = sockets[sockets.length - 1];
+    act(() => ws.onmessage?.({ data: JSON.stringify({ type: "turn_complete", new_project: proposal }) }));
+    await waitFor(() => expect(hook.result.current.newProject).toEqual(proposal));
+    // The server sends the persisted value, null included -- a dismissed
+    // proposal must not come back on the next turn.
+    act(() => ws.onmessage?.({ data: JSON.stringify({ type: "turn_complete", new_project: null }) }));
+    await waitFor(() => expect(hook.result.current.newProject).toBeNull());
+
+    act(() => ws.onmessage?.({ data: JSON.stringify({ type: "turn_complete", new_project: proposal }) }));
+    await waitFor(() => expect(hook.result.current.newProject).toEqual(proposal));
+    act(() => hook.result.current.clearNewProject());
+    await waitFor(() => expect(hook.result.current.newProject).toBeNull());
+  });
+
+  it("hydrates from the session meta", async () => {
+    getPlanningSession.mockResolvedValue({
+      log: [], running: false, meta: { plan_markdown: null, cost_usd: 0, new_project: proposal },
+    });
+    const { usePlanningStream } = await import("./usePlanningStream");
+    const hook = renderHook(() => usePlanningStream("s1"));
+    await waitFor(() => expect(hook.result.current.newProject).toEqual(proposal));
+  });
+});

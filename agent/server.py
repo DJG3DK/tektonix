@@ -2368,6 +2368,7 @@ async def _bank_planning_turn(
     outcome: str | None = None,
     outcome_detail: str | None = None,
     brief: dict | None = None,
+    new_project: dict | None = None,
 ) -> None:
     """Persist whatever a turn earned before it ended -- used by the two
     abnormal exits (operator Stop, and an exception), which both used to
@@ -2413,6 +2414,8 @@ async def _bank_planning_turn(
             meta["cost_usd"] = spent
         if brief is not None:
             meta["brief"] = brief  # same PRESERVE rule: a turn can add or replace a brief, never remove one
+        if new_project is not None:
+            meta["new_project"] = new_project  # a proposal made before the crash is still the operator's to answer
         if text and not meta.get("title"):
             meta["title"] = text[:60]
         if outcome is not None:
@@ -2431,7 +2434,9 @@ async def _bank_planning_turn(
         await recorder.flush()
 
 
-async def _run_planning_turn_bg(session_id: str, repo: str, text: str, attachments: list[dict] | None = None, allowed_repos: list[str] | None = None) -> None:
+async def _run_planning_turn_bg(session_id: str, repo: str, text: str, attachments: list[dict] | None = None,
+                                allowed_repos: list[str] | None = None, is_admin: bool = False,
+                                actor: str | None = None) -> None:
     try:
         meta_item = await app.state.store.aget(("planning", repo), session_id)
         starting_cost = meta_item.value.get("cost_usd", 0.0) if meta_item else 0.0
@@ -2507,6 +2512,8 @@ async def _run_planning_turn_bg(session_id: str, repo: str, text: str, attachmen
             allowed_repos=allowed_repos,  # audit H-2
             existing_brief=_prior_brief,
             route=route,
+            is_admin=is_admin,  # gates create_project; not derivable from allowed_repos
+            actor=actor,
         )
         thread_config = planning_thread_config(session_id, repo)
         # Circuit breaker: llm_for_role's own per-call timeout (plus
@@ -2604,12 +2611,19 @@ async def _run_planning_turn_bg(session_id: str, repo: str, text: str, attachmen
         # error anywhere. A turn can add or replace a plan, never remove one.
         effective_plan = plan_markdown if plan_markdown is not None else _prior_plan
         meta_item = await app.state.store.aget(("planning", repo), session_id)
+        # A create_project proposal rides the same shared plan_ref as the plan
+        # and the brief: the tool can only return text to the model, so this
+        # is the one way the server learns of it. Same PRESERVE rule -- a turn
+        # that proposed nothing keeps the proposal the operator has not yet
+        # answered (only the confirm/dismiss route clears it).
+        new_project = plan_ref.get("new_project") or (meta_item.value.get("new_project") if meta_item else None)
         if meta_item:
             meta = {
                 **meta_item.value, "updated_at": time.time(),
                 "plan_markdown": effective_plan, "cost_usd": tracker.total_cost,
                 "turn_active": False,
                 "brief": plan_ref.get("brief") or meta_item.value.get("brief"),
+                "new_project": new_project,
             }
             if not meta.get("title"):
                 meta["title"] = text[:60]
@@ -2638,7 +2652,10 @@ async def _run_planning_turn_bg(session_id: str, repo: str, text: str, attachmen
         await _bank_planning_turn(
             session_id, repo, None, None, outcome="completed"
         )
-        _publish_planning(session_id, {"type": "turn_complete", "plan_markdown": effective_plan, "cost_usd": tracker.total_cost})
+        _publish_planning(session_id, {
+            "type": "turn_complete", "plan_markdown": effective_plan, "cost_usd": tracker.total_cost,
+            "new_project": new_project,
+        })
     except asyncio.CancelledError:
         # Operator pressed Stop, or the process is shutting down. The spend is
         # real either way, so bank it against the session rather than losing it,
@@ -2655,7 +2672,7 @@ async def _run_planning_turn_bg(session_id: str, repo: str, text: str, attachmen
         _ref = locals().get("plan_ref") or {}
         await _bank_planning_turn(
             session_id, repo, _ref.get("markdown"), spent, text=text, outcome="stopped",
-            brief=_ref.get("brief"),
+            brief=_ref.get("brief"), new_project=_ref.get("new_project"),
         )
         _publish_planning(session_id, {"type": "stopped", "cost_usd": spent})
         raise
@@ -2685,7 +2702,7 @@ async def _run_planning_turn_bg(session_id: str, repo: str, text: str, attachmen
             session_id, repo, _ref.get("markdown"),
             _t.total_cost if _t is not None else None,
             text=text, outcome=_outcome, outcome_detail=str(e)[:500],
-            brief=_ref.get("brief"),
+            brief=_ref.get("brief"), new_project=_ref.get("new_project"),
         )
         _publish_planning(
             session_id,
@@ -2736,9 +2753,88 @@ async def send_planning_message(session_id: str, req: PlanningMessageRequest, us
         if not req.text.strip():
             raise HTTPException(400, "message text is required")
         _running_planning_turns[session_id] = asyncio.create_task(
-            _run_planning_turn_bg(session_id, repo, req.text.strip(), req.attachments, allowed_repos=user.allowed_repos)
+            _run_planning_turn_bg(session_id, repo, req.text.strip(), req.attachments,
+                                  allowed_repos=user.allowed_repos,
+                                  # role, not allowed_repos: None there means admin OR legacy unscoped
+                                  is_admin=user.role == "admin", actor=user.email)
         )
         return {"ok": True}
+
+
+class NewProjectDecisionRequest(BaseModel):
+    decision: Literal["confirm", "dismiss"]
+    # Overrides the proposal's `github` when the operator changes the box on
+    # the confirm card; None keeps what the agent recorded.
+    github: bool | None = None
+    token_name: str | None = None
+
+
+async def _move_planning_session(session_id: str, old_repo: str, new_repo: str, meta: dict) -> dict:
+    """Re-home a session's two Store rows -- meta at ("planning", repo) and
+    the durable transcript at ("planning_log", repo) -- under the new repo.
+    The checkpoint thread id is f"planning:{session_id}" with no repo in it
+    (planning_thread_config), so the conversation itself needs nothing.
+
+    Copy first, delete after: a crash between the two leaves a duplicate the
+    next confirm can overwrite, never a session with no row anywhere.
+    """
+    store = app.state.store
+    new_meta = {**meta, "repo": new_repo, "new_project": None, "updated_at": time.time()}
+    await store.aput(("planning", new_repo), session_id, new_meta)
+    log_item = await store.aget((planning_log.NAMESPACE, old_repo), session_id)
+    if log_item and log_item.value:
+        await store.aput((planning_log.NAMESPACE, new_repo), session_id, log_item.value)
+    await store.adelete(("planning", old_repo), session_id)
+    await planning_log.forget(store, old_repo, session_id)
+    return new_meta
+
+
+@app.post("/api/planning/sessions/{session_id}/new-project")
+async def decide_planning_new_project(session_id: str, req: NewProjectDecisionRequest,
+                                      user: User = Depends(require_full_auth)):
+    """Answer the confirm card a create_project tool call put on the session.
+
+    The planner cannot create anything itself (agent/tools/planning_tools.py):
+    it records a proposal in the session meta and the operator answers it
+    here. Confirm runs the SAME code as POST /api/projects/create -- one
+    provisioning path, whichever door the project came through -- and then
+    moves the session onto the new repo so the conversation continues there
+    with the new project's memory and sandbox. A failed create leaves the
+    session where it is and answers 200 with the step list, so the card can
+    show which step died and stay up for a retry.
+    """
+    auth.require_admin(user)
+    repo, meta = await _find_planning_meta(session_id)
+    if not meta:
+        raise HTTPException(404, "planning session not found")
+    check_repo_access(user, repo)
+    if req.decision == "dismiss":
+        # A plain meta write; a turn ending later re-reads the row and
+        # preserves what it finds, so this needs no run slot.
+        meta = {**meta, "new_project": None, "updated_at": time.time()}
+        await app.state.store.aput(("planning", repo), session_id, meta)
+        return {"project": None, "session": meta}
+
+    proposal = meta.get("new_project")
+    if not proposal:
+        raise HTTPException(409, "this session has no proposed project to confirm")
+    # The move rewrites the rows a running turn writes back at its end, so it
+    # is refused mid-turn the same way delete is.
+    with _claim_run_slot(_running_planning_turns, session_id,
+                         "planning session is processing a message"):
+        create_req = CreateProjectRequest(
+            name=proposal["name"],
+            description=proposal.get("description") or "",
+            github=bool(proposal.get("github")) if req.github is None else req.github,
+            token_name=req.token_name,
+        )
+        result = await _create_project(create_req, user)
+        if not result.get("ok"):
+            return {"project": result, "session": meta}
+        # reload_projects() ran inside _create_project, so the new repo is in
+        # PROJECTS and _find_planning_meta can see the moved row.
+        new_meta = await _move_planning_session(session_id, repo, result["name"], meta)
+    return {"project": result, "session": new_meta}
 
 
 @app.websocket("/api/planning/sessions/{session_id}/stream")
@@ -4170,10 +4266,18 @@ def _resolve_github_token(token_name: str | None) -> str:
 
 @app.post("/api/projects/create")
 async def create_project_endpoint(req: CreateProjectRequest, user: User = Depends(require_full_auth)):
-    """Start a project from nothing: a git repo with one commit under an
-    allowed root, optionally mirrored to a new PRIVATE GitHub repository,
-    then provisioned exactly as the wizard would with the recommended
-    answers.
+    """Start a project from nothing -- see _create_project, which the
+    planner's confirm route (decide_planning_new_project) shares verbatim so
+    a project arrives wired identically whichever door it came through."""
+    auth.require_admin(user)
+    return await _create_project(req, user)
+
+
+async def _create_project(req: CreateProjectRequest, user: User) -> dict:
+    """A git repo with one commit under an allowed root, optionally mirrored
+    to a new PRIVATE GitHub repository, then provisioned exactly as the
+    wizard would with the recommended answers. The caller has already
+    checked the admin role.
 
     Order matters. The token is resolved before anything is created so a
     missing token is a clean 400 with no directory left behind; the GitHub
@@ -4182,7 +4286,6 @@ async def create_project_endpoint(req: CreateProjectRequest, user: User = Depend
     failed step, not an abort -- the repo on disk is real and usable, and
     the operator can connect it from the deploy-key panel later.
     """
-    auth.require_admin(user)
     from agent import provisioning, github_repos, deploy_keys  # noqa: PLC0415
 
     try:

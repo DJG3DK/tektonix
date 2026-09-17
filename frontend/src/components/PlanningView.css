@@ -356,6 +356,28 @@
 .planning-outcome--bad  { border-left-color: var(--red); }
 .planning-outcome-hint { color: var(--text-faint); }
 
+/* The confirm card for a create_project proposal (2026-09-17). Sits above
+   the composer, not in the scrolling log: it is a pending decision, and a
+   decision that scrolls away is one that never gets made. */
+.planning-proposal {
+  margin: 0 16px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--blue);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  font-size: 13px;
+  color: var(--text-dim);
+}
+.planning-proposal-head { color: var(--text); margin-bottom: 4px; }
+.planning-proposal-head code { font-size: 13px; color: var(--text); }
+.planning-proposal-desc { margin: 0 0 10px; }
+.planning-proposal .planning-check { margin-bottom: 10px; }
+.planning-proposal-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.planning-proposal-actions .planning-build-error { margin-left: auto; }
+.planning-proposal .planning-create-failed { margin: 0 0 10px; }
+.planning-proposal-note { margin: 0 16px; font-size: 12px; color: var(--text-faint); }
+
 /* Build Now failure, shown beside the button that failed (2026-09-09). */
 .planning-build-error {
   display: inline-flex;

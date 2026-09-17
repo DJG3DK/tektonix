@@ -690,6 +690,33 @@ export async function archivePlanningSession(sessionId: string): Promise<void> {
   }
 }
 
+export interface NewProjectDecisionResult {
+  /** The create result on confirm (ok:false carries the step list); null on dismiss. */
+  project: CreateProjectResult | null;
+  /** The session as it now stands: under the new repo after a successful
+   *  confirm, unchanged (proposal still attached) after a failed one, and
+   *  with the proposal cleared after a dismiss. */
+  session: PlanningSessionMeta;
+}
+
+/** Answer the planner's create_project proposal. Admin-only. Confirm runs
+ *  the same server path as createProject and then moves the session onto
+ *  the new repo, so the conversation continues there. */
+export async function decideNewProject(
+  sessionId: string,
+  body: { decision: "confirm" | "dismiss"; github?: boolean | null; token_name?: string | null },
+): Promise<NewProjectDecisionResult> {
+  // Same ceiling as createProject: a confirm is a create (git init, an
+  // optional push, the cartographer's first pass) plus the row move.
+  const res = await apiFetch(`${API_BASE}/planning/sessions/${sessionId}/new-project`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  }, 180_000);
+  if (!res.ok) throw new Error(await errText(res));
+  return res.json();
+}
+
 export async function sendPlanningMessage(sessionId: string, text: string, attachments?: AttachmentEntry[]): Promise<void> {
   const res = await apiFetch(`${API_BASE}/planning/sessions/${sessionId}/message`, {
     method: "POST",

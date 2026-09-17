@@ -265,6 +265,14 @@ function AuthenticatedApp({ user, onLogout, onUserChanged }: { user: CurrentUser
               setPlanningSessions((list) => [s, ...list]);
               setSelectedPlanningSession(s);
             }}
+            onSessionUpdated={(s) => {
+              // A confirmed new project moves the session onto the new repo:
+              // the sidebar row and the open view must both follow, or the
+              // header and Build Now would still name the old project until
+              // the next poll.
+              setPlanningSessions((list) => list.map((x) => (x.session_id === s.session_id ? s : x)));
+              setSelectedPlanningSession((cur) => (cur?.session_id === s.session_id ? s : cur));
+            }}
           />
         )}
       </div>

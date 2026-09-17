@@ -3,8 +3,8 @@ import { useBudgetInput } from "../useDefaultTaskBudget";
 import { RouteBadge, RouteSelect, type RouteChoice } from "./RouteSelect";
 import { JumpToBottom } from "./JumpToBottom";
 import type { AttachmentEntry, CreateProjectResult } from "../api";
-import { archivePlanningSession, createPlanningSession, createProject, uploadFiles } from "../api";
-import type { PlanningLogEntry, PlanningSessionMeta } from "../types";
+import { archivePlanningSession, createPlanningSession, createProject, decideNewProject, uploadFiles } from "../api";
+import type { NewProjectProposal, PlanningLogEntry, PlanningSessionMeta } from "../types";
 import { usePlanningStream } from "../usePlanningStream";
 import { AutoGrowTextarea } from "./AutoGrowTextarea";
 import { cleanText, ModelBadge, parseToolCalls, relativeTime, renderWithColorSwatches, TOOL_ICONS } from "./ChatMessage";
@@ -66,6 +66,11 @@ interface Props {
   buildError?: string | null;
   onClearBuildError?: () => void;
   onSessionCreated: (session: PlanningSessionMeta) => void;
+  /** The session's meta changed server-side under the same id -- today,
+   *  a confirmed create_project proposal moved it onto the new repo. App
+   *  replaces its copy (sidebar row and selection) so the header, the
+   *  composer's uploads and Build Now all follow the repo. */
+  onSessionUpdated: (session: PlanningSessionMeta) => void;
 }
 
 function PlanningEntry({ entry }: { entry: PlanningLogEntry }) {
@@ -285,6 +290,70 @@ function BuildNowPanel({ onConfirm, sessionRoute }: { onConfirm: (budgetUsd: num
   );
 }
 
+/* The planner's create_project proposal, awaiting an admin's answer. The
+   agent cannot create anything itself; this card is the gate. It sits above
+   the composer rather than in the log because it is a pending decision, and
+   the conversation can carry on around it either way. */
+function NewProjectCard({
+  proposal, isAdmin, githubReady, busy, failed, error, onConfirm, onDismiss, onClearError,
+}: {
+  proposal: NewProjectProposal;
+  isAdmin: boolean;
+  githubReady: boolean;
+  busy: boolean;
+  /** An ok:false create: the steps show which one died; the card stays. */
+  failed: CreateProjectResult | null;
+  error: string | null;
+  onConfirm: (github: boolean) => void;
+  onDismiss: () => void;
+  onClearError: () => void;
+}) {
+  // Prefilled from what the agent recorded (what the operator told it), and
+  // only offered when a token can act -- same rule as the start form.
+  const [github, setGithub] = useState(proposal.github);
+  if (!isAdmin) {
+    return (
+      <p className="planning-proposal-note" role="note">
+        The agent proposes a new project, <code>{proposal.name}</code> &mdash; an admin must confirm it.
+      </p>
+    );
+  }
+  return (
+    <div className="planning-proposal" role="region" aria-label="Proposed new project">
+      <div className="planning-proposal-head">
+        The agent proposes a new project: <code>{proposal.name}</code>
+      </div>
+      {proposal.description && <p className="planning-proposal-desc">{proposal.description}</p>}
+      {githubReady && (
+        <label className="planning-check">
+          <input type="checkbox" checked={github} onChange={(e) => setGithub(e.target.checked)} disabled={busy} />
+          <span>Create a private GitHub repo</span>
+        </label>
+      )}
+      {failed && (
+        <div className="planning-create-failed">
+          <StepList steps={failed.steps} />
+          {failed.message && <p className="planning-create-message">{failed.message}</p>}
+        </div>
+      )}
+      <div className="planning-proposal-actions">
+        <button className="planning-build-confirm-btn" disabled={busy} onClick={() => onConfirm(githubReady && github)}>
+          {busy ? "Creating project…" : "Confirm"}
+        </button>
+        <button className="planning-build-cancel-btn" disabled={busy} onClick={onDismiss}>
+          Dismiss
+        </button>
+        {error && (
+          <div className="planning-build-error" role="alert">
+            {error}
+            <button type="button" onClick={onClearError} aria-label="Dismiss error">×</button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 /* Why the last turn ended, read from the persisted session rather than the
    live stream. A stream event only reaches whoever is watching at that
    second; this is what an operator sees on returning to a session that
@@ -312,11 +381,16 @@ function OutcomeBanner({ session }: { session: PlanningSessionMeta | null }) {
   );
 }
 
-export function PlanningView({ repos, isAdmin, githubReady, onProjectCreated, session, onBuildNow, onSessionCreated, buildError, onClearBuildError }: Props) {
+export function PlanningView({ repos, isAdmin, githubReady, onProjectCreated, session, onBuildNow, onSessionCreated, onSessionUpdated, buildError, onClearBuildError }: Props) {
   const [starting, setStarting] = useState(false);
   const [creating, setCreating] = useState(false);
   const [startError, setStartError] = useState<string | null>(null);
   const [createFailed, setCreateFailed] = useState<CreateProjectResult | null>(null);
+  // The confirm card's own state; the proposal itself is not mirrored here
+  // (audit H-13) -- it is read from the stream, falling back to the session.
+  const [deciding, setDeciding] = useState(false);
+  const [proposalFailed, setProposalFailed] = useState<CreateProjectResult | null>(null);
+  const [proposalError, setProposalError] = useState<string | null>(null);
   const [text, setText] = useState("");
   const [planOpen, setPlanOpen] = useState(true);
   const [archiving, setArchiving] = useState(false);
@@ -412,6 +486,47 @@ export function PlanningView({ repos, isAdmin, githubReady, onProjectCreated, se
     stream.sendMessage(goal, attachments);
   }
 
+  async function handleConfirmProposal(github: boolean) {
+    if (!session) return;
+    setDeciding(true);
+    setProposalFailed(null);
+    setProposalError(null);
+    try {
+      const result = await decideNewProject(session.session_id, { decision: "confirm", github });
+      if (!result.project?.ok) {
+        // The server reports which step died and leaves the session (and
+        // the proposal) where they were, so the card stays for a retry.
+        setProposalFailed(result.project);
+        return;
+      }
+      // Same order as the start form: App must know the repo before the
+      // view names it, or the header and Build Now would point at a project
+      // the dropdowns have never heard of.
+      await onProjectCreated(result.project.name);
+      stream.clearNewProject();
+      onSessionUpdated(result.session);
+    } catch (err) {
+      setProposalError(err instanceof Error ? err.message : "Could not create the project. Please try again.");
+    } finally {
+      setDeciding(false);
+    }
+  }
+
+  async function handleDismissProposal() {
+    if (!session) return;
+    setDeciding(true);
+    setProposalError(null);
+    try {
+      const result = await decideNewProject(session.session_id, { decision: "dismiss" });
+      stream.clearNewProject();
+      onSessionUpdated(result.session);
+    } catch (err) {
+      setProposalError(err instanceof Error ? err.message : "Could not dismiss the proposal. Please try again.");
+    } finally {
+      setDeciding(false);
+    }
+  }
+
   async function handleNewPlan() {
     if (!session) return;
     setArchiving(true);
@@ -455,6 +570,10 @@ export function PlanningView({ repos, isAdmin, githubReady, onProjectCreated, se
   }
 
   const repo = session.repo;
+  // The stream is the fresher source (turn_complete lands before the
+  // sidebar's next poll updates the session prop); the prop covers a
+  // session opened from the list before the hook has hydrated.
+  const proposal = stream.newProject ?? session.new_project ?? null;
 
   return (
     <div className="planning-view">
@@ -528,6 +647,21 @@ export function PlanningView({ repos, isAdmin, githubReady, onProjectCreated, se
           </div>
         )}
       </div>
+
+      {proposal && (
+        <NewProjectCard
+          key={proposal.name}
+          proposal={proposal}
+          isAdmin={isAdmin}
+          githubReady={githubReady}
+          busy={deciding}
+          failed={proposalFailed}
+          error={proposalError}
+          onConfirm={handleConfirmProposal}
+          onDismiss={handleDismissProposal}
+          onClearError={() => setProposalError(null)}
+        />
+      )}
 
       <div className="planning-attach-row">
         <input

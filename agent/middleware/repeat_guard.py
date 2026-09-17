@@ -39,7 +39,7 @@ from langchain_core.messages import ToolMessage
 from langchain.agents.middleware.types import AgentMiddleware
 
 # Tools whose repeat is meaningful, not a loop.
-DEFAULT_EXEMPT = frozenset({"write_todos", "save_plan", "save_brief", "ask_user", "task", "describe_image"})
+DEFAULT_EXEMPT = frozenset({"write_todos", "save_plan", "save_brief", "create_project", "ask_user", "task", "describe_image"})
 CACHED_AT = 3      # the Nth identical call is answered from cache
 REFUSED_AT = 4     # and from here on refused
 # A model that keeps issuing the SAME refused call is no longer steering:

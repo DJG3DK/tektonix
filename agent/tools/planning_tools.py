@@ -5,7 +5,10 @@ only reads it for context and drafts a plan document that later gets handed
 to a real build task (which has its own full write/edit/bash toolset). That
 also means there's no INTERRUPT_ON-style approval gate needed here, unlike
 investigator/test-writer -- nothing in this tool list can touch the
-filesystem destructively.
+filesystem destructively. create_project is no exception: the tool itself
+mutates nothing, it records a proposal in plan_ref; the project is created
+only after an admin confirms it from the dashboard, through the same server
+path as POST /api/projects/create.
 
 Playwright (not a plain httpx GET) is the actual point of `browse_page`: a
 raw HTTP fetch can't render JS-heavy pages or take a real screenshot, and
@@ -393,9 +396,20 @@ def make_planning_tools(
     allowed_repos: list[str] | None = None,
     existing_brief: dict | None = None,
     skills_manifest: dict[str, str] | None = None,
+    is_admin: bool = False,
+    actor: str | None = None,
 ) -> tuple[list, dict]:
     """Returns ([web_search, browse_page, list_project_dir, read_project_file,
-    save_brief, save_plan], plan_ref).
+    search_project, find_files, save_brief, save_plan, create_project], plan_ref).
+
+    `is_admin`/`actor` are the caller's role and email, threaded in
+    explicitly the way `allowed_repos` is (server.py send_planning_message ->
+    build_planning_agent -> here). They cannot be derived from
+    `allowed_repos`: it is None for admins AND for legacy unscoped accounts,
+    so only an explicit flag can gate create_project the way the endpoint it
+    feeds (POST /api/projects/create) is gated. Both default off, so a caller
+    that builds the tools without a user gets a planner that can propose
+    nothing.
 
     plan_ref also carries "brief": the dict save_brief last wrote (seeded from
     `existing_brief`), which BriefFirstMiddleware/PinnedBriefMiddleware read
@@ -761,7 +775,46 @@ def make_planning_tools(
             "/skills/codebase-map/SKILL.md and read only the files the goal needs."
         )
 
-    return [web_search, browse_page, list_project_dir, read_project_file, search_project, find_files, save_brief, save_plan], plan_ref
+    @tool
+    @tool_errors_to_text
+    def create_project(name: str, description: str = "", github: bool = False) -> str:
+        """Propose a NEW project for what the operator is describing -- a new
+        application, not a change to a project that already exists. Call it
+        ONCE, only after the operator has confirmed the project name and
+        whether a private GitHub repo should be created. `name` becomes the
+        directory and projects.json key (letters, digits, '.', '_', '-'; not
+        starting with '.'); `description` is one line for the README and the
+        GitHub repo. Nothing is created by this call: the operator sees a
+        Confirm card in the dashboard and the project is created when they
+        confirm it. Keep planning as if the project already exists."""
+        if not is_admin:
+            return ("ERROR: creating projects is admin-only; ask an admin to create it from "
+                    "Settings -> Projects or the planner")
+        from agent import provisioning  # noqa: PLC0415 -- server-side module, imported lazily like the endpoint does
+
+        try:
+            # The same validator the endpoint runs, against the same live
+            # project list, so a name refused here is refused for the reason
+            # the confirm would give -- and the model can ask for another
+            # name now rather than after the operator has clicked Confirm.
+            name = provisioning.validate_project_name(name, list(PROJECTS))
+        except provisioning.ProvisioningError as e:
+            return f"ERROR: {e.detail}"
+        plan_ref["new_project"] = {
+            "name": name,
+            "description": (description or "").strip(),
+            "github": bool(github),
+            "proposed_by": actor,
+        }
+        return (
+            f"Proposal recorded: new project {name!r}"
+            + (" with a private GitHub repo" if github else "")
+            + ". The operator will see a Confirm card in the dashboard; the project is created when "
+            "they confirm it and this conversation moves onto it. Do not call create_project again "
+            "unless the operator changes the name. Keep planning as if the project already exists."
+        )
+
+    return [web_search, browse_page, list_project_dir, read_project_file, search_project, find_files, save_brief, save_plan, create_project], plan_ref
 
 
 _STOPWORDS = frozenset("""

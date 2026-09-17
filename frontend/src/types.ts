@@ -357,6 +357,18 @@ export interface ModelCatalogEntry {
 // plan_markdown document -- "Build Now" in the frontend hands that off to a
 // real task via the ordinary POST /api/tasks, not a dedicated endpoint here.
 
+/** What the planner's create_project tool recorded: a project the agent
+ *  proposes to create for a NEW application the operator described
+ *  mid-conversation. Nothing exists yet -- an admin answers it from the
+ *  confirm card (POST .../new-project), which creates the project and moves
+ *  the session onto it. */
+export interface NewProjectProposal {
+  name: string;
+  description: string;
+  github: boolean;
+  proposed_by?: string | null;
+}
+
 export interface PlanningSessionMeta {
   session_id: string;
   repo: string;
@@ -386,6 +398,9 @@ export interface PlanningSessionMeta {
   last_outcome?: "completed" | "stopped" | "stalled" | "budget" | "error" | null;
   last_outcome_detail?: string | null;
   last_outcome_at?: number | null;
+  /** An unanswered create_project proposal. Absent or null once it has been
+   *  confirmed (the session then lives under the new repo) or dismissed. */
+  new_project?: NewProjectProposal | null;
 }
 
 export interface PlanningLogEntry {
@@ -407,4 +422,7 @@ export interface PlanningStreamEvent {
   plan_markdown?: string | null;
   cost_usd?: number;
   message?: string;
+  /** turn_complete only: the proposal the turn persisted, so the confirm
+   *  card appears without waiting for the sidebar's next poll. */
+  new_project?: NewProjectProposal | null;
 }
