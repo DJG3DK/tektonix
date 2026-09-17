@@ -1,42 +1,62 @@
 # Changelog
 
-## Unreleased
+## v0.6.0 — a name of its own, a router of its own, and a console you can carry
 
-### Taking a project back off the agent
+**2026-09-17**
 
-There was a button to add a project and none to remove one, so removing one
-meant editing `projects.json`, deleting a worktree, finding the deploy key,
-clearing the reviewer's state file and purging six store namespaces by hand --
-in that order, because getting it wrong leaves a project half-configured and
-unreachable. **Settings → Projects** now has *Remove from Tektonix*.
+Seventy-five commits on top of v0.5.0, and the largest release so far.
 
-What it does not do is the half worth stating first: **the live repository is
-never touched.** Not a file, not a branch the agent pushed to it, not the
-remote. Removing a project means Tektonix forgets it. A control that sits in a
-list of someone's own repositories must not be one misread click away from
-deleting their code, so the confirmation also asks for the project's name
-typed out, and removal is refused outright while a task or a planning turn is
-in flight -- pulling the workspace out from under a running task would leave a
-half-finished branch nobody owns.
+The agent is called Tektonix and lives at tektonix.io. The dashboard installs
+as an app on a phone and can wake you with a notification, in whichever of
+five colour schemes you pick. Projects are things you create and remove from
+that dashboard rather than files you edit by hand. The LiteLLM proxy is gone
+and a router this repo owns has taken its place, the console's numbers come
+from this box rather than from LangSmith, and Settings became a rail with one
+section at a time.
 
-The single exception is the opposite of destructive: `core.sshCommand` is
-unset on the live repo, because the agent set it when it minted the deploy
-key. Leaving it would point the operator's own git at a key file that no
-longer exists and break every push they made by hand afterwards.
+### Tektonix
 
-What the agent *learned* is a separate choice. **Archive** writes its memory,
-generated skills, planning sessions, transcripts and task history to one JSON
-file under `archives/`, then removes the rows; **delete** removes them without
-the file. The archive is not write-only: the onboarding wizard lists any
-archive matching the name of a project being added and offers to restore it,
-so re-adding a project is a continuation rather than a fresh start. Archives
-are listed in the same panel with their item counts and dates, and can be
-deleted there, because an archive nobody can find is a file that accumulates
-rather than a safety net.
+3D-Agent is now Tektonix, everywhere it is user-visible: the dashboard, the
+landing page, the sign-in card, OG cards, the TOTP issuer, the router's
+OpenRouter headers, the sandbox image tag, the release tarball and the GitHub
+repository (`DJG3DK/tektonix`). The other businesses on the same box —
+3DSteals, 3dwebcatchers, 3dcryptobots.com — are untouched. The dashboard is
+served at `/` on its own domain, `tektonix.io`, with `www` redirecting; the
+old `/v2/` subpath on agent.3dcryptobots.com redirects surgically so the other
+tool that shares that host keeps its login.
 
-An archive that fails to write refuses the whole removal rather than
-continuing -- the operator asked to keep that, and deleting it anyway is the
-one mistake here with no undo.
+The mark is a plumb line and the palette is called Drafting: dark charcoal
+with a gold accent. The landing page was reshot in it and condensed (features
+8 → 4, controls 7 → 6), and the hero copy no longer describes a tier system
+that was removed weeks ago. For search: a real `robots.txt`, a sitemap,
+structured data, and the landing page is prerendered at build time so a
+crawler with JavaScript off sees the page rather than an empty root div.
+
+### The dashboard installs as a phone app
+
+Chrome on Android now offers *Install app*, and iOS Safari's *Add to Home
+Screen* does the same: a launcher icon, a standalone window with no browser
+chrome, and the status bar in the app's own colour. It is the same React app
+from the same build -- a web app manifest, a service worker and the icons the
+brand generator already knew how to draw (`scripts/brand/build_assets.py`
+gained a maskable variant, because Android crops an adaptive icon to whatever
+mask the launcher uses and a rounded tile handed to that crop loses its own
+corners).
+
+There is deliberately no offline mode. This is a console onto a live agent --
+running tasks, streaming logs, a review gate -- so a cached screen would be a
+screen that lies. The worker exists for two narrower things: Chrome will not
+offer to install an origin that has no fetch handler, and a cold start on a
+bad connection should show the app rather than the browser's offline page.
+It never touches `/api`, which keeps the session cookie, every mutation and
+the task and planning WebSocket upgrades entirely out of its hands; hashed
+bundles under `/assets/` are kept forever because their names change when
+their contents do; and navigations go to the network first, with the cached
+shell only as a fallback. That last one is not a preference: `index.html`
+names the hashed bundles of the deploy it came from, so a stale shell served
+while the network was fine would ask for a bundle that no longer exists and
+white-screen the app after every deploy. Verified by installing a client,
+deploying a new bundle underneath it, and reloading.
 
 ### Notifications on the phone, and a console in your own colours
 
@@ -84,32 +104,6 @@ move with a preference. Every foreground was computed against its own surface
 and clears 4.5:1; `tests/test_themes.py` does that arithmetic rather than
 trusting the comments, and holds the three copies of the scheme list (the
 stylesheet, the picker, and the server's allow-list) in step.
-
-### The dashboard installs as a phone app
-
-Chrome on Android now offers *Install app*, and iOS Safari's *Add to Home
-Screen* does the same: a launcher icon, a standalone window with no browser
-chrome, and the status bar in the app's own colour. It is the same React app
-from the same build -- a web app manifest, a service worker and the icons the
-brand generator already knew how to draw (`scripts/brand/build_assets.py`
-gained a maskable variant, because Android crops an adaptive icon to whatever
-mask the launcher uses and a rounded tile handed to that crop loses its own
-corners).
-
-There is deliberately no offline mode. This is a console onto a live agent --
-running tasks, streaming logs, a review gate -- so a cached screen would be a
-screen that lies. The worker exists for two narrower things: Chrome will not
-offer to install an origin that has no fetch handler, and a cold start on a
-bad connection should show the app rather than the browser's offline page.
-It never touches `/api`, which keeps the session cookie, every mutation and
-the task and planning WebSocket upgrades entirely out of its hands; hashed
-bundles under `/assets/` are kept forever because their names change when
-their contents do; and navigations go to the network first, with the cached
-shell only as a fallback. That last one is not a preference: `index.html`
-names the hashed bundles of the deploy it came from, so a stale shell served
-while the network was fine would ask for a bundle that no longer exists and
-white-screen the app after every deploy. Verified by installing a client,
-deploying a new bundle underneath it, and reloading.
 
 ### A project that did not exist yet
 
@@ -163,43 +157,41 @@ overwritten, and a project whose checks come from
 `builtin-projects.local.js` is left alone. This replaces the manual "add
 checks" step that Auto for the GitHub inbox used to point at.
 
-### The review services read projects.json live
+### Taking a project back off the agent
 
-Both Node services bound the project map once at startup, so a project
-created or given checks at runtime did not exist for them until pm2
-restarted: the reviewer never polled its branches, the deploy service
-answered 404 for it, and the agent's wait for a verdict timed out on a
-verdict that could not arrive. They now re-read `projects.json` on every
-poll and every request. The reviewer also no longer crashes on a project
-entry with no `review.checks` — exactly the entry a new project produces —
-and returns a verdict instead of an internal error.
+There was a button to add a project and none to remove one, so removing one
+meant editing `projects.json`, deleting a worktree, finding the deploy key,
+clearing the reviewer's state file and purging six store namespaces by hand --
+in that order, because getting it wrong leaves a project half-configured and
+unreachable. **Settings → Projects** now has *Remove from Tektonix*.
 
-## v0.6.0 — a name of its own, a router of its own, and a console that knows where you are
+What it does not do is the half worth stating first: **the live repository is
+never touched.** Not a file, not a branch the agent pushed to it, not the
+remote. Removing a project means Tektonix forgets it. A control that sits in a
+list of someone's own repositories must not be one misread click away from
+deleting their code, so the confirmation also asks for the project's name
+typed out, and removal is refused outright while a task or a planning turn is
+in flight -- pulling the workspace out from under a running task would leave a
+half-finished branch nobody owns.
 
-**2026-09-16**
+The single exception is the opposite of destructive: `core.sshCommand` is
+unset on the live repo, because the agent set it when it minted the deploy
+key. Leaving it would point the operator's own git at a key file that no
+longer exists and break every push they made by hand afterwards.
 
-Sixty commits on top of v0.5.0. The agent is called Tektonix and lives at
-tektonix.io; the LiteLLM proxy is gone and a router this repo owns has taken
-its place; the dashboard's numbers now come from this box rather than from
-LangSmith; and the Settings page became a rail with one section at a time.
+What the agent *learned* is a separate choice. **Archive** writes its memory,
+generated skills, planning sessions, transcripts and task history to one JSON
+file under `archives/`, then removes the rows; **delete** removes them without
+the file. The archive is not write-only: the onboarding wizard lists any
+archive matching the name of a project being added and offers to restore it,
+so re-adding a project is a continuation rather than a fresh start. Archives
+are listed in the same panel with their item counts and dates, and can be
+deleted there, because an archive nobody can find is a file that accumulates
+rather than a safety net.
 
-### Tektonix
-
-3D-Agent is now Tektonix, everywhere it is user-visible: the dashboard, the
-landing page, the sign-in card, OG cards, the TOTP issuer, the router's
-OpenRouter headers, the sandbox image tag, the release tarball and the GitHub
-repository (`DJG3DK/tektonix`). The other businesses on the same box —
-3DSteals, 3dwebcatchers, 3dcryptobots.com — are untouched. The dashboard is
-served at `/` on its own domain, `tektonix.io`, with `www` redirecting; the
-old `/v2/` subpath on agent.3dcryptobots.com redirects surgically so the other
-tool that shares that host keeps its login.
-
-The mark is a plumb line and the palette is called Drafting: dark charcoal
-with a gold accent. The landing page was reshot in it and condensed (features
-8 → 4, controls 7 → 6), and the hero copy no longer describes a tier system
-that was removed weeks ago. For search: a real `robots.txt`, a sitemap,
-structured data, and the landing page is prerendered at build time so a
-crawler with JavaScript off sees the page rather than an empty root div.
+An archive that fails to write refuses the whole removal rather than
+continuing -- the operator asked to keep that, and deleting it anyway is the
+one mistake here with no undo.
 
 ### The model router is ours
 
@@ -280,6 +272,17 @@ reach a conclusion.
 Auto mode covers GitHub inbox tasks: a Dependabot fix that cannot change a
 version string unattended was not safer, only slower. The merge gate still
 applies to every one of them.
+
+### The review services read projects.json live
+
+Both Node services bound the project map once at startup, so a project
+created or given checks at runtime did not exist for them until pm2
+restarted: the reviewer never polled its branches, the deploy service
+answered 404 for it, and the agent's wait for a verdict timed out on a
+verdict that could not arrive. They now re-read `projects.json` on every
+poll and every request. The reviewer also no longer crashes on a project
+entry with no `review.checks` — exactly the entry a new project produces —
+and returns a verdict instead of an internal error.
 
 ### Operating it
 
