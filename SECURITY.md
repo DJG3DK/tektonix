@@ -32,6 +32,11 @@ capabilities are intended and which would be real vulnerabilities.
 - The agent can modify any file in a project you onboarded. That's the job.
 - An admin can point onboarding at any directory inside `AGENT_PROJECT_ROOTS`.
   Narrowing that root is the operator's control.
+- An admin can create a directory under `AGENT_PROJECT_ROOTS` from the
+  dashboard, and a private GitHub repository with it, using a token the
+  same admin stored. The name is validated as a single directory name, a
+  path that already exists or resolves outside the roots is refused, and
+  the request is audited.
 - Model output is not trusted-but-verified so much as *gated*: an independent
   review service and (optionally) a human approve every merge.
 
@@ -77,7 +82,12 @@ capabilities are intended and which would be real vulnerabilities.
   both off means unattended merges to your live repos.
 - **Deploy keys, not account keys.** Each project gets an SSH key scoped to one
   repository (Settings → Projects → Push access) rather than a credential that
-  can reach everything you own.
+  can reach everything you own. A repository created from the dashboard is
+  handled the same way: the GitHub token is used for two API calls — create
+  the private repository, register the project's freshly minted deploy key on
+  it — and the first push of `main` goes over that key from the API process
+  on the host, on an admin's request. No agent ever holds the token or the
+  key, and `git push` stays on the agent's blocked-command list.
 - **Budget ceilings are a safety control too.** `DEFAULT_BUDGET_USD` bounds a
   runaway loop's cost.
 

@@ -229,6 +229,17 @@ the end of the turn. Paged reads return at least 500 lines whatever `limit` asks
   and no `save_plan` call has that text adopted as the draft (narrow heuristic; an explicit save
   always wins).
 
+**The agent can propose a project that does not exist yet.** When a request turns out to be a new
+application rather than a change to the current project, the planning agent asks for a name and
+whether to create a private GitHub repo, restates both, and only after the operator confirms calls
+a `create_project` tool. The tool creates nothing: it records a proposal, and the dashboard shows a
+confirm card ("The agent proposes a new project: *name*") with **Confirm** and **Dismiss**. Confirm
+(`POST /api/planning/sessions/{id}/new-project`, admin only) creates the project through the same
+path as [Adding a project](#adding-a-project) and moves the session onto it, so the conversation
+continues against the new repository; a non-admin is told that an admin must confirm. The proposal
+is inert until a person with the right to click does — a model that could create repositories by
+calling a tool would be one that could create them by being asked to in a pasted document.
+
 With a GitHub token, `github_pull_request` / `github_pull_requests` read a PR host-side. The inbox
 tool `github_inbox_items` lists what the poller found — for code scanning items the locations in
 the summary **are** the findings.
@@ -292,7 +303,7 @@ first. The app lands on **Planning**, not the raw task composer.
 - **Models** (admin only) — the model-pin editor described under [Model routing](#model-routing).
 - **Users** (admin only) — create accounts, scope them to specific projects, revoke access, and
   grant auto mode **for named projects** rather than globally.
-- **Audit log** (admin only, Settings) — who onboarded a project, who approved or rejected a
+- **Audit log** (admin only, Settings) — who onboarded or created a project, who approved or rejected a
   specific gated command, who approved a merge, who moved auto mode or merge review and for whom,
   who set a GitHub source to Auto, who generated a deploy key, and which inbox items were approved
   by a click, a signed link, or the poller itself. Kept in the same database as your tasks.
@@ -368,6 +379,10 @@ inbox task and which coder seat it goes to.
 tests, no lint, no build — cannot be set to Auto: saving is refused with the reason, and if a
 project's checks disappear later its items are proposed instead of started. Otherwise "auto" would
 mean shipping work that a model's opinion alone had verified. Propose always works.
+A brand-new project therefore starts on Propose: it has no checks until its first merge lands,
+at which point detection runs on its own and writes them (see [Adding a project](#adding-a-project)),
+and from then on Auto is accepted. Nothing has to be added by hand — the manual "add checks"
+step that the refusal used to point at happens by itself.
 
 Every start is recorded in the audit log, including the ones nobody clicked: an approve link
 appears as *signed link*, and the poller's own auto-start as *github-inbox*.
@@ -543,6 +558,9 @@ agent/
   memory_freshness.py    flags memory facts whose cited files have changed
   runtime_settings.py    operator-tunable limits (no restart)
   deploy_keys.py         per-project SSH deploy keys
+  provisioning.py        onboarding: detect, confirm, provision -- and create a repo from nothing
+  github_repos.py        a private GitHub repo for a new project, its deploy key, the first push
+  project_checks.py      detects and writes a project's checks after its first merge
   config.py              env-var config + PROJECTS (which repos this agent can target)
   nodes/                 work.py, verify_and_ship.py
   middleware/            budget_guard, model_pin, hidden_tools, repeat_guard,
@@ -692,14 +710,46 @@ deployment can target and each one's sandbox/live checkout paths.
 `services/shared/projects-config.js`, so a project added once is picked up by the agent,
 the commit reviewer, and the deploy service without editing any of them.
 
-Two front doors, one implementation (`agent/provisioning.py`):
+Three front doors, one implementation (`agent/provisioning.py`):
 
 - **Dashboard** — Settings → Projects (admin only). Enter an absolute path, review what
   was detected, create.
 - **CLI** — `.venv/bin/python scripts/add_project.py /path/to/repo` (add `--yes` to take
   the recommended answers for a headless install).
+- **New project** — for a project that does not exist yet. The Repo dropdown on the planner's
+  "Plan a project" form has a **New project…** entry (admins only): a name, an optional
+  description and, when a GitHub token is configured, a **Create a private GitHub repo** box.
+  The headless twin is `.venv/bin/python scripts/new_project.py <name>` (with `--parent`,
+  `--description`, `--github` and `--token-env`).
 
-Both run the same three phases:
+The first two take a directory that is already a git repository. The third makes one.
+`POST /api/projects/create` (admin only, audited as `project.create`) creates the directory
+under the first allowed root (`AGENT_PROJECT_ROOTS`, default `/home`), refuses a path that
+already exists or that fails the containment rule below, runs `git init -b main` and an initial
+commit (a `README.md` and a `.gitignore` — a repository with zero commits gives the worktree
+no branch to start from), and then runs exactly the wizard's provisioning steps with the
+wizard's recommended answers. The name is one directory name — 1–64 characters of letters,
+digits, `.`, `_` or `-`, no leading dot, not already configured — because it is also the
+`projects.json` key and the deploy key's filename, and it is validated as all three. The
+planner then opens a planning session bound to the new project, and Settings → Projects and
+every Repo dropdown pick it up without a reload. The planning agent can also propose one
+mid-conversation; see [Planning Chat](#planning-chat).
+
+With the GitHub box ticked, the token is resolved first (a stored token from Settings → GitHub,
+or `GITHUB_TOKEN`); without one the request is refused before anything is created, so a missing
+token never leaves a half-made directory behind. The private repository is created through the
+API with `auto_init` off — a GitHub-made first commit would leave the two histories unrelated
+and the first push rejected — a deploy key is minted for the project (`agent/deploy_keys.py`)
+and registered on the repository with write access, `origin` is set to the SSH URL, never
+HTTPS, and `main` is pushed **from the server process**. The sandboxed agent still cannot
+push; this runs host-side on an admin's explicit request, the same trust level as the review
+service's post-merge push, which is why the claim in [SECURITY.md](SECURITY.md) stays true. A
+GitHub failure is reported as a failed step and the local project is provisioned anyway: the
+repository on disk is real, and the remote can be connected later from the project card. The
+token needs permission to create a repository and register a deploy key —
+[INSTALL.md §6b](INSTALL.md#6b-github-optional).
+
+All three run the same three phases:
 
 1. **Inspect** (read-only) — confirms it's a git repo, reads the repo's own manifests for
    the commands its checks should run, expands monorepo workspaces, finds gitignored files
@@ -725,6 +775,17 @@ Both run the same three phases:
    bundled Ruby project's `vendor/bundle` — are proposed here too. A review checkout is a
    git worktree, so it has none of them; the reviewer borrows them from the live checkout,
    **bound read-only**, since the code about to run against them has not been reviewed yet.
+
+   A project created from nothing has no checks to confirm, because there is nothing yet for
+   detection to read, so its first review is model-only. After a merge lands in a project the
+   reviewer reports as having no checks, the ship path runs this same detection on the live
+   repo with its recommended answers and writes `review.checks` into `projects.json`
+   (`agent/project_checks.py`); the task log shows which checks were written, or that none are
+   detectable yet. It fills an empty slot only. A non-empty list is never overwritten, and a
+   project whose checks come from the reviewer's `builtin-projects.local.js` is left alone,
+   because the reviewer's built-ins win over `projects.json` and a second, competing set would
+   land on top of a hand-tuned one. A suite flagged as network-touching arrives disabled here,
+   exactly as it would in the wizard.
 3. **Provision** — creates the git worktree, writes the `projects.json` entry, reloads it
    into the running process (no restart needed), seeds starter project memory, and builds
    the codebase map. Each step reports independently, so a partial failure is visible
@@ -750,6 +811,10 @@ into a worktree.
   with the server's own command — a client cannot author one.
 - `secretFiles`, mounts and `db_env_file` must be repo-relative and inside the project;
   traversal (`../../root/.ssh/id_rsa`) and absolute paths are refused.
+- Creating a project applies the same rule to a directory the server makes: it goes under the
+  first allowed root, a path that already exists (even a dangling symlink) is refused, so
+  creation can never adopt or replace something on disk, and the name is validated as a single
+  directory name — no separators, no leading dot.
 - The agent's own repository is refused outright (including via a worktree of it), and
   every provision is logged with the operator's email.
 
@@ -818,8 +883,8 @@ sources (including code scanning grouped per rule), check detection for all ten 
 containment, and uploads — against in-memory stores and mocked model calls, no live Postgres or
 real model calls required. Frontend Vitest covers the landing page, settings, inbox and streams.
 The node tests cover `projects.json` merging, pre-existing check classification, deploy preflight,
-service-secret reading, the health routes' project check, and the reviewer's read-only dependency
-borrow.
+service-secret reading, the health routes' project check, the reviewer's read-only dependency
+borrow, and both services' live re-read of `projects.json`.
 
 Two suites are worth knowing about by name:
 

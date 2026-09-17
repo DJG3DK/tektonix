@@ -200,9 +200,21 @@ The agent needs at least one project to work in. Either:
   was detected → Create.
 - **CLI** — `.venv/bin/python scripts/add_project.py /path/to/your/repo`
   (add `--yes` for an unattended install).
+- **New project** — when there is no repository yet. On the planner's
+  "Plan a project" form, choose **New project…** in the Repo dropdown
+  (admins only), give it a name and, if you have stored a GitHub token
+  (§6b), tick **Create a private GitHub repo**. Headless:
+  `.venv/bin/python scripts/new_project.py my-service --github`, which reads
+  the token from `GITHUB_TOKEN` (or the variable named by `--token-env`),
+  never from an argument.
 
-Both inspect the directory, propose a configuration, and let you approve it.
-Read §5 before clicking through it.
+The first two inspect the directory, propose a configuration, and let you
+approve it. Read §5 before clicking through it. The third makes the
+directory under the first `AGENT_PROJECT_ROOTS` entry, runs `git init` with
+one commit on `main`, and provisions it with the recommended answers — there
+is nothing to approve yet, because an empty repository has nothing to
+detect. Its checks arrive on their own after its first merge (§9, *Checks
+never run*).
 
 Onboarding creates a **git worktree** of your repo under
 `AGENT_SANDBOX_ROOT`. The agent works there on a per-task branch and never
@@ -231,6 +243,12 @@ Settings → Projects and use **Push access**:
 You can paste an existing private key instead. It must have **no passphrase**,
 since nothing can type one during an unattended push; a passphrase-protected
 key is rejected at paste time rather than failing at merge time.
+
+A project created with **Create a private GitHub repo** ticked arrives with
+all of this already done: the key is minted, registered on the new
+repository with write access, and `origin` is the SSH URL. That first push
+of `main` is made by the API process on the host, on your request — not by
+an agent, which still cannot push.
 
 Keys are stored under `keys/` with `0600` permissions (gitignored), and each
 one is wired to a single repo via that repo's own `core.sshCommand` — so one
@@ -424,6 +442,12 @@ scanning (CodeQL) alerts, review comments and failing checks and turn them into 
    | Dependabot alerts (read) | the security-alerts source |
    | Code scanning alerts (read) | the code-scanning (CodeQL) source |
    | Actions (read) *or* Checks (read) | the failing-checks source |
+   | Administration (write) | creating a repository and registering its deploy key from **New project…** (a classic token needs the `repo` scope) |
+
+   A fine-grained token reaches only the repositories chosen when it was made, and a
+   repository that does not exist yet cannot be chosen — so a token meant for **New
+   project…** needs *All repositories*, or the deploy-key step fails after the repository
+   is created.
 
    Dependabot alerts must also be **enabled on the repository** (repo → Settings → Code security).
 2. In the dashboard: **Settings → GitHub → Add token**. Give it a name, paste it, press **Test** —
@@ -551,7 +575,12 @@ isn't under `AGENT_PROJECT_ROOTS`. Widen it deliberately, or move the repo.
 
 **Checks never run for a project.** Detection found no `typecheck`/`lint`/
 `test` scripts, or the only test script was flagged as network-touching and
-left disabled. Check Settings → Projects.
+left disabled. Check Settings → Projects. A project created from **New
+project…** starts with none, since there was nothing to detect; detection
+re-runs on its own after the project's first merge lands and writes what it
+finds into `projects.json` — the task log says which checks it wrote, or that
+none are detectable yet. It only fills an empty list, so checks you set by
+hand are never replaced.
 
 **The app won't start with a `KeyError` or `ValueError` about `SMTP_*`.** All
 five SMTP keys must be present in `.env` even when email is unused, and

@@ -5,7 +5,7 @@ design document and it does not explain why anything is the way it is — that
 reasoning lives in comments next to the code it justifies, where it cannot go
 stale silently. Read this to find the right file, then read the file.
 
-Written 2026-09-11. Everything here was checked against the running system.
+Written 2026-09-11, revised 2026-09-17. Everything here was checked against the running system.
 
 ---
 
@@ -98,6 +98,18 @@ rather than being quietly green against the wrong gems.
 A task's diff is the task worktree against its branch point. The live checkout
 never moves until the gate approves and the operator approves the merge.
 
+A project can also begin here rather than arrive. `POST /api/projects/create`
+(`agent/server.py`, admin only) makes the live checkout under the first
+`AGENT_PROJECT_ROOTS` entry with one commit on `main`, optionally creates a
+private GitHub repository and pushes to it over a fresh deploy key
+(`agent/github_repos.py`, host-side), and then provisions the task worktree
+and the `projects.json` entry exactly as the wizard does. `scripts/new_project.py`
+is the same thing without the dashboard. Both Node services re-read
+`projects.json` on every poll and every request (`currentProjects()` in each,
+through `services/shared/projects-config.js`) rather than once at startup, so
+a project created or given checks at runtime is reviewed and merged without a
+restart of either.
+
 ---
 
 ## 4. The graph is two nodes
@@ -113,7 +125,9 @@ START → work → verify_and_ship → (work | END)
 - **`verify_and_ship`** (`agent/nodes/verify_and_ship.py`) commits, runs the
   checks, waits for the reviewer's verdict for that exact sha, and — when
   everything says yes — merges and deploys **inside this node**. There is no
-  third node; a deploy preflight failure is a stage of this one.
+  third node; a deploy preflight failure is a stage of this one. After a merge
+  in a project the reviewer runs no checks for, it detects and writes them
+  (`agent/project_checks.py`), so the next review has a gate.
 
 **Resting states.** The graph returns `END` and the task simply waits, holding
 its checkpoint. Nothing is lost and every one of them is resumable:
@@ -148,12 +162,17 @@ agent/
   health.py            what "up" means (section 1)
   github_settings.py   tokens (encrypted) and per-project inbox policy
   github_inbox.py      the poller, the items, the signed approve links
+  provisioning.py      onboarding: detect, confirm, provision; create_repository for a new one
+  github_repos.py      a private GitHub repo, its deploy key, the first push (host-side)
+  project_checks.py    checks for a project that shipped without any, after its first merge
+  deploy_keys.py       per-project SSH deploy keys
   middleware/          budget_guard, repeat_guard, sanitize_tool_calls,
                        hidden_tools, pinned_brief, model_pin, todo_nag
   tools/               files, bash/sandbox, git, review_gate, planning_tools,
                        github_tools, vision, checks
 scripts/
   doctor.py            checks the configuration above, without printing a secret
+  add_project.py       onboard an existing repo headlessly; new_project.py creates one
   backup.sh            + verify_backup_restore.sh (docs/backup.md)
   package_release.sh   a tarball with the dashboard prebuilt
 services/

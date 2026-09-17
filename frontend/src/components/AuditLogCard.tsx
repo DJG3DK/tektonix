@@ -6,7 +6,7 @@ import { getAuditLog, type AuditEntry } from "../api";
  *
  * Not a feed of everything that happened — tasks and model calls are recorded
  * elsewhere and in far more detail. This is the short list of decisions that
- * change what the system is allowed to do: who onboarded a project, who
+ * change what the system is allowed to do: who onboarded or created a project, who
  * approved a particular gated command, who turned auto mode on and for which
  * projects, who let a GitHub source create work on its own, who minted a key
  * that can push.

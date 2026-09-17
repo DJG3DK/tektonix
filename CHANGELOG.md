@@ -1,5 +1,70 @@
 # Changelog
 
+## Unreleased
+
+### A project that did not exist yet
+
+Until now a project had to exist before Tektonix could see it: the wizard
+and `scripts/add_project.py` both take a directory that is already a git
+repository, so the first commit of anything new was made somewhere else, by
+hand, before the agent could be pointed at it. The planner's Repo dropdown
+now has a third door, **New project…** (admins only): a name, an optional
+description and, when a GitHub token is stored, a **Create a private GitHub
+repo** box. The server makes the directory under the first allowed root,
+refuses a path that exists or that fails the containment rule the wizard
+applies, runs `git init -b main` with one commit (a repository with zero
+commits gives the worktree no branch to start from), and then runs exactly
+the wizard's provisioning steps with the wizard's recommended answers — one
+code path, so a project that arrives by either door is wired identically.
+The planner opens a session on it at once, and Settings → Projects and every
+Repo dropdown refresh without a reload. `scripts/new_project.py` is the
+headless twin. Creation is audited as `project.create`.
+
+With the GitHub box ticked, the token is resolved before anything is
+created, so a missing token is a refusal and not a half-made directory. The
+private repository is made with `auto_init` off, a deploy key is minted for
+the project and registered on it with write access, `origin` is set to the
+SSH URL — never HTTPS, which the host's credential helper would push as the
+operator's personal account — and `main` is pushed from the server process.
+The agent still cannot push; this is the API process acting on an admin's
+request, the same trust level as the review service's post-merge push,
+which is why SECURITY.md's claim about agents and `git push` stays true. A
+GitHub failure is a failed step, not an abort: the repository on disk is
+real, and the remote can be connected from the project card later.
+
+The planning agent can propose one. When a request turns out to be a new
+application rather than a change to the current project, the agent asks for
+a name and whether to create a private repo, restates both, and after the
+operator confirms calls a `create_project` tool. The tool creates nothing:
+it records a proposal, and the dashboard shows a confirm card with Confirm
+and Dismiss. Confirm creates the project through the same path and moves the
+session onto it, so the conversation continues against the new repository;
+a non-admin is told that an admin must confirm. A model that could create
+repositories by calling a tool would be one that could create them by being
+asked to in a pasted document.
+
+A brand-new project has no checks, so its first review is model-only — and
+the merge that lands is the first moment the repository has code for
+detection to read. After a merge in a project the reviewer reports as
+having no checks, the ship path runs the wizard's detection on the live repo
+with its recommended answers and writes `review.checks` into
+`projects.json`; the task log shows which checks were written, or that none
+are detectable yet. It fills an empty slot only: a non-empty list is never
+overwritten, and a project whose checks come from
+`builtin-projects.local.js` is left alone. This replaces the manual "add
+checks" step that Auto for the GitHub inbox used to point at.
+
+### The review services read projects.json live
+
+Both Node services bound the project map once at startup, so a project
+created or given checks at runtime did not exist for them until pm2
+restarted: the reviewer never polled its branches, the deploy service
+answered 404 for it, and the agent's wait for a verdict timed out on a
+verdict that could not arrive. They now re-read `projects.json` on every
+poll and every request. The reviewer also no longer crashes on a project
+entry with no `review.checks` — exactly the entry a new project produces —
+and returns a verdict instead of an internal error.
+
 ## v0.6.0 — a name of its own, a router of its own, and a console that knows where you are
 
 **2026-09-16**
