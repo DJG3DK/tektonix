@@ -33,6 +33,7 @@ from pathlib import Path
 from agent import config as _config
 from agent.config import PROJECTS, reload_projects
 from agent.provisioning import ProvisioningError, detect_project
+from agent.tools import review_gate as _review_gate
 from agent.tools.review_gate import project_checks
 
 logger = logging.getLogger(__name__)
@@ -114,6 +115,11 @@ async def _autodetect(repo: str) -> dict | None:
     # promoted here.
     set_project_checks(_config._PROJECTS_CONFIG_PATH, repo, report.checks)
     reload_projects()
+    # project_checks(force=True) above refreshed the 60s cache with the
+    # PRE-write answer ("no checks"), so without this every project_has_checks
+    # caller -- the GitHub inbox's Auto gate most of all -- would keep reading
+    # "this project verifies nothing" for a minute after we gave it checks.
+    _review_gate._CHECKS_CACHE.pop("all", None)
     names = [c.get("name", "?") for c in report.checks]
     lines = [
         f"{c.get('name', '?')}: {c.get('cmd', '')} {' '.join(c.get('args') or [])}".rstrip()

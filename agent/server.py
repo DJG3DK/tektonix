@@ -7,10 +7,12 @@ opening a fresh connection per request would be wasteful and race-prone).
 
 import asyncio
 import html
+import functools
 import contextlib
 import json
 import logging
 import os
+import shutil
 import time
 import traceback
 import uuid
@@ -4076,8 +4078,10 @@ async def list_projects_config(user: User = Depends(require_full_auth)):
         "projects": PROJECTS,
         "config_path": str(_PROJECTS_CONFIG_PATH),
         "restart_required_hint": (
-            "The running agent picks a newly added project up immediately; the "
-            "review and deploy services re-read projects.json on their next poll."
+            "A project added from the dashboard is live immediately, and the review "
+            "and deploy services re-read projects.json on their next poll. A project "
+            "written to this file by hand or by scripts/add_project.py needs "
+            "`pm2 restart tektonix` before the agent process sees it."
         ),
     }
 
@@ -4161,7 +4165,8 @@ def _provisioning_public_error(e: Exception) -> str:
 
 
 async def _provision_from_report(report, choices: dict, user: User,
-                                 grant_access: bool) -> tuple[bool, list[dict]]:
+                                 grant_access: bool, *,
+                                 fresh_workspace: bool = False) -> tuple[bool, list[dict]]:
     """Everything after the operator's answers are validated: worktree,
     projects.json entry, in-process reload, knowledge seeding, access.
 
@@ -4169,6 +4174,10 @@ async def _provision_from_report(report, choices: dict, user: User,
     /api/projects/create (a repo this server just made), so a project that
     arrives by either door ends up wired identically. Returns (ok, steps);
     ok is False only when a step the project cannot exist without failed.
+
+    `fresh_workspace` is set by the create door: that project has never run,
+    so an existing workspace at its path is another project's leftover rather
+    than its own, and adopting it would run every task against the wrong repo.
     """
     from agent import provisioning  # noqa: PLC0415
     from agent.config import _PROJECTS_CONFIG_PATH  # noqa: PLC0415
@@ -4182,7 +4191,9 @@ async def _provision_from_report(report, choices: dict, user: User,
 
     logger.info("onboarding: %s provisioning %s from %s", user.email, name, report.live)
 
-    ok, detail = await asyncio.to_thread(provisioning.create_worktree, report.live, report.sandbox)
+    ok, detail = await asyncio.to_thread(
+        functools.partial(provisioning.create_worktree, report.live, report.sandbox,
+                          must_be_new=fresh_workspace))
     _step("worktree", ok, detail)
     if not ok:
         return False, steps
@@ -4250,18 +4261,67 @@ class CreateProjectRequest(BaseModel):
     token_name: str | None = None
 
 
-def _resolve_github_token(token_name: str | None) -> str:
-    """A stored named token, else the GITHUB_TOKEN env fallback. Raises the
-    HTTP error the endpoint should answer with; the token itself never goes
-    anywhere but the request headers in agent/github_repos.py."""
+def _resolve_github_token(token_name: str | None) -> tuple[str, str | None]:
+    """Returns (token, stored_name). A named stored token if one was asked
+    for, else the GITHUB_TOKEN env fallback, else the single stored token if
+    that is unambiguous. Raises the HTTP error the endpoint should answer
+    with; the token itself never goes anywhere but the request headers in
+    agent/github_repos.py.
+
+    The unambiguous-stored fallback exists because the dashboard decides
+    whether to offer "create a private GitHub repo" from
+    GET /api/settings/github, which reports stored tokens AND the env one --
+    so on a box with a token saved in Settings and no GITHUB_TOKEN (the
+    normal shape, since Settings is the documented place to put it) the
+    checkbox was offered and the request then died on "no GitHub token is
+    configured". Stored-first also matches github_settings.token_for's own
+    precedence for every other GitHub call.
+    """
+    tokens = github_settings.current()["tokens"]
     if token_name:
-        entry = github_settings.current()["tokens"].get(token_name)
+        entry = tokens.get(token_name)
         if not entry:
             raise HTTPException(400, f"no stored GitHub token named {token_name!r} (Settings -> GitHub)")
-        return github_settings.decrypt_token(config, entry["enc"])
+        return github_settings.decrypt_token(config, entry["enc"]), token_name
+    if len(tokens) == 1:
+        only = next(iter(tokens))
+        return github_settings.decrypt_token(config, tokens[only]["enc"]), only
+    if len(tokens) > 1 and not getattr(config, "github_token", None):
+        raise HTTPException(400, (
+            f"several GitHub tokens are stored ({', '.join(sorted(tokens))}) and none was chosen -- "
+            "name one in the request, or set GITHUB_TOKEN"))
     if getattr(config, "github_token", None):
-        return config.github_token
+        return config.github_token, None
     raise HTTPException(400, "no GitHub token is configured (Settings -> GitHub)")
+
+
+def _rollback_new_project(live: str, name: str, github_info: dict | None, steps: list[dict]) -> None:
+    """Remove the directory this call created when a later step fails, so the
+    retry the dashboard offers is a real retry.
+
+    Without this, "create" was a one-shot: create_repository only cleans up
+    after its own git failure, so a project whose detect/worktree/config step
+    died left <parent>/<name> on disk, and the second attempt -- with the same
+    name, from a form the UI deliberately keeps filled in -- hit "already
+    exists" and could never succeed.
+
+    Not when a GitHub repository was created: that one is not ours to throw
+    away silently, and the local checkout is the only copy of its deploy-key
+    config. The operator gets the path and onboards it with the wizard.
+    """
+    if github_info:
+        steps.append({"step": "rollback", "ok": True,
+                      "detail": f"kept {live} (its GitHub repo {github_info['full_name']} exists); "
+                                "onboard it from Settings -> Projects, or delete both to start over"})
+        return
+    try:
+        shutil.rmtree(live)
+    except OSError as e:
+        steps.append({"step": "rollback", "ok": False,
+                      "detail": f"could not remove {live}: {e}"})
+        return
+    steps.append({"step": "rollback", "ok": True,
+                  "detail": f"removed {live}, so {name} can be created again"})
 
 
 @app.post("/api/projects/create")
@@ -4294,8 +4354,9 @@ async def _create_project(req: CreateProjectRequest, user: User) -> dict:
         raise HTTPException(400, e.detail)
 
     token: str | None = None
+    stored_token_name: str | None = None
     if req.github:
-        token = _resolve_github_token(req.token_name)
+        token, stored_token_name = _resolve_github_token(req.token_name)
 
     try:
         live = await asyncio.to_thread(
@@ -4329,14 +4390,14 @@ async def _create_project(req: CreateProjectRequest, user: User) -> dict:
             logger.exception("github: creating the repository for %s failed", name)
             steps.append({"step": "github", "ok": False,
                           "detail": f"GitHub request failed ({type(e).__name__}) -- see the server log"})
-        if req.token_name and github_info:
+        if stored_token_name and github_info:
             # So token_for(name) -- the inbox poller, the PR tools -- reaches
             # this repo with the same token that created it.
             try:
                 await github_settings.save(app.state.store, config,
-                                           {"projects": {name: {"token": req.token_name}}})
+                                           {"projects": {name: {"token": stored_token_name}}})
                 steps.append({"step": "github-token", "ok": True,
-                              "detail": f"{name} uses the stored token {req.token_name!r}"})
+                              "detail": f"{name} uses the stored token {stored_token_name!r}"})
             except Exception as e:  # noqa: BLE001 -- reported, never fatal
                 steps.append({"step": "github-token", "ok": False,
                               "detail": _provisioning_public_error(e)})
@@ -4349,13 +4410,20 @@ async def _create_project(req: CreateProjectRequest, user: User) -> dict:
         choices = provisioning.validate_choices(report, provisioning.recommended_choices(report))
     except provisioning.ProvisioningError as e:
         steps.append({"step": "detect", "ok": False, "detail": e.detail})
+        _rollback_new_project(live, name, github_info, steps)
         return {"ok": False, "name": name, "live": live, "steps": steps, "github": github_info}
     steps.append({"step": "detect", "ok": True,
                   "detail": f"{len(report.checks)} check(s), {len(report.warnings)} warning(s)"})
 
-    ok, provision_steps = await _provision_from_report(report, choices, user, True)
+    ok, provision_steps = await _provision_from_report(report, choices, user, True,
+                                                       fresh_workspace=True)
     steps.extend(provision_steps)
     if not ok:
+        # Only when nothing was registered: once the projects.json entry is
+        # written the project exists, and removing its checkout underneath a
+        # configured name is worse than leaving a half-provisioned one.
+        if name not in PROJECTS:
+            _rollback_new_project(live, name, github_info, steps)
         return {"ok": False, "name": name, "live": live, "steps": steps, "github": github_info}
 
     await audit.record(_audit_store(), actor=user.email, action="project.create",

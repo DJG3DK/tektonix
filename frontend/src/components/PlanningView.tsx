@@ -25,10 +25,14 @@ const NEW_PROJECT = "__new__";
 
 // Mirrors the validator behind POST /api/projects/create so the rule shows up
 // as the operator types rather than as a 400 from the server: 1-64 chars of
-// [A-Za-z0-9._-], not starting with "." (a dot-directory would be invisible
-// in the allowed root and clash with .git-style names).
-const PROJECT_NAME_RE = /^[A-Za-z0-9_-][A-Za-z0-9._-]{0,63}$/;
-const PROJECT_NAME_RULE = "1–64 characters: letters, digits, '.', '_' or '-', and not starting with '.'";
+// Character-for-character the server's rule (provisioning.PROJECT_NAME_RE):
+// a leading letter or digit, then [A-Za-z0-9._-]. It has to match exactly --
+// a name this accepted and the server refused was a 400 on submit with the
+// form's own validator saying it was fine. A leading "." or "-" is out
+// because the name is also a directory under the allowed root and a key in
+// projects.json; a dot-directory would be invisible there.
+const PROJECT_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+const PROJECT_NAME_RULE = "1–64 characters: letters, digits, '.', '_' or '-', starting with a letter or digit";
 function isValidProjectName(name: string): boolean {
   return PROJECT_NAME_RE.test(name);
 }

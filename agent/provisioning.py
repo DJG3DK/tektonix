@@ -1423,14 +1423,26 @@ def write_project_entry(projects_path: Path, name: str, entry: dict) -> None:
     os.replace(tmp, projects_path)
 
 
-def create_worktree(live: str, sandbox: str, branch: str = "agent-base") -> tuple[bool, str]:
+def create_worktree(live: str, sandbox: str, branch: str = "agent-base",
+                    *, must_be_new: bool = False) -> tuple[bool, str]:
     """Create the agent's workspace as a git worktree of the live repo.
 
     A worktree, not a clone: tasks commit to a per-task branch that is a
     plain local ref in the live repo, which is what lets the review service
     read the branch directly with no remote in between.
+
+    `must_be_new` is for the create-a-project path. Re-onboarding an existing
+    repo may legitimately find its own workspace already there, so the wizard
+    adopts it -- but a project being created for the first time cannot have
+    one. If a directory is sitting at that path it belongs to something else
+    with the same name (a deleted project's leftovers, most likely), and
+    adopting it would point every task for the new project at a worktree of a
+    DIFFERENT repository.
     """
     if os.path.exists(sandbox):
+        if must_be_new:
+            return False, (f"{sandbox} already exists -- a new project cannot reuse a workspace. "
+                           "Remove the leftover directory, or pick another name.")
         if os.path.isdir(os.path.join(sandbox, ".git")) or os.path.isfile(os.path.join(sandbox, ".git")):
             return True, f"worktree already exists at {sandbox}"
         return False, f"{sandbox} exists and is not a git worktree -- refusing to overwrite"

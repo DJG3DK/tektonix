@@ -342,8 +342,14 @@ app.post('/api/projects/:name/restart', requireControlSecret, async (req, res) =
     if (preflightFailures.length) {
         return res.status(500).json({ ok: false, error: formatPreflightError(preflightFailures), stage: 'preflight', built });
     }
+    // `|| []` on both: a project with nothing to build and nothing to restart
+    // deploys as a no-op rather than throwing. A dashboard-created project has
+    // no `deploy` block at all (an empty repo detects no build steps and no pm2
+    // app), so `p.build is not iterable` came back as stage 'build' -- which
+    // verify_and_ship reads as a compile error the agent should fix, sending it
+    // round the work loop chasing a TypeError in this file.
     try {
-        for (const step of p.build) {
+        for (const step of p.build || []) {
             const dir = path.join(p.live, step.dir);
             await run(step.cmd, step.args, dir);
             built.push(step.dir);
@@ -352,10 +358,10 @@ app.post('/api/projects/:name/restart', requireControlSecret, async (req, res) =
         return res.status(500).json({ ok: false, error: e.message, stage: 'build', built });
     }
     try {
-        for (const appName of p.pm2Apps) {
+        for (const appName of p.pm2Apps || []) {
             await run('pm2', ['restart', appName], '/');
         }
-        res.json({ ok: true, built, restarted: p.pm2Apps });
+        res.json({ ok: true, built, restarted: p.pm2Apps || [] });
     } catch (e) { res.status(500).json({ ok: false, error: e.message, stage: 'restart', built }); }
 });
 

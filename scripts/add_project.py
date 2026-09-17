@@ -143,8 +143,10 @@ def main() -> int:
     print("\nNext:")
     print(f"  .venv/bin/python scripts/run_cartographer.py {name}   # build its codebase map")
     print("  .venv/bin/python scripts/seed_memory.py               # seed project memory")
-    print("  (no restart needed: the running agent reloads projects.json on its next")
-    print("   provision or merge, and the review services re-read it on every poll)")
+    print("  pm2 restart tektonix                                   # the running agent re-reads projects.json")
+    print("  (the two review services need no restart: they re-read projects.json on")
+    print("   every poll. The agent process only reloads it when the DASHBOARD adds a")
+    print("   project, so a write from this script needs the restart above.)")
     return 0
 
 

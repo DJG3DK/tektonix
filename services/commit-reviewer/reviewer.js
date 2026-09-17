@@ -735,7 +735,14 @@ async function setupWorktree(project, cfg, sha, base) {
     }
   }
 
-  for (const rel of cfg.secretFiles) {
+  // `|| []` like every sibling loop above: a project with no `review` block
+  // at all is the NORMAL shape now, not an edge case. A project created from
+  // the dashboard starts as an empty repo with no .env and no manifest, so
+  // config_from_choices writes `{live, sandbox}` and nothing else; iterating
+  // the missing key threw inside setupWorktree, the catch logged "review
+  // failed with an internal error", no verdict was ever written, and the
+  // agent's wait_for_review sat there until it timed out.
+  for (const rel of cfg.secretFiles || []) {
     const src = path.join(REVIEW_SECRETS_ROOT, project, rel);
     const dest = path.join(worktreePath, rel);
     if (!fs.existsSync(src)) {

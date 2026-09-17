@@ -771,3 +771,134 @@ def test_new_project_script_fails_on_a_bad_name(tmp_path, monkeypatch):
     monkeypatch.setattr(script, "PROJECTS", {})
     monkeypatch.setattr(sys, "argv", ["new_project.py", "../x", "--parent", str(tmp_path)])
     assert script.main() == 2
+
+
+# --------------------------------------------------------------------------
+# Regressions from the adversarial review of 2026-09-17. Each one is a way the
+# create path could fail AFTER its happy path was already green.
+
+
+def test_a_stored_token_is_used_when_no_env_token_is_set(wired, monkeypatch):
+    """The dashboard offers the GitHub checkbox when Settings holds a token OR
+    GITHUB_TOKEN is set, but the server used to accept only the env one -- so
+    on the normal shape (a token saved in Settings, no env var) the checkbox
+    was offered and the request died with 'no GitHub token is configured'."""
+    monkeypatch.setattr(gs, "_cache",
+                        gs.apply_patch(srv.config, gs.current(), {"add_tokens": {"main": _TOKEN}}))
+    token, name = srv._resolve_github_token(None)
+    assert token == _TOKEN
+    assert name == "main", "the project must be bound to the token that created it"
+
+
+def test_several_stored_tokens_and_no_choice_is_refused_by_name(wired, monkeypatch):
+    """Picking one at random would bind the project to an arbitrary account."""
+    monkeypatch.setattr(gs, "_cache", gs.apply_patch(
+        srv.config, gs.current(), {"add_tokens": {"main": _TOKEN, "other": _TOKEN}}))
+    with pytest.raises(srv.HTTPException) as e:
+        srv._resolve_github_token(None)
+    assert e.value.status_code == 400
+    assert "main" in e.value.detail and "other" in e.value.detail
+
+
+def test_env_token_still_wins_when_no_single_stored_token_applies(wired, monkeypatch):
+    monkeypatch.setattr(srv, "config", dataclasses.replace(srv.config, github_token=_TOKEN))
+    monkeypatch.setattr(gs, "_cache", gs.apply_patch(
+        srv.config, gs.current(), {"add_tokens": {"main": "x" * 20, "other": "y" * 20}}))
+    token, name = srv._resolve_github_token(None)
+    assert token == _TOKEN
+    assert name is None, "an env token is nobody's stored token"
+
+
+def test_a_failed_step_removes_the_directory_so_a_retry_is_a_retry(wired, monkeypatch):
+    """The dashboard keeps the form up after a failure and invites another go.
+    create_repository only cleaned up after its OWN git failure, so a project
+    that died at detect/worktree/config left the directory behind and every
+    retry answered 'already exists' -- the offer could never be taken."""
+    real_detect = prov.detect_project
+
+    def boom(*a, **kw):
+        raise prov.ProvisioningError("detection exploded")
+
+    monkeypatch.setattr(prov, "detect_project", boom)
+    res = TestClient(srv.app).post("/api/projects/create", json={"name": "svc"})
+    assert res.status_code == 200
+    body = res.json()
+    assert body["ok"] is False
+    assert not (wired["root"] / "svc").exists(), "the directory this call made must be gone"
+    rollback = {s["step"]: s for s in body["steps"]}["rollback"]
+    assert rollback["ok"] is True and "svc" in rollback["detail"]
+
+    # ...and the proof that it is a retry: the same request now succeeds.
+    # (setattr, not monkeypatch.undo(): undo would also drop the fixture's
+    # auth override and answer 401 for reasons that have nothing to do with
+    # what this test is about.)
+    monkeypatch.setattr(prov, "detect_project", real_detect)
+    again = TestClient(srv.app).post("/api/projects/create", json={"name": "svc"})
+    assert again.status_code == 200 and again.json()["ok"] is True
+
+
+def test_a_created_github_repo_is_never_silently_discarded(wired, monkeypatch):
+    """Rollback removes a local directory; it must not throw away a repo on
+    someone's GitHub account, nor the deploy-key config that is its only
+    record locally."""
+    async def fake_create(token, name, description="", org=None):
+        return {"full_name": f"me/{name}", "ssh_url": f"git@github.com:me/{name}.git",
+                "html_url": f"https://github.com/me/{name}"}
+
+    async def fake_add_key(token, full_name, title, public_key):
+        return None
+
+    monkeypatch.setattr(github_repos, "create_private_repo", fake_create)
+    monkeypatch.setattr(github_repos, "add_deploy_key", fake_add_key)
+    monkeypatch.setattr(github_repos, "connect_origin", lambda live, url, name: "ssh-ed25519 AAAA test")
+    monkeypatch.setattr(github_repos, "push_initial", lambda live, name, **kw: (True, "pushed"))
+    monkeypatch.setattr(prov, "detect_project",
+                        lambda *a, **kw: (_ for _ in ()).throw(prov.ProvisioningError("nope")))
+    monkeypatch.setattr(gs, "_cache",
+                        gs.apply_patch(srv.config, gs.current(), {"add_tokens": {"main": _TOKEN}}))
+
+    res = TestClient(srv.app).post("/api/projects/create", json={"name": "svc", "github": True})
+    body = res.json()
+    assert body["ok"] is False
+    assert (wired["root"] / "svc").exists(), "a repo exists on GitHub; the checkout stays"
+    rollback = {s["step"]: s for s in body["steps"]}["rollback"]
+    assert "me/svc" in rollback["detail"]
+
+
+def test_a_leftover_workspace_is_refused_rather_than_adopted(wired):
+    """create_worktree adopts an existing workspace, which is right when the
+    wizard re-onboards a repo it already knows. A project being created has
+    never run: a directory at its workspace path belongs to something else
+    with the same name, and adopting it would run every task for the new
+    project against a DIFFERENT repository."""
+    stale = wired["workspaces"] / "svc"
+    stale.mkdir(parents=True)
+    (stale / ".git").write_text("gitdir: /somewhere/else/.git\n")
+
+    res = TestClient(srv.app).post("/api/projects/create", json={"name": "svc"})
+    body = res.json()
+    assert body["ok"] is False
+    worktree = {s["step"]: s for s in body["steps"]}["worktree"]
+    assert worktree["ok"] is False
+    assert "already exists" in worktree["detail"]
+    assert "svc" not in agent_config.PROJECTS, "a project must not be registered on a stale workspace"
+
+
+def test_the_wizard_still_adopts_its_own_existing_workspace(tmp_path):
+    """The other half of the same rule: re-onboarding an existing repo finds
+    its own worktree already there and must go on using it."""
+    live = tmp_path / "repo"
+    live.mkdir()
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=live, check=True)
+    (live / "f.txt").write_text("x")
+    subprocess.run(["git", "add", "-A"], cwd=live, check=True)
+    subprocess.run(["git", "-c", "user.email=t@e", "-c", "user.name=t", "commit", "-qm", "c"],
+                   cwd=live, check=True)
+    sandbox = tmp_path / "ws" / "repo"
+
+    ok, _ = prov.create_worktree(str(live), str(sandbox))
+    assert ok
+    ok_again, detail = prov.create_worktree(str(live), str(sandbox))
+    assert ok_again and "already exists" in detail
+    refused, why = prov.create_worktree(str(live), str(sandbox), must_be_new=True)
+    assert refused is False and "cannot reuse a workspace" in why

@@ -96,6 +96,17 @@ describe("PlanningView — the New project door", () => {
     expect(screen.getByText(/1–64 characters/)).toBeInTheDocument();
     expect(startButton()).toBeDisabled();
 
+    // A leading "_" or "-" is refused by provisioning.PROJECT_NAME_RE too.
+    // This validator once allowed both, so the form said the name was fine
+    // and the server answered 400 on submit -- the one failure mode a
+    // client-side validator exists to prevent.
+    for (const rejected of ["_app", "-app"]) {
+      await userEvent.clear(name);
+      await userEvent.type(name, rejected);
+      expect(screen.getByText(/1–64 characters/)).toBeInTheDocument();
+      expect(startButton()).toBeDisabled();
+    }
+
     await userEvent.clear(name);
     await userEvent.type(name, "my-app");
     expect(screen.queryByText(/1–64 characters/)).not.toBeInTheDocument();
