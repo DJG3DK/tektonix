@@ -5,6 +5,8 @@ import { changePassword, setAutoApprove, setMergeReview, getTelegramSettings, se
 import type { CurrentUser } from "../types";
 import "./SettingsPage.css";
 import { ApiKeysPanel } from "./ApiKeysPanel";
+import { AppearancePanel } from "./AppearancePanel";
+import { PushPanel } from "./PushPanel";
 import { ProjectsPanel } from "./ProjectsPanel";
 import { GitHubSettingsCard } from "./GitHubSettingsCard";
 import { AuditLogCard } from "./AuditLogCard";
@@ -14,7 +16,7 @@ function sameRepos(a: string[], b: string[]): boolean {
 }
 
 type SectionId =
-  | "account" | "agent" | "notifications" | "projects"
+  | "account" | "appearance" | "agent" | "notifications" | "projects"
   | "github" | "limits" | "environment" | "audit";
 
 /** Where the operator was last time. Settings is a place people come back to
@@ -152,6 +154,7 @@ export function SettingsPage({ user, onUserChanged, onProjectsChanged }: Props) 
   // while 300px of screen sat empty to the right of it.
   const sections: { id: SectionId; label: string; blurb: string; admin?: boolean; wide?: boolean }[] = [
     { id: "account", label: "Account", blurb: "Who you are signed in as, and your password." },
+    { id: "appearance", label: "Appearance", blurb: "The console's colour scheme, for this account." },
     { id: "agent", label: "Agent behavior", blurb: "How much the agent does without stopping to ask." },
     { id: "notifications", label: "Notifications", blurb: "Where the agent reaches you." },
     { id: "projects", label: "Projects", blurb: "The repositories this deployment can work on.", admin: true },
@@ -391,8 +394,21 @@ export function SettingsPage({ user, onUserChanged, onProjectsChanged }: Props) 
           </div>
         )}
 
+        {active.id === "appearance" && (
+          <div className="settings-stack">
+            <AppearancePanel user={user} onUserChanged={onUserChanged} />
+          </div>
+        )}
+
         {active.id === "notifications" && (
           <div className="settings-stack">
+            <section className="settings-card">
+              <h2>Push notifications</h2>
+              <p className="settings-card-sub">
+                Alerts on your phone or desktop, from the installed app.
+              </p>
+              <PushPanel />
+            </section>
             <TelegramCard />
           </div>
         )}

@@ -296,6 +296,22 @@ first. The app lands on **Planning**, not the raw task composer.
   `/api` at all and serves the app shell network-first, falling back to a cached copy only when the
   box is genuinely unreachable. `tests/test_pwa.py` pins each of Chrome's installability criteria,
   because Chrome reports a failed one only in DevTools.
+- **Push notifications** — the installed app gets the same alerts Telegram carries (a task
+  finishing, escalating, or waiting on approval), scoped by the same rule to the projects the
+  account can see. `agent/notify.py` fans out to both transports from one place on purpose: two
+  fan-outs are two chances for the scoping to drift and start telling a single-repo user about
+  every project. Permission is per device, so each phone or laptop is enabled separately in
+  **Settings → Notifications**; on iPhone it only works once the app is on the Home Screen, and
+  the panel says so rather than offering a button that cannot work. The VAPID keypair is generated
+  once into `keys/vapid.json` and never rotated, because regenerating it silently invalidates
+  every existing subscription.
+- **Colour schemes** — five, chosen per account in **Settings → Appearance**: Drafting (the
+  original brass), Indigo, Orchid, Ember and Moss. The preview pane is the scheme rather than a
+  picture of one — it carries `data-theme` and the same `[data-theme]` blocks in `theme.css` paint
+  it — so it cannot drift from what Save applies. Every foreground in every scheme is measured
+  against its own surface and clears 4.5:1, and `tests/test_themes.py` computes those ratios
+  rather than trusting the comments. State colours (running, waiting, done, failed) deliberately
+  do not change with the scheme: a colour that means something must not move with a preference.
 - **Consolidation status** — nightly memory-consolidation health on the Models tab: healthy, stale,
   failed, or never-run. That last state is the one a log tail can never show you: if cron stops
   firing entirely, an empty log looks exactly like a quiet night.

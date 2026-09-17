@@ -70,6 +70,41 @@ def _may_hear_about(role: str, allowed_repos, repo: str | None) -> bool:
     return allowed_repos is None or repo in allowed_repos
 
 
+async def _push_operators(auth_pool, text: str, repo: str | None) -> int:
+    """The push half of the fan-out. Same recipients, same scoping rule, same
+    never-raises contract as the Telegram half.
+
+    A dead subscription is DELETED rather than retried: 404/410 from a push
+    service means the browser uninstalled the app, cleared its data, or the
+    endpoint expired, and those never come back. Leaving them accumulates rows
+    that fail on every alert forever.
+    """
+    from agent import auth, push
+    if not push.configured():
+        return 0
+    try:
+        targets = await auth.get_push_targets(auth_pool)
+    except Exception:  # noqa: BLE001
+        logger.exception("push: could not load recipients")
+        return 0
+
+    title, _, rest = text.partition("\n")
+    body = rest.strip() or title
+    sent = 0
+    for t in targets:
+        if not _may_hear_about(t["role"], t["allowed_repos"], repo):
+            continue
+        ok, status = await push.send_one(t, title.strip() or "Tektonix", body,
+                                         url="/", tag=repo or "tektonix")
+        if ok:
+            sent += 1
+            await auth.mark_push_ok(auth_pool, t["endpoint"])
+        elif status in (404, 410):
+            logger.info("push: dropping a subscription the service says is gone (%s)", status)
+            await auth.delete_push_subscription(auth_pool, t["endpoint"])
+    return sent
+
+
 async def notify_operators(auth_pool, text: str, repo: str | None = None) -> int:
     """Send `text` to the users allowed to know about `repo`.
 
@@ -93,6 +128,13 @@ async def notify_operators(auth_pool, text: str, repo: str | None = None) -> int
             continue
         if await send_telegram(token, chat_id, text):
             sent += 1
+    # Both transports, one fan-out. Push is additive and must never be able to
+    # cost a Telegram alert, so its failures are swallowed the same way the
+    # loop above swallows a failed send.
+    try:
+        sent += await _push_operators(auth_pool, text, repo)
+    except Exception:  # noqa: BLE001
+        logger.exception("push: fan-out failed")
     return sent
 
 

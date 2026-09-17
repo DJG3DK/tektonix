@@ -160,6 +160,7 @@ jobs:
           node tests/test_health_projects.js
           node tests/test_reviewer_projects_reload.js
           node tests/test_bare_project_entry.js
+          node tests/test_sw_push.js
 
       - name: Reviewer dependency mounts (as root — the read-only proof)
         # This one needs real bind mounts: it borrows a directory the way the

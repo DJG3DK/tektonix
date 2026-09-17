@@ -71,6 +71,57 @@ self.addEventListener('message', (event) => {
   if (event.data === 'skip-waiting') self.skipWaiting();
 });
 
+/* ── push ──────────────────────────────────────────────────────────────────
+ * The only reason this worker runs when the app is closed. The payload is
+ * written by agent/push.py and is deliberately small: a title, a body, a URL
+ * and a tag.
+ *
+ * showNotification is not optional. A push received without one is a
+ * "silent push", and every browser treats a pattern of them as abuse --
+ * Chrome shows a generic "This site has been updated in the background"
+ * notification instead, and repeated offences cost the subscription
+ * entirely. So a malformed payload still notifies, with whatever it had.
+ */
+self.addEventListener('push', (event) => {
+  let data = {};
+  try {
+    data = event.data ? event.data.json() : {};
+  } catch {
+    data = { body: event.data && event.data.text ? event.data.text() : '' };
+  }
+  const title = data.title || 'Tektonix';
+  event.waitUntil(self.registration.showNotification(title, {
+    body: data.body || '',
+    // The app's own mark, not the browser's globe -- on Android this is what
+    // makes it read as a notification from an app rather than from a website.
+    icon: '/icon-192.png',
+    badge: '/icon-192.png',
+    // Collapses repeats about the same project: three escalations replace one
+    // another on the lock screen instead of stacking into a wall.
+    tag: data.tag || 'tektonix',
+    renotify: true,
+    data: { url: data.url || '/' },
+  }));
+});
+
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  const target = (event.notification.data && event.notification.data.url) || '/';
+  // Focus the window the operator already has open rather than opening a
+  // second copy of a dashboard that holds live WebSocket streams.
+  event.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((wins) => {
+      for (const w of wins) {
+        if (new URL(w.url).origin === self.location.origin && 'focus' in w) {
+          if (w.navigate && new URL(w.url).pathname !== target) w.navigate(target);
+          return w.focus();
+        }
+      }
+      return self.clients.openWindow(target);
+    }),
+  );
+});
+
 function isApi(url) {
   return url.pathname === '/api' || url.pathname.startsWith('/api/');
 }

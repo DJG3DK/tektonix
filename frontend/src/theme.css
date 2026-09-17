@@ -83,6 +83,15 @@
      part of the "lit" feel: elevation reads as light, not absence.        */
   --shadow-card:  0 1px 2px rgba(4,6,10,.45), 0 6px 20px rgba(160,130,40,.10);
   --shadow-pop:   0 8px 28px rgba(4,6,10,.55), 0 2px 40px rgba(201,162,39,.08);
+
+  /* ── Ambient light (App.css paints these at the body level) ──────────────
+     Tokens rather than literals because this is what makes a theme read as a
+     different ROOM rather than the same room with different buttons. Three
+     pools: one in the accent's own hue, two cool anchors that stop the warm
+     ones tipping into sepia.                                              */
+  --ambient-1: rgba(201, 162, 39, 0.14);
+  --ambient-2: rgba(61, 219, 217, 0.10);
+  --ambient-3: rgba(90, 176, 255, 0.07);
   --shadow-inset: inset 0 1px 0 rgba(255,255,255,.05);
 
   /* ── Motion. Short, and honoured only when the user allows it. ───────── */
@@ -97,6 +106,148 @@
   --safe-t: env(safe-area-inset-top, 0px);
   --safe-l: env(safe-area-inset-left, 0px);
   --safe-r: env(safe-area-inset-right, 0px);
+}
+
+
+/* ============================================================================
+   Themes
+   ----------------------------------------------------------------------------
+   Drafting is :root above, so an account that has never chosen gets it with no
+   attribute set and no flash. The four below override only what carries the
+   scheme's identity -- the ground, the accent family, the ambient light and
+   the shadows' tint. Everything structural (space, radii, type, motion, the
+   44px tap floor) stays shared, because those are decisions about the product
+   rather than about colour.
+
+   Every foreground here was computed against its OWN --surface, not
+   estimated, and clears the 4.5:1 body minimum -- the ratios in the comments
+   come out of the same check the original palette used. The state colours
+   (blue/amber/green/red/cyan) are deliberately NOT re-tinted per theme: they
+   mean running, waiting, done, failed, and a colour that means something must
+   not drift with a preference. They were re-measured against each new surface
+   instead, and each accent sits at least 20 degrees of hue away from all five
+   so "the primary button" can never be mistaken for "a status".
+
+   Scoped by attribute, so the same declarations drive both the whole app
+   (<html data-theme>) and the settings preview (a div with data-theme), which
+   is what makes the preview honest: it is not a picture of the theme, it is
+   the theme.
+   ========================================================================== */
+
+[data-theme="indigo"] {
+  --bg:             #0e1018;
+  --surface:        #191d2b;
+  --surface-raised: #222840;
+  --surface-hover:  #2b324f;
+  --surface-sunken: #0a0c12;
+
+  --border:        #333b57;
+  --border-soft:   #262d44;
+  --border-strong: #48527a;
+
+  --text:       #eceef6;   /* 14.48:1 */
+  --text-dim:   #a5abc4;   /*  7.37:1 */
+  --text-faint: #8c93ad;   /*  5.50:1 */
+
+  --accent:       #8b93f8;   /* 6.09:1 */
+  --accent-hover: #a8aefb;   /* 8.08:1 */
+  --accent-dim:   #5a62c4;
+  --accent-glow:  rgba(139, 147, 248, 0.16);
+  --accent-ring:  rgba(139, 147, 248, 0.45);
+
+  --ambient-1: rgba(139, 147, 248, 0.15);
+  --ambient-2: rgba(61, 219, 217, 0.07);
+  --ambient-3: rgba(90, 176, 255, 0.09);
+
+  --shadow-card: 0 1px 2px rgba(3,4,8,.50), 0 6px 20px rgba(90,98,196,.12);
+  --shadow-pop:  0 8px 28px rgba(3,4,8,.58), 0 2px 40px rgba(139,147,248,.10);
+}
+
+[data-theme="orchid"] {
+  --bg:             #140f18;
+  --surface:        #211a27;
+  --surface-raised: #2c2334;
+  --surface-hover:  #372c41;
+  --surface-sunken: #0f0b12;
+
+  --border:        #403349;
+  --border-soft:   #31283a;
+  --border-strong: #584766;
+
+  --text:       #f2ecf5;   /* 14.57:1 */
+  --text-dim:   #b3a6bb;   /*  7.32:1 */
+  --text-faint: #998ca3;   /*  5.34:1 */
+
+  --accent:       #d879d8;   /* 6.16:1 */
+  --accent-hover: #e79ae7;   /* 8.19:1 */
+  --accent-dim:   #9b4f9b;
+  --accent-glow:  rgba(216, 121, 216, 0.16);
+  --accent-ring:  rgba(216, 121, 216, 0.45);
+
+  --ambient-1: rgba(216, 121, 216, 0.13);
+  --ambient-2: rgba(61, 219, 217, 0.07);
+  --ambient-3: rgba(139, 147, 248, 0.09);
+
+  --shadow-card: 0 1px 2px rgba(8,4,10,.50), 0 6px 20px rgba(155,79,155,.12);
+  --shadow-pop:  0 8px 28px rgba(8,4,10,.58), 0 2px 40px rgba(216,121,216,.10);
+}
+
+[data-theme="ember"] {
+  --bg:             #161210;
+  --surface:        #241d19;
+  --surface-raised: #302722;
+  --surface-hover:  #3c312b;
+  --surface-sunken: #110d0b;
+
+  --border:        #463a33;
+  --border-soft:   #352b26;
+  --border-strong: #5f4f45;
+
+  --text:       #f5efe9;   /* 14.55:1 */
+  --text-dim:   #bcaca0;   /*  7.55:1 */
+  --text-faint: #a29184;   /*  5.47:1 */
+
+  --accent:       #f0913c;   /* 6.97:1 */
+  --accent-hover: #f7aa61;   /* 8.60:1 */
+  --accent-dim:   #a55f22;
+  --accent-glow:  rgba(240, 145, 60, 0.16);
+  --accent-ring:  rgba(240, 145, 60, 0.45);
+
+  --ambient-1: rgba(240, 145, 60, 0.13);
+  --ambient-2: rgba(255, 225, 77, 0.06);
+  --ambient-3: rgba(90, 176, 255, 0.06);
+
+  --shadow-card: 0 1px 2px rgba(10,6,4,.50), 0 6px 20px rgba(165,95,34,.12);
+  --shadow-pop:  0 8px 28px rgba(10,6,4,.58), 0 2px 40px rgba(240,145,60,.10);
+}
+
+[data-theme="moss"] {
+  --bg:             #0f1411;
+  --surface:        #19211b;
+  --surface-raised: #222c25;
+  --surface-hover:  #2b382e;
+  --surface-sunken: #0b100c;
+
+  --border:        #324038;
+  --border-soft:   #26312a;
+  --border-strong: #485b4e;
+
+  --text:       #ecf2ed;   /* 14.51:1 */
+  --text-dim:   #a4b3a8;   /*  7.52:1 */
+  --text-faint: #8b9b90;   /*  5.64:1 */
+
+  --accent:       #9ad13f;   /*  9.07:1 */
+  --accent-hover: #b3e05f;   /* 10.78:1 */
+  --accent-dim:   #688f24;
+  --accent-glow:  rgba(154, 209, 63, 0.16);
+  --accent-ring:  rgba(154, 209, 63, 0.45);
+
+  --ambient-1: rgba(154, 209, 63, 0.12);
+  --ambient-2: rgba(61, 219, 217, 0.08);
+  --ambient-3: rgba(90, 176, 255, 0.06);
+
+  --shadow-card: 0 1px 2px rgba(4,8,5,.50), 0 6px 20px rgba(104,143,36,.12);
+  --shadow-pop:  0 8px 28px rgba(4,8,5,.58), 0 2px 40px rgba(154,209,63,.10);
 }
 
 * { box-sizing: border-box; }

@@ -1,0 +1,228 @@
+/* The picker and its preview.
+ *
+ * Everything inside .appearance-preview is written against the SAME tokens the
+ * app uses, never a literal colour -- that is the whole point. The pane sets
+ * data-theme, theme.css resolves the tokens for that scheme, and the preview
+ * is therefore the scheme rather than an illustration of it.
+ */
+
+.appearance-choices {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: var(--s2);
+  margin-bottom: var(--s5);
+}
+
+.appearance-choice {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: var(--s3);
+  text-align: left;
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+  min-height: var(--tap);
+  transition: border-color var(--t-fast), background var(--t-fast);
+}
+.appearance-choice:hover { background: var(--surface-hover); }
+.appearance-choice.is-chosen {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent-ring);
+}
+.appearance-choice:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Four bands: ground, surface, accent, text. Enough to tell two schemes apart
+   at a glance without rendering the whole preview five times. */
+.appearance-swatch {
+  display: flex;
+  height: 26px;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  border: 1px solid var(--border-soft);
+}
+.appearance-swatch i { flex: 1; }
+
+.appearance-choice-label {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  font-weight: 600;
+  font-size: var(--fs-base);
+}
+.appearance-current {
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--accent);
+  border: 1px solid var(--accent-dim);
+  border-radius: var(--radius-pill);
+  padding: 0 7px;
+}
+.appearance-choice-blurb {
+  font-size: var(--fs-sm);
+  color: var(--text-faint);
+  line-height: 1.4;
+}
+
+/* ── the preview pane ───────────────────────────────────────────────────── */
+
+.appearance-preview {
+  display: grid;
+  grid-template-columns: 132px 1fr;
+  gap: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  /* Its own ground, not the page's: the pane is a window into another scheme,
+     so it has to paint its own --bg or it would sit on the saved theme's. */
+  background: var(--bg);
+  min-height: 210px;
+  user-select: none;
+}
+
+.apv-rail {
+  background: var(--surface);
+  border-right: 1px solid var(--border-soft);
+  padding: var(--s3);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.apv-brand {
+  height: 10px;
+  width: 58px;
+  border-radius: var(--radius-xs);
+  background: var(--text-dim);
+  margin-bottom: 4px;
+}
+.apv-primary {
+  background: var(--accent);
+  /* Against a mid-tone accent this has to be the ground, not --text: every
+     accent here is light enough that white-on-accent fails contrast. */
+  color: var(--bg);
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  text-align: center;
+  padding: 5px 0;
+  border-radius: var(--radius-sm);
+}
+.apv-navitem {
+  font-size: var(--fs-xs);
+  color: var(--text-faint);
+  padding: 4px 6px;
+  border-radius: var(--radius-xs);
+  border: 1px solid transparent;
+}
+.apv-navitem--on {
+  color: var(--accent);
+  border-color: var(--accent-dim);
+  background: var(--accent-glow);
+}
+
+.apv-main {
+  padding: var(--s3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+}
+.apv-card {
+  background: var(--surface);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  padding: var(--s2) var(--s3);
+  box-shadow: var(--shadow-card);
+}
+.apv-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s2);
+}
+.apv-title {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--text);
+}
+.apv-meta {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-faint);
+  margin-top: 3px;
+}
+.apv-badge {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  padding: 2px 6px;
+  border-radius: var(--radius-pill);
+}
+/* State colours, deliberately NOT theme-tinted -- they mean the same thing in
+   every scheme, which is the point of showing them here. */
+.apv-badge--run  { color: var(--blue);  background: var(--blue-bg); }
+.apv-badge--done { color: var(--green); background: var(--green-bg); }
+
+.apv-bar {
+  margin-top: 7px;
+  height: 4px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-sunken);
+  overflow: hidden;
+}
+.apv-bar i { display: block; height: 100%; background: var(--accent); }
+
+.apv-actions { display: flex; gap: 6px; margin-top: auto; }
+.apv-btn {
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--accent);
+  color: var(--bg);
+}
+.apv-btn--ghost {
+  background: transparent;
+  color: var(--text-dim);
+  border: 1px solid var(--border-strong);
+}
+
+/* ── actions ────────────────────────────────────────────────────────────── */
+
+.appearance-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  margin-top: var(--s4);
+  flex-wrap: wrap;
+}
+.appearance-ok { color: var(--green); font-size: var(--fs-sm); }
+.appearance-error { color: var(--red); font-size: var(--fs-sm); }
+.appearance-note {
+  margin: var(--s4) 0 0;
+  font-size: var(--fs-sm);
+  color: var(--text-faint);
+  line-height: 1.5;
+  max-width: 64ch;
+}
+
+@media (max-width: 768px) {
+  /* The rail is 132px of a 390px screen; below that the cards have no room
+     left to read as cards. One column, rail on top. */
+  .appearance-preview { grid-template-columns: 1fr; }
+  .apv-rail {
+    flex-direction: row;
+    align-items: center;
+    border-right: none;
+    border-bottom: 1px solid var(--border-soft);
+    overflow-x: auto;
+  }
+  .apv-brand { margin-bottom: 0; flex: 0 0 auto; }
+  .apv-primary { flex: 0 0 auto; padding: 5px 10px; }
+  .apv-navitem { flex: 0 0 auto; white-space: nowrap; }
+}

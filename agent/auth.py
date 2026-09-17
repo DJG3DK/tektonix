@@ -94,6 +94,30 @@ ALTER TABLE agent_users ADD COLUMN IF NOT EXISTS telegram_chat_id TEXT;
 -- that already had the switch on, so nobody's behaviour changes silently.
 ALTER TABLE agent_users ADD COLUMN IF NOT EXISTS auto_approve_repos TEXT[];
 
+-- Added 2026-09-17. A colour scheme is a per-ACCOUNT preference, not a
+-- per-browser one: an operator who picks Ember on the laptop should not be
+-- handed Drafting by the phone. NULL means "never chosen", which the frontend
+-- renders as the default rather than writing a row for everyone at once.
+ALTER TABLE agent_users ADD COLUMN IF NOT EXISTS theme TEXT;
+
+-- Web push endpoints, one row per BROWSER rather than per account: a push
+-- subscription belongs to a specific install (this phone's Chrome, that
+-- laptop's Firefox) and the same person legitimately has several. The
+-- endpoint is the identity the push service issues and is unique by
+-- construction, so a re-subscribe from the same browser updates in place
+-- instead of accumulating duplicates that would each deliver the same alert.
+-- ON DELETE CASCADE: removing an account must not leave endpoints behind that
+-- still receive that account's alerts.
+CREATE TABLE IF NOT EXISTS agent_push_subscriptions (
+    endpoint TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES agent_users(id) ON DELETE CASCADE,
+    p256dh TEXT NOT NULL,
+    auth TEXT NOT NULL,
+    label TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_ok_at TIMESTAMPTZ
+);
+
 CREATE TABLE IF NOT EXISTS agent_sessions (
     token_hash TEXT PRIMARY KEY,
     user_id INTEGER NOT NULL REFERENCES agent_users(id) ON DELETE CASCADE,
@@ -145,6 +169,10 @@ class User:
     # never scoped, which is treated as NONE rather than all: a switch whose
     # blast radius nobody chose should not be the widest one.
     auto_approve_repos: list[str] | None = None
+    # The account's colour scheme (agent/../frontend/src/theme.css). None means
+    # never chosen; the frontend maps that to the default rather than storing a
+    # copy of the default in every row.
+    theme: str | None = None
 
     def can_access(self, repo: str) -> bool:
         return self.role == "admin" or self.allowed_repos is None or repo in self.allowed_repos
@@ -295,6 +323,7 @@ def _row_to_user(row: dict) -> User:
         auto_approve_commands=row["auto_approve_commands"],
         require_merge_review=row["require_merge_review"],
         auto_approve_repos=row.get("auto_approve_repos"),
+        theme=row.get("theme"),
     )
 
 
@@ -489,6 +518,94 @@ async def get_telegram_targets(pool: AsyncConnectionPool) -> list[tuple[str, str
         rows = await cur.fetchall()
     return [(r["telegram_bot_token"], r["telegram_chat_id"], r["role"], r["allowed_repos"])
             for r in rows]
+
+
+# Every scheme that exists in frontend/src/theme.css, and nothing else. The
+# column is free text, so this list is the gate: an unknown value would leave
+# the dashboard with a data-theme attribute that matches no rule, i.e. the
+# default, silently -- the operator would pick a colour and watch nothing
+# happen. tests/test_themes.py keeps this in step with the stylesheet.
+THEMES = ("drafting", "indigo", "orchid", "ember", "moss")
+DEFAULT_THEME = "drafting"
+
+
+async def update_theme(pool: AsyncConnectionPool, user_id: int, theme: str) -> None:
+    """Set the account's colour scheme. Rejects anything not in THEMES rather
+    than storing it: the failure it prevents is a saved preference that does
+    nothing, which reads as a broken Save button."""
+    if theme not in THEMES:
+        raise ValueError(f"unknown theme {theme!r}; choose one of {', '.join(THEMES)}")
+    async with pool.connection() as conn:
+        await conn.execute("UPDATE agent_users SET theme = %s WHERE id = %s", (theme, user_id))
+
+
+# ---------------------------------------------------------------------------
+# web push subscriptions
+# ---------------------------------------------------------------------------
+
+async def save_push_subscription(pool: AsyncConnectionPool, user_id: int, endpoint: str,
+                                 p256dh: str, auth_key: str, label: str | None = None) -> None:
+    """Store (or refresh) one browser's push endpoint.
+
+    Upsert on the endpoint, not on the user: one account has as many
+    subscriptions as it has browsers, and a browser that re-subscribes gets a
+    NEW endpoint from the push service while the old one keeps working until
+    it expires. Re-registering the same endpoint must update rather than
+    duplicate, or every alert arrives twice.
+
+    The user_id is part of the update on purpose: if a shared device is signed
+    into a different account, the endpoint moves with it instead of continuing
+    to deliver the previous account's alerts.
+    """
+    async with pool.connection() as conn:
+        await conn.execute(
+            "INSERT INTO agent_push_subscriptions (endpoint, user_id, p256dh, auth, label) "
+            "VALUES (%s, %s, %s, %s, %s) "
+            "ON CONFLICT (endpoint) DO UPDATE SET user_id = EXCLUDED.user_id, "
+            "p256dh = EXCLUDED.p256dh, auth = EXCLUDED.auth, label = EXCLUDED.label",
+            (endpoint, user_id, p256dh, auth_key, label))
+
+
+async def delete_push_subscription(pool: AsyncConnectionPool, endpoint: str) -> None:
+    async with pool.connection() as conn:
+        await conn.execute("DELETE FROM agent_push_subscriptions WHERE endpoint = %s", (endpoint,))
+
+
+async def count_push_subscriptions(pool: AsyncConnectionPool, user_id: int) -> int:
+    async with pool.connection() as conn:
+        cur = await conn.execute(
+            "SELECT count(*) AS n FROM agent_push_subscriptions WHERE user_id = %s", (user_id,))
+        row = await cur.fetchone()
+    return int(row["n"]) if row else 0
+
+
+async def get_push_targets(pool: AsyncConnectionPool,
+                           user_id: int | None = None) -> list[dict]:
+    """Push endpoints WITH the scope each one may hear about.
+
+    Same shape and the same reason as get_telegram_targets: alert bodies carry
+    the repo name, a goal excerpt and failure detail, so the caller has to be
+    able to filter by role/allowed_repos before sending. Joined rather than
+    filtered in Python so a subscription whose account was deleted simply is
+    not returned.
+    """
+    sql = ("SELECT s.endpoint, s.p256dh, s.auth, u.role, u.allowed_repos "
+           "FROM agent_push_subscriptions s JOIN agent_users u ON u.id = s.user_id")
+    params: tuple = ()
+    if user_id is not None:
+        sql += " WHERE s.user_id = %s"
+        params = (user_id,)
+    async with pool.connection() as conn:
+        cur = await conn.execute(sql, params)
+        rows = await cur.fetchall()
+    return [dict(r) for r in rows]
+
+
+async def mark_push_ok(pool: AsyncConnectionPool, endpoint: str) -> None:
+    async with pool.connection() as conn:
+        await conn.execute(
+            "UPDATE agent_push_subscriptions SET last_ok_at = now() WHERE endpoint = %s",
+            (endpoint,))
 
 
 async def update_require_merge_review(pool: AsyncConnectionPool, user_id: int, require_merge_review: bool) -> None:

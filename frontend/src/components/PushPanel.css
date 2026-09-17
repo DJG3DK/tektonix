@@ -1,0 +1,37 @@
+.push-panel { display: flex; flex-direction: column; gap: var(--s3); }
+
+.push-state {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  flex-wrap: wrap;
+  font-size: var(--fs-base);
+  color: var(--text);
+}
+.push-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--text-faint);
+  flex: 0 0 auto;
+}
+.push-dot.is-on { background: var(--green); box-shadow: 0 0 0 3px var(--green-bg); }
+
+.push-count {
+  font-size: var(--fs-sm);
+  color: var(--text-faint);
+  font-family: var(--font-mono);
+}
+
+.push-actions { display: flex; gap: var(--s2); flex-wrap: wrap; }
+.push-actions button { min-height: var(--tap); }
+
+.push-ok { color: var(--green); font-size: var(--fs-sm); margin: 0; }
+.push-error { color: var(--red); font-size: var(--fs-sm); margin: 0; }
+.push-note {
+  margin: 0;
+  font-size: var(--fs-sm);
+  color: var(--text-faint);
+  line-height: 1.5;
+  max-width: 64ch;
+}

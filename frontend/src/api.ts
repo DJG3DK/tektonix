@@ -408,6 +408,65 @@ export async function saveProviderPins(pins: Record<string, string | null>): Pro
   return res.json();
 }
 
+export async function setTheme(theme: string): Promise<void> {
+  const res = await apiFetch(`${API_BASE}/auth/me/theme`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ theme }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.detail || `saving the theme failed: ${res.status}`);
+  }
+}
+
+// ── web push ───────────────────────────────────────────────────────────────
+
+export interface PushKeyResponse {
+  public_key: string;
+  subscriptions: number;
+}
+
+export async function getPushKey(): Promise<PushKeyResponse> {
+  const res = await apiFetch(`${API_BASE}/push/key`);
+  if (!res.ok) throw new Error(`push key unavailable: ${res.status}`);
+  return res.json();
+}
+
+export async function subscribePush(body: {
+  endpoint: string; p256dh: string; auth: string; label?: string;
+}): Promise<{ subscriptions: number }> {
+  const res = await apiFetch(`${API_BASE}/push/subscribe`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const b = await res.json().catch(() => ({}));
+    throw new Error(b.detail || `subscribing failed: ${res.status}`);
+  }
+  return res.json();
+}
+
+export async function unsubscribePush(endpoint: string): Promise<{ subscriptions: number }> {
+  const res = await apiFetch(`${API_BASE}/push/unsubscribe`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ endpoint }),
+  });
+  if (!res.ok) throw new Error(`unsubscribing failed: ${res.status}`);
+  return res.json();
+}
+
+export async function testPush(): Promise<{ sent: number; devices: number }> {
+  const res = await apiFetch(`${API_BASE}/push/test`, { method: "POST" });
+  if (!res.ok) {
+    const b = await res.json().catch(() => ({}));
+    throw new Error(b.detail || `test push failed: ${res.status}`);
+  }
+  return res.json();
+}
+
 export async function setMergeReview(requireMergeReview: boolean): Promise<void> {
   const res = await apiFetch(`${API_BASE}/auth/me/merge-review`, {
     method: "POST",

@@ -5,9 +5,9 @@
    scrolling content moves through the light. */
 body {
   background:
-    radial-gradient(38% 45% at 16% 10%, rgba(201, 162, 39, 0.14), transparent 70%),
-    radial-gradient(34% 40% at 86% 16%, rgba(61, 219, 217, 0.10), transparent 70%),
-    radial-gradient(42% 44% at 68% 94%, rgba(90, 176, 255, 0.07), transparent 72%),
+    radial-gradient(38% 45% at 16% 10%, var(--ambient-1), transparent 70%),
+    radial-gradient(34% 40% at 86% 16%, var(--ambient-2), transparent 70%),
+    radial-gradient(42% 44% at 68% 94%, var(--ambient-3), transparent 72%),
     var(--bg);
   background-attachment: fixed;
 }

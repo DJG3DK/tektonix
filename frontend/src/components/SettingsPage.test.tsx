@@ -21,7 +21,7 @@ function user(over: Partial<CurrentUser> = {}): CurrentUser {
   return {
     id: 1, email: "dev@example.com", role: "user", allowed_repos: ["sandbox", "production"],
     totp_enabled: true, must_change_password: false, require_totp_setup: false,
-    auto_approve_commands: false, auto_approve_repos: [], require_merge_review: true,
+    auto_approve_commands: false, auto_approve_repos: [], require_merge_review: true, theme: "drafting",
     ...over,
   };
 }

@@ -14,6 +14,9 @@ export interface CurrentUser {
   /** Which projects auto mode covers. Both halves must agree before a task
    *  runs unattended -- see User.auto_approves in agent/auth.py. */
   auto_approve_repos: string[];
+  /** The account's colour scheme (src/themes.ts). The server substitutes the
+   *  default for an account that has never chosen, so this is never null. */
+  theme: string;
   require_merge_review: boolean;
 }
 

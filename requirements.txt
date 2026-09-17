@@ -87,5 +87,10 @@ websockets==15.0.1
 xxhash==4.0.1
 zstandard==0.25.0
 
+# Web push (agent/push.py). RFC 8291 payload encryption and the VAPID
+# signature are real cryptography with a lot of ways to be subtly wrong, so
+# this is a dependency rather than a hand-rolled hundred lines.
+pywebpush==2.5.0
+
 # Lint. Configured in ruff.toml; enforced in CI.
 ruff==0.16.5

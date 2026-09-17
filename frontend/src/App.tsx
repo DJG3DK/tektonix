@@ -16,6 +16,7 @@ import { Sidebar } from "./components/Sidebar";
 import { TaskView } from "./components/TaskView";
 import { UsersPanel } from "./components/UsersPanel";
 import type { CurrentUser, PlanningSessionMeta, TaskMeta } from "./types";
+import { applyTheme, isThemeId, storedTheme } from "./themes";
 // audit M-23: recharts (~the bulk of the bundle) now ships in its own chunk,
 // fetched only when an admin opens Analytics.
 const AnalyticsView = lazy(() =>
@@ -311,6 +312,11 @@ export default function App() {
     getMe()
       .then((me) => {
         hadSession.current = true;
+        // The account is the source of truth for the scheme; main.tsx painted
+        // the last one THIS browser saw so there was no flash. Reconcile now:
+        // a scheme changed on another device, or a first sign-in on a new
+        // browser, would otherwise stay wrong until the next save.
+        if (isThemeId(me.theme) && me.theme !== storedTheme()) applyTheme(me.theme);
         setUser(me);
       })
       .catch(() => setUser(null))

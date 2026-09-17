@@ -515,6 +515,9 @@ def _user_public(user: User) -> dict:
         "auto_approve_commands": user.auto_approve_commands,
         "auto_approve_repos": user.auto_approve_repos or [],
         "require_merge_review": user.require_merge_review,
+        # None until the account picks one; the frontend maps that to the
+        # default rather than the server writing the default into every row.
+        "theme": user.theme or auth.DEFAULT_THEME,
     }
 
 
@@ -1104,6 +1107,21 @@ async def _github_poll_loop(startup_delay: float = 20.0) -> None:
         _github_poll_wake.clear()
 
 
+class UpdateThemeRequest(BaseModel):
+    theme: str
+
+
+class PushSubscribeRequest(BaseModel):
+    endpoint: str
+    p256dh: str
+    auth: str
+    label: str | None = None
+
+
+class PushUnsubscribeRequest(BaseModel):
+    endpoint: str
+
+
 class UpdateMergeReviewRequest(BaseModel):
     require_merge_review: bool
 
@@ -1120,6 +1138,86 @@ async def set_own_merge_review(req: UpdateMergeReviewRequest, user: User = Depen
                        target=user.email,
                        detail="on" if req.require_merge_review else "off")
     return {"ok": True, "require_merge_review": req.require_merge_review}
+
+
+@app.post("/api/auth/me/theme")
+async def set_own_theme(req: UpdateThemeRequest, user: User = Depends(require_full_auth)):
+    """The account's colour scheme. Self-service and unaudited: it grants
+    nothing and reveals nothing, and an audit line per colour change would
+    bury the entries that matter."""
+    try:
+        await auth.update_theme(app.state.auth_pool, user.id, req.theme)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True, "theme": req.theme}
+
+
+# ---------------------------------------------------------------------------
+# web push
+# ---------------------------------------------------------------------------
+
+@app.get("/api/push/key")
+async def push_public_key(user: User = Depends(require_full_auth)):
+    """The VAPID public key the browser needs to subscribe, plus how many
+    endpoints this account already has -- the Settings toggle needs both to
+    decide what to render, and two round trips for one panel is a slower
+    settings page for no reason."""
+    from agent import push  # noqa: PLC0415
+    try:
+        key = push.public_key()
+    except push.PushError as e:
+        raise HTTPException(500, str(e))
+    return {"public_key": key,
+            "subscriptions": await auth.count_push_subscriptions(app.state.auth_pool, user.id)}
+
+
+@app.post("/api/push/subscribe")
+async def push_subscribe(req: PushSubscribeRequest, user: User = Depends(require_full_auth)):
+    """Register THIS browser for push. Bound to the calling account, never to
+    an id in the body: a subscription is permission to receive that account's
+    alerts, and accepting a user id from the client would let any signed-in
+    account subscribe itself to another's feed."""
+    await auth.save_push_subscription(app.state.auth_pool, user.id, req.endpoint,
+                                      req.p256dh, req.auth, req.label)
+    return {"ok": True, "subscriptions": await auth.count_push_subscriptions(
+        app.state.auth_pool, user.id)}
+
+
+@app.post("/api/push/unsubscribe")
+async def push_unsubscribe(req: PushUnsubscribeRequest, user: User = Depends(require_full_auth)):
+    """Drop one endpoint. Deliberately not scoped to the caller's own rows: an
+    endpoint is issued by a push service to one browser, so whoever is holding
+    it IS that browser, and a device signing out must be able to stop its own
+    notifications even if the account it was bound to has since changed."""
+    await auth.delete_push_subscription(app.state.auth_pool, req.endpoint)
+    return {"ok": True, "subscriptions": await auth.count_push_subscriptions(
+        app.state.auth_pool, user.id)}
+
+
+@app.post("/api/push/test")
+async def push_test(user: User = Depends(require_full_auth)):
+    """Send this account's own devices a test notification.
+
+    The same reason the Telegram panel has one: a push that silently fails --
+    permission revoked in the OS, an endpoint expired, the app uninstalled --
+    is indistinguishable from a quiet night, and the first time that matters
+    is the escalation nobody saw.
+    """
+    from agent import push  # noqa: PLC0415
+    targets = await auth.get_push_targets(app.state.auth_pool, user_id=user.id)
+    if not targets:
+        raise HTTPException(400, "no device is subscribed for this account")
+    sent = 0
+    for t in targets:
+        ok, status = await push.send_one(
+            t, "Tektonix", "Push is working. This is a test from Settings.",
+            url="/", tag="tektonix-test")
+        if ok:
+            sent += 1
+            await auth.mark_push_ok(app.state.auth_pool, t["endpoint"])
+        elif status in (404, 410):
+            await auth.delete_push_subscription(app.state.auth_pool, t["endpoint"])
+    return {"ok": sent > 0, "sent": sent, "devices": len(targets)}
 
 
 @app.post("/api/auth/me/auto-approve")

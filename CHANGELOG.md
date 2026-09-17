@@ -2,6 +2,53 @@
 
 ## Unreleased
 
+### Notifications on the phone, and a console in your own colours
+
+The installed app now gets push notifications: the same alerts Telegram
+already carried -- a task finishing, escalating, or waiting on an approval --
+delivered to the lock screen with the app's own icon. It is one fan-out, not
+two. `notify_operators` sends to both transports behind one copy of the
+scoping rule, because the alternative is two copies that drift, and the last
+time that scoping was wrong (audit H1) a single-repo account was receiving a
+live feed of every project.
+
+Permission belongs to a device rather than to an account, so **Settings →
+Notifications** talks about this device and says how many others the account
+has. Two cases are handled rather than papered over: a browser that has
+already been told "block" can never be asked again from JavaScript, so the
+panel sends you to site settings instead of offering a button that does
+nothing; and iOS delivers web push only to an app installed to the Home
+Screen, which the panel detects and explains instead of letting you subscribe
+into silence. A subscription the push service reports as gone (404/410) is
+deleted rather than retried, since those never recover.
+
+The VAPID keypair is written once to `keys/vapid.json` and read back
+thereafter. Regenerating it would invalidate every subscription ever issued,
+and the symptom is "notifications just stopped" with nothing in any log.
+
+**Five colour schemes**, per account, in **Settings → Appearance**: Drafting
+(the brass the mark was drawn for), Indigo, Orchid, Ember and Moss. Pick one,
+see it in a preview pane, then Save applies it everywhere.
+
+The preview is the scheme, not a rendering of it. The pane carries
+`data-theme` and every `[data-theme]` block in `theme.css` is scoped by
+attribute, so the custom properties inside it resolve to the chosen scheme
+while the rest of the page stays on the saved one. A mock built from
+hard-coded colours would drift from the stylesheet the first time a token
+moved, and it would drift silently -- it would still look like a preview.
+
+Each scheme overrides only what carries its identity: the ground, the accent
+family, the ambient light and the shadows' tint. The ambient light had to
+become a token to do that; while it was a literal brass `rgba()` in App.css,
+a theme changed its buttons and kept the original's light, which is most of
+what makes a scheme read as a different room. Everything structural stays
+shared, and so do the state colours -- running, waiting, done and failed mean
+the same thing in all five, because a colour that carries meaning must not
+move with a preference. Every foreground was computed against its own surface
+and clears 4.5:1; `tests/test_themes.py` does that arithmetic rather than
+trusting the comments, and holds the three copies of the scheme list (the
+stylesheet, the picker, and the server's allow-list) in step.
+
 ### The dashboard installs as a phone app
 
 Chrome on Android now offers *Install app*, and iOS Safari's *Add to Home
