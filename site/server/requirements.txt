@@ -4,7 +4,7 @@
 # with an installation.
 fastapi==0.122.0
 psycopg[binary,pool]==3.2.12
-python-multipart==0.0.22
+python-multipart==0.0.31
 uvicorn==0.41.0
 
 # Tests only.
