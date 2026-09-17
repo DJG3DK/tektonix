@@ -19,11 +19,7 @@ section at a time.
 3D-Agent is now Tektonix, everywhere it is user-visible: the dashboard, the
 landing page, the sign-in card, OG cards, the TOTP issuer, the router's
 OpenRouter headers, the sandbox image tag, the release tarball and the GitHub
-repository (`DJG3DK/tektonix`). The other businesses on the same box —
-3DSteals, 3dwebcatchers, 3dcryptobots.com — are untouched. The dashboard is
-served at `/` on its own domain, `tektonix.io`, with `www` redirecting; the
-old `/v2/` subpath on agent.3dcryptobots.com redirects surgically so the other
-tool that shares that host keeps its login.
+repository (`DJG3DK/tektonix`).
 
 The mark is a plumb line and the palette is called Drafting: dark charcoal
 with a gold accent. The landing page was reshot in it and condensed (features
