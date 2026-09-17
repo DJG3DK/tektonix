@@ -2,6 +2,35 @@
 
 ## Unreleased
 
+### A newsletter instead of a sign-in button
+
+The landing page's one action was "Sign in", which pointed at a private
+console the visitor has no account on. It was the right button when the page
+and the console were one document and one host; once they were not, it was an
+invitation to a locked door.
+
+It is a newsletter signup now: a name, an address, and a line about what the
+list is for — the changelog for each release, plus what is being built next
+and what turned out to be a bad idea. Nothing sends yet, deliberately. There
+is a list to send to first.
+
+The form is plain HTML, because the page still ships no JavaScript: `method`,
+`action`, two fields, and a same-origin POST that needs neither a fetch nor
+CORS. The server answers with a redirect to a real page rather than a status
+code a browser would show to nobody, so success and failure each have
+somewhere to land. A repeat signup is a success — the person meant "put me on
+the list", they are on the list, and an error would send them away believing
+it had not worked.
+
+`site/server/` is the other end: one table, one endpoint, its own virtualenv
+and its own pm2 process. It goes where the landing page goes, which is to say
+not into an installation — a self-hosted agent has no business shipping an
+endpoint that writes to tektonix.io's mailing list. Addresses are never
+written to the log, because a log line is the easiest way for a mailing list
+to leak and it leaks into a file people tail. Every subscriber gets an
+unsubscribe token at signup, so the first issue does not have to backfill one
+for everybody.
+
 ### The landing page is not part of the agent any more
 
 `tektonix.io` serves the public page; `agent.tektonix.io` serves the console.

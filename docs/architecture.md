@@ -187,6 +187,9 @@ services/
   agent-review/        merge + deploy control, review dashboard
   commit-reviewer/     the verdict: checks, the model review, state.json
   shared/              projects.json reader, service secrets reader
+site/server/           the newsletter signup behind that page: one table, one
+                       endpoint, its own venv and pm2 process. Nothing sends
+                       yet. Not part of an installation either
 site/                  tektonix.io's public landing page. Its own Vite build,
                        its own copy of the Drafting palette, and it ships NO
                        JavaScript -- scripts/render.mjs renders it to static

@@ -161,6 +161,16 @@ jobs:
           fi
           test -s dist/index.html
 
+      # The newsletter signup behind the page's form. Its own venv, because it
+      # is the landing page's service and not the agent's -- neither ships
+      # with an installation.
+      - name: Newsletter signup
+        working-directory: site/server
+        run: |
+          python3 -m venv .venv
+          .venv/bin/pip install -q -r requirements.txt
+          .venv/bin/python -m pytest -q test_newsletter.py
+
   services:
     name: Node services — syntax and unit tests
     runs-on: ubuntu-latest

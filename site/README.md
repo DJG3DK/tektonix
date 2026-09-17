@@ -16,6 +16,14 @@ Two things follow from the split:
   the module script — see `scripts/render.mjs`, which fails the build if a
   script tag ever survives.
 
+## The newsletter
+
+The form at the bottom of the page posts to [`server/`](server/README.md), a
+small service that writes a name and an address down. **Nothing sends yet.**
+It is a plain HTML POST for the same reason everything else here is static:
+there is no JavaScript to run a fetch, so the server answers with a redirect
+to a page rather than a status code nobody would see.
+
 ## Build and deploy
 
 ```bash

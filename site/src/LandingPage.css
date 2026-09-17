@@ -666,3 +666,79 @@
 @media (prefers-reduced-motion: reduce) {
   .landing * { transition: none !important; }
 }
+
+/* ── Newsletter ───────────────────────────────────────────────────────────
+   A plain HTML form. It posts and the browser navigates; there is no
+   JavaScript on this page to give it an inline success state, which is why
+   the server answers with a redirect to a real page rather than a status
+   code nobody would see. */
+
+.lp-news {
+  border-top: 1px solid var(--border-soft);
+}
+
+.lp-news-form {
+  max-width: 560px;
+  margin: var(--s6) 0 0;
+}
+
+.lp-news-fields {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--s3);
+}
+
+.lp-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.lp-field span {
+  font-size: var(--fs-sm);
+  color: var(--text-dim);
+}
+.lp-field input {
+  /* 16px is the floor that stops mobile browsers zooming the viewport when a
+     field takes focus. */
+  font: inherit;
+  font-size: 16px;
+  min-height: var(--tap);
+  padding: 0 var(--s3);
+  color: var(--text);
+  background: var(--surface-sunken);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.lp-field input::placeholder { color: var(--text-faint); }
+.lp-field input:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+/* The browser's own validation, since there is no script to do it: :invalid
+   would fire while the field is still being typed into, so wait for a value. */
+.lp-field input:not(:placeholder-shown):invalid {
+  border-color: var(--red, #ff6b63);
+}
+
+.lp-news-submit {
+  margin-top: var(--s4);
+  border: none;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 650;
+}
+
+.lp-news-fine {
+  margin: var(--s4) 0 0;
+  font-size: var(--fs-sm);
+  color: var(--text-faint);
+  line-height: 1.55;
+  max-width: var(--lp-measure);
+}
+.lp-news-fine a { color: var(--text-dim); }
+
+@media (max-width: 720px) {
+  .lp-news-fields { grid-template-columns: 1fr; }
+  .lp-news-submit { width: 100%; }
+}

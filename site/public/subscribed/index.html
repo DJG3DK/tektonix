@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="robots" content="noindex" />
+    <title>You're on the list — Tektonix</title>
+    <link rel="icon" href="/favicon.ico" sizes="any" />
+    <!-- Styles inline rather than the site's hashed stylesheet: this page is
+         copied verbatim from public/, so it has no build step to learn the
+         hashed filename from, and one screen of CSS is cheaper than wiring
+         a second entry into the build for a page nobody stays on. -->
+    <style>
+      :root { color-scheme: dark; }
+      body {
+        margin: 0; min-height: 100vh;
+        display: grid; place-items: center; padding: 24px;
+        background: #11151a; color: #edf0f4;
+        font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, sans-serif;
+        background-image: radial-gradient(46% 38% at 12% 4%, rgba(201,162,39,.16), transparent 70%);
+        text-align: center;
+      }
+      main { max-width: 46ch; }
+      h1 { font-size: 24px; margin: 0 0 12px; }
+      p { color: #a3adbb; margin: 0 0 20px; }
+      a.back {
+        display: inline-block; padding: 10px 20px; border-radius: 6px;
+        background: #c9a227; color: #14102e; font-weight: 650; text-decoration: none;
+      }
+      a.mail { color: #8a94a3; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>You're on the list.</h1>
+      <p>
+        You'll get the changelog when there is a release worth reading about, and a note on
+        what is being built next. Nothing else goes to this address.
+      </p>
+      <a class="back" href="/">Back to Tektonix</a>
+      <p style="margin-top:24px;font-size:14px">
+        Changed your mind? <a class="mail" href="mailto:danny@tektonix.io">danny@tektonix.io</a>
+      </p>
+    </main>
+  </body>
+</html>

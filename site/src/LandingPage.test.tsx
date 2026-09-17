@@ -14,28 +14,43 @@ describe("LandingPage", () => {
     expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(/autonomous coding agent/i);
   });
 
-  it("sends sign-in to the console's own host", () => {
-    // The whole point of the split: this page carries no application code,
-    // so the only way to the console is a link to where it now lives.
+  it("offers the newsletter, not a sign-in", () => {
+    // A visitor has no account on somebody else's private console, so "sign
+    // in" was never an action this page could offer them. The thing it can
+    // offer is to tell them when something ships.
     render(<LandingPage />);
-    const signIn = screen.getByRole("link", { name: /^sign in$/i });
-    expect(signIn).toHaveAttribute("href", "https://agent.tektonix.io");
+    expect(screen.queryByRole("link", { name: /^sign in$/i })).not.toBeInTheDocument();
+    expect(document.body.textContent).not.toMatch(/agent\.tektonix\.io/);
+    expect(screen.getByRole("link", { name: /get updates/i })).toHaveAttribute("href", "#newsletter");
   });
 
-  it("has exactly one sign-in control", () => {
-    // The closing section used to carry a second one, splitting the call to
-    // action between signing in and reading the source.
-    render(<LandingPage />);
-    const signIns = screen.getAllByRole("link").filter((a) => /^sign in$/i.test(a.textContent ?? ""));
-    expect(signIns).toHaveLength(1);
+  it("collects a name and an address, and posts them as a plain form", () => {
+    const { container } = render(<LandingPage />);
+    const form = container.querySelector("form.lp-news-form") as HTMLFormElement;
+    expect(form).toBeTruthy();
+    // method and action, not a handler: there is no JavaScript on this page to
+    // run a fetch, and a same-origin POST needs no CORS either.
+    expect(form.getAttribute("method")).toBe("post");
+    expect(form.getAttribute("action")).toBe("/newsletter/subscribe");
+    expect(form.querySelector('input[name="name"][required]')).toBeTruthy();
+    expect(form.querySelector('input[name="email"][type="email"][required]')).toBeTruthy();
   });
 
-  it("ships no button that would need JavaScript", () => {
-    // If a control ever comes back, scripts/render.mjs is stripping the only
-    // runtime that could have handled it -- so the page would look fine and
-    // do nothing.
+  it("has no control that would need JavaScript to do anything", () => {
+    // A submit button inside a form is HTML doing its own job. Anything else
+    // -- type=button, an onClick -- would render fine and then do nothing,
+    // because scripts/render.mjs strips the only runtime that could handle it.
+    const { container } = render(<LandingPage />);
+    const buttons = [...container.querySelectorAll("button")];
+    expect(buttons).toHaveLength(1);
+    expect(buttons[0].getAttribute("type")).toBe("submit");
+    expect(buttons[0].closest("form")).toBeTruthy();
+  });
+
+  it("says who the newsletter comes from, and how to leave it", () => {
     render(<LandingPage />);
-    expect(screen.queryAllByRole("button")).toHaveLength(0);
+    expect(screen.getAllByRole("link", { name: /danny@tektonix\.io/ }).length).toBeGreaterThan(0);
+    expect(document.body.textContent).toMatch(/unsubscribe/i);
   });
 
   it("links to the source, and only ever to that repo", () => {

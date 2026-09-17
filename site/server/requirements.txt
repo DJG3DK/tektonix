@@ -1,0 +1,12 @@
+# The newsletter signup behind tektonix.io. Three packages: a web framework, a
+# Postgres driver, and the server to run it. Deliberately separate from the
+# agent's requirements.txt -- this is the landing page's, and neither ships
+# with an installation.
+fastapi==0.122.0
+psycopg[binary,pool]==3.2.12
+python-multipart==0.0.22
+uvicorn==0.41.0
+
+# Tests only.
+httpx==0.28.1
+pytest==8.4.2

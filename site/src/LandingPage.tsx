@@ -10,11 +10,13 @@ import "./LandingPage.css";
 
 const REPO = "https://github.com/DJG3DK/tektonix";
 
-// The console lives on its own host now. A link rather than a callback is what
-// lets this page ship with no JavaScript at all: the only control on it is
-// "sign in", and a link is HTML. Overridable at build time so a fork pointing
-// at its own deployment does not have to patch the component.
-const CONSOLE_URL = import.meta.env.VITE_CONSOLE_URL || "https://agent.tektonix.io";
+// Where the newsletter form posts. Same origin as this page, so the form is a
+// plain HTML POST with no fetch, no CORS and no JavaScript -- which is what
+// keeps this page static. nginx routes it to site/server.
+const SUBSCRIBE_URL = "/newsletter/subscribe";
+
+// Who the newsletter and this page come from.
+const OWNER_EMAIL = "danny@tektonix.io";
 
 function GitHubMark() {
   return (
@@ -143,8 +145,8 @@ export function LandingPage() {
               <GitHubMark />
               <span>GitHub</span>
             </a>
-            <a className="lp-signin" href={CONSOLE_URL}>
-              Sign in
+            <a className="lp-signin" href="#newsletter">
+              Get updates
             </a>
           </div>
         </div>
@@ -358,14 +360,63 @@ cd tektonix && ./install.sh`}</code></pre>
             tunnel reaches it without nginx or a certificate. Give the installer a domain and it
             will set up both.
           </p>
-          {/* One action here, and it is the repo. Sign-in lives in the nav,
-              which is sticky and therefore always within reach anyway. */}
+          {/* One action here, and it is the repo. The newsletter has its own
+              section below; putting two calls to action in one block splits
+              the attention of someone who has just finished reading. */}
           <div className="lp-cta">
             <a className="lp-btn lp-btn-primary" href={REPO} target="_blank" rel="noopener noreferrer">
               <GitHubMark />
               View the source
             </a>
           </div>
+        </section>
+
+        {/* A plain HTML form: method, action, two fields. No fetch, no
+            handler, no JavaScript -- the browser posts it and follows the
+            redirect the server answers with, which is what keeps this page
+            static. site/server/newsletter.py is the other end. */}
+        <section className="lp-section lp-news" id="newsletter">
+          <h2 className="lp-h2">Told what changed, and what is coming</h2>
+          <p className="lp-sub">
+            Every release ships with a changelog that says what moved and, more usefully, why
+            it had to. The newsletter is that changelog, plus what is being built next and
+            what turned out to be a bad idea. No cadence promised beyond &ldquo;when there is
+            something worth reading&rdquo;, and nothing else is ever sent to this list.
+          </p>
+          <form className="lp-news-form" method="post" action={SUBSCRIBE_URL}>
+            <div className="lp-news-fields">
+              <label className="lp-field">
+                <span>Name</span>
+                <input
+                  type="text"
+                  name="name"
+                  autoComplete="name"
+                  maxLength={120}
+                  required
+                  placeholder="Ada Lovelace"
+                />
+              </label>
+              <label className="lp-field">
+                <span>Email</span>
+                <input
+                  type="email"
+                  name="email"
+                  autoComplete="email"
+                  maxLength={254}
+                  required
+                  placeholder="ada@example.com"
+                />
+              </label>
+            </div>
+            <button className="lp-btn lp-btn-primary lp-news-submit" type="submit">
+              Sign up for the newsletter
+            </button>
+            <p className="lp-news-fine">
+              Your name and address, stored to send you the newsletter and nothing else. Never
+              sold, never shared. Unsubscribe from any issue, or by mailing{" "}
+              <a href={`mailto:${OWNER_EMAIL}`}>{OWNER_EMAIL}</a>.
+            </p>
+          </form>
         </section>
       </main>
 
@@ -375,7 +426,8 @@ cd tektonix && ./install.sh`}</code></pre>
         </div>
         <p>
           Source available under PolyForm Noncommercial 1.0.0 &mdash; free for any noncommercial
-          use. This console is private; the repository is not.
+          use. Built and maintained by{" "}
+          <a href={`mailto:${OWNER_EMAIL}`}>{OWNER_EMAIL}</a>.
         </p>
         <a href={REPO} target="_blank" rel="noopener noreferrer">
           <GitHubMark />

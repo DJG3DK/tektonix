@@ -33,6 +33,9 @@
   --accent-dim:   #8f7219;
   --accent-glow:  rgba(201, 162, 39, 0.16);
 
+  /* The one state colour this page uses: an invalid field. */
+  --red: #ff6b63;
+
   --s2: 8px;  --s3: 12px; --s4: 16px; --s5: 20px;
   --s6: 24px; --s7: 32px; --s8: 48px;
 
