@@ -1,9 +1,9 @@
 /* ============================================================================
    Landing page — the public face in front of the login.
    ----------------------------------------------------------------------------
-   Everything here is built from the tokens in theme.css, so the page reads as
-   the same product as the console behind it rather than a separate marketing
-   site. Two deliberate departures from console density: the type scale is
+   Everything here is built from the tokens in tokens.css -- this page's own
+   copy of the Drafting palette, so it reads as the same product as the console
+   without importing the console's stylesheet or its theming. Two deliberate departures from console density: the type scale is
    larger (a console is scanned, a landing page is read), and the measure is
    capped at ~62ch so body copy never runs the full width of a desktop.
    ========================================================================== */
@@ -126,6 +126,11 @@
 .lp-ghost:hover { color: var(--text); background: var(--surface); }
 
 .lp-signin {
+  /* An <a>, not a <button>, since the console is another origin now -- so it
+     needs the box behaviour a button had for free. */
+  display: inline-flex;
+  align-items: center;
+  text-decoration: none;
   height: 36px;
   padding: 0 var(--s5);
   border: 1px solid var(--accent-dim);

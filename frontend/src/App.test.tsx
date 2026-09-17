@@ -66,50 +66,31 @@ beforeEach(() => {
 });
 
 describe("App — signed out", () => {
-  it("shows the landing page, not the login form", async () => {
-    // Regression: the opening getMe() 401s for every signed-out visitor, and
-    // that fired the session-expiry handler, sending them straight past the
-    // landing page to the login form.
+  it("shows the sign-in form: this host is the console, nothing else", async () => {
+    // Before the split there was a landing page in front of this, and the
+    // opening getMe() 401 had to be told apart from a real expiry so a
+    // visitor was not shoved past it. tektonix.io serves that page now, and
+    // agent.tektonix.io is the console -- so signed out simply means sign in.
     getMe.mockRejectedValue(new Error("401"));
     render(<App />);
-    expect(await screen.findByRole("heading", { level: 1 })).toHaveTextContent(
-      /autonomous coding agent/i,
-    );
-    expect(screen.queryByLabelText(/password/i)).not.toBeInTheDocument();
-  });
-
-  it("reaches the login form via Sign in, and back again", async () => {
-    getMe.mockRejectedValue(new Error("401"));
-    render(<App />);
-    await screen.findByRole("heading", { level: 1 });
-
-    await userEvent.click(screen.getByRole("button", { name: /^sign in$/i }));
     expect(await screen.findByRole("heading", { name: /sign in/i })).toBeInTheDocument();
-
-    await userEvent.click(screen.getByRole("button", { name: /back to overview/i }));
-    await waitFor(() =>
-      expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(
-        /autonomous coding agent/i,
-      ),
-    );
+    expect(screen.getByLabelText(/password/i)).toBeInTheDocument();
   });
 
-  it("offers the source link on the landing page but not on the login card", async () => {
+  it("carries no product pitch, only a link to where it lives", async () => {
     getMe.mockRejectedValue(new Error("401"));
     render(<App />);
-    await screen.findByRole("heading", { level: 1 });
-    expect(screen.getAllByRole("link", { name: /github|view the source/i }).length).toBeGreaterThan(0);
-
-    await userEvent.click(screen.getByRole("button", { name: /^sign in$/i }));
     await screen.findByRole("heading", { name: /sign in/i });
-    expect(screen.queryByRole("link", { name: /github/i })).not.toBeInTheDocument();
+    expect(document.body.textContent).not.toMatch(/autonomous coding agent/i);
+    expect(screen.getByRole("link", { name: /what is tektonix/i }))
+      .toHaveAttribute("href", "https://tektonix.io");
   });
 });
 
 describe("App — session expiry", () => {
-  it("goes straight to the login form, skipping the landing page", async () => {
-    // Someone whose cookie just expired is trying to get back in; a product
-    // pitch reads as being logged out of the wrong site.
+  it("returns to the sign-in form", async () => {
+    // Once the landing page moved off this host there is nothing else for an
+    // expiry to land on, but the handler still has to clear the user.
     getMe.mockResolvedValue(user());
     render(<App />);
     await waitFor(() => expect(authFailureHandler).toBeTypeOf("function"));

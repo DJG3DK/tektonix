@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <!-- This file is the PUBLIC page, and nothing else. The console has its own
+         host (agent.tektonix.io) and its own shell in frontend/index.html; the
+         two were one document until 2026-09-17, which is why the marketing
+         metadata used to sit in front of a login form.
+
+         meta description, because that is the line a search result shows;
+         og:description is for social cards and is not a substitute. -->
+    <meta name="description" content="A self-hosted, open-source autonomous coding agent. Give it a plain-English goal and it plans the work, writes the code, runs your project's real test suite, and passes an independent review gate before anything merges. Bring your own models through OpenRouter." />
+    <link rel="canonical" href="https://tektonix.io/" />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Tektonix" />
+    <meta property="og:title" content="Tektonix — autonomous coding agent" />
+    <meta property="og:description" content="A self-hosted autonomous coding agent for your own repositories. Takes a plain-English goal, plans the work, writes the code, re-runs the project's real test suite, and ships it. Nothing merges on the agent's say-so: a second model, any model you like through OpenRouter, reviews every diff in an isolated worktree first." />
+    <meta property="og:url" content="https://tektonix.io/" />
+    <meta property="og:image" content="https://tektonix.io/og-preview.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="Tektonix — autonomous coding agent. Plan, Build, Verify, Review gate, Ship." />
+    <meta name="twitter:image" content="https://tektonix.io/og-preview.png" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Tektonix — autonomous coding agent" />
+    <meta name="twitter:description" content="A self-hosted open-source coding agent. Plans, writes, tests and ships code to your real repos, with an independent review gate before anything merges. Any model, via OpenRouter." />
+    <link rel="icon" href="/favicon.ico" sizes="any" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png" />
+    <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+    <meta name="theme-color" content="#11151a" />
+    <title>Tektonix — autonomous coding agent</title>
+    <!-- Structured data, static in the head: this page ships no JavaScript at
+         all, so anything a runtime would inject could never be read. Claims
+         are limited to what the page itself states. -->
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "SoftwareApplication",
+        "name": "Tektonix",
+        "applicationCategory": "DeveloperApplication",
+        "operatingSystem": "Linux, or any host running Docker",
+        "url": "https://tektonix.io/",
+        "description": "An autonomous coding agent that takes a plain-English goal, plans the work, writes the code, re-runs the project's real test suite, and ships it — with an independent review gate that must pass before anything merges.",
+        "codeRepository": "https://github.com/DJG3DK/tektonix",
+        "license": "https://polyformproject.org/licenses/noncommercial/1.0.0/",
+        "isAccessibleForFree": true,
+        "screenshot": "https://tektonix.io/og-preview.png"
+      }
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

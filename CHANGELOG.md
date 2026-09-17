@@ -1,5 +1,43 @@
 # Changelog
 
+## Unreleased
+
+### The landing page is not part of the agent any more
+
+`tektonix.io` serves the public page; `agent.tektonix.io` serves the console.
+They were one build and one origin until now, which had two costs. A marketing
+page shared an origin, a bundle and a cookie jar with a private console. And
+every installation of Tektonix shipped a page selling Tektonix to the person
+who had just installed it.
+
+`site/` is its own Vite project with its own dependencies, its own copy of the
+Drafting palette, and its own tests. `scripts/package_release.sh` deletes it
+from the tarball and `install.sh` never looks at it, so a self-hosted agent
+serves the console and nothing else — both halves checked by
+`tests/test_repo_hygiene.py`, since either one alone would let it back in.
+
+It also ships **no JavaScript**. The only control on the page is the sign-in
+link, and a link is HTML, so the build renders the page to static markup and
+then strips the module script; the build fails if a script tag ever survives.
+What deploys is HTML, CSS and images, which can sit on any static host.
+
+The console lost the things that only made sense while the two were one
+document: the landing page, the Open Graph card and the structured data (now
+on the page they describe), the back-to-overview button, and the ref that
+existed to tell a signed-out visitor apart from an expired session so the
+first was not shoved past the pitch. It is `noindex` now, because a private
+console has no business in a search result.
+
+**If you had the app installed, reinstall it.** A service worker, an installed
+app and a push subscription all belong to an origin, and the console's origin
+changed. The old subscriptions were removed server-side rather than left to
+fail on every alert; re-enable notifications from Settings once the app is
+installed from the new host.
+
+Also fixed on the way past: the GitHub inbox's approve links were still built
+from a URL last correct before the rename, so they pointed at a host that has
+not served the console since 2026-09-15.
+
 ## v0.6.0 — a name of its own, a router of its own, and a console you can carry
 
 **2026-09-17**

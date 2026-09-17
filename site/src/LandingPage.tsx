@@ -1,18 +1,20 @@
-import logoUrl from "../assets/tektonix-logo.png";
-import shotPipeline from "../assets/shots/models2.webp";
-import shotAnalytics from "../assets/shots/analytics2.webp";
-import shotLedger from "../assets/shots/analytics3.webp";
-import shotReviewer from "../assets/shots/models3.webp";
-import shotSupport from "../assets/shots/models4.webp";
-import shotUsers from "../assets/shots/users2.webp";
-import shotPlanning from "../assets/shots/dashboard2.webp";
+import logoUrl from "./assets/tektonix-logo.png";
+import shotPipeline from "./assets/shots/models2.webp";
+import shotAnalytics from "./assets/shots/analytics2.webp";
+import shotLedger from "./assets/shots/analytics3.webp";
+import shotReviewer from "./assets/shots/models3.webp";
+import shotSupport from "./assets/shots/models4.webp";
+import shotUsers from "./assets/shots/users2.webp";
+import shotPlanning from "./assets/shots/dashboard2.webp";
 import "./LandingPage.css";
 
 const REPO = "https://github.com/DJG3DK/tektonix";
 
-interface Props {
-  onSignIn: () => void;
-}
+// The console lives on its own host now. A link rather than a callback is what
+// lets this page ship with no JavaScript at all: the only control on it is
+// "sign in", and a link is HTML. Overridable at build time so a fork pointing
+// at its own deployment does not have to patch the component.
+const CONSOLE_URL = import.meta.env.VITE_CONSOLE_URL || "https://agent.tektonix.io";
 
 function GitHubMark() {
   return (
@@ -122,7 +124,7 @@ const CONTROLS = [
   },
 ];
 
-export function LandingPage({ onSignIn }: Props) {
+export function LandingPage() {
   return (
     <div className="landing">
       <header className="lp-nav">
@@ -141,9 +143,9 @@ export function LandingPage({ onSignIn }: Props) {
               <GitHubMark />
               <span>GitHub</span>
             </a>
-            <button className="lp-signin" onClick={onSignIn}>
+            <a className="lp-signin" href={CONSOLE_URL}>
               Sign in
-            </button>
+            </a>
           </div>
         </div>
       </header>

@@ -270,8 +270,12 @@ managed roles on the Models page.
 
 ## Dashboard
 
-One React/Vite app (`frontend/`), served by the backend itself. Signed-out visitors see a public
-landing page; sign-in is in the nav. Live task and planning output arrives over WebSockets, with a
+One React/Vite app (`frontend/`), served by the backend itself, at its own host. Signed out means
+the sign-in form: the public page that used to sit in front of it is a separate build (`site/`) on
+a separate host, and is **not** part of an installation — `scripts/package_release.sh` drops it and
+`install.sh` never builds it. A self-hosted Tektonix serves the console and nothing else. On this
+deployment that is `agent.tektonix.io` for the console and `tektonix.io` for the page; your own
+install has whatever single host you point at it. Live task and planning output arrives over WebSockets, with a
 REST snapshot on every (re)connect — the socket only carries events from the moment it opens, so
 the snapshot is what makes a page opened mid-task show real history instead of starting blank.
 Multiple people can watch the same task at once; a second viewer connecting doesn't disconnect the

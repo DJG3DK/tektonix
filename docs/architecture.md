@@ -187,6 +187,11 @@ services/
   agent-review/        merge + deploy control, review dashboard
   commit-reviewer/     the verdict: checks, the model review, state.json
   shared/              projects.json reader, service secrets reader
+site/                  tektonix.io's public landing page. Its own Vite build,
+                       its own copy of the Drafting palette, and it ships NO
+                       JavaScript -- scripts/render.mjs renders it to static
+                       HTML and strips the runtime. Deliberately not part of an
+                       installation: the release tarball drops it
 frontend/src/          the dashboard (Vite + React). theme.css holds the five
                        colour schemes as [data-theme] blocks; public/sw.js is
                        the service worker (installable app + push) and

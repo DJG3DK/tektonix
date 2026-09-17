@@ -122,3 +122,40 @@ def test_no_source_file_contains_a_raw_nul_byte():
     escape (`\\u0000`, `\\0`) instead -- the runtime value is identical."""
     offenders = [str(p.relative_to(REPO)) for p in _source_files() if b"\x00" in p.read_bytes()]
     assert not offenders, f"raw NUL byte in: {offenders}"
+
+
+def test_the_landing_page_is_not_part_of_an_installation():
+    """site/ is tektonix.io's public page: marketing, not product.
+
+    Somebody self-hosting the agent wants the console, not a page selling it
+    to them, so the release tarball drops the directory and install.sh never
+    looks at it. Both halves are checked because either one alone would let it
+    back in: the packager could stop deleting it, or the installer could start
+    building it.
+    """
+    packager = (REPO / "scripts" / "package_release.sh").read_text()
+    assert 'rm -rf "$STAGE/$NAME/site"' in packager, (
+        "package_release.sh no longer drops site/ from the tarball")
+
+    installer = (REPO / "install.sh").read_text()
+    for line in installer.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            continue
+        assert "site/" not in stripped and "cd site" not in stripped, (
+            f"install.sh references the landing page: {stripped!r}")
+
+
+def test_the_console_and_the_landing_page_do_not_share_source():
+    """The split is only real if neither build reaches into the other.
+
+    frontend/ importing from site/ would put marketing code in the console's
+    bundle; site/ importing from frontend/ would mean the landing page cannot
+    be lifted out and hosted on its own, which is half the point.
+    """
+    for src, other in (("frontend", "site"), ("site", "frontend")):
+        root = REPO / src / "src"
+        for f in list(root.rglob("*.ts")) + list(root.rglob("*.tsx")) + list(root.rglob("*.css")):
+            text = f.read_text()
+            assert f"../../{other}/" not in text and f"/{other}/src/" not in text, (
+                f"{src}/{f.relative_to(root)} reaches into {other}/")

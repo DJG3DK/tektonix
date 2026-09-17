@@ -1,15 +1,19 @@
 /**
- * The built index.html must contain the landing page's real text.
+ * The built index.html must contain the page's real text, and no JavaScript.
  *
- * This is the assertion that would have caught the original problem: before
- * 2026-09-16 the built page shipped `<div id="root"></div>` and nothing else,
- * so a crawler that does not execute JavaScript saw no body content at all —
- * the only occurrences of "coding agent" anywhere on the page were inside meta
- * tags. Google renders JS on a second, queued pass; Bing, DuckDuckGo and most
- * LLM crawlers largely do not.
+ * The first half is the assertion that would have caught the original
+ * problem: before 2026-09-16 the built page shipped `<div id="root"></div>`
+ * and nothing else, so a crawler that does not execute JavaScript saw no body
+ * content at all — the only occurrences of "coding agent" anywhere were
+ * inside meta tags. Google renders JS on a second, queued pass; Bing,
+ * DuckDuckGo and most LLM crawlers largely do not.
  *
- * Asserts on CONTENT, not on the mechanism. If prerendering is ever replaced
- * by SSR or static generation, these still pass; if the build step is dropped
+ * The second half is new with the split (2026-09-17): this page ships as
+ * static files, so a reintroduced runtime is a regression rather than a
+ * detail. scripts/render.mjs fails the build over it; this fails the tests.
+ *
+ * Asserts on CONTENT, not on the mechanism. If the rendering is ever replaced
+ * by SSG or a different framework, these still pass; if the step is dropped
  * or silently stops emitting, they fail.
  */
 import { existsSync, readFileSync } from 'node:fs';
@@ -63,5 +67,16 @@ withBuild('the built page is readable without JavaScript', () => {
   it('keeps the heading structure a crawler reads for hierarchy', () => {
     expect(built).toMatch(/<h1[^>]*>/);
     expect(built).toMatch(/<h2[^>]*>/);
+  });
+
+  it('ships no JavaScript at all', () => {
+    // The only control is the sign-in link. Anything that needed a runtime
+    // would render and then do nothing, because there is no runtime to load.
+    expect(built).not.toMatch(/<script[^>]+src=/);
+  });
+
+  it('keeps the structured data, which is content rather than code', () => {
+    expect(built).toContain('application/ld+json');
+    expect(built).toContain('SoftwareApplication');
   });
 });

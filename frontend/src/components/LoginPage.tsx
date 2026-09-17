@@ -6,7 +6,6 @@ import "./LoginPage.css";
 
 interface Props {
   onLoggedIn: (user: CurrentUser) => void;
-  onBack: () => void;
 }
 
 type Mode = "login" | "2fa" | "forgot" | "reset" | "reset-done";
@@ -20,21 +19,20 @@ function LoginMark() {
   return <img className="login-mark" src={logoUrl} alt="" />;
 }
 
-/* Shown under the card on every login view. This used to be a link to the
-   source on GitHub, which was the useful thing to offer when the login screen
-   WAS the front door. It is not any more -- the landing page in front of it
-   carries that link (twice), so the job here is just a way back out. */
-function LoginLinks({ onBack }: { onBack: () => void }) {
+/* Shown under the card on every login view. It has been three things: a link
+   to the source, then a way back to the landing page that sat in front of
+   this screen, and now a link to that page on its own host -- because the
+   console moved to agent.tektonix.io and there is nothing behind this form to
+   go "back" to any more. */
+function LoginLinks() {
   return (
     <div className="login-links">
-      <button type="button" onClick={onBack}>
-        &lsaquo; Back to overview
-      </button>
+      <a href="https://tektonix.io">&lsaquo; What is Tektonix?</a>
     </div>
   );
 }
 
-export function LoginPage({ onLoggedIn, onBack }: Props) {
+export function LoginPage({ onLoggedIn }: Props) {
   const [mode, setMode] = useState<Mode>("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -148,7 +146,7 @@ export function LoginPage({ onLoggedIn, onBack }: Props) {
             ‹ Back to sign in
           </button>
         </div>
-        <LoginLinks onBack={onBack} />
+        <LoginLinks />
       </div>
     );
   }
@@ -178,7 +176,7 @@ export function LoginPage({ onLoggedIn, onBack }: Props) {
             ‹ Back to sign in
           </button>
         </div>
-        <LoginLinks onBack={onBack} />
+        <LoginLinks />
       </div>
     );
   }
@@ -232,7 +230,7 @@ export function LoginPage({ onLoggedIn, onBack }: Props) {
             ‹ Back to sign in
           </button>
         </div>
-        <LoginLinks onBack={onBack} />
+        <LoginLinks />
       </div>
     );
   }
@@ -248,7 +246,7 @@ export function LoginPage({ onLoggedIn, onBack }: Props) {
             Back to sign in
           </button>
         </div>
-        <LoginLinks onBack={onBack} />
+        <LoginLinks />
       </div>
     );
   }
@@ -293,7 +291,7 @@ export function LoginPage({ onLoggedIn, onBack }: Props) {
           Forgot password?
         </button>
       </div>
-      <LoginLinks onBack={onBack} />
+      <LoginLinks />
     </div>
   );
 }

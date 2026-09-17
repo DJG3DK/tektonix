@@ -136,8 +136,34 @@ def test_the_ambient_light_is_a_token_not_a_literal():
 
 
 def test_the_landing_page_is_not_themed():
-    """The signed-out page is the product's own colours: a visitor has no
-    account and therefore no preference, and the brand should not depend on
-    whoever logged in last."""
-    landing = (ROOT / "frontend" / "src" / "components" / "LandingPage.css").read_text()
+    """The public page is the product's own colours: a visitor has no account
+    and therefore no preference, and the brand should not depend on whoever
+    signed in last.
+
+    It lives in site/ now, built and served separately (tektonix.io), which is
+    what makes this structural rather than a convention: it carries its own
+    copy of the Drafting tokens and never imports the console's stylesheet,
+    so the five schemes cannot reach it even by accident.
+    """
+    landing = (ROOT / "site" / "src" / "LandingPage.css").read_text()
     assert "rgba(201, 162, 39" in landing, "the landing page should keep Drafting's brass"
+
+    site_src = ROOT / "site" / "src"
+    for f in site_src.rglob("*.ts*"):
+        assert "theme.css" not in f.read_text(), (
+            f"{f.name} imports the console's theme.css; the public page must not inherit themes")
+    tokens = (site_src / "tokens.css").read_text()
+    assert "[data-theme" not in tokens, "the public page must carry no theme switching"
+
+
+def test_the_public_page_and_the_console_agree_on_the_brand():
+    """site/src/tokens.css is a COPY of Drafting, so the two can drift. They
+    are the same product, so the accent and the ground have to match."""
+    tokens = (ROOT / "site" / "src" / "tokens.css").read_text()
+    root = _css_blocks()[DEFAULT_THEME]
+    for name in ("--bg", "--surface", "--accent", "--text"):
+        value = root[name]
+        assert f"{name}:" in tokens, f"the public page is missing {name}"
+        got = re.search(rf"{name}:\s*(#[0-9a-fA-F]{{6}})", tokens)
+        assert got and got.group(1).lower() == value.lower(), (
+            f"{name} drifted: console {value}, public page {got.group(1) if got else 'missing'}")

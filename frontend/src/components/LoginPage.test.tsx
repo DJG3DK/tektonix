@@ -20,11 +20,10 @@ vi.mock("../api", async (importOriginal) => {
   };
 });
 
-function renderLogin(over: { onLoggedIn?: () => void; onBack?: () => void } = {}) {
+function renderLogin(over: { onLoggedIn?: () => void } = {}) {
   const onLoggedIn = over.onLoggedIn ?? vi.fn();
-  const onBack = over.onBack ?? vi.fn();
-  render(<LoginPage onLoggedIn={onLoggedIn} onBack={onBack} />);
-  return { onLoggedIn, onBack };
+  render(<LoginPage onLoggedIn={onLoggedIn} />);
+  return { onLoggedIn };
 }
 
 const emailBox = () => screen.getByLabelText(/email/i);
@@ -196,14 +195,21 @@ describe("LoginPage — navigation", () => {
     expect(screen.getByRole("heading", { name: /sign in/i })).toBeInTheDocument();
   });
 
-  it("offers a way back out to the landing page", async () => {
-    const { onBack } = renderLogin();
-    await userEvent.click(screen.getByRole("button", { name: /back to overview/i }));
-    expect(onBack).toHaveBeenCalled();
+  it("links out to the public page, which is another host now", () => {
+    // There is nothing to go "back" to on this origin: the console and the
+    // landing page became separate builds on separate hosts, so this is a
+    // link rather than a callback.
+    renderLogin();
+    const out = screen.getByRole("link", { name: /what is tektonix/i });
+    expect(out).toHaveAttribute("href", "https://tektonix.io");
   });
 
-  it("carries no link to the source — that lives on the landing page now", () => {
+  it("carries no link to the source — that lives on the public page", () => {
+    // The card has exactly one link, out to tektonix.io. The source link
+    // belongs on the page that is actually trying to explain the product.
     renderLogin();
-    expect(screen.queryByRole("link")).not.toBeInTheDocument();
+    const links = screen.getAllByRole("link");
+    expect(links).toHaveLength(1);
+    expect(links[0]).toHaveAttribute("href", "https://tektonix.io");
   });
 });

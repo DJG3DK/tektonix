@@ -45,6 +45,13 @@ echo "  collecting tracked files"
 mkdir -p "$STAGE/$NAME"
 git archive --format=tar HEAD | tar -x -C "$STAGE/$NAME"
 
+# 2a. ...except site/, which is tektonix.io's public landing page. It is a
+# separate build with its own deps, it is marketing rather than product, and
+# an installation has no use for it -- somebody self-hosting Tektonix wants
+# the console, not a page selling it to them. Removed here rather than being
+# untracked, because it IS source that belongs in the repo.
+rm -rf "$STAGE/$NAME/site"
+
 # 3. The built dashboard, which git does not track on purpose.
 echo "  adding the built dashboard"
 mkdir -p "$STAGE/$NAME/frontend"
@@ -56,7 +63,8 @@ cat > "$STAGE/$NAME/RELEASE.json" <<EOF
   "version": "$VERSION",
   "commit": "$(git rev-parse HEAD 2>/dev/null || echo unknown)",
   "built_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-  "dashboard_prebuilt": true
+  "dashboard_prebuilt": true,
+  "includes_landing_page": false
 }
 EOF
 

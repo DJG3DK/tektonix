@@ -130,6 +130,37 @@ jobs:
       - run: npm test
       - run: npm run build
 
+  site:
+    name: Landing page — typecheck, lint, test, build
+    # tektonix.io's public page, built separately from the console and not
+    # shipped with an installation (scripts/package_release.sh drops it). Its
+    # build asserts the page ends up with no JavaScript at all, so a change
+    # that reintroduced a runtime would fail here rather than quietly ship one.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: site
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: site/package-lock.json
+      - run: npm ci
+      - run: npx tsc --noEmit -p tsconfig.app.json
+      - run: npm run lint
+      - run: npm test
+      - run: npm run build
+      - name: The page ships no JavaScript
+        run: |
+          if grep -q '<script[^>]*src=' dist/index.html; then
+            echo "dist/index.html references a script; this page must be static" >&2
+            exit 1
+          fi
+          test -s dist/index.html
+
   services:
     name: Node services — syntax and unit tests
     runs-on: ubuntu-latest

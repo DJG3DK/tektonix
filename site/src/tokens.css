@@ -1,0 +1,76 @@
+/* The design tokens this page needs, and only those.
+ *
+ * A copy rather than an import of the console's theme.css, on purpose. The
+ * landing page is brand-fixed: it is always Drafting, because a visitor has
+ * no account and therefore no colour preference, and the brand should not
+ * depend on whoever signed in last. The console's stylesheet now carries five
+ * schemes and a theming mechanism this page must never inherit.
+ *
+ * It is also what lets site/ be lifted out and hosted anywhere -- a CDN, a
+ * static bucket -- without dragging the application's stylesheet along.
+ *
+ * Values are Drafting's, verbatim (frontend/src/theme.css :root). If the brand
+ * changes, both move; tests/test_landing_site.py checks the two agree.
+ */
+
+:root {
+  --bg:             #11151a;
+  --surface:        #1b2028;
+  --surface-raised: #242a34;
+  --surface-hover:  #2d3440;
+  --surface-sunken: #0d1116;
+
+  --border:        #343c48;
+  --border-soft:   #29303a;
+  --border-strong: #4a5563;
+
+  --text:       #edf0f4;
+  --text-dim:   #a3adbb;
+  --text-faint: #8a94a3;
+
+  --accent:       #c9a227;
+  --accent-hover: #e0b63a;
+  --accent-dim:   #8f7219;
+  --accent-glow:  rgba(201, 162, 39, 0.16);
+
+  --s2: 8px;  --s3: 12px; --s4: 16px; --s5: 20px;
+  --s6: 24px; --s7: 32px; --s8: 48px;
+
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius:    10px;
+  --radius-lg: 14px;
+  --radius-pill: 999px;
+
+  --font-ui: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, sans-serif;
+  --font-mono: ui-monospace, "SFMono-Regular", "JetBrains Mono", Menlo, Consolas, monospace;
+
+  --fs-xs: 11px; --fs-sm: 12px; --fs-md: 13px;
+  --fs-base: 14px; --fs-lg: 16px; --fs-xl: 20px;
+
+  --shadow-card: 0 1px 2px rgba(4,6,10,.45), 0 6px 20px rgba(160,130,40,.10);
+  --shadow-pop:  0 8px 28px rgba(4,6,10,.55), 0 2px 40px rgba(201,162,39,.08);
+
+  --t-fast: 110ms cubic-bezier(.4,0,.2,1);
+  --tap: 44px;
+
+  --safe-b: env(safe-area-inset-bottom, 0px);
+  --safe-t: env(safe-area-inset-top, 0px);
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: var(--fs-base);
+  -webkit-font-smoothing: antialiased;
+  /* The ambient glow is painted by .landing itself, not here -- one place
+     only, or the two drift. */
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+}
