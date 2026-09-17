@@ -1,7 +1,7 @@
 """The watchdog restarts for a wedged process and NEVER for a sick dependency.
 
 That distinction is the whole reason this exists, and it is easy to get
-backwards. 3DSteals' own health controller spells out why: restarting fixes a
+backwards. storefront' own health controller spells out why: restarting fixes a
 wedged process and does nothing for a database outage -- so a monitor that
 restarts on readiness turns one incident into a restart loop against a
 database that is already struggling.

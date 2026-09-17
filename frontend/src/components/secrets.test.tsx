@@ -136,11 +136,11 @@ describe("ApiKeysPanel — a secret's real value never reaches the browser", () 
 
 describe("DeployKeyCard", () => {
   const status = (over: Record<string, unknown> = {}) => ({
-    project: "3d-bot",
+    project: "webapp",
     installed: false,
     fingerprint: null,
     public_key: null,
-    remote: "git@github.com:DJG3DK/3d-bot.git",
+    remote: "git@github.com:owner/webapp.git",
     remote_kind: "ssh",
     configured: false,
     detail: null,
@@ -149,16 +149,16 @@ describe("DeployKeyCard", () => {
 
   it("reports when no key is installed", async () => {
     getDeployKey.mockResolvedValue(status());
-    render(<DeployKeyCard project="3d-bot" />);
-    await waitFor(() => expect(getDeployKey).toHaveBeenCalledWith("3d-bot"));
-    expect(document.body.textContent).toMatch(/3d-bot/);
+    render(<DeployKeyCard project="webapp" />);
+    await waitFor(() => expect(getDeployKey).toHaveBeenCalledWith("webapp"));
+    expect(document.body.textContent).toMatch(/webapp/);
   });
 
   it("shows a fingerprint but never a private key once one is installed", async () => {
     getDeployKey.mockResolvedValue(
       status({ installed: true, configured: true, fingerprint: "SHA256:abc123", public_key: "ssh-ed25519 AAAA…" }),
     );
-    render(<DeployKeyCard project="3d-bot" />);
+    render(<DeployKeyCard project="webapp" />);
     expect(await screen.findByText(/SHA256:abc123/)).toBeInTheDocument();
     // The public half is fine to show; there is no endpoint that returns the
     // private half, and nothing here should ever render one.
@@ -168,7 +168,7 @@ describe("DeployKeyCard", () => {
   it("surfaces a remote check result", async () => {
     getDeployKey.mockResolvedValue(status({ installed: true, configured: true, fingerprint: "SHA256:abc" }));
     checkDeployKeyRemote.mockResolvedValue({ ok: false, detail: "permission denied" });
-    render(<DeployKeyCard project="3d-bot" />);
+    render(<DeployKeyCard project="webapp" />);
     await screen.findByText(/SHA256:abc/);
 
     await userEvent.click(screen.getByRole("button", { name: /test connection/i }));
@@ -177,7 +177,7 @@ describe("DeployKeyCard", () => {
 
   it("does not crash when the status call fails", async () => {
     getDeployKey.mockRejectedValue(new Error("nope"));
-    render(<DeployKeyCard project="3d-bot" />);
+    render(<DeployKeyCard project="webapp" />);
     await waitFor(() => expect(getDeployKey).toHaveBeenCalled());
     expect(document.body).toBeTruthy();
   });

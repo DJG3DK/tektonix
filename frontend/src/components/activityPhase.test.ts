@@ -4,7 +4,7 @@ import type { LogEntry } from "../types";
 
 /* The banner used to say one thing at every kind of silence.
  *
- * Reported 2026-09-13 with a screenshot: a task on 3d-bot sat in its check
+ * Reported 2026-09-13 with a screenshot: a task on webapp sat in its check
  * suite, the stream said "running the full check suite (typecheck/lint/tests)
  * — several minutes of quiet is normal here", and immediately under it the
  * yellow banner said "No activity for 3 min ... the agent is either on a long

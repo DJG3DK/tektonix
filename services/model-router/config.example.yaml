@@ -514,7 +514,7 @@ model_list:
 
   - model_name: trade-gate
     params:
-      # Dedicated pin (2026-09-02): 3d-bot's Agent Gate (src/core/agentGate.js)
+      # Dedicated pin (2026-09-02): webapp's Agent Gate (src/core/agentGate.js)
       # — the LLM entry veto/decider on strata & ctaTrend armed entries. Low
       # volume (fires only when an entry arms; the bot also enforces its own
       # maxCallsPerDay cap), but every call gates real money: one structured
@@ -522,7 +522,7 @@ model_list:
       # approach direction and OI/funding. Judgement quality per call matters
       # far more than rate, so it pins the strongest Anthropic tier rather
       # than a cost tier. Anthropic-only, no fallbacks — deliberately: the
-      # gate's shadow win/loss cohorts (3d-bot data/agent/decisions.jsonl)
+      # gate's shadow win/loss cohorts (webapp data/agent/decisions.jsonl)
       # are a running experiment on ONE model's judgement; a silent provider
       # swap mid-sample would contaminate the cohorts.
       model: openrouter/anthropic/claude-opus-5

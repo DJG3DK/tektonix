@@ -102,7 +102,7 @@ SKILLS_MANIFEST_PATH = "/skills/_manifest.json"
 # Tokens ONLY. There used to be an OR'd ("messages", 120) clause, and it is the
 # exact degenerate case described below: `keep` is 30k TOKENS, and 30k tokens
 # of short tool calls is easily more than 120 messages. Observed 2026-09-09 on
-# task 828ca1d9 (3d-bot): every compaction preserved 139 messages, so the
+# task 828ca1d9 (webapp): every compaction preserved 139 messages, so the
 # message clause was true again on the very next call, and summarization fired
 # before EVERY model call for over an hour -- a 3.5k-token summary regenerated
 # each step, plus a failed primary-summarizer attempt each step, while the

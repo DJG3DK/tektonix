@@ -47,7 +47,7 @@ LOSES_WORK = [
     "rm -rf src", "rm src/app.ts", "rm -rf .", "rm -rf /", "rm -rf ~",
     "rm -rf $HOME", "rm -rf /workspace", "rm -rf .git", "rm -rf ../other-project",
     'rm -rf "$BUILD_DIR"', "rm -rf", "git clean -fdx", 'find . -name "*.ts" -delete',
-    "find src -name x -delete", "rm -rf /home/3DSteals",
+    "find src -name x -delete", "rm -rf /home/storefront",
     # cd is tracked, so the last one decides where a relative target lands
     "cd /tmp && cd /workspace && rm -rf src",
 ]

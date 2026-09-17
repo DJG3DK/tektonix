@@ -58,17 +58,17 @@ def fake_connect(monkeypatch):
 
 
 def test_the_key_is_stable_across_processes_and_fits_int4():
-    a = graph.advisory_key("3DSteals")
-    assert a == graph.advisory_key("3DSteals")
-    assert a != graph.advisory_key("3d-bot")
-    for repo in ("3DSteals", "3d-bot", "a" * 200, "", "étoile"):
+    a = graph.advisory_key("storefront")
+    assert a == graph.advisory_key("storefront")
+    assert a != graph.advisory_key("webapp")
+    for repo in ("storefront", "webapp", "a" * 200, "", "étoile"):
         key = graph.advisory_key(repo)
         assert -(2**31) <= key < 2**31, f"{repo}: {key} is not an int4"
     # Pinned, not just self-consistent: the key must survive a release as well
     # as a restart, or an upgrade mid-task would hand the same project to two
     # processes. Not Python's salted hash, which differs per process.
-    assert graph.advisory_key("3DSteals") == 102546335
-    assert graph.advisory_key("3d-bot") == -292854655
+    assert graph.advisory_key("storefront") == 1827256500
+    assert graph.advisory_key("webapp") == 490000328
 
 
 def test_the_lock_is_taken_and_released_around_the_block(fake_connect):

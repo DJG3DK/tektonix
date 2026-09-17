@@ -16,8 +16,8 @@ function entry(over: Partial<AuditEntry> = {}): AuditEntry {
     actor: "admin@example.com",
     action: "settings.auto_approve",
     label: "changed auto-approve of commands",
-    target: "danny@example.com",
-    detail: "on for 3DSteals",
+    target: "operator@example.com",
+    detail: "on for storefront",
     ...over,
   };
 }
@@ -31,9 +31,9 @@ describe("AuditLogCard", () => {
     getAuditLog.mockResolvedValue([entry()]);
     render(<AuditLogCard />);
     expect(await screen.findByText("admin@example.com")).toBeTruthy();
-    expect(screen.getByText("danny@example.com")).toBeTruthy();  // who it was done to
+    expect(screen.getByText("operator@example.com")).toBeTruthy();  // who it was done to
     expect(screen.getByText(/changed auto-approve of commands/)).toBeTruthy();
-    expect(screen.getByText(/on for 3DSteals/)).toBeTruthy();
+    expect(screen.getByText(/on for storefront/)).toBeTruthy();
     expect(screen.getByText("2 min ago")).toBeTruthy();
   });
 

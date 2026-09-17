@@ -285,7 +285,7 @@ and returns a verdict instead of an internal error.
 A health watchdog restarts only what a restart can fix: it polls each
 service's live and ready probes, so a process that is alive but wedged, or
 healthy in front of a dead database, is distinguished from one that died — the
-silent outage the operator hit before. It covers 3DSteals, 3d-bot and its
+silent outage the operator hit before. It covers storefront, webapp and its
 compute service. The pm2 memory cap is declared, with its cost stated.
 
 Performance: tool-call streaming is off (langchain-core re-parsed the whole

@@ -1,6 +1,6 @@
 // The deploy service checks a project's declared preflight URLs before any
 // build step runs, and reports a failure as its own stage (2026-09-09: the
-// 3DSteals prerender failed against a dead API and the gate handed the
+// storefront prerender failed against a dead API and the gate handed the
 // agent a "compile error" to fix).
 const test = require('node:test');
 const assert = require('node:assert/strict');

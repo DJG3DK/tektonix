@@ -34,9 +34,9 @@ function withProjectsFile(contents, fn) {
 }
 
 const BUILTINS = {
-    '3DSteals': { live: '/home/3DSteals' },
-    '3d-bot': { live: '/home/3d-bot' },
-    '3dwebcatchers': { live: '/home/3dwebcatchers' },
+    'storefront': { live: '/home/storefront' },
+    'webapp': { live: '/home/webapp' },
+    'brochure': { live: '/home/brochure' },
 };
 const onDisk = (paths) => (p) => paths.includes(p);
 
@@ -80,19 +80,19 @@ test('the fault names every missing project, not just the first', () => {
 });
 
 test('an onboarded project that is on disk is healthy and counted', () => {
-    withProjectsFile({ projects: { '3d-bot': { live: '/home/3d-bot' } } }, (file) => {
-        const c = healthProjectsCheck(BUILTINS, { file, exists: onDisk(['/home/3d-bot']) });
+    withProjectsFile({ projects: { 'webapp': { live: '/home/webapp' } } }, (file) => {
+        const c = healthProjectsCheck(BUILTINS, { file, exists: onDisk(['/home/webapp']) });
         assert.strictEqual(c.ok, true);
         assert.strictEqual(c.count, 1);
     });
 });
 
 test('built-ins this host never onboarded are named, but do not fail the check', () => {
-    withProjectsFile({ projects: { '3d-bot': { live: '/home/3d-bot' } } }, (file) => {
-        const c = healthProjectsCheck(BUILTINS, { file, exists: onDisk(['/home/3d-bot']) });
+    withProjectsFile({ projects: { 'webapp': { live: '/home/webapp' } } }, (file) => {
+        const c = healthProjectsCheck(BUILTINS, { file, exists: onDisk(['/home/webapp']) });
         assert.strictEqual(c.ok, true);
         assert.match(c.detail, /not onboarded here/);
-        assert.match(c.detail, /3DSteals/);
+        assert.match(c.detail, /storefront/);
     });
 });
 

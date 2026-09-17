@@ -43,7 +43,7 @@ function Preview({ theme }: { theme: ThemeId }) {
             <span className="apv-title">Backtest pair grouping</span>
             <span className="apv-badge apv-badge--run">running</span>
           </div>
-          <div className="apv-meta">3d-bot · 7/12 steps · $1.53</div>
+          <div className="apv-meta">webapp · 7/12 steps · $1.53</div>
           <div className="apv-bar"><i style={{ width: "58%" }} /></div>
         </div>
         <div className="apv-card">
@@ -51,7 +51,7 @@ function Preview({ theme }: { theme: ThemeId }) {
             <span className="apv-title">Health endpoints</span>
             <span className="apv-badge apv-badge--done">done</span>
           </div>
-          <div className="apv-meta">3DSteals · merged</div>
+          <div className="apv-meta">storefront · merged</div>
         </div>
         <div className="apv-actions">
           <span className="apv-btn">Approve</span>

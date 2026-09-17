@@ -10,7 +10,7 @@ import { session, user } from "./test/fixtures";
 const getMe = vi.fn();
 const listTasks = vi.fn(async () => []);
 const listPlanningSessions = vi.fn(async () => []);
-const listRepos = vi.fn(async () => ["3d-bot"]);
+const listRepos = vi.fn(async () => ["webapp"]);
 const logout = vi.fn(async () => {});
 const getGitHubSettings = vi.fn();
 const createProject = vi.fn();

@@ -26,7 +26,7 @@ from agent import new_files
 
 GOAL = """# Build Plan — `multiTrader` strategy (4-engine regime-routed entry system)
 
-Add a new strategy `multiTrader` to 3d-bot that unifies four entry engines.
+Add a new strategy `multiTrader` to webapp that unifies four entry engines.
 
 | File | Role |
 |---|---|

@@ -287,7 +287,7 @@ async def _verify_and_ship_inner(state: AgentState, repo: str, repo_root: str,
     # call or stuck" -- directly beneath this very line saying the quiet is
     # normal. Two contradicting sentences on one screen, and the operator
     # reasonably believed the alarming one (2026-09-13). The estimate is this
-    # PROJECT's own median: 3d-bot's suite is 111 tests and runs ~310s, a small
+    # PROJECT's own median: webapp's suite is 111 tests and runs ~310s, a small
     # repo's takes twenty, and no single threshold is right for both.
     expected = await check_timing.expected_seconds(store, repo)
     try:

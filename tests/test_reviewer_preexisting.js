@@ -1,6 +1,6 @@
 // A check that fails on the branch AND on the base commit is not the diff's
 // fault: it must not force NEEDS_FIXES, and the agent must be told not to
-// chase it (2026-09-09: pnpm audit's 14 high vulns on main looped a 3DSteals
+// chase it (2026-09-09: pnpm audit's 14 high vulns on main looped a storefront
 // task at the gate).
 const test = require('node:test');
 const assert = require('node:assert/strict');

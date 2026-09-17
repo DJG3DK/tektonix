@@ -203,10 +203,10 @@ def test_create_repository_makes_one_commit_on_main(tmp_path):
 
 def test_an_existing_identity_is_not_overridden(tmp_path, monkeypatch):
     cfg = tmp_path / "gitconfig"
-    cfg.write_text("[user]\n\tname = Danny\n\temail = danny@example.com\n")
+    cfg.write_text("[user]\n\tname = Danny\n\temail = operator@example.com\n")
     monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(cfg))
     live = prov.create_repository(str(tmp_path), "svc")
-    assert _git(live, "log", "-1", "--format=%an <%ae>") == "Danny <danny@example.com>"
+    assert _git(live, "log", "-1", "--format=%an <%ae>") == "Danny <operator@example.com>"
 
 
 def test_empty_description_writes_a_bare_heading(tmp_path):

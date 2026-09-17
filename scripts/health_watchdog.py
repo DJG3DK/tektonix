@@ -2,7 +2,7 @@
 
     .venv/bin/python scripts/health_watchdog.py [--dry-run]
 
-Run from cron every minute. The whole point is the distinction 3DSteals'
+Run from cron every minute. The whole point is the distinction storefront'
 own health controller documents:
 
     "There used to be one endpoint that returned 503 when the database probe
@@ -60,35 +60,46 @@ TIMEOUT_S = 12
 
 # repo is passed to notify_operators so a single-repo operator only hears
 # about their own service (agent/notify.py's audit H1 fan-out filter).
-SERVICES = [
-    {
-        "name": "3dsteals-api",
-        "repo": "3DSteals",
-        "live": "https://3dsteals.com/api/v1/health/live",
-        "ready": "https://3dsteals.com/api/v1/health/ready",
-        "pm2": "3dsteals-api",
-    },
-    # 3d-bot gained these on 2026-09-16 (task 230eed5b). Probed on localhost
-    # rather than through nginx on purpose: this watchdog decides whether to
-    # restart the PROCESS, and a vhost or TLS problem is not something a pm2
-    # restart fixes -- routing it through nginx would let an edge failure
-    # trigger a restart that cannot help, which is the same mistake as
-    # restarting on readiness.
-    {
-        "name": "3d-bot",
-        "repo": "3d-bot",
-        "live": "http://127.0.0.1:14001/healthz",
-        "ready": "http://127.0.0.1:14001/readyz",
-        "pm2": "3d-bot",
-    },
-    {
-        "name": "3d-bot-compute",
-        "repo": "3d-bot",
-        "live": "http://127.0.0.1:14002/healthz",
-        "ready": "http://127.0.0.1:14002/readyz",
-        "pm2": "3d-bot-compute",
-    },
-]
+# What to watch is this INSTALL's business, not the repo's: the list names
+# somebody's real services, their URLs and their pm2 process names, and no two
+# deployments share one. It lives in a gitignored file beside this script, the
+# same way the router's config.yaml and the reviewer's builtin projects do.
+#
+# `repo` is passed to notify_operators so a single-repo operator only hears
+# about their own service (agent/notify.py's audit H1 fan-out filter). Probe
+# URLs should point at the PROCESS -- localhost, not through nginx: this
+# watchdog decides whether to restart a process, and a vhost or TLS problem is
+# not something a pm2 restart fixes. Routing probes through the edge would let
+# an edge failure trigger a restart that cannot possibly help.
+SERVICES_FILE = Path(__file__).resolve().parent / "watchdog-services.local.json"
+EXAMPLE_FILE = SERVICES_FILE.with_name("watchdog-services.example.json")
+
+
+def load_services() -> list[dict]:
+    """The services to watch, or an empty list.
+
+    Empty is a valid answer, not an error: a fresh install watches nothing
+    until an operator says what to watch, and a watchdog that crashed on a
+    missing file would take out the cron job that runs it every minute.
+    """
+    if not SERVICES_FILE.exists():
+        return []
+    try:
+        data = json.loads(SERVICES_FILE.read_text())
+    except (OSError, ValueError) as e:
+        print(f"watchdog: {SERVICES_FILE.name} is unreadable ({e}); watching nothing")
+        return []
+    if not isinstance(data, list):
+        print(f"watchdog: {SERVICES_FILE.name} must be a list of services; watching nothing")
+        return []
+    out = []
+    for svc in data:
+        missing = [k for k in ("name", "repo", "live", "pm2") if not svc.get(k)]
+        if missing:
+            print(f"watchdog: skipping a service entry missing {missing}")
+            continue
+        out.append(svc)
+    return out
 
 
 def _probe(url: str) -> tuple[bool, str]:
@@ -213,7 +224,7 @@ async def main(dry: bool) -> int:
     now = time.time()
     state = _load_state()
     pending: list[tuple[str, str]] = []
-    for svc in SERVICES:
+    for svc in load_services():
         try:
             pending += check(svc, state, now, dry)
         except Exception as e:  # noqa: BLE001 -- one service must not stop the rest

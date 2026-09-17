@@ -18,7 +18,7 @@ pasted, which means they carry concrete paths; on another install, substitute:
 |---|---|
 | `/home/3d-agent` | your `AGENT_HOME` — where install.sh put the agent |
 | `/root/.pm2/logs/...` | wherever pm2 writes for the user it runs as (`pm2 logs <app>` avoids the path entirely) |
-| `/home/3DSteals`, `/home/3d-bot` | your own projects' live checkouts, from `projects.json` |
+| `/home/storefront`, `/home/webapp` | your own projects' live checkouts, from `projects.json` |
 | `.venv/bin/python` | the agent's virtualenv |
 
 Most snippets start with `cd /home/3d-agent`; `cd "$AGENT_HOME"` works just as

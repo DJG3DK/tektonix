@@ -294,7 +294,7 @@ function getOpenRouterKey() {
 // not work the agent is shipping, and reviewing it is worse than useless:
 // 2026-09-16, `agent/230eed5b-pre-rebase-backup` sat unmerged beside the live
 // task's branch, so every round found "new work" on whichever of the two the
-// previous round had not reviewed. Forty reviews of 3d-bot in a day, each
+// previous round had not reviewed. Forty reviews of webapp in a day, each
 // one overwriting the project's single review record, and the merge gate
 // refused the real task's READY as "stale" because `branch` had just been
 // clobbered by the backup branch's in-progress review.
@@ -838,7 +838,7 @@ async function runChecks(cfg, worktreePath) {
 }
 
 // A check that fails on the branch AND fails identically on the base commit is
-// not this change's fault. Seen live 2026-09-09 (3DSteals, multi-category
+// not this change's fault. Seen live 2026-09-09 (storefront, multi-category
 // products): `pnpm audit` reports 14 high vulnerabilities in nodemailer/multer
 // on main itself, the diff touched no package.json, Sonnet wrote "no blocking
 // issues, pre-existing audit failure" -- and the harness forced NEEDS_FIXES

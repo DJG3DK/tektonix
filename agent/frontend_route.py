@@ -48,7 +48,7 @@ PLANNING_ROLE = {FRONTEND: "agent-planning-chat-frontend"}
 
 FRONTEND_CATEGORIES = frozenset({"ui-styling"})
 # Backend-core signals: a request that names any of these is not "frontend
-# work" however many component files it also lists. A 3DSteals task on
+# work" however many component files it also lists. A storefront task on
 # 2026-09-09 -- a Prisma schema change so products can live in several
 # categories, with API, mapper, import and shared-type edits -- named 19
 # frontend files against 17 backend ones and routed to the frontend seat on
@@ -75,7 +75,7 @@ FRONTEND_PATH_QUORUM = 3
 # directory -- its own HTTP client -- and "api" is in BACKEND_DIRS above.
 # Without it, apps/storefront/src/api/client.ts reads as a backend file and
 # one such path routes an entire storefront task to the general coder
-# (3DSteals, 2026-09-16). A backend never contains components/ or pages/,
+# (storefront, 2026-09-16). A backend never contains components/ or pages/,
 # so the markers are not symmetric and the frontend one should win.
 FRONTEND_DIRS = frozenset({"frontend", "web", "client", "ui", "components", "pages", "views",
                            "layouts", "styles", "css", "storefront"})
@@ -87,13 +87,13 @@ FRONTEND_KEYWORDS = (
     "sidebar", "font", "color", "colour", "spacing", "mobile", "dark mode", "hover", "tooltip",
     # Lighting and material vocabulary. The list above described WHERE a thing
     # lives and had almost nothing for what it should LOOK like, so "an HDR
-    # lighting effect on the add-to-cart buttons" (3DSteals, 2026-09-15) scored
+    # lighting effect on the add-to-cart buttons" (storefront, 2026-09-15) scored
     # one hit and planned on the general seat -- the purest frontend request
     # the operator has ever typed.
     "hdr", "lighting", "glow", "sheen", "shine", "gloss", "bloom", "gradient",
     "shadow", "opacity", "blur", "transition", "visual",
     # Presentational nouns. Deliberately NOT here: "header" (HTTP headers),
-    # "card" (payment cards), "margin" (margin trading, in 3d-bot), "cart"
+    # "card" (payment cards), "margin" (margin trading, in webapp), "cart"
     # (cart logic is backend) -- each reads as frontend in a storefront and as
     # something else entirely one repo over.
     "icon", "banner", "hero", "navbar", "footer", "carousel", "dropdown",

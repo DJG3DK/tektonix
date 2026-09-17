@@ -28,10 +28,10 @@ class _Req:
 
 
 MANIFEST = {
-    "codebase-map": "Structural map of the 3d-bot codebase.",
-    "strata-architecture": "How 3d-bot's STRATA strategy works -- SR level sources ... Read before touching strata.js, srLevelsModule.js.",
-    "srdivergence-architecture": "How 3d-bot's SR-divergence strategy works -- ... Read before touching srDivergence.js, srLevelsModule.js.",
-    "cta-architecture": "How 3d-bot's CTA trend-following strategy works -- MA ensemble ... Read before touching ctaTrend.js, ctaCore.js.",
+    "codebase-map": "Structural map of the webapp codebase.",
+    "strata-architecture": "How webapp's STRATA strategy works -- SR level sources ... Read before touching strata.js, srLevelsModule.js.",
+    "srdivergence-architecture": "How webapp's SR-divergence strategy works -- ... Read before touching srDivergence.js, srLevelsModule.js.",
+    "cta-architecture": "How webapp's CTA trend-following strategy works -- MA ensemble ... Read before touching ctaTrend.js, ctaCore.js.",
     "bybit-perp-mechanics": "How Bybit USDT perpetuals settle -- funding sign/timing ... Read before touching bybitClient.js.",
 }
 

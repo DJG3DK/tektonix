@@ -83,13 +83,13 @@ function test(name, fn) { tests.push([name, fn]); }
 test('a normal payload becomes a notification with the app icon', async () => {
     const w = loadWorker();
     await fire(w.handlers, 'push', {
-        data: { json: () => ({ title: 'Task ESCALATED', body: '3d-bot: needs you', url: '/', tag: '3d-bot' }) },
+        data: { json: () => ({ title: 'Task ESCALATED', body: 'webapp: needs you', url: '/', tag: 'webapp' }) },
     });
     assert.strictEqual(w.shown.length, 1);
     const n = w.shown[0];
     assert.strictEqual(n.title, 'Task ESCALATED');
-    assert.strictEqual(n.body, '3d-bot: needs you');
-    assert.strictEqual(n.tag, '3d-bot', 'the tag collapses repeats about one project');
+    assert.strictEqual(n.body, 'webapp: needs you');
+    assert.strictEqual(n.tag, 'webapp', 'the tag collapses repeats about one project');
     assert.strictEqual(n.icon, '/icon-192.png', 'without this it shows the browser globe');
     assert.strictEqual(n.data.url, '/', 'notificationclick reads this back');
 });

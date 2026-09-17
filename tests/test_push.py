@@ -60,10 +60,10 @@ def test_configured_is_false_before_a_key_exists_and_true_after(keys_dir):
 
 
 def test_a_payload_is_small_and_carries_only_what_the_worker_reads(keys_dir):
-    data = json.loads(push._payload("Task escalated", "x" * 5000, url="/", tag="3d-bot"))
+    data = json.loads(push._payload("Task escalated", "x" * 5000, url="/", tag="webapp"))
     assert set(data) == {"title", "body", "url", "tag"}
     assert len(data["body"]) <= push._MAX_BODY, "push services reject oversized payloads"
-    assert data["tag"] == "3d-bot"
+    assert data["tag"] == "webapp"
 
 
 class _Pool:
@@ -78,9 +78,9 @@ def fanout(monkeypatch, keys_dir):
         {"endpoint": "https://push/admin", "p256dh": "a", "auth": "b",
          "role": "admin", "allowed_repos": None},
         {"endpoint": "https://push/scoped", "p256dh": "a", "auth": "b",
-         "role": "user", "allowed_repos": ["3d-bot"]},
+         "role": "user", "allowed_repos": ["webapp"]},
         {"endpoint": "https://push/other", "p256dh": "a", "auth": "b",
-         "role": "user", "allowed_repos": ["3DSteals"]},
+         "role": "user", "allowed_repos": ["storefront"]},
     ]
     sent: list[tuple[str, str]] = []
     deleted: list[str] = []
@@ -110,7 +110,7 @@ def fanout(monkeypatch, keys_dir):
 
 @pytest.mark.asyncio
 async def test_a_project_alert_reaches_only_accounts_that_may_see_that_project(fanout):
-    n = await notify._push_operators(_Pool(), "Task DONE\n3d-bot: ship it", repo="3d-bot")
+    n = await notify._push_operators(_Pool(), "Task DONE\nwebapp: ship it", repo="webapp")
     reached = {e for e, _ in fanout.sent}
     assert reached == {"https://push/admin", "https://push/scoped"}
     assert "https://push/other" not in reached, "a user was told about another project"

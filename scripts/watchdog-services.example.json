@@ -1,0 +1,15 @@
+[
+  {
+    "name": "storefront-api",
+    "repo": "storefront",
+    "live": "http://127.0.0.1:3000/health/live",
+    "ready": "http://127.0.0.1:3000/health/ready",
+    "pm2": "storefront-api"
+  },
+  {
+    "name": "worker",
+    "repo": "storefront",
+    "live": "http://127.0.0.1:4000/healthz",
+    "pm2": "worker"
+  }
+]

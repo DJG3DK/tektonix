@@ -23,7 +23,7 @@ while GitHub was two commits stale, with nothing anywhere reporting the drift.
 **How far behind is each project?** Read-only:
 
 ```bash
-for d in /home/3d-bot /home/3DSteals /home/3dwebcatchers; do
+for d in /home/webapp /home/storefront /home/brochure; do
   git -C "$d" fetch -q origin 2>/dev/null
   b=$(git -C "$d" branch --show-current)
   ahead=$(git -C "$d" rev-list --count origin/$b..$b 2>/dev/null)
@@ -56,7 +56,7 @@ the first thing to check, and `git remote get-url` can lie when a credential
 helper rewrites URLs, so read the configured value:
 
 ```bash
-git -C /home/3DSteals config --local --get remote.origin.url
+git -C /home/storefront config --local --get remote.origin.url
 ```
 
 ---

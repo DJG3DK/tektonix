@@ -2576,7 +2576,7 @@ async def _run_planning_turn_bg(session_id: str, repo: str, text: str, attachmen
         # The session's own category is passed in once it has one. It is the
         # strongest signal the router has (a model read the whole request),
         # and it did not reach this call at all: the route was decided on the
-        # first message's keywords and then never revisited, so the 3DSteals
+        # first message's keywords and then never revisited, so the storefront
         # HDR-lighting session on 2026-09-15 settled into `ui-styling` and
         # kept planning on the general seat for every turn after. A session
         # has no category until it first saves a plan (see the categorising

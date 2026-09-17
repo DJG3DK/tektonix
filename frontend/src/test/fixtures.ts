@@ -11,7 +11,7 @@ export function task(over: Partial<TaskMeta> = {}): TaskMeta {
   return {
     task_id: nextId(),
     goal: "do the thing",
-    repo: "3d-bot",
+    repo: "webapp",
     budget_usd: 5,
     status: "done",
     created_at: 1_700_000_000,
@@ -23,7 +23,7 @@ export function task(over: Partial<TaskMeta> = {}): TaskMeta {
 export function session(over: Partial<PlanningSessionMeta> = {}): PlanningSessionMeta {
   return {
     session_id: nextId(),
-    repo: "3d-bot",
+    repo: "webapp",
     created_at: 1_700_000_000,
     updated_at: 1_700_000_100,
     title: "a plan",

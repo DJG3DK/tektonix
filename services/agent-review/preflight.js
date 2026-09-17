@@ -3,7 +3,7 @@
  * Deploy preflight: URLs a project's build steps depend on must answer
  * BEFORE any build step runs.
  *
- * Why: a build step is not always self-contained. 3DSteals' storefront
+ * Why: a build step is not always self-contained. storefront' storefront
  * prerender fetches the catalog from the live API; on 2026-09-09 that API
  * had silently stopped listening days earlier, the prerender failed with a
  * bare "fetch failed", and the gate treated it as a compile error for the

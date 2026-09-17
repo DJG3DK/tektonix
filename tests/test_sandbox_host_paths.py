@@ -33,8 +33,8 @@ def test_no_mapping_is_the_identity(monkeypatch):
 
 def test_a_windows_host_gets_a_windows_path(monkeypatch):
     monkeypatch.setenv("AGENT_HOST_PATH_MAP", r"/projects=C:\dev")
-    assert sandbox.host_path("/projects/3d-bot") == r"C:\dev\3d-bot"
-    assert sandbox.host_path("/projects/3d-bot/.git") == r"C:\dev\3d-bot\.git"
+    assert sandbox.host_path("/projects/webapp") == r"C:\dev\webapp"
+    assert sandbox.host_path("/projects/webapp/.git") == r"C:\dev\webapp\.git"
 
 
 def test_a_linux_host_keeps_forward_slashes(monkeypatch):

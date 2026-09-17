@@ -39,7 +39,7 @@ const okResult = (name: string): CreateProjectResult => ({
 
 function renderPanel(over: Partial<ComponentProps<typeof PlanningView>> = {}) {
   const props = {
-    repos: ["3d-bot"],
+    repos: ["webapp"],
     isAdmin: true,
     githubReady: true,
     onProjectCreated: vi.fn(async () => {}),
@@ -220,11 +220,11 @@ describe("PlanningView — the New project door", () => {
 
 describe("PlanningView — the ordinary start flow next to the door", () => {
   it("never hands the sentinel to createPlanningSession", async () => {
-    createPlanningSession.mockResolvedValue({ session_id: "s2", repo: "3d-bot" });
+    createPlanningSession.mockResolvedValue({ session_id: "s2", repo: "webapp" });
     const { onSessionCreated } = renderPanel();
     await userEvent.click(startButton());
     await waitFor(() => expect(onSessionCreated).toHaveBeenCalled());
-    expect(createPlanningSession).toHaveBeenCalledWith("3d-bot", "auto");
+    expect(createPlanningSession).toHaveBeenCalledWith("webapp", "auto");
     expect(createProject).not.toHaveBeenCalled();
   });
 
@@ -255,7 +255,7 @@ const PROPOSAL = { name: "my-app", description: "a store front", github: true };
 
 const openSession = (over: Partial<PlanningSessionMeta> = {}): PlanningSessionMeta => ({
   session_id: "s1",
-  repo: "3d-bot",
+  repo: "webapp",
   created_at: 1,
   updated_at: 1,
   title: "a new thing",
@@ -356,7 +356,7 @@ describe("PlanningView — the confirm card for a proposed project", () => {
     await waitFor(() => expect(onSessionUpdated).toHaveBeenCalled());
     expect(decideNewProject).toHaveBeenCalledWith("s1", { decision: "dismiss" });
     expect(onProjectCreated).not.toHaveBeenCalled();
-    expect(onSessionUpdated).toHaveBeenCalledWith(expect.objectContaining({ repo: "3d-bot", new_project: null }));
+    expect(onSessionUpdated).toHaveBeenCalledWith(expect.objectContaining({ repo: "webapp", new_project: null }));
   });
 
   it("renders the step list on an ok:false create and keeps the card", async () => {

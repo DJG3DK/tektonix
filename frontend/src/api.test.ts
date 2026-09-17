@@ -116,9 +116,9 @@ describe("pre-auth endpoints", () => {
 
 describe("session", () => {
   it("getMe returns the current user", async () => {
-    const me = user({ email: "danny@example.test" });
+    const me = user({ email: "operator@example.test" });
     stubFetch(async () => response(me));
-    await expect(getMe()).resolves.toMatchObject({ email: "danny@example.test" });
+    await expect(getMe()).resolves.toMatchObject({ email: "operator@example.test" });
   });
 
   it("logout resolves even when the server rejects it", async () => {

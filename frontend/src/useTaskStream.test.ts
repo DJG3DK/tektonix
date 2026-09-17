@@ -57,7 +57,7 @@ class FakeSocket {
 }
 
 const snapshot = (over: Record<string, unknown> = {}) => ({
-  meta: { task_id: "t1", status: "running", repo: "3d-bot", goal: "g", budget_usd: 5, created_at: 0 },
+  meta: { task_id: "t1", status: "running", repo: "webapp", goal: "g", budget_usd: 5, created_at: 0 },
   state: { execution_log: [{ node: "work", summary: "already happened", detail: "", cost_usd: 0, timestamp: new Date().toISOString(), step_id: null }], plan: [] },
   orphaned: false,
   ...over,
@@ -78,21 +78,21 @@ describe("useTaskStream", () => {
   });
 
   it("fetches the REST snapshot so history opened mid-task is not blank", async () => {
-    const { result } = renderHook(() => useTaskStream("t1", "3d-bot"));
-    await waitFor(() => expect(getTask).toHaveBeenCalledWith("t1", "3d-bot"));
+    const { result } = renderHook(() => useTaskStream("t1", "webapp"));
+    await waitFor(() => expect(getTask).toHaveBeenCalledWith("t1", "webapp"));
     await waitFor(() => expect(result.current.log.length).toBeGreaterThan(0));
     expect(result.current.log[0].summary).toBe("already happened");
   });
 
   it("opens a socket for the task", async () => {
-    renderHook(() => useTaskStream("t1", "3d-bot"));
+    renderHook(() => useTaskStream("t1", "webapp"));
     await waitFor(() => expect(FakeSocket.instances.length).toBeGreaterThan(0));
     expect(FakeSocket.instances[0].url).toContain("t1");
   });
 
   it("re-fetches the snapshot on every reconnect, not just the first connect", async () => {
     // Regression for audit H6.
-    renderHook(() => useTaskStream("t1", "3d-bot"));
+    renderHook(() => useTaskStream("t1", "webapp"));
     await waitFor(() => expect(FakeSocket.instances.length).toBeGreaterThan(0));
     await waitFor(() => expect(getTask).toHaveBeenCalledTimes(1));
 
@@ -104,30 +104,30 @@ describe("useTaskStream", () => {
 
   it("retries a failing snapshot rather than giving up silently", async () => {
     getTask.mockRejectedValueOnce(new Error("boom")).mockResolvedValue(snapshot());
-    renderHook(() => useTaskStream("t1", "3d-bot"));
+    renderHook(() => useTaskStream("t1", "webapp"));
     await waitFor(() => expect(getTask.mock.calls.length).toBeGreaterThan(1), { timeout: 5000 });
   });
 
   it("stops when the task changes and starts fresh for the new one", async () => {
-    const { rerender } = renderHook(({ id }) => useTaskStream(id, "3d-bot"), {
+    const { rerender } = renderHook(({ id }) => useTaskStream(id, "webapp"), {
       initialProps: { id: "t1" },
     });
-    await waitFor(() => expect(getTask).toHaveBeenCalledWith("t1", "3d-bot"));
+    await waitFor(() => expect(getTask).toHaveBeenCalledWith("t1", "webapp"));
 
     rerender({ id: "t2" });
-    await waitFor(() => expect(getTask).toHaveBeenCalledWith("t2", "3d-bot"));
+    await waitFor(() => expect(getTask).toHaveBeenCalledWith("t2", "webapp"));
   });
 
   it("surfaces an orphaned task so it can be resumed rather than looking busy forever", async () => {
     // The store says "running" but nothing is driving it — a backend restart
     // mid-run. Without this the task sits there looking active indefinitely.
     getTask.mockResolvedValue(snapshot({ orphaned: true }));
-    const { result } = renderHook(() => useTaskStream("t1", "3d-bot"));
+    const { result } = renderHook(() => useTaskStream("t1", "webapp"));
     await waitFor(() => expect(result.current.orphaned).toBe(true));
   });
 
   it("applies events that arrive over the socket", async () => {
-    const { result } = renderHook(() => useTaskStream("t1", "3d-bot"));
+    const { result } = renderHook(() => useTaskStream("t1", "webapp"));
     await waitFor(() => expect(FakeSocket.instances.length).toBeGreaterThan(0));
     const ws = FakeSocket.instances[0];
     ws.open();
@@ -153,7 +153,7 @@ describe("useTaskStream", () => {
   });
 
   it("ignores a malformed frame instead of tearing the stream down", async () => {
-    const { result } = renderHook(() => useTaskStream("t1", "3d-bot"));
+    const { result } = renderHook(() => useTaskStream("t1", "webapp"));
     await waitFor(() => expect(FakeSocket.instances.length).toBeGreaterThan(0));
     const ws = FakeSocket.instances[0];
     ws.open();

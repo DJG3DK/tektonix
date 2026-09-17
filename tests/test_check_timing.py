@@ -1,7 +1,7 @@
 """How long this project's checks take, so the dashboard can tell quiet from
 wedged.
 
-Reported 2026-09-13 with a screenshot: a task on 3d-bot sat in its check suite
+Reported 2026-09-13 with a screenshot: a task on webapp sat in its check suite
 while the stream said "several minutes of quiet is normal here" and the yellow
 banner directly beneath said "the agent is either on a long model call or
 stuck". Both true-looking, one of them wrong. The suite was healthy — 111

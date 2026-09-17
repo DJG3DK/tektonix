@@ -35,7 +35,7 @@ _DIFF_CAP = 60_000        # chars of diff handed to the model
 _COMMENT_CAP = 40         # review comments shown
 _LIST_CAP = 30            # PRs listed
 # A deploy key per project means an SSH host alias per project in ~/.ssh/config
-# ("git@github-3dsteals:owner/repo.git" -- see agent/deploy_keys.py), so any
+# ("git@github-storefront:owner/repo.git" -- see agent/deploy_keys.py), so any
 # host containing "github" counts, not only github.com itself.
 _REMOTE_RE = re.compile(
     r"(?:git@[\w.-]*github[\w.-]*:|ssh://git@[\w.-]*github[\w.-]*/|"
@@ -44,7 +44,7 @@ _REMOTE_RE = re.compile(
 
 
 def repo_slug_from_remote(url: str) -> str | None:
-    """'git@github.com:DJG3DK/3d-bot.git' or 'https://github.com/DJG3DK/3d-bot' -> 'DJG3DK/3d-bot'."""
+    """'git@github.com:owner/webapp.git' or 'https://github.com/owner/webapp' -> 'owner/webapp'."""
     m = _REMOTE_RE.match((url or "").strip())
     return f"{m.group(1)}/{m.group(2)}" if m else None
 

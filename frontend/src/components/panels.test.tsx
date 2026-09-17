@@ -107,7 +107,7 @@ describe("ApprovalCard — ask_user is a question, not an approval", () => {
 
 describe("NewTaskPanel", () => {
   const props = () => ({
-    repos: ["3d-bot", "3DSteals"],
+    repos: ["webapp", "storefront"],
     onSubmit: vi.fn(),
     submitting: false,
     error: null,
@@ -116,8 +116,8 @@ describe("NewTaskPanel", () => {
 
   it("lists every repo the user may target", () => {
     render(<NewTaskPanel {...props()} />);
-    expect(screen.getByRole("option", { name: "3d-bot" })).toBeInTheDocument();
-    expect(screen.getByRole("option", { name: "3DSteals" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "webapp" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "storefront" })).toBeInTheDocument();
   });
 
   it("submits the goal, repo and budget together", async () => {

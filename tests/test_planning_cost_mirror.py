@@ -36,7 +36,7 @@ class _Store:
 @pytest.mark.asyncio
 async def test_it_writes_the_live_cost_onto_the_session():
     store = _Store({"session_id": "s1", "cost_usd": 0.0, "turn_active": True})
-    await server._mirror_planning_cost(store, "3d-bot", "s1", 4.25)
+    await server._mirror_planning_cost(store, "webapp", "s1", 4.25)
     assert store.value["cost_usd"] == 4.25
 
 
@@ -47,7 +47,7 @@ async def test_it_preserves_everything_else_on_the_row():
         "session_id": "s1", "cost_usd": 0.0, "turn_active": True,
         "plan_markdown": "# a plan worth keeping", "title": "some title",
     })
-    await server._mirror_planning_cost(store, "3d-bot", "s1", 1.0)
+    await server._mirror_planning_cost(store, "webapp", "s1", 1.0)
     assert store.value["plan_markdown"] == "# a plan worth keeping"
     assert store.value["title"] == "some title"
     assert store.value["turn_active"] is True
@@ -56,7 +56,7 @@ async def test_it_preserves_everything_else_on_the_row():
 @pytest.mark.asyncio
 async def test_a_missing_session_is_not_created_by_a_mirror():
     store = _Store(None)
-    await server._mirror_planning_cost(store, "3d-bot", "gone", 1.0)
+    await server._mirror_planning_cost(store, "webapp", "gone", 1.0)
     assert store.writes == []
 
 
@@ -66,7 +66,7 @@ async def test_a_broken_store_never_breaks_the_turn():
         async def aget(self, ns, key):
             raise RuntimeError("database is down")
 
-    await server._mirror_planning_cost(_Broken(), "3d-bot", "s1", 1.0)  # must not raise
+    await server._mirror_planning_cost(_Broken(), "webapp", "s1", 1.0)  # must not raise
 
 
 def test_the_throttle_is_small_enough_to_be_useful():

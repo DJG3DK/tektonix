@@ -97,7 +97,7 @@ def test_roles_are_the_router_aliases():
 
 
 # ---------------------------------------------------------------------------
-# plurals, and the lighting vocabulary -- 3DSteals, 2026-09-15
+# plurals, and the lighting vocabulary -- storefront, 2026-09-15
 # ---------------------------------------------------------------------------
 
 HDR_REQUEST = ("on the storefront, I want the buttons to add products to the cart "
@@ -168,7 +168,7 @@ def test_lighting_words_alone_are_not_enough_without_a_second_hit():
 
 def test_the_ambiguous_words_stayed_out():
     """Each of these reads as frontend in a storefront and as something else
-    one repo over -- margin trading in 3d-bot, HTTP headers, payment cards."""
+    one repo over -- margin trading in webapp, HTTP headers, payment cards."""
     for kw in ("header", "card", "margin", "cart"):
         assert kw not in FRONTEND_KEYWORDS
 
@@ -194,7 +194,7 @@ def test_a_settled_planning_category_reaches_the_route_decision():
 
 # ---------------------------------------------------------------------------
 # a backend WORD must not outrank an unambiguous list of frontend FILES
-# (3DSteals, 2026-09-16)
+# (storefront, 2026-09-16)
 # ---------------------------------------------------------------------------
 
 def test_a_prose_backend_word_does_not_beat_several_frontend_files():
@@ -232,7 +232,7 @@ def test_a_frontend_apps_own_api_client_is_not_a_backend_file():
     """`api` is in BACKEND_DIRS, but a frontend app legitimately contains an
     api/ directory holding its HTTP client. One such path used to mark a whole
     storefront task as backend work and send it to the general coder, where it
-    stalled in a tool loop (3DSteals, 2026-09-16). The markers are not
+    stalled in a tool loop (storefront, 2026-09-16). The markers are not
     symmetric -- a backend never contains components/ or pages/ -- so the
     frontend one wins."""
     from agent.frontend_route import _is_backend_path, _is_frontend_path

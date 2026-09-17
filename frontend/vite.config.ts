@@ -5,7 +5,7 @@ import react from '@vitejs/plugin-react'
 export default defineConfig(() => ({
   plugins: [react()],
   // Root, on Tektonix's own domain. This was '/v2/' for the build while the
-  // dashboard shared agent.3dcryptobots.com with another service at '/' --
+  // dashboard shared agent.example.com with another service at '/' --
   // that subpath existed only to avoid provisioning DNS and a cert for a
   // pilot, and tektonix.io removed the reason for it (2026-09-15).
   // api.ts/useTaskStream.ts build request paths off import.meta.env.BASE_URL,

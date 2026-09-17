@@ -38,7 +38,7 @@ beforeEach(() => {
 describe("UsersPanel", () => {
   it("lists the accounts that exist", async () => {
     listUsers.mockResolvedValue([user({ email: "a@x.test" }), user({ id: 2, email: "b@x.test" })]);
-    render(<UsersPanel repos={["3d-bot"]} />);
+    render(<UsersPanel repos={["webapp"]} />);
     expect(await screen.findByText("a@x.test")).toBeInTheDocument();
     expect(screen.getByText("b@x.test")).toBeInTheDocument();
   });
@@ -56,7 +56,7 @@ describe("UsersPanel", () => {
     // Least privilege runs both ways: an account scoped to no repo at all is
     // not a safe default, it is a broken one.
     createUser.mockResolvedValue(undefined);
-    render(<UsersPanel repos={["3d-bot"]} />);
+    render(<UsersPanel repos={["webapp"]} />);
     await waitFor(() => expect(listUsers).toHaveBeenCalled());
 
     await userEvent.type(document.querySelector('input[type="email"]') as HTMLInputElement, "new@x.test");
@@ -67,13 +67,13 @@ describe("UsersPanel", () => {
 
   it("creates a user scoped to the repos that were ticked", async () => {
     createUser.mockResolvedValue(undefined);
-    render(<UsersPanel repos={["3d-bot"]} />);
+    render(<UsersPanel repos={["webapp"]} />);
     await waitFor(() => expect(listUsers).toHaveBeenCalled());
 
     await fillNewUser();
     await userEvent.click(screen.getByRole("button", { name: /create user/i }));
     await waitFor(() =>
-      expect(createUser).toHaveBeenCalledWith("new@x.test", "Passw0rdPassw0rd", "user", ["3d-bot"]),
+      expect(createUser).toHaveBeenCalledWith("new@x.test", "Passw0rdPassw0rd", "user", ["webapp"]),
     );
   });
 
@@ -82,7 +82,7 @@ describe("UsersPanel", () => {
     // new account is forced to set its own on first login, so re-displaying
     // it would leave a live credential sitting on screen for no benefit.
     createUser.mockResolvedValue(undefined);
-    render(<UsersPanel repos={["3d-bot"]} />);
+    render(<UsersPanel repos={["webapp"]} />);
     await waitFor(() => expect(listUsers).toHaveBeenCalled());
     await fillNewUser("new@x.test", "Passw0rdPassw0rd");
     await userEvent.click(screen.getByRole("button", { name: /create user/i }));
@@ -96,7 +96,7 @@ describe("UsersPanel", () => {
     // Leaving a password in a field after submit is a credential left lying
     // around in the DOM.
     createUser.mockResolvedValue(undefined);
-    render(<UsersPanel repos={["3d-bot"]} />);
+    render(<UsersPanel repos={["webapp"]} />);
     await waitFor(() => expect(listUsers).toHaveBeenCalled());
     await fillNewUser();
     await userEvent.click(screen.getByRole("button", { name: /create user/i }));
@@ -108,7 +108,7 @@ describe("UsersPanel", () => {
 
   it("reports a creation failure rather than a silent no-op", async () => {
     createUser.mockRejectedValue(new Error("email already exists"));
-    render(<UsersPanel repos={["3d-bot"]} />);
+    render(<UsersPanel repos={["webapp"]} />);
     await waitFor(() => expect(listUsers).toHaveBeenCalled());
     await fillNewUser("dupe@x.test");
     await userEvent.click(screen.getByRole("button", { name: /create user/i }));
@@ -117,10 +117,10 @@ describe("UsersPanel", () => {
 
   it("offers per-repo scoping so an account need not see everything", async () => {
     listUsers.mockResolvedValue([]);
-    render(<UsersPanel repos={["3d-bot", "3DSteals"]} />);
+    render(<UsersPanel repos={["webapp", "storefront"]} />);
     await waitFor(() => expect(listUsers).toHaveBeenCalled());
-    expect(screen.getAllByText(/3d-bot/).length).toBeGreaterThan(0);
-    expect(screen.getAllByText(/3DSteals/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/webapp/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/storefront/).length).toBeGreaterThan(0);
   });
 });
 

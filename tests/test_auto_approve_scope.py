@@ -24,7 +24,7 @@ from agent.auth import User
 
 
 def _user(**kw):
-    base = dict(id=1, email="danny@example.com", role="admin", allowed_repos=None,
+    base = dict(id=1, email="operator@example.com", role="admin", allowed_repos=None,
                 totp_enabled=True, must_change_password=False,
                 auto_approve_commands=True, require_merge_review=True,
                 auto_approve_repos=["sandbox"])

@@ -44,11 +44,11 @@ class FakeStore:
 
 def test_a_record_carries_who_what_and_when():
     store = FakeStore()
-    entry = asyncio.run(audit.record(store, actor="danny@example.com", action="project.onboard",
-                                     target="3DSteals", detail="/home/3DSteals"))
-    assert entry["actor"] == "danny@example.com"
+    entry = asyncio.run(audit.record(store, actor="operator@example.com", action="project.onboard",
+                                     target="storefront", detail="/home/storefront"))
+    assert entry["actor"] == "operator@example.com"
     assert entry["action"] == "project.onboard"
-    assert entry["target"] == "3DSteals"
+    assert entry["target"] == "storefront"
     assert entry["ts"] > 0
     assert len(store.rows) == 1
 

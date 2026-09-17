@@ -47,11 +47,11 @@ def _entry(i):
 
 def test_entries_survive_a_flush_and_read_back_in_order():
     store = FakeStore()
-    rec = planning_log.Recorder("3DSteals", "s1", store)
+    rec = planning_log.Recorder("storefront", "s1", store)
     for i in range(3):
         rec.add(_entry(i))
     assert asyncio.run(rec.flush()) == 3
-    entries = asyncio.run(planning_log.load(store, "3DSteals", "s1"))
+    entries = asyncio.run(planning_log.load(store, "storefront", "s1"))
     assert [e["summary"] for e in entries] == ["step 0", "step 1", "step 2"]
 
 

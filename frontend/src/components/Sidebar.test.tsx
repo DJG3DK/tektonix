@@ -161,15 +161,15 @@ describe("Sidebar — repo filter", () => {
     renderSidebar({
       tasks: [
         ...manyTasks(),
-        task({ goal: "bot task", repo: "3d-bot", category: "feature" }),
-        task({ goal: "steals task", repo: "3DSteals", category: "feature" }),
+        task({ goal: "bot task", repo: "webapp", category: "feature" }),
+        task({ goal: "steals task", repo: "storefront", category: "feature" }),
       ],
       planningSessions: [
-        session({ title: "bot plan", repo: "3d-bot" }),
-        session({ title: "steals plan", repo: "3DSteals" }),
+        session({ title: "bot plan", repo: "webapp" }),
+        session({ title: "steals plan", repo: "storefront" }),
       ],
     });
-    await userEvent.click(screen.getByRole("button", { name: "3d-bot" }));
+    await userEvent.click(screen.getByRole("button", { name: "webapp" }));
     await userEvent.type(screen.getByPlaceholderText(/search tasks/i), "task");
     expect(screen.getByText("bot task")).toBeInTheDocument();
     expect(screen.queryByText("steals task")).not.toBeInTheDocument();

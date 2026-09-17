@@ -338,7 +338,7 @@ async def _ci_failures(client: GitHubClient, repo: str, slug: str, branch: str) 
     # event "dynamic" ("npm_and_yarn in /. for sharp - Update #..."). A failed
     # one means Dependabot could not produce a PR, which the alerts source
     # already covers; it is not a check on the operator's code (2026-09-10:
-    # five of six "failing checks" on 3DSteals were these).
+    # five of six "failing checks" on storefront were these).
     runs = [r for r in runs if r.get("event") != "dynamic"]
     if not runs:
         return out

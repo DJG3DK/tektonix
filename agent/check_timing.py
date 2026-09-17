@@ -2,7 +2,7 @@
 
 The dashboard's idle banner needs to tell "quiet because a test suite is
 grinding" apart from "quiet because something is wedged", and the honest
-answer is per project: 3d-bot's curated review suite is 111 tests and runs
+answer is per project: webapp's curated review suite is 111 tests and runs
 307-311s, while a small repo's is twenty seconds. A fixed threshold is wrong
 for one of them whichever number is picked.
 
