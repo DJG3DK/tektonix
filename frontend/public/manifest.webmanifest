@@ -1,0 +1,17 @@
+{
+  "id": "/",
+  "name": "Tektonix",
+  "short_name": "Tektonix",
+  "description": "Plan, watch and ship work on your own repositories from your phone.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#11151a",
+  "theme_color": "#11151a",
+  "categories": ["developer", "productivity"],
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

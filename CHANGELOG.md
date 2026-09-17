@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+### The dashboard installs as a phone app
+
+Chrome on Android now offers *Install app*, and iOS Safari's *Add to Home
+Screen* does the same: a launcher icon, a standalone window with no browser
+chrome, and the status bar in the app's own colour. It is the same React app
+from the same build -- a web app manifest, a service worker and the icons the
+brand generator already knew how to draw (`scripts/brand/build_assets.py`
+gained a maskable variant, because Android crops an adaptive icon to whatever
+mask the launcher uses and a rounded tile handed to that crop loses its own
+corners).
+
+There is deliberately no offline mode. This is a console onto a live agent --
+running tasks, streaming logs, a review gate -- so a cached screen would be a
+screen that lies. The worker exists for two narrower things: Chrome will not
+offer to install an origin that has no fetch handler, and a cold start on a
+bad connection should show the app rather than the browser's offline page.
+It never touches `/api`, which keeps the session cookie, every mutation and
+the task and planning WebSocket upgrades entirely out of its hands; hashed
+bundles under `/assets/` are kept forever because their names change when
+their contents do; and navigations go to the network first, with the cached
+shell only as a fallback. That last one is not a preference: `index.html`
+names the hashed bundles of the deploy it came from, so a stale shell served
+while the network was fine would ask for a bundle that no longer exists and
+white-screen the app after every deploy. Verified by installing a client,
+deploying a new bundle underneath it, and reloading.
+
 ### A project that did not exist yet
 
 Until now a project had to exist before Tektonix could see it: the wizard

@@ -48,6 +48,26 @@
     <link rel="icon" type="image/png" sizes="32x32" href="favicon-32x32.png" />
     <link rel="icon" type="image/png" sizes="16x16" href="favicon-16x16.png" />
     <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png" />
+    <!-- Installable app (public/manifest.webmanifest + public/sw.js).
+         Absolute hrefs here, unlike the icons above: the manifest's own scope
+         is "/", and a manifest fetched from a deep link under a relative href
+         would resolve its start_url against the wrong base.
+
+         theme-color paints Android's status bar behind the app. It is --bg
+         (#11151a) rather than --surface so the bar reads as part of the page
+         instead of a slightly wrong-coloured strip above it.
+
+         iOS ignores the manifest's display mode and uses these three instead.
+         black-translucent puts the page UNDER the status bar, which is only
+         correct because the viewport is already viewport-fit=cover and every
+         top-edge padding in the CSS is env(safe-area-inset-top) -- without
+         that pair the clock would sit on top of the header. -->
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <meta name="theme-color" content="#11151a" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Tektonix" />
+    <meta name="mobile-web-app-capable" content="yes" />
     <!-- Was "Agent". There is a public landing page in front of the login now,
          so the tab title is the first thing a visitor reads, not just a label
          on an operator's pinned tab. Matches og:title. -->

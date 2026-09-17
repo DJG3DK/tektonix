@@ -120,6 +120,30 @@ def apple_touch(path, px=180):
     _save(img, px, px, path)
 
 
+def pwa_icon(path, px, maskable=False):
+    """The installed-app icon, for the web app manifest.
+
+    Two shapes, because Android draws them differently. `any` is the tile as
+    it ships -- rounded, the mark at the same 0.16 inset as the favicons.
+    `maskable` is full-bleed and keeps every drawn pixel inside the safe
+    zone: Android crops an adaptive icon to whatever mask the launcher uses
+    (circle, squircle, teardrop), guaranteeing only the middle 80% survives.
+    A rounded tile handed to that crop loses its own corners and reads as a
+    dark blob, which is what "why is my app icon a grey circle" always is.
+    """
+    ground = SURFACE
+    img, d = _new(px, px, ground if maskable else CLEAR)
+    if not maskable:
+        r = int(px * 0.18) * SS
+        d.rounded_rectangle([0, 0, px * SS - 1, px * SS - 1], radius=r, fill=ground)
+    # 0.16 of the tile normally; 0.26 for maskable, which keeps the mark
+    # inside the 80%-diameter circle every launcher mask is guaranteed to
+    # leave alone.
+    inset = px * (0.26 if maskable else 0.16)
+    plumb(d, inset * SS, inset * SS, (px - 2 * inset) * SS)
+    _save(img, px, px, path)
+
+
 # ── 3. the display card ─────────────────────────────────────────────────────
 def og_card(path, w=1200, h=630):
     """What a link to tektonix.io unfurls as in Slack, iMessage, X."""
@@ -168,4 +192,7 @@ if __name__ == "__main__":
     icon(OUT / "favicon-32x32.png", 32)
     ico(OUT / "favicon.ico")
     apple_touch(OUT / "apple-touch-icon.png")
+    pwa_icon(OUT / "icon-192.png", 192)
+    pwa_icon(OUT / "icon-512.png", 512)
+    pwa_icon(OUT / "icon-maskable-512.png", 512, maskable=True)
     og_card(OUT / "og-preview.png")

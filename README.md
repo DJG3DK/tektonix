@@ -288,6 +288,14 @@ first. The app lands on **Planning**, not the raw task composer.
   pane on a phone, so reaching Analytics took three gestures), safe-area insets keep content clear of
   the notch and gesture bar, and tap targets meet the 44px floor. Verified by rendering at 412x915
   with a headless browser rather than by eye.
+- **Installable** — the dashboard is a Progressive Web App: Chrome on Android offers *Install app*,
+  and iOS Safari's *Add to Home Screen* does the same, both giving a launcher icon and a standalone
+  window with no browser chrome. One codebase, no app store, no separate build. The service worker
+  (`frontend/public/sw.js`) deliberately does **not** provide an offline mode — this is a console
+  onto a live agent, and cached task state would be a screen that lies — so it never touches
+  `/api` at all and serves the app shell network-first, falling back to a cached copy only when the
+  box is genuinely unreachable. `tests/test_pwa.py` pins each of Chrome's installability criteria,
+  because Chrome reports a failed one only in DevTools.
 - **Consolidation status** — nightly memory-consolidation health on the Models tab: healthy, stale,
   failed, or never-run. That last state is the one a log tail can never show you: if cron stops
   firing entirely, an empty log looks exactly like a quiet night.
