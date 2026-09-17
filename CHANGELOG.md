@@ -2,6 +2,42 @@
 
 ## Unreleased
 
+### Taking a project back off the agent
+
+There was a button to add a project and none to remove one, so removing one
+meant editing `projects.json`, deleting a worktree, finding the deploy key,
+clearing the reviewer's state file and purging six store namespaces by hand --
+in that order, because getting it wrong leaves a project half-configured and
+unreachable. **Settings → Projects** now has *Remove from Tektonix*.
+
+What it does not do is the half worth stating first: **the live repository is
+never touched.** Not a file, not a branch the agent pushed to it, not the
+remote. Removing a project means Tektonix forgets it. A control that sits in a
+list of someone's own repositories must not be one misread click away from
+deleting their code, so the confirmation also asks for the project's name
+typed out, and removal is refused outright while a task or a planning turn is
+in flight -- pulling the workspace out from under a running task would leave a
+half-finished branch nobody owns.
+
+The single exception is the opposite of destructive: `core.sshCommand` is
+unset on the live repo, because the agent set it when it minted the deploy
+key. Leaving it would point the operator's own git at a key file that no
+longer exists and break every push they made by hand afterwards.
+
+What the agent *learned* is a separate choice. **Archive** writes its memory,
+generated skills, planning sessions, transcripts and task history to one JSON
+file under `archives/`, then removes the rows; **delete** removes them without
+the file. The archive is not write-only: the onboarding wizard lists any
+archive matching the name of a project being added and offers to restore it,
+so re-adding a project is a continuation rather than a fresh start. Archives
+are listed in the same panel with their item counts and dates, and can be
+deleted there, because an archive nobody can find is a file that accumulates
+rather than a safety net.
+
+An archive that fails to write refuses the whole removal rather than
+continuing -- the operator asked to keep that, and deleting it anyway is the
+one mistake here with no undo.
+
 ### Notifications on the phone, and a console in your own colours
 
 The installed app now gets push notifications: the same alerts Telegram

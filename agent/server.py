@@ -1107,6 +1107,13 @@ async def _github_poll_loop(startup_delay: float = 20.0) -> None:
         _github_poll_wake.clear()
 
 
+class RemoveProjectRequest(BaseModel):
+    # What to do with everything the agent LEARNED about this project. The
+    # project's own repository is never in scope either way -- see
+    # agent/project_removal.py's docstring for why that is the whole design.
+    memory: Literal["archive", "delete"] = "archive"
+
+
 class UpdateThemeRequest(BaseModel):
     theme: str
 
@@ -4162,6 +4169,135 @@ class ProvisionProjectRequest(BaseModel):
     path: str
     choices: dict
     grant_access: bool = True
+    # The filename of an archive to restore into the new project, from the
+    # `archives` list the detect step returned. A name, never a path -- see
+    # project_removal.read_archive for the containment that enforces.
+    restore_archive: str | None = None
+
+
+async def _running_repos() -> set[str]:
+    """Which projects have work in flight right now.
+
+    Removing a project underneath a running task would pull its worktree out
+    from under the agent mid-edit and leave a half-finished branch nobody
+    owns, so removal refuses instead. Resolving each running task's repo from
+    its checkpoint is a handful of reads; there are never many.
+    """
+    repos: set[str] = set()
+    for task_id in list(_running_tasks):
+        repo = await _resolve_task_repo(task_id)
+        if repo:
+            repos.add(repo)
+    for session_id in list(_running_planning_turns):
+        meta = await _find_planning_meta(session_id)
+        if meta and meta.get("repo"):
+            repos.add(meta["repo"])
+    return repos
+
+
+@app.get("/api/projects/archives")
+async def list_project_archives(user: User = Depends(require_full_auth)):
+    """Archived memory from removed projects, newest first."""
+    auth.require_admin(user)
+    from agent import project_removal  # noqa: PLC0415
+    return {"archives": project_removal.list_archives()}
+
+
+@app.delete("/api/projects/archives/{filename}")
+async def delete_project_archive(filename: str, user: User = Depends(require_full_auth)):
+    """Throw away one archive. Separate from removing a project so that
+    forgetting a project and forgetting what it knew are two decisions."""
+    auth.require_admin(user)
+    from agent import project_removal  # noqa: PLC0415
+    try:
+        project_removal.delete_archive(filename)
+    except project_removal.RemovalError as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True}
+
+
+@app.delete("/api/projects/{name}")
+async def remove_project_endpoint(name: str, req: RemoveProjectRequest,
+                                  user: User = Depends(require_full_auth)):
+    """Take a project off the agent.
+
+    What this does NOT do is the important half: the live repository is left
+    exactly as it is -- every file, every branch the agent ever pushed to it,
+    and its remote. Removing a project means Tektonix forgets it, not that
+    anybody's code goes away. The only thing touched inside the live repo is
+    `core.sshCommand`, which is unset because the agent set it when it minted
+    the deploy key, and leaving it would point the operator's own git at a key
+    file that no longer exists.
+
+    Each step reports independently, for the same reason provisioning does: a
+    failure after the worktree is gone must not read as "nothing happened".
+    """
+    auth.require_admin(user)
+    from agent import deploy_keys, project_removal  # noqa: PLC0415
+    from agent.config import _PROJECTS_CONFIG_PATH, reload_projects  # noqa: PLC0415
+
+    entry = PROJECTS.get(name)
+    if entry is None:
+        raise HTTPException(404, f"no project named {name!r}")
+
+    busy = await _running_repos()
+    if name in busy:
+        raise HTTPException(409, (
+            f"{name} has work in flight -- stop the running task or planning turn first, "
+            "or removing it would pull the workspace out from under the agent mid-edit"))
+
+    live, sandbox = entry.get("live", ""), entry.get("sandbox", "")
+    steps: list[dict] = []
+    archived: str | None = None
+
+    # Knowledge first: while the project is still configured, so a failure
+    # here leaves it whole rather than half-removed and unreachable.
+    store = getattr(app.state, "store", None)
+    if store is not None:
+        if req.memory == "archive":
+            try:
+                doc = await project_removal.collect(store, name)
+                path = await asyncio.to_thread(project_removal.write_archive, doc)
+                archived = path.name
+                steps.append({"step": "archive", "ok": True,
+                              "detail": f"{doc['item_count']} item(s) saved to {path.name}"})
+            except Exception as e:  # noqa: BLE001
+                # Refuse rather than continue: the operator asked to keep this,
+                # and deleting it anyway is the one mistake with no undo.
+                logger.exception("remove: archiving %s failed", name)
+                raise HTTPException(500, f"could not archive {name}'s memory, so nothing was removed: {e}")
+        removed = await project_removal.purge(store, name)
+        steps.append({"step": "memory", "ok": True,
+                      "detail": f"{removed} item(s) {'archived and removed' if archived else 'deleted'}"})
+
+    ok, detail = await asyncio.to_thread(project_removal.remove_worktree, live, sandbox)
+    steps.append({"step": "workspace", "ok": ok, "detail": detail})
+
+    try:
+        deploy_keys.remove_key(name, live)
+        steps.append({"step": "deploy-key", "ok": True,
+                      "detail": "key deleted and the repo's core.sshCommand unset"})
+    except Exception as e:  # noqa: BLE001 -- never fatal; the key is ours, not theirs
+        steps.append({"step": "deploy-key", "ok": False, "detail": str(e)[:200]})
+
+    reviewer_state = paths.REPO_ROOT / "services" / "commit-reviewer" / "state.json"
+    if project_removal.clear_reviewer_state(reviewer_state, name):
+        steps.append({"step": "review-state", "ok": True, "detail": "last verdict cleared"})
+
+    try:
+        project_removal.remove_project_entry(_PROJECTS_CONFIG_PATH, name)
+    except project_removal.RemovalError as e:
+        raise HTTPException(500, str(e))
+    reload_projects()
+    steps.append({"step": "config", "ok": True,
+                  "detail": f"{name} removed; the review services drop it on their next poll"})
+
+    await audit.record(_audit_store(), actor=user.email, action="project.remove",
+                       target=name, detail=f"memory {req.memory}",
+                       extra={"archive": archived})
+
+    return {"ok": True, "name": name, "steps": steps, "archive": archived,
+            "live_untouched": live}
 
 
 @app.get("/api/projects")
@@ -4196,7 +4332,14 @@ async def detect_project_endpoint(req: DetectProjectRequest, user: User = Depend
         )
     except provisioning.ProvisioningError as e:
         raise HTTPException(400, str(e))
-    return report.to_dict()
+    from agent import project_removal  # noqa: PLC0415
+    # A project removed earlier leaves its memory behind on purpose. Surfacing
+    # it HERE is what closes the loop: the operator sees "there is archived
+    # memory for a project called this" at the moment they are deciding to add
+    # it, rather than discovering the file months later with no idea what it is.
+    out = report.to_dict()
+    out["archives"] = project_removal.list_archives(report.name) if report.name else []
+    return out
 
 
 @app.post("/api/projects/provision")
@@ -4239,6 +4382,20 @@ async def provision_project_endpoint(req: ProvisionProjectRequest, user: User = 
     # Onboarding hands an agent bash and write access to a directory, which
     # makes "who added this project, and when" a question worth being able to
     # answer later.
+    if req.restore_archive:
+        # After provisioning, never before: restoring memory into a project
+        # whose worktree or config then failed to land would leave rows for a
+        # project that does not exist.
+        from agent import project_removal  # noqa: PLC0415
+        try:
+            doc = project_removal.read_archive(req.restore_archive)
+            written = await project_removal.restore(app.state.store, name, doc)
+            steps.append({"step": "restore", "ok": True,
+                          "detail": f"{written} item(s) restored from {req.restore_archive}"})
+        except Exception as e:  # noqa: BLE001 -- the project is already live; this is additive
+            logger.exception("provision: restoring %s failed", req.restore_archive)
+            steps.append({"step": "restore", "ok": False, "detail": str(e)[:200]})
+
     await audit.record(_audit_store(), actor=user.email, action="project.onboard",
                        target=name, detail=report.live)
 

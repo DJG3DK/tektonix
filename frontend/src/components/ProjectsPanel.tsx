@@ -1,12 +1,16 @@
 import { useEffect, useState } from "react";
 import {
   detectProject,
+  listProjectArchives,
   listProjectsConfig,
+  deleteProjectArchive,
   provisionProject,
   type DetectionReport,
+  type ProjectArchive,
   type ProvisionCandidate,
   type ProvisionStep,
 } from "../api";
+import { RemoveProject } from "./RemoveProject";
 import { DeployKeyCard } from "./DeployKeyCard";
 import { Icon } from "./Icon";
 import { StepList } from "./StepList";
@@ -80,6 +84,11 @@ export function ProjectsPanel({ onChanged }: { onChanged?: () => void | Promise<
   const [apps, setApps] = useState<Record<string, boolean>>({});
   const [risky, setRisky] = useState<Record<string, boolean>>({});
 
+  const [archives, setArchives] = useState<ProjectArchive[]>([]);
+  // Which archive (if any) to restore into the project being added. Set
+  // from the detection report, which lists archives matching its name.
+  const [restoreFrom, setRestoreFrom] = useState<string | null>(null);
+
   async function load() {
     try {
       setExisting((await listProjectsConfig()).projects);
@@ -87,7 +96,15 @@ export function ProjectsPanel({ onChanged }: { onChanged?: () => void | Promise<
       setError(e instanceof Error ? e.message : "could not load projects");
     }
   }
-  useEffect(() => { void load(); }, []);
+  async function loadArchives() {
+    try {
+      setArchives((await listProjectArchives()).archives);
+    } catch {
+      // A missing archive list must not stop the panel rendering the
+      // projects, which is what anyone came here for.
+    }
+  }
+  useEffect(() => { void load(); void loadArchives(); }, []);
 
   async function handleDetect() {
     setStage("detecting");
@@ -130,6 +147,7 @@ export function ProjectsPanel({ onChanged }: { onChanged?: () => void | Promise<
           db_env_file: report.db_env_file,
         },
         grant_access: true,
+        restore_archive: restoreFrom,
       });
       setSteps(res.steps);
       setDoneMsg(res.message || (res.ok ? "Project configured." : "Provisioning failed."));
@@ -182,11 +200,66 @@ export function ProjectsPanel({ onChanged }: { onChanged?: () => void | Promise<
                   <strong>{name}</strong>
                   <code>{cfg.live}</code>
                 </button>
-                {expanded === name && <DeployKeyCard project={name} />}
+                {expanded === name && (
+                  <>
+                    <DeployKeyCard project={name} />
+                    <RemoveProject
+                      name={name}
+                      live={cfg.live}
+                      onRemoved={async () => {
+                        // Both: this panel's own table, and App's repo list,
+                        // which feeds the planner and task composer dropdowns.
+                        // Refreshing only the first leaves a removed project
+                        // selectable everywhere else until a page reload.
+                        setExpanded(null);
+                        await load();
+                        await loadArchives();
+                        await onChanged?.();
+                      }}
+                    />
+                  </>
+                )}
               </li>
             ))}
             {!Object.keys(existing).length && <li className="wiz-empty">No projects configured yet.</li>}
           </ul>
+
+          {archives.length > 0 && (
+            <div className="wiz-archives">
+              <h4>Archived memory</h4>
+              <p className="settings-card-sub">
+                What removed projects knew. Adding a project of the same name again offers to
+                restore the matching archive.
+              </p>
+              <ul className="wiz-archive-list">
+                {archives.map((a) => (
+                  <li key={a.file}>
+                    <div className="wiz-archive-body">
+                      <strong>{a.project}</strong>
+                      <code>{a.file}</code>
+                      <span className="wiz-archive-meta">
+                        {a.item_count} item{a.item_count === 1 ? "" : "s"} · {a.archived_at}
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      className="wiz-btn"
+                      onClick={async () => {
+                        try {
+                          await deleteProjectArchive(a.file);
+                          await loadArchives();
+                        } catch (e) {
+                          setError(e instanceof Error ? e.message : "could not delete the archive");
+                        }
+                      }}
+                    >
+                      Delete
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
 
           {stage === "idle" && (
             <div className="wiz-row">
@@ -214,6 +287,39 @@ export function ProjectsPanel({ onChanged }: { onChanged?: () => void | Promise<
                   {report.package_manager ? ` · ${report.package_manager}` : ""}</span>
                 <span className="wiz-path">worktree → {report.sandbox}</span>
               </div>
+
+              {(report.archives?.length ?? 0) > 0 && (
+                <div className="wiz-restore">
+                  <p className="wiz-restore-head">
+                    A project called <strong>{report.name}</strong> was removed earlier and its
+                    memory was kept.
+                  </p>
+                  <label className="wiz-restore-opt">
+                    <input
+                      type="radio"
+                      name="restore"
+                      checked={restoreFrom === null}
+                      onChange={() => setRestoreFrom(null)}
+                    />
+                    <span>Start fresh — leave the archive alone</span>
+                  </label>
+                  {report.archives?.map((a) => (
+                    <label key={a.file} className="wiz-restore-opt">
+                      <input
+                        type="radio"
+                        name="restore"
+                        checked={restoreFrom === a.file}
+                        onChange={() => setRestoreFrom(a.file)}
+                      />
+                      <span>
+                        Restore {a.item_count} item{a.item_count === 1 ? "" : "s"} from{" "}
+                        <code>{a.file}</code>
+                        <em> ({a.archived_at})</em>
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              )}
 
               {report.blockers.map((b) => <p key={b} className="wiz-blocker">{b}</p>)}
               {report.warnings.map((w) => <p key={w} className="wiz-warn">{w}</p>)}

@@ -163,3 +163,52 @@
 }
 .wiz-existing-row:hover { color: var(--text); }
 .wiz-existing-row svg { flex-shrink: 0; width: 13px; height: 13px; align-self: center; }
+
+/* ── archived memory from removed projects ──────────────────────────────── */
+.wiz-archives {
+  margin-top: var(--s5);
+  padding-top: var(--s4);
+  border-top: 1px solid var(--border-soft);
+}
+.wiz-archives h4 { margin: 0 0 4px; font-size: var(--fs-base); }
+
+.wiz-archive-list { list-style: none; margin: var(--s3) 0 0; padding: 0; display: flex; flex-direction: column; gap: var(--s2); }
+.wiz-archive-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s3);
+  padding: var(--s2) var(--s3);
+  background: var(--surface-raised);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  flex-wrap: wrap;
+}
+.wiz-archive-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.wiz-archive-body code { font-size: var(--fs-xs); color: var(--text-dim); word-break: break-all; }
+.wiz-archive-meta { font-size: var(--fs-xs); color: var(--text-faint); font-family: var(--font-mono); }
+
+/* The offer to bring a removed project's memory back. Shown at the review
+   step, which is the moment the operator is deciding to add it -- not
+   afterwards, when the archive would just be a file they no longer recognise. */
+.wiz-restore {
+  border: 1px solid var(--accent-dim);
+  background: var(--accent-glow);
+  border-radius: var(--radius-sm);
+  padding: var(--s3);
+  margin: var(--s3) 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.wiz-restore-head { margin: 0 0 4px; font-size: var(--fs-sm); color: var(--text); }
+.wiz-restore-opt {
+  display: flex;
+  gap: var(--s2);
+  align-items: baseline;
+  font-size: var(--fs-sm);
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.wiz-restore-opt code { font-size: var(--fs-xs); word-break: break-all; }
+.wiz-restore-opt em { font-style: normal; color: var(--text-faint); }

@@ -60,6 +60,11 @@ services/*/builtin-projects.local.js
 # committed, and the app has no endpoint that returns one.
 keys/
 
+# Archived project memory (agent/project_removal.py). Operator data, like
+# keys/: it is what a removed project knew, kept so re-adding it is a
+# continuation rather than a fresh start.
+archives/
+
 # A symlink named .venv is NOT matched by ".venv/" above (that matches
 # directories only), so a worktree convenience symlink slipped past git add -A
 # and, on merge, replaced the real venv with a self-referential link.

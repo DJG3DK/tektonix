@@ -1,0 +1,96 @@
+/* The removal control. Red only where it commits, never on the row itself:
+   a list of repositories lined with red buttons reads as a hazard rather
+   than as an inventory. */
+
+.rmproj { display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap; padding-top: var(--s2); }
+
+.rmproj-open {
+  background: none;
+  border: 1px solid var(--border-strong);
+  color: var(--text-dim);
+  border-radius: var(--radius-sm);
+  padding: 6px 12px;
+  font: inherit;
+  font-size: var(--fs-sm);
+  min-height: var(--tap);
+  cursor: pointer;
+}
+.rmproj-open:hover { color: var(--red); border-color: var(--red); background: var(--red-bg); }
+
+.rmproj-hint { font-size: var(--fs-sm); color: var(--text-faint); }
+
+.rmproj-confirm {
+  border: 1px solid var(--red);
+  background: var(--red-bg);
+  border-radius: var(--radius);
+  padding: var(--s4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+  margin-top: var(--s2);
+}
+.rmproj-lead { margin: 0; font-size: var(--fs-base); line-height: 1.55; color: var(--text); }
+.rmproj-lead code { font-size: var(--fs-sm); color: var(--text-dim); }
+
+.rmproj-choice {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: var(--s3);
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  background: var(--surface);
+}
+.rmproj-choice legend {
+  font-size: var(--fs-sm);
+  color: var(--text-dim);
+  padding: 0 6px;
+}
+.rmproj-choice label {
+  display: flex;
+  gap: var(--s2);
+  align-items: flex-start;
+  padding: var(--s2);
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  cursor: pointer;
+}
+.rmproj-choice label.is-chosen { border-color: var(--border-strong); background: var(--surface-raised); }
+.rmproj-choice input { margin-top: 3px; flex: 0 0 auto; }
+.rmproj-choice span { display: flex; flex-direction: column; gap: 3px; }
+.rmproj-choice strong { font-size: var(--fs-base); color: var(--text); }
+.rmproj-choice em {
+  font-style: normal;
+  font-size: var(--fs-sm);
+  color: var(--text-faint);
+  line-height: 1.45;
+}
+
+.rmproj-type { display: flex; flex-direction: column; gap: 6px; font-size: var(--fs-sm); color: var(--text-dim); }
+.rmproj-type code { color: var(--text); }
+.rmproj-type .wiz-input { max-width: 320px; }
+
+.rmproj-actions { display: flex; gap: var(--s2); flex-wrap: wrap; }
+.rmproj-go {
+  background: var(--red);
+  color: var(--bg);
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: 8px 16px;
+  font: inherit;
+  font-weight: 650;
+  min-height: var(--tap);
+  cursor: pointer;
+}
+.rmproj-go:disabled { opacity: .45; cursor: not-allowed; }
+
+.rmproj-done {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--s3);
+  margin-top: var(--s2);
+  background: var(--surface-raised);
+}
+.rmproj-done-head { margin: 0 0 var(--s2); font-size: var(--fs-base); line-height: 1.5; }
+.rmproj-note { margin: var(--s2) 0 0; font-size: var(--fs-sm); color: var(--text-faint); line-height: 1.5; }

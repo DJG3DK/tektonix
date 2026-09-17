@@ -296,6 +296,16 @@ first. The app lands on **Planning**, not the raw task composer.
   `/api` at all and serves the app shell network-first, falling back to a cached copy only when the
   box is genuinely unreachable. `tests/test_pwa.py` pins each of Chrome's installability criteria,
   because Chrome reports a failed one only in DevTools.
+- **Removing a project** — **Settings → Projects**, expand a project, *Remove from Tektonix*. The
+  agent forgets it: the worktree it built in, the deploy key it minted, its configuration entry and
+  its memory. **The live repository is never touched** — not a file, not a branch the agent pushed,
+  not the remote. The one thing changed inside it is `core.sshCommand`, unset because the agent set
+  it when it minted the key, and leaving it would point your own git at a key that no longer exists.
+  You choose what happens to what the agent *learned*: **archive** writes its memory, generated
+  skills, planning sessions and task history to a file under `archives/`, and adding a project of
+  the same name again offers to restore it; **delete** removes it outright. Removal is refused
+  while a task or planning turn is in flight, and the confirmation asks you to type the project's
+  name, because the button sits one row away from a project that was working fine.
 - **Push notifications** — the installed app gets the same alerts Telegram carries (a task
   finishing, escalating, or waiting on approval), scoped by the same rule to the projects the
   account can see. `agent/notify.py` fans out to both transports from one place on purpose: two

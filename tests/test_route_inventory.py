@@ -134,6 +134,8 @@ def test_the_route_surface_has_not_silently_changed():
 #   python -c "import tests.test_route_inventory as t; print(t._inventory())"
 EXPECTED: list[tuple[str, str, str | None]] = [   ('DELETE', '/api/auth/users/{user_id}', 'require_full_auth'),
     ('DELETE', '/api/planning/sessions/{session_id}', 'require_full_auth'),
+    ('DELETE', '/api/projects/archives/{filename}', 'require_full_auth'),
+    ('DELETE', '/api/projects/{name}', 'require_full_auth'),
     ('DELETE', '/api/projects/{name}/deploy-key', 'require_full_auth'),
     ('DELETE', '/api/tasks/{task_id}', 'require_full_auth'),
     ('GET', '/api/analytics', 'require_full_auth'),
@@ -155,6 +157,7 @@ EXPECTED: list[tuple[str, str, str | None]] = [   ('DELETE', '/api/auth/users/{u
     ('GET', '/api/planning/sessions', 'require_full_auth'),
     ('GET', '/api/planning/sessions/{session_id}', 'require_full_auth'),
     ('GET', '/api/projects', 'require_full_auth'),
+    ('GET', '/api/projects/archives', 'require_full_auth'),
     ('GET', '/api/projects/{name}/deploy-key', 'require_full_auth'),
     ('GET', '/api/push/key', 'require_full_auth'),
     ('GET', '/api/repos', 'require_full_auth'),

@@ -838,6 +838,9 @@ export interface DetectionReport {
   db_env_file: string | null;
   warnings: string[];
   blockers: string[];
+  /** Memory kept from a project of this name that was removed earlier. The
+   *  wizard offers to restore one; see agent/project_removal.py. */
+  archives?: ProjectArchive[];
 }
 
 export interface ProvisionStep {
@@ -850,6 +853,46 @@ export interface ProvisionResult {
   ok: boolean;
   steps: ProvisionStep[];
   message?: string;
+}
+
+export interface ProjectArchive {
+  file: string;
+  project: string;
+  archived_at: string;
+  item_count: number;
+}
+
+export interface RemoveProjectResult {
+  ok: boolean;
+  name: string;
+  steps: ProvisionStep[];
+  archive: string | null;
+  live_untouched: string;
+}
+
+export async function removeProject(
+  name: string, memory: "archive" | "delete",
+): Promise<RemoveProjectResult> {
+  const res = await apiFetch(`${API_BASE}/projects/${encodeURIComponent(name)}`, {
+    method: "DELETE",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ memory }),
+  }, 120_000);
+  if (!res.ok) throw new Error(await errText(res));
+  return res.json();
+}
+
+export async function listProjectArchives(): Promise<{ archives: ProjectArchive[] }> {
+  const res = await apiFetch(`${API_BASE}/projects/archives`);
+  if (!res.ok) throw new Error(await errText(res));
+  return res.json();
+}
+
+export async function deleteProjectArchive(file: string): Promise<void> {
+  const res = await apiFetch(`${API_BASE}/projects/archives/${encodeURIComponent(file)}`, {
+    method: "DELETE",
+  });
+  if (!res.ok) throw new Error(await errText(res));
 }
 
 export async function listProjectsConfig(): Promise<{
@@ -877,6 +920,8 @@ export async function provisionProject(body: {
   path: string;
   choices: Record<string, unknown>;
   grant_access: boolean;
+  /** An archive FILENAME from the detection report, never a path. */
+  restore_archive?: string | null;
 }): Promise<ProvisionResult> {
   const res = await apiFetch(`${API_BASE}/projects/provision`, {
     method: "POST",
