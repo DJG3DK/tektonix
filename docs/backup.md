@@ -16,6 +16,22 @@ accounts.
 > with a different key comes back with unreadable secrets and every 2FA user
 > locked out. Keep `.env` with the dump, or at minimum keep that one value
 > somewhere you trust and separate.
+>
+> **`keys/` belongs with it.** Two different things live there and both fail
+> silently if they are missing or replaced:
+>
+> * `keys/vapid.json` is the keypair every web-push subscription was issued
+>   against. A restore with a different one does not error anywhere — the rows
+>   in `agent_push_subscriptions` still look fine, every send is simply
+>   rejected, and the first anyone knows is an escalation nobody was told
+>   about. There is no rotation path: if it is genuinely lost, delete the
+>   subscription rows too so each device re-registers instead of sitting on an
+>   endpoint that can never work again.
+> * `keys/<project>.key` are the per-project deploy keys. Without them the
+>   post-merge push fails and the repo's `core.sshCommand` points at nothing.
+>
+> `archives/` is optional but unrecoverable: it is what removed projects knew
+> (`docs/architecture.md` §5). Nothing else holds a copy.
 
 ---
 

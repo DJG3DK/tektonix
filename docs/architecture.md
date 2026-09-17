@@ -56,6 +56,7 @@ which is called out explicitly.
 | `REVIEW_CONTROL_SECRET` | `.env` **and** `services/shared/.env` | the agent sends it, both Node services check it. The two copies must match |
 | GitHub tokens for the inbox | Postgres, encrypted with `AUTH_SECRET_KEY` | the agent. Managed in Settings → GitHub, never in a file |
 | Per-project deploy keys | `keys/<project>.key` (`AGENT_KEYS_DIR`), plus whatever `~/.ssh/config` points at | git, through the host's SSH |
+| Web-push signing key (VAPID) | `keys/vapid.json`, generated once on first use, 0600 | `agent/push.py`, to sign every push. **Never rotate it** — every existing subscription was issued against it and a new one invalidates them all with no error anywhere |
 | Per-project secret files copied into a review worktree | listed in `projects.json`, stored under `services/commit-reviewer/review-secrets/<project>/` | the reviewer, so checks can run |
 
 Check the whole layout at once with `.venv/bin/python scripts/doctor.py`: it
@@ -165,6 +166,10 @@ agent/
   provisioning.py      onboarding: detect, confirm, provision; create_repository for a new one
   github_repos.py      a private GitHub repo, its deploy key, the first push (host-side)
   project_checks.py    checks for a project that shipped without any, after its first merge
+  project_removal.py   taking a project off the agent: archive or purge its
+                       knowledge, drop the worktree -- never the live repo
+  push.py              web push: the VAPID pair, and one send (notify.py fans out)
+  notify.py            one fan-out, two transports: Telegram and web push
   deploy_keys.py       per-project SSH deploy keys
   middleware/          budget_guard, repeat_guard, sanitize_tool_calls,
                        hidden_tools, pinned_brief, model_pin, todo_nag
@@ -182,7 +187,13 @@ services/
   agent-review/        merge + deploy control, review dashboard
   commit-reviewer/     the verdict: checks, the model review, state.json
   shared/              projects.json reader, service secrets reader
-frontend/src/          the dashboard (Vite + React)
+frontend/src/          the dashboard (Vite + React). theme.css holds the five
+                       colour schemes as [data-theme] blocks; public/sw.js is
+                       the service worker (installable app + push) and
+                       public/manifest.webmanifest its manifest
+archives/              what removed projects knew, if the operator chose to keep
+                       it (agent/project_removal.py). Gitignored, and nothing
+                       else holds a copy -- see docs/backup.md
 docs/middleware.md     which rule is attached to which agent, and what it forbids
 docs/playbooks/        how to add a role, an inbox source, a runtime knob
 docs/runbooks/         symptom → check → action, for when something is wrong

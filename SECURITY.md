@@ -37,6 +37,17 @@ capabilities are intended and which would be real vulnerabilities.
   same admin stored. The name is validated as a single directory name, a
   path that already exists or resolves outside the roots is refused, and
   the request is audited.
+- An admin can remove a project from the dashboard. That deletes the agent's
+  workspace, its deploy key and — if they choose delete rather than archive —
+  everything the agent learned about it. It does **not** touch the live
+  repository, and that boundary is what `tests/test_project_removal.py`
+  exists to hold. The action is audited and refused while work is in flight.
+- Web push sends alert text through a push service run by Google, Mozilla or
+  Apple. The payload is end-to-end encrypted to the browser's own key, so the
+  service cannot read it, but it does learn that a message was sent, when, and
+  roughly how big — so push bodies carry the same short summaries the Telegram
+  alerts do and never a diff. The signing key (`keys/vapid.json`) never leaves
+  the box; only its public half goes to the browser.
 - Model output is not trusted-but-verified so much as *gated*: an independent
   review service and (optionally) a human approve every merge.
 

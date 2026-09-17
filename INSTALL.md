@@ -350,6 +350,33 @@ It also checks each project's paths, the sandbox image, the built dashboard
 and which pm2 apps are online. Run it after any change to configuration, and
 after an upgrade.
 
+## 6aa. Phone notifications (nothing to configure)
+
+The dashboard installs as an app — Chrome on Android offers **Install app**,
+iOS Safari's Share menu has **Add to Home Screen** — and the installed app can
+receive push notifications: the same alerts Telegram carries, scoped to the
+projects an account can see.
+
+There is no setup step. The signing keypair (VAPID) is generated on first use
+into `keys/vapid.json` and never needs rotating. Each person turns it on per
+device under **Settings → Notifications**, because notification permission
+belongs to a browser rather than to an account, and there is a **Send a test**
+button for exactly the reason a silent failure here is invisible.
+
+Two things to know:
+
+* **iOS only delivers push to an app installed to the Home Screen** (16.4+).
+  In an ordinary Safari tab the buttons would appear to work and nothing would
+  ever arrive, so the panel detects that case and says so instead.
+* **`keys/vapid.json` must be backed up with the database.** Every subscription
+  was issued against it; restoring onto a box with a different one stops every
+  notification with no error anywhere. See `docs/backup.md`.
+
+Colour schemes live next door under **Settings → Appearance** — five of them,
+saved per account, with a preview before you apply.
+
+---
+
 ## 6a. Email (SMTP)
 
 Email is used for **password-reset codes** and, if you switch it on under Settings → GitHub,
@@ -572,6 +599,12 @@ this needs `proxy_read_timeout 1800s;`.
 
 **A project won't onboard: "outside the configured project roots."** Its path
 isn't under `AGENT_PROJECT_ROOTS`. Widen it deliberately, or move the repo.
+
+**Notifications never arrive.** Check **Settings → Notifications** says *On for
+this device* and press **Send a test**. If it reports the server could not
+deliver, the problem is server-side rather than the phone's permission: look
+for a line starting `push:` in the agent's log (`pm2 logs tektonix`). On iOS,
+confirm you opened the app from the Home Screen icon and not from a Safari tab.
 
 **Checks never run for a project.** Detection found no `typecheck`/`lint`/
 `test` scripts, or the only test script was flagged as network-touching and
