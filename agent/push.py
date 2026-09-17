@@ -144,6 +144,7 @@ def _send_blocking(sub: dict[str, Any], data: str) -> tuple[bool, int | None]:
     exception into a status the caller can act on -- specifically 404/410,
     which is the push service saying the subscription is dead and should be
     deleted rather than retried forever."""
+    from py_vapid import Vapid  # noqa: PLC0415
     from pywebpush import WebPushException, webpush  # noqa: PLC0415
 
     k = keys()
@@ -153,8 +154,22 @@ def _send_blocking(sub: dict[str, Any], data: str) -> tuple[bool, int | None]:
         "keys": {"p256dh": sub["p256dh"], "auth": sub["auth"]},
     }
     try:
+        # A Vapid INSTANCE, not the PEM text. pywebpush accepts three things
+        # for this argument and a PEM string is none of them: it takes a Vapid
+        # object, a path to a key file, or raw base64url DER. Handed a PEM it
+        # falls through to Vapid.from_string, which strips the newlines and
+        # base64-decodes the whole thing INCLUDING the "-----BEGIN PRIVATE
+        # KEY-----" header, and dies on it.
+        #
+        # That was live from 2026-09-17 until it was found by pressing "Send a
+        # test" on a phone: every send raised, was caught below, and reported
+        # as "no device accepted it" -- which reads like an expired
+        # subscription rather than a key we never managed to load. Hence
+        # test_push.py::test_the_stored_key_is_in_a_form_the_signer_accepts,
+        # which signs with the real stored key instead of mocking the send.
+        signer = Vapid.from_pem(k["private_pem"].encode())
         webpush(subscription_info=info, data=data,
-                vapid_private_key=k["private_pem"],
+                vapid_private_key=signer,
                 vapid_claims={"sub": VAPID_SUBJECT},
                 timeout=10)
         return True, 200

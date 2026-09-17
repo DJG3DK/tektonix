@@ -152,9 +152,21 @@ export function PushPanel() {
     setNote(null);
     try {
       const { sent, devices: n } = await testPush();
-      setNote(sent > 0
-        ? `Sent to ${sent} of ${n} device${n === 1 ? "" : "s"}.`
-        : "No device accepted it — the subscriptions may have expired.");
+      if (sent > 0) {
+        setNote(`Sent to ${sent} of ${n} device${n === 1 ? "" : "s"}.`);
+      } else {
+        // An error, in the error colour. This sat in the success slot and
+        // rendered green, so a send that reached nobody looked like a send
+        // that worked -- which is the one thing a Test button must never do.
+        // The wording no longer guesses at "expired" either: the first real
+        // cause was a server-side signing failure, and a message that blames
+        // the subscription sends the operator to re-subscribe a device that
+        // was fine.
+        setError(
+          `The server could not deliver to ${n === 1 ? "the subscribed device" : `any of the ${n} subscribed devices`}. ` +
+          "Nothing is wrong with this device's permission — check the agent's log for a line starting \"push:\".",
+        );
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "the test failed");
     } finally {

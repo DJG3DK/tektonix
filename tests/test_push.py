@@ -173,3 +173,67 @@ async def test_a_push_failure_can_never_cost_a_telegram_alert(monkeypatch):
 
     sent = await notify.notify_operators(_Pool(), "Task DONE\nx", repo=None)
     assert sent == 1, "the Telegram alert was lost when push failed"
+
+
+def test_the_stored_key_is_in_a_form_the_signer_accepts(keys_dir):
+    """The gap that let a broken send ship.
+
+    Every other test here mocks `send_one`, so nothing ever loaded the stored
+    key with the real library -- and it turned out pywebpush does not accept a
+    PEM string at all. It takes a Vapid object, a path, or raw base64url DER;
+    handed a PEM it strips the newlines and base64-decodes the header line
+    too. Live, that raised on every send, was swallowed by the catch-all, and
+    surfaced as "no device accepted it", which reads as an expired
+    subscription rather than a key the server never managed to load.
+
+    So: sign a real claim with the real stored key, the way _send_blocking
+    does.
+    """
+    from py_vapid import Vapid, Vapid01
+
+    push.public_key()
+    pem = push.keys()["private_pem"]
+
+    signer = Vapid.from_pem(pem.encode())
+    assert isinstance(signer, Vapid01), "pywebpush checks isinstance(.., Vapid01)"
+    headers = signer.sign({"sub": push.VAPID_SUBJECT, "aud": "https://example.push"})
+    assert "Authorization" in headers and headers["Authorization"].startswith("vapid")
+
+
+def test_the_public_key_we_serve_belongs_to_the_private_key_we_sign_with(keys_dir):
+    """A mismatched pair is the other silent failure: the browser subscribes
+    against one key, every send is signed with another, and the push service
+    rejects them all with a 403 that says nothing useful."""
+    import base64
+
+    from cryptography.hazmat.primitives import serialization
+
+    served = push.public_key()
+    private = serialization.load_pem_private_key(
+        push.keys()["private_pem"].encode(), password=None)
+    point = private.public_key().public_bytes(
+        encoding=serialization.Encoding.X962,
+        format=serialization.PublicFormat.UncompressedPoint)
+    derived = base64.urlsafe_b64encode(point).rstrip(b"=").decode()
+    assert derived == served
+
+
+def test_a_send_reports_the_status_rather_than_raising(keys_dir, monkeypatch):
+    """_send_blocking is the boundary between a transport that fails all the
+    time and an alert path that must never raise. Exercised with the real key
+    loading and only the HTTP call stubbed."""
+    push.public_key()
+    sent = {}
+
+    def fake_webpush(subscription_info, data, vapid_private_key, vapid_claims, timeout):
+        from py_vapid import Vapid01
+        sent["signer_type_ok"] = isinstance(vapid_private_key, Vapid01)
+        sent["endpoint"] = subscription_info["endpoint"]
+        return None
+
+    import pywebpush
+    monkeypatch.setattr(pywebpush, "webpush", fake_webpush)
+    ok, status = push._send_blocking(
+        {"endpoint": "https://example.push/x", "p256dh": "p", "auth": "a"}, "{}")
+    assert (ok, status) == (True, 200)
+    assert sent["signer_type_ok"], "the PEM was passed through instead of a Vapid object"
