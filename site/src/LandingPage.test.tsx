@@ -56,16 +56,31 @@ describe("LandingPage", () => {
     expect(document.body.textContent).toMatch(/never sold, never shared/i);
   });
 
-  it("links to the source, and only ever to that repo", () => {
+  it("links off-site only ever into that one repo", () => {
+    // The point is that this page never sends anyone somewhere else, not that
+    // every link is the repo root -- the download goes to /releases/latest.
+    // Anchored with the trailing slash so a lookalike host cannot satisfy it.
     render(<LandingPage />);
     const external = screen
       .getAllByRole("link")
       .filter((a) => a.getAttribute("href")?.startsWith("http"))
       .filter((a) => !/^sign in$/i.test(a.textContent ?? ""));
     expect(external.length).toBeGreaterThan(0);
-    external.forEach((a) =>
-      expect(a.getAttribute("href")).toBe("https://github.com/DJG3DK/tektonix"),
-    );
+    external.forEach((a) => {
+      const href = a.getAttribute("href") ?? "";
+      expect(
+        href === "https://github.com/DJG3DK/tektonix" ||
+          href.startsWith("https://github.com/DJG3DK/tektonix/"),
+      ).toBe(true);
+    });
+  });
+
+  it("offers the release, not a version that will go stale here", () => {
+    // A direct asset URL has to name the file, the file names its version, and
+    // this page would then offer an old one from the next release onwards.
+    render(<LandingPage />);
+    const download = screen.getByRole("link", { name: /download the latest release/i });
+    expect(download).toHaveAttribute("href", "https://github.com/DJG3DK/tektonix/releases/latest");
   });
 
   it("opens external links safely", () => {

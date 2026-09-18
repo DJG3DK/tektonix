@@ -26,6 +26,19 @@ function GitHubMark() {
   );
 }
 
+/* An arrow into a tray. Decorative: the button says what it does, and a
+   screen reader should hear that sentence once, not twice. */
+function DownloadMark() {
+  return (
+    <svg viewBox="0 0 16 16" aria-hidden="true" width="15" height="15" fill="none"
+         stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M8 1.5v8.5" />
+      <path d="M4.5 7 8 10.5 11.5 7" />
+      <path d="M2 12.5v1a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1v-1" />
+    </svg>
+  );
+}
+
 /* The five stages a task moves through, as the outer graph actually runs them.
    "Review gate" is marked because it is the one that can send work backwards. */
 const PIPELINE = [
@@ -364,11 +377,27 @@ cd tektonix && ./install.sh`}</code></pre>
             tunnel reaches it without nginx or a certificate. Give the installer a domain and it
             will set up both.
           </p>
-          {/* One action here, and it is the repo. The newsletter has its own
-              section below; putting two calls to action in one block splits
-              the attention of someone who has just finished reading. */}
+          {/* The section is called "Run it yourself", so the primary action is
+              the thing that lets you: one archive, both install paths, every
+              operating system. The source stays beside it, quieter, because
+              reading it first is a reasonable thing to want and a licence like
+              this one invites it.
+
+              /releases/latest rather than a versioned asset URL: the direct
+              download link has to name the file, the file names its version,
+              and this page would then quietly offer an old one from the next
+              release onwards. */}
           <div className="lp-cta">
-            <a className="lp-btn lp-btn-primary" href={REPO} target="_blank" rel="noopener noreferrer">
+            <a
+              className="lp-btn lp-btn-primary"
+              href={`${REPO}/releases/latest`}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              <DownloadMark />
+              Download the latest release
+            </a>
+            <a className="lp-btn lp-btn-quiet" href={REPO} target="_blank" rel="noopener noreferrer">
               <GitHubMark />
               View the source
             </a>
