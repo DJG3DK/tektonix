@@ -335,6 +335,10 @@ export function LandingPage() {
               </p>
               <pre><code>{`cp docker/.env.example .env
 docker compose up -d`}</code></pre>
+              <p>
+                On Windows, <code>./install.ps1</code> does both steps for you &mdash; it checks
+                Docker is running, asks for the two values it needs, and starts the stack.
+              </p>
               <p className="lp-reqs">Docker &middot; an OpenRouter API key</p>
             </article>
             <article className="lp-install">

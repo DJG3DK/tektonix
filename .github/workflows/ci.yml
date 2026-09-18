@@ -196,6 +196,9 @@ jobs:
           node tests/test_projects_config_merge.js
           node tests/test_reviewer_preexisting.js
           node tests/test_reviewer_gate_attribution.js
+          # The Windows installer's pure decisions. pwsh ships on the
+          # GitHub ubuntu runners, so this needs no setup step.
+          pwsh tests/test_install_ps1.ps1
           node tests/test_reviewer_candidates.js
           node tests/test_preflight.js
           node tests/test_service_env.js

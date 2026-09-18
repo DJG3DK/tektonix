@@ -8,6 +8,17 @@ cp docker/.env.example .env      # set OPENROUTER_API_KEY and PROJECTS_DIR
 docker compose up -d
 ```
 
+On Windows, or anywhere you would rather be asked than edit a file, run
+`./install.ps1` instead. It does exactly the two steps above: checks Docker is
+installed AND running, asks for the two values with no sensible default,
+writes the `.env`, and brings the stack up. `-DryRun` prints every action
+without performing one; `-Yes` never prompts and fails naming whatever is
+missing. Re-running is safe, keeps every value already in your `.env`, and is
+also the upgrade path.
+
+(The `cp` above is the reason it exists: Windows has no such command, so the
+documented first step could not be followed as written.)
+
 Then open <http://localhost:8100> and sign in with the admin account the logs
 print on first run (`docker compose logs agent`).
 
