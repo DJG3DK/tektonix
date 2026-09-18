@@ -47,10 +47,13 @@ describe("LandingPage", () => {
     expect(buttons[0].closest("form")).toBeTruthy();
   });
 
-  it("says who the newsletter comes from, and how to leave it", () => {
+  it("says who the newsletter comes from, and what is done with an address", () => {
     render(<LandingPage />);
     expect(screen.getAllByRole("link", { name: /danny@tektonix\.io/ }).length).toBeGreaterThan(0);
-    expect(document.body.textContent).toMatch(/unsubscribe/i);
+    // The signup form no longer promises an unsubscribe. Nothing has been sent
+    // yet, so there is nothing to leave -- the promise belongs in the first
+    // issue, which carries the link the stored token is minted for.
+    expect(document.body.textContent).toMatch(/never sold, never shared/i);
   });
 
   it("links to the source, and only ever to that repo", () => {

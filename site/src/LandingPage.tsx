@@ -376,7 +376,7 @@ cd tektonix && ./install.sh`}</code></pre>
             redirect the server answers with, which is what keeps this page
             static. site/server/newsletter.py is the other end. */}
         <section className="lp-section lp-news" id="newsletter">
-          <h2 className="lp-h2">Told what changed, and what is coming</h2>
+          <h2 className="lp-h2">What changed, and what is coming</h2>
           <p className="lp-sub">
             Every release ships with a changelog that says what moved and, more usefully, why
             it had to. The newsletter is that changelog, plus what is being built next and
@@ -413,8 +413,7 @@ cd tektonix && ./install.sh`}</code></pre>
             </button>
             <p className="lp-news-fine">
               Your name and address, stored to send you the newsletter and nothing else. Never
-              sold, never shared. Unsubscribe from any issue, or by mailing{" "}
-              <a href={`mailto:${OWNER_EMAIL}`}>{OWNER_EMAIL}</a>.
+              sold, never shared.
             </p>
           </form>
         </section>
