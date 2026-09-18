@@ -170,3 +170,34 @@ def test_the_readme_describes_the_lock_that_actually_exists():
     assert "pg_try_advisory_lock" in graph, "the lock is no longer a Postgres advisory lock"
     assert "advisory lock" in readme, "the README does not say how one-task-per-project is enforced"
     assert "enforced by an in-process lock" not in readme
+
+
+def test_every_image_a_doc_shows_actually_exists():
+    """Links were checked; images were not, and that is the gap that bit.
+
+    2026-09-18: splitting the landing page into site/ moved the seven
+    screenshots the README embeds, and nothing noticed. GitHub renders a
+    missing image as a broken icon rather than an error, so the README looked
+    fine in every diff and wrong on the page for a day.
+
+    Relative paths only -- an absolute URL points at something this repo does
+    not own and cannot check without the network.
+    """
+    import re
+
+    root = pathlib.Path(__file__).resolve().parent.parent
+    broken: list[str] = []
+    for md in [root / "README.md", root / "INSTALL.md", root / "CONTRIBUTING.md",
+               root / "SECURITY.md", *(root / "docs").rglob("*.md")]:
+        if not md.is_file():
+            continue
+        text = md.read_text()
+        refs = re.findall(r'<img[^>]+src="([^"]+)"', text)
+        refs += [m for m in re.findall(r"!\[[^\]]*\]\(([^)]+)\)", text)]
+        for ref in refs:
+            if ref.startswith(("http://", "https://", "data:")):
+                continue
+            target = (root if md.parent == root else md.parent) / ref.split("#")[0]
+            if not target.is_file():
+                broken.append(f"{md.relative_to(root)} -> {ref}")
+    assert not broken, "images a doc shows but the repo does not have: " + ", ".join(broken)

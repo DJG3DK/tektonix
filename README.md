@@ -24,8 +24,8 @@ connection closes, so a crashed process releases it with nobody cleaning up.
 
 <table>
 <tr>
-<td width="50%"><img src="frontend/src/assets/shots/models2.webp" alt="Model Configuration — build pipeline roles"></td>
-<td width="50%"><img src="frontend/src/assets/shots/analytics2.webp" alt="Analytics — spend, outcomes, review cost and runs"></td>
+<td width="50%"><img src="site/src/assets/shots/models2.webp" alt="Model Configuration — build pipeline roles"></td>
+<td width="50%"><img src="site/src/assets/shots/analytics2.webp" alt="Analytics — spend, outcomes, review cost and runs"></td>
 </tr>
 <tr>
 <td><b>Every role is a named alias you can repin.</b> Planner, coder, frontend coder,
@@ -36,8 +36,8 @@ cycles per task, outcomes split into done / stopped / escalated, the review gate
 per repo, and per-task runs from this box's router ledger — no tracing service required.</td>
 </tr>
 <tr>
-<td><img src="frontend/src/assets/shots/models3.webp" alt="Commit reviewer with probe results, and the planning chat tiers"></td>
-<td><img src="frontend/src/assets/shots/analytics3.webp" alt="Analytics — cost by category and repo, model usage by role"></td>
+<td><img src="site/src/assets/shots/models3.webp" alt="Commit reviewer with probe results, and the planning chat tiers"></td>
+<td><img src="site/src/assets/shots/analytics3.webp" alt="Analytics — cost by category and repo, model usage by role"></td>
 </tr>
 <tr>
 <td><b>Models are probed, not assumed.</b> The reviewer is marked strict — it forces one
@@ -48,8 +48,8 @@ per-role model usage with call counts, tokens, latency, cost and cache hit rate,
 expensive role is visible instead of inferred.</td>
 </tr>
 <tr>
-<td><img src="frontend/src/assets/shots/models4.webp" alt="Classifier and support roles"></td>
-<td><img src="frontend/src/assets/shots/users2.webp" alt="Users — per-project access"></td>
+<td><img src="site/src/assets/shots/models4.webp" alt="Classifier and support roles"></td>
+<td><img src="site/src/assets/shots/users2.webp" alt="Users — per-project access"></td>
 </tr>
 <tr>
 <td><b>Support roles carry the badge their job requires.</b> The classifier needs structured
@@ -63,7 +63,7 @@ the repos they are allowed, and nothing else; the admin has every one.</td>
 <details>
 <summary>More: starting a planning session</summary>
 
-<img src="frontend/src/assets/shots/dashboard2.webp" alt="Plan a project — repo and model route pickers">
+<img src="site/src/assets/shots/dashboard2.webp" alt="Plan a project — repo and model route pickers">
 
 A planning session starts from a repo and a model route. Auto detects frontend work and
 sends it to the frontend seat; the session remembers what it learns about the project
