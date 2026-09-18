@@ -32,7 +32,9 @@ function bodyText(html: string): string {
   const marker = '<div id="root">';
   const body = html.slice(html.indexOf(marker) + marker.length);
   return body
-    .replace(/<script[\s\S]*?<\/script>/g, ' ')
+    // `gi`, not `g`: <SCRIPT> is as valid as <script>, and a tag this misses
+    // leaves its contents in the text these assertions then measure.
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
     .replace(/<[^>]+>/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();

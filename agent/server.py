@@ -4261,11 +4261,16 @@ async def remove_project_endpoint(name: str, req: RemoveProjectRequest,
                 archived = path.name
                 steps.append({"step": "archive", "ok": True,
                               "detail": f"{doc['item_count']} item(s) saved to {path.name}"})
-            except Exception as e:  # noqa: BLE001
+            except Exception:  # noqa: BLE001
                 # Refuse rather than continue: the operator asked to keep this,
                 # and deleting it anyway is the one mistake with no undo.
                 logger.exception("remove: archiving %s failed", name)
-                raise HTTPException(500, f"could not archive {name}'s memory, so nothing was removed: {e}")
+                # The reason is in the log, not the response: an arbitrary
+                # exception's text carries paths and internals that a caller
+                # has no business seeing (CodeQL py/stack-trace-exposure).
+                raise HTTPException(500, (
+                    f"could not archive {name}'s memory, so nothing was removed "
+                    "-- see the server log"))
         removed = await project_removal.purge(store, name)
         steps.append({"step": "memory", "ok": True,
                       "detail": f"{removed} item(s) {'archived and removed' if archived else 'deleted'}"})
@@ -4278,7 +4283,8 @@ async def remove_project_endpoint(name: str, req: RemoveProjectRequest,
         steps.append({"step": "deploy-key", "ok": True,
                       "detail": "key deleted and the repo's core.sshCommand unset"})
     except Exception as e:  # noqa: BLE001 -- never fatal; the key is ours, not theirs
-        steps.append({"step": "deploy-key", "ok": False, "detail": str(e)[:200]})
+        steps.append({"step": "deploy-key", "ok": False,
+                      "detail": _provisioning_public_error(e)})
 
     reviewer_state = paths.REPO_ROOT / "services" / "commit-reviewer" / "state.json"
     if project_removal.clear_reviewer_state(reviewer_state, name):
@@ -4394,7 +4400,8 @@ async def provision_project_endpoint(req: ProvisionProjectRequest, user: User = 
                           "detail": f"{written} item(s) restored from {req.restore_archive}"})
         except Exception as e:  # noqa: BLE001 -- the project is already live; this is additive
             logger.exception("provision: restoring %s failed", req.restore_archive)
-            steps.append({"step": "restore", "ok": False, "detail": str(e)[:200]})
+            steps.append({"step": "restore", "ok": False,
+                          "detail": _provisioning_public_error(e)})
 
     await audit.record(_audit_store(), actor=user.email, action="project.onboard",
                        target=name, detail=report.live)

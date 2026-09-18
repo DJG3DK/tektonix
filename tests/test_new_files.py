@@ -21,6 +21,7 @@ rather than left for the model to infer from prose it has already read.
 from __future__ import annotations
 
 import pytest
+from urllib.parse import urlparse
 
 from agent import new_files
 
@@ -56,8 +57,17 @@ def test_it_finds_the_paths_the_plan_names(repo):
 
 def test_a_url_is_not_a_repo_path():
     """`https://example.com/docs/guide.js` ends in .js and has slashes."""
-    assert "docs/guide.js" not in new_files.declared_paths(GOAL)
-    assert not any("example.com" in p for p in new_files.declared_paths(GOAL))
+    found = new_files.declared_paths(GOAL)
+    assert "docs/guide.js" not in found
+    # Assert the shape, not a substring. `"example.com" in p` matches a path
+    # that merely CONTAINS the host anywhere -- including one that only looks
+    # like a URL because a directory is named after a domain (CodeQL
+    # py/incomplete-url-substring-sanitization). What actually matters is that
+    # nothing which came out of a URL survived as a repo path.
+    for p in found:
+        assert "://" not in p, f"{p!r} is a URL, not a path in the repo"
+        assert not p.startswith("//"), f"{p!r} is protocol-relative"
+        assert urlparse("//" + p).hostname != "example.com", f"{p!r} kept a host"
 
 
 def test_only_the_missing_ones_are_reported(repo):

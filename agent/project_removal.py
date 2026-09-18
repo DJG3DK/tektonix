@@ -75,9 +75,29 @@ def _safe_name(name: str) -> str:
 # archives
 # ---------------------------------------------------------------------------
 
+def _in_archive_dir(filename: str) -> Path:
+    """A file directly inside ARCHIVE_DIR, or an error.
+
+    paths.contained_file does the work: a single component, a normpath
+    containment check, then a realpath one a symlink cannot slip past. This
+    was spelled out inline with `Path.resolve()` and `.parent ==`, which reads
+    the same to a person and is invisible to static analysis -- six of the
+    repository's path-injection alerts were these two functions.
+    """
+    try:
+        return paths.contained_file(ARCHIVE_DIR, filename)
+    except paths.UnsafePath as e:
+        raise RemovalError(f"invalid archive name {filename!r}: {e}") from e
+
+
 def archive_path(repo: str, when: float | None = None) -> Path:
     stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime(when if when is not None else time.time()))
-    return ARCHIVE_DIR / f"{_safe_name(repo)}-{stamp}.json"
+    # _safe_name has already rejected separators; going through the same door
+    # as the read side keeps one rule rather than two.
+    name = f"{_safe_name(repo)}-{stamp}.json"
+    if "/" in name or "\\" in name:
+        raise RemovalError(f"invalid project name {repo!r}")
+    return ARCHIVE_DIR / name
 
 
 async def collect(store, repo: str) -> dict[str, Any]:
@@ -137,10 +157,8 @@ def read_archive(filename: str) -> dict[str, Any]:
     """Load one archive by FILENAME, never by a caller-supplied path: the name
     has to resolve to a file directly inside ARCHIVE_DIR, so a request cannot
     walk out of it."""
-    if "/" in filename or "\\" in filename or filename in (".", ".."):
-        raise RemovalError(f"invalid archive name {filename!r}")
-    target = (ARCHIVE_DIR / filename).resolve()
-    if target.parent != ARCHIVE_DIR.resolve() or not target.is_file():
+    target = _in_archive_dir(filename)
+    if not target.is_file():
         raise RemovalError(f"no archive named {filename!r}")
     try:
         return json.loads(target.read_text())
@@ -149,10 +167,8 @@ def read_archive(filename: str) -> dict[str, Any]:
 
 
 def delete_archive(filename: str) -> None:
-    if "/" in filename or "\\" in filename or filename in (".", ".."):
-        raise RemovalError(f"invalid archive name {filename!r}")
-    target = (ARCHIVE_DIR / filename).resolve()
-    if target.parent != ARCHIVE_DIR.resolve() or not target.is_file():
+    target = _in_archive_dir(filename)
+    if not target.is_file():
         raise RemovalError(f"no archive named {filename!r}")
     target.unlink()
 

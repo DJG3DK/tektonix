@@ -72,16 +72,37 @@ class KeyStatus:
         return asdict(self)
 
 
+def _in_keys_dir(name: str) -> Path:
+    """A file directly inside KEYS_DIR, or an error.
+
+    paths.contained_file does the containment: a single component, textual
+    normpath check, then a realpath check that a symlink cannot slip past.
+    This used to be spelled out here with `Path.resolve()` and a startswith,
+    which is correct and which static analysis could not see through -- the
+    private-key paths accounted for four of the repository's path-injection
+    alerts.
+    """
+    try:
+        return paths.contained_file(KEYS_DIR, name)
+    except paths.UnsafePath as e:
+        raise DeployKeyError(str(e)) from e
+
+
 def _key_path(project: str) -> Path:
+    # The name rule first: it is narrower than "a single component" (no
+    # leading dot, no spaces) and gives the operator a better message.
     if not _SAFE_NAME.match(project):
         raise DeployKeyError(f"invalid project name: {project!r}")
-    path = (KEYS_DIR / f"{project}.key").resolve()
-    # Belt and braces: the name pattern already excludes separators, but the
-    # file this returns is written with the private key, so confirm rather
-    # than assume it landed inside the keys directory.
-    if not str(path).startswith(str(KEYS_DIR.resolve()) + os.sep):
+    return _in_keys_dir(f"{project}.key")
+
+
+def _pub_path(project: str) -> Path:
+    """The public half. Built through the same door as the private one --
+    remove_key used to assemble this string itself, which is exactly the kind
+    of second spelling that drifts."""
+    if not _SAFE_NAME.match(project):
         raise DeployKeyError(f"invalid project name: {project!r}")
-    return path
+    return _in_keys_dir(f"{project}.key.pub")
 
 
 def _run(args: list[str], cwd: str | None = None, timeout: int = 30) -> tuple[bool, str]:
@@ -239,7 +260,7 @@ def generate_key(project: str, live: str, comment: str | None = None) -> KeyStat
     kf = _key_path(project)
     if kf.exists():
         kf.unlink()
-    (KEYS_DIR / f"{project}.key.pub").unlink(missing_ok=True)
+    _pub_path(project).unlink(missing_ok=True)
     ok, out = _run(["ssh-keygen", "-t", "ed25519", "-N", "", "-q",
                     "-C", comment or f"tektonix-{project}", "-f", str(kf)])
     if not ok:
@@ -261,6 +282,6 @@ def remove_key(project: str, live: str) -> KeyStatus:
     """Delete the key and unset the repo's pointer to it."""
     kf = _key_path(project)
     kf.unlink(missing_ok=True)
-    (KEYS_DIR / f"{project}.key.pub").unlink(missing_ok=True)
+    _pub_path(project).unlink(missing_ok=True)
     _git(live, ["config", "--unset", "core.sshCommand"])
     return status(project, live)
