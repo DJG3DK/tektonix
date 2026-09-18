@@ -175,9 +175,18 @@ def test_run_refuses_a_path_shaped_argument_that_starts_with_a_dash():
     assert ok is False and "starts with" in detail
 
 
-def test_run_still_accepts_every_argument_shape_this_module_really_passes():
+def test_run_still_accepts_every_argument_shape_this_module_really_passes(tmp_path):
     """The guard is worthless if it rejects the real calls, and each of these
-    is a literal from somewhere in this file."""
+    is a literal from somewhere in this file.
+
+    `cwd=tmp_path` is not tidiness. Two of these are real `git config` writes,
+    and without it they ran in whatever repository the suite was started from
+    -- which is this one. That is exactly what happened: the suite wrote a
+    core.sshCommand pointing at a key path invented for this test into the
+    working checkout, and every later push warned about a missing identity
+    file. A test that reaches outside its own directory is a test that edits
+    the machine it is run on.
+    """
     from agent import deploy_keys
 
     for args in (
@@ -188,6 +197,6 @@ def test_run_still_accepts_every_argument_shape_this_module_really_passes():
         ["ssh-keygen", "-t", "ed25519", "-N", "", "-q", "-C", "tektonix-demo",
          "-f", "/home/x/keys/demo.key"],
     ):
-        ok, detail = deploy_keys._run(args, timeout=1)
+        ok, detail = deploy_keys._run(args, cwd=str(tmp_path), timeout=1)
         # It may fail because the file is not there; it must not be refused.
         assert "refusing to run" not in detail, f"{args} was refused: {detail}"
