@@ -1,0 +1,16 @@
+{
+  "name": "Tektonix",
+  "install": "bash .cursor/install.sh",
+  "start": "bash .cursor/start.sh",
+  "terminals": [
+    {
+      "name": "model-router",
+      "command": "cd services/model-router && exec venv/bin/uvicorn router.app:app --host 127.0.0.1 --port 4001"
+    },
+    {
+      "name": "agent",
+      "command": "exec .venv/bin/uvicorn agent.server:app --host 127.0.0.1 --port 8100"
+    }
+  ],
+  "ports": [8100, 4001]
+}
