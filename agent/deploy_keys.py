@@ -119,28 +119,33 @@ def _pub_path(project: str) -> Path:
 _SAFE_ARG = re.compile(r"^[A-Za-z0-9 @%+=:,./_-]*$")
 
 
-def _check_args(args: list[str]) -> str | None:
-    """The reason these arguments are not safe to run, or None."""
-    for i, a in enumerate(args):
-        if not isinstance(a, str):
-            return f"argument {i} is {type(a).__name__}, not a string"
-        if not _SAFE_ARG.match(a):
-            # The value is not echoed: it is the thing under suspicion.
-            return f"argument {i} contains characters that are not allowed here"
-        # Option injection: an argument meant as a path that begins with `-`
-        # is read as a flag. Every path this module passes is absolute, so
-        # requiring that of anything path-shaped costs nothing.
-        if a.startswith("-") and "/" in a:
-            return f"argument {i} looks like a path but starts with '-'"
-    return None
-
-
 def _run(args: list[str], cwd: str | None = None, timeout: int = 30) -> tuple[bool, str]:
-    bad = _check_args(args)
-    if bad is not None:
-        return False, f"refusing to run: {bad}"
+    """Run a command, having rebuilt its argument list from values that each
+    passed the allowlist above.
+
+    The checking is inline, and the list that runs is the one built here, for
+    two reasons. The plain one: whoever reads this can see that nothing
+    reaches subprocess without having been matched first. The other: a guard
+    factored into a helper is invisible to static analysis, so the critical
+    command-injection alert survived being fixed once already.
+    """
+    checked: list[str] = []
+    for i, arg in enumerate(args):
+        if not isinstance(arg, str):
+            return False, f"refusing to run: argument {i} is not a string"
+        if not _SAFE_ARG.fullmatch(arg):
+            # The value itself is not echoed: it is the thing under suspicion.
+            return False, f"refusing to run: argument {i} has characters that are not allowed"
+        if arg.startswith("-") and "/" in arg:
+            # Option injection: an argument meant as a path but starting with
+            # `-` is read as a flag. Every path this module passes is
+            # absolute, so requiring that of path-shaped values costs nothing.
+            return False, f"refusing to run: argument {i} looks like a path but starts with '-'"
+        checked.append(str(arg))
+
     try:
-        res = subprocess.run(args, cwd=cwd, capture_output=True, text=True, timeout=timeout)  # noqa: S603
+        res = subprocess.run(checked, cwd=cwd, capture_output=True,  # noqa: S603
+                             text=True, timeout=timeout)
     except (subprocess.SubprocessError, OSError) as e:
         return False, str(e)
     return res.returncode == 0, (res.stdout + res.stderr).strip()

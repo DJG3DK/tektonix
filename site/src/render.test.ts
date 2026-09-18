@@ -35,7 +35,7 @@ function bodyText(html: string): string {
     // Case-insensitive, and tolerant of whitespace in the closing tag:
     // <SCRIPT> and </script > are both valid, and a tag this misses leaves
     // its contents in the text these assertions then measure.
-    .replace(/<script\b[\s\S]*?<\/script\s*>/gi, ' ')
+    .replace(/<script\b[\s\S]*?<\/script[^>]*>/gi, ' ')
     .replace(/<[^>]+>/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
