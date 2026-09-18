@@ -73,7 +73,7 @@ between sessions, and **Build Now** hands the finished plan straight to a build 
 
 ## Contents
 
-Operating it, rather than reading about it: **[docs/architecture.md](docs/architecture.md)** (the four processes, where each secret lives, the three checkouts, the two-node graph), **[docs/runbooks/](docs/runbooks/)** (symptom → check → action), and **[docs/backup.md](docs/backup.md)** (backup, and proving a restore works).
+Operating it, rather than reading about it: **[docs/architecture.md](docs/architecture.md)** (the four processes, where each secret lives, the three checkouts, the two-node graph), **[docs/runbooks/](docs/runbooks/)** (symptom → check → action), and **[docs/backup.md](docs/backup.md)** (backup, and proving a restore works). Agreed-but-unbuilt work is in **[docs/todo.md](docs/todo.md)**.
 
 - [How a build task runs](#how-a-build-task-runs)
 - [Planning Chat](#planning-chat)
