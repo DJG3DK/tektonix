@@ -141,7 +141,12 @@ NGINX_LAYOUT="archlinux"
 detect_pkg_manager() {
     if command -v apt-get >/dev/null 2>&1; then
         PKG_MGR="apt"
-        PKG_INSTALL="sudo apt-get install -y -qq"
+        # `sudo env VAR=...` rather than `sudo VAR=...`: sudo's own policy can
+        # refuse an environment assignment on its command line, and env sets it
+        # for the child regardless. Without DEBIAN_FRONTEND, apt tries a dialog
+        # frontend, fails for want of a TERM, and prints half a screen of
+        # debconf fallback noise before doing the right thing anyway.
+        PKG_INSTALL="sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq"
         PKG_NGINX="nginx certbot python3-certbot-nginx"
         NGINX_LAYOUT="debian"
     elif command -v pacman >/dev/null 2>&1; then
@@ -204,8 +209,26 @@ offer_to_install() {
         return 1
     fi
 
+    if [ "$DRY_RUN" = "1" ]; then
+        note "would run: $PKG_INSTALL $pkgs"
+        return 0
+    fi
+
+    # dpkg's unpacking chatter runs to hundreds of lines and buries the only
+    # thing worth reading, which is what the re-check says afterwards. Kept,
+    # not discarded: on failure the tail is exactly what diagnoses it.
+    say "  installing:$(printf ' %s' $pkgs) — this can take a minute"
+    local log
+    log="$(mktemp)"
     # shellcheck disable=SC2086  # both are deliberately word-split
-    run $PKG_INSTALL $pkgs || { warn "the package install did not succeed — see the output above"; return 1; }
+    if ! $PKG_INSTALL $pkgs >"$log" 2>&1; then
+        warn "the package install did not succeed:"
+        tail -15 "$log" | while IFS= read -r line; do note "$line"; done
+        rm -f "$log"
+        return 1
+    fi
+    rm -f "$log"
+    ok "installed"
     return 0
 }
 
