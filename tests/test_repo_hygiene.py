@@ -328,3 +328,44 @@ def test_the_docker_build_context_still_contains_what_the_images_need():
     ]
     dropped = [p for p in must_ship if excluded(p)]
     assert not dropped, "the images need these and .dockerignore drops them:\n  " + "\n  ".join(dropped)
+
+
+def test_the_bundle_never_bind_mounts_a_path_a_fresh_install_lacks():
+    """`docker compose up` has to work on a tree nobody has configured yet.
+
+    A bind mount whose source does not exist does not fail politely: Docker
+    creates a DIRECTORY at the missing path, and the container then dies on
+    "are you trying to mount a directory onto a file". This shipped -- the
+    router mounted config.yaml, which is gitignored and therefore absent from
+    every fresh clone and every release tarball, so the bundle could not start
+    for anyone who had not already been running it.
+    """
+    compose = yaml.safe_load((REPO / "docker-compose.yml").read_text())
+    tracked = set(
+        subprocess.run(["git", "ls-files"], cwd=REPO, capture_output=True, text=True).stdout.split()
+    )
+    offenders = []
+    for name, svc in compose.get("services", {}).items():
+        for vol in svc.get("volumes", []) or []:
+            if not isinstance(vol, str):
+                continue
+            src = vol.split(":", 1)[0]
+            # Only relative paths inside the repo are this test's business.
+            # ${VAR} sources are the operator's to point somewhere real, and a
+            # ${VAR:-default} is judged on its default.
+            if src.startswith("${"):
+                if ":-" not in src:
+                    continue
+                src = src.split(":-", 1)[1].rstrip("}")
+            if not src.startswith("./"):
+                continue
+            rel = src[2:]
+            if rel in tracked:
+                continue
+            if (REPO / rel).is_dir():
+                continue
+            offenders.append(f"{name}: {vol}")
+    assert not offenders, (
+        "these mount a source that a fresh checkout does not have, so the "
+        "container dies on a type mismatch:\n  " + "\n  ".join(offenders)
+    )

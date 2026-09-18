@@ -34,9 +34,15 @@ services:
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:?set OPENROUTER_API_KEY in .env}
       MODEL_ROUTER_KEY: ${MODEL_ROUTER_KEY:-sk-local-dev}
     volumes:
-      # The operator's own pins, when they have a config.yaml. Without one the
-      # image's example is used, which is a working default rather than a stub.
-      - ./services/model-router/config.yaml:/app/config.yaml:ro
+      # The operator's own pins when they have them, the committed example when
+      # they do not. This was an unconditional mount of config.yaml, which is
+      # gitignored and therefore absent from every fresh clone and every
+      # release tarball -- Docker then creates a DIRECTORY at the missing
+      # source and the router dies on "are you trying to mount a directory
+      # onto a file". `docker compose up` in a fresh tree could not start.
+      # Pointing the default at a file that is always there fixes it; set
+      # ROUTER_CONFIG in .env to use your own.
+      - ${ROUTER_CONFIG:-./services/model-router/config.example.yaml}:/app/config.yaml:ro
       - routerlogs:/app/logs
     restart: unless-stopped
 

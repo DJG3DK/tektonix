@@ -275,8 +275,16 @@ function Explain-ComposeFailure {
         Write-Note 'engine", or enable virtualization in your BIOS if it is switched off.'
         return
     }
-    if ($Output -match 'no space left|disk') {
+    if ($Output -match 'no space left on device|ENOSPC') {
         Write-Warn 'The machine appears to be out of disk space. The images need about 3 GB.'
+        return
+    }
+    if ($Output -match 'mount.*(directory onto a file|not a directory)') {
+        Write-Warn 'Docker could not mount a file that is not there.'
+        Write-Note 'A bind mount whose source is missing makes Docker create a directory in'
+        Write-Note 'its place, and the container then fails on the type mismatch. Check any'
+        Write-Note 'path you set in .env -- ROUTER_CONFIG and PROJECTS_DIR are the two that'
+        Write-Note 'point at something outside this folder.'
         return
     }
     Write-Note 'The output above is from Docker itself and says what it could not do.'

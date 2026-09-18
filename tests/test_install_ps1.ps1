@@ -149,6 +149,22 @@ It 'says how much room is needed when the disk is full' {
     Expect-True ($out -match '3 GB') 'the size it needs'
 }
 
+It 'does not call every message containing "disk" a full disk' {
+    # It did. A bind mount of a missing file was reported as "out of disk
+    # space", which is the failure mode this whole function is supposed to
+    # prevent: confident, specific and wrong sends somebody off fixing a
+    # problem they do not have.
+    $out = Explain-Of 'error mounting "/host/c/x/config.yaml" to rootfs at "/app/config.yaml": not a directory'
+    Expect-True (-not ($out -match '3 GB')) 'no disk-space claim'
+    Expect-True ($out -match 'not there|missing') 'the real cause'
+}
+
+It 'names the two paths worth checking when a mount source is missing' {
+    $out = Explain-Of 'Are you trying to mount a directory onto a file (or vice-versa)?'
+    Expect-True ($out -match 'ROUTER_CONFIG') 'the router config path'
+    Expect-True ($out -match 'PROJECTS_DIR') 'the projects path'
+}
+
 It 'falls back to pointing at Docker output rather than inventing a cause' {
     # Guessing wrong here is worse than saying nothing: it sends somebody off
     # fixing a problem they do not have.
