@@ -9,11 +9,8 @@ a cutover needs no reader to change.
 from __future__ import annotations
 
 import json
-import sys
 
 from router import ledger
-
-sys.path.insert(0, "/home/3d-agent")
 
 
 def _row(tmp_path, **over):

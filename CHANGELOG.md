@@ -22,6 +22,12 @@ read it. They do now, and the pre-rename path remains a last resort.
 A handful of docs and one fallback URL still sent people to the LiteLLM
 port `:4000`. The router has been on `:4001` since the cutover.
 
+CONTRIBUTING claimed to list the exact CI jobs and then omitted the landing
+page, the model-router suite, and `ruff check services/model-router`. The
+list is five jobs now, and the hygiene test pins the commands that used to
+drift. The shipped example `projects.json` and watchdog list no longer name
+the maintainer's other services.
+
 ### The review dashboard could not press its own buttons
 
 `POST /api/review/check/:name` required the control secret, then proxied to
@@ -360,8 +366,8 @@ linted and tested in CI.
 the WebAuthn gate, its vhosts and its cert. Five consumers were on `:4000`,
 and only two were findable by grepping `.env` files. Every one now resolves
 through the router on `:4001` **with its own key**; anything of yours still
-pointing at `:4000` will stop. The cutover and rollback are in
-`docs/runbooks/model-router-cutover.md`.
+pointing at `:4000` will stop. What to do when the router refuses a call is
+in `docs/runbooks/router-refusals.md`.
 
 The dead tier system (SIMPLE / MEDIUM / COMPLEX / REASONING) is gone from the
 router and from the Models page, which now says what it actually controls.

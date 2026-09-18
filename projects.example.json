@@ -1,8 +1,8 @@
 {
   "projects": {
-    "storefront": {
-      "sandbox": "/srv/sandboxes/storefront",
-      "live": "/srv/live/storefront"
+    "web-app": {
+      "sandbox": "/srv/sandboxes/web-app",
+      "live": "/srv/live/web-app"
     },
     "large-project": {
       "sandbox": "/srv/sandboxes/large-project",
@@ -22,9 +22,9 @@
         "build": [{ "dir": ".", "cmd": "npm", "args": ["install", "--no-audit", "--no-fund"] }]
       }
     },
-    "scraper-service": {
-      "sandbox": "/srv/sandboxes/scraper-service",
-      "live": "/srv/live/scraper-service"
+    "worker": {
+      "sandbox": "/srv/sandboxes/worker",
+      "live": "/srv/live/worker"
     }
   },
   "test_env": {

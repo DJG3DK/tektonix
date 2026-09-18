@@ -32,10 +32,13 @@ elsewhere.
 
 Verified on clean containers of **Debian 13** (Python 3.13, Node 24) and
 **Arch** (Python 3.14, Node 26): `install.sh` completes and the full test
-suite passes on both — 1,408 Python tests and 240 frontend tests, against a
-real Postgres. `install.sh` detects `apt`, `pacman` or `dnf`, and
-writes its nginx config to `sites-available` or `conf.d` depending on the
-distro's layout.
+suite passes on both, against a real Postgres. `install.sh` detects `apt`,
+`pacman` or `dnf`, and writes its nginx config to `sites-available` or
+`conf.d` depending on the distro's layout.
+
+Windows, macOS, or a one-command Docker install is a different path:
+[docker/README.md](docker/README.md) and `install.ps1`. That bundle does
+not include the review services yet.
 
 ---
 
