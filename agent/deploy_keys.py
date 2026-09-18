@@ -118,6 +118,10 @@ def _pub_path(project: str) -> Path:
 # _key_path is not (CodeQL py/command-line-injection).
 _SAFE_ARG = re.compile(r"^[A-Za-z0-9 @%+=:,./_-]*$")
 
+# Every program this module is allowed to start. Not a general-purpose runner:
+# it configures git and mints ssh keys, and that is the whole list.
+_PROGRAMS = frozenset({"git", "ssh-keygen"})
+
 
 def _run(args: list[str], cwd: str | None = None, timeout: int = 30) -> tuple[bool, str]:
     """Run a command, having rebuilt its argument list from values that each
@@ -129,8 +133,18 @@ def _run(args: list[str], cwd: str | None = None, timeout: int = 30) -> tuple[bo
     factored into a helper is invisible to static analysis, so the critical
     command-injection alert survived being fixed once already.
     """
-    checked: list[str] = []
-    for i, arg in enumerate(args):
+    if not args:
+        return False, "refusing to run: no command"
+    # The program is one of two literals, always. This module shells out to
+    # exactly git and ssh-keygen, so the executable is never derived from
+    # anything -- which is both the strongest statement available here and the
+    # one a checker reads most easily.
+    program = args[0]
+    if program not in _PROGRAMS:
+        return False, f"refusing to run: {program!r} is not a command this module runs"
+
+    checked: list[str] = [program]
+    for i, arg in enumerate(args[1:], start=1):
         if not isinstance(arg, str):
             return False, f"refusing to run: argument {i} is not a string"
         if not _SAFE_ARG.fullmatch(arg):
@@ -141,7 +155,9 @@ def _run(args: list[str], cwd: str | None = None, timeout: int = 30) -> tuple[bo
             # `-` is read as a flag. Every path this module passes is
             # absolute, so requiring that of path-shaped values costs nothing.
             return False, f"refusing to run: argument {i} looks like a path but starts with '-'"
-        checked.append(str(arg))
+        # `arg` itself, not a copy of it: str(arg) would be a NEW value
+        # derived after the check rather than the value the check passed.
+        checked.append(arg)
 
     try:
         res = subprocess.run(checked, cwd=cwd, capture_output=True,  # noqa: S603

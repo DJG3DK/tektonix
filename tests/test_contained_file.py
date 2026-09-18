@@ -127,3 +127,67 @@ def test_archives_refuse_a_traversing_filename(tmp_path, monkeypatch):
             pr.read_archive(bad)
         with pytest.raises(pr.RemovalError):
             pr.delete_archive(bad)
+
+
+# --- what _run will and will not start -------------------------------------
+
+def test_run_starts_only_the_two_programs_this_module_uses():
+    """It configures git and mints ssh keys. A third program reaching it means
+    something is wrong upstream, and the list is short enough to be a literal."""
+    from agent import deploy_keys
+
+    ok, detail = deploy_keys._run(["curl", "https://example.com"])
+    assert ok is False
+    assert "not a command this module runs" in detail
+
+    ok, detail = deploy_keys._run([])
+    assert ok is False and "no command" in detail
+
+
+@pytest.mark.parametrize("bad", [
+    "has\nnewline",
+    "has\x00null",
+    "semi;colon",
+    "back`tick`",
+    "dollar$(sub)",
+    "pipe|it",
+])
+def test_run_refuses_arguments_with_characters_it_has_no_use_for(bad):
+    """There is no shell here -- subprocess gets a list -- so this is not about
+    quoting. It is about a value arriving somewhere it was never meant to,
+    which is easier to notice at the boundary than to reason about at each
+    call site."""
+    from agent import deploy_keys
+
+    ok, detail = deploy_keys._run(["git", "config", bad])
+    assert ok is False
+    assert "not allowed" in detail
+    # The suspect value is not echoed back.
+    assert bad not in detail
+
+
+def test_run_refuses_a_path_shaped_argument_that_starts_with_a_dash():
+    """Option injection: ssh-keygen would read `-f/evil/key` as a flag, not a
+    filename."""
+    from agent import deploy_keys
+
+    ok, detail = deploy_keys._run(["ssh-keygen", "-lf", "-/tmp/evil.key"])
+    assert ok is False and "starts with" in detail
+
+
+def test_run_still_accepts_every_argument_shape_this_module_really_passes():
+    """The guard is worthless if it rejects the real calls, and each of these
+    is a literal from somewhere in this file."""
+    from agent import deploy_keys
+
+    for args in (
+        ["git", "config", "--local", "--get", "remote.origin.url"],
+        ["git", "config", "core.sshCommand",
+         "ssh -i /home/x/keys/demo.key -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"],
+        ["ssh-keygen", "-lf", "/home/x/keys/demo.key"],
+        ["ssh-keygen", "-t", "ed25519", "-N", "", "-q", "-C", "tektonix-demo",
+         "-f", "/home/x/keys/demo.key"],
+    ):
+        ok, detail = deploy_keys._run(args, timeout=1)
+        # It may fail because the file is not there; it must not be refused.
+        assert "refusing to run" not in detail, f"{args} was refused: {detail}"
