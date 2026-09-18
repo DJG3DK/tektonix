@@ -118,6 +118,45 @@ It 'ignores a line with no =' {
     Expect-Equal (Read-EnvValues -Content "nonsense`n").Count 0 'key count'
 }
 
+Write-Host 'Explain-ComposeFailure'
+
+# The whole point of this function is that Docker's own wording names neither
+# the cause nor the remedy. Each case asserts the remedy, not the symptom.
+function Explain-Of {
+    param([string]$Text)
+    (Explain-ComposeFailure -Output $Text 6>&1 | Out-String)
+}
+
+It 'tells a remote user to run it from their own desktop' {
+    $out = Explain-Of 'error getting credentials - err: exit status 1, out: `A specified logon session does not exist.`'
+    Expect-True ($out -match 'own desktop') 'the actual remedy'
+    Expect-True ($out -match 'credential helper') 'what failed'
+}
+
+It 'recognises the other wording for the same failure' {
+    $out = Explain-Of 'failed: logon session does not exist. It may already have been terminated.'
+    Expect-True ($out -match 'own desktop') 'the same remedy'
+}
+
+It 'points at the WSL 2 engine setting when the backend is missing' {
+    $out = Explain-Of 'provisioning failed: WSL 2 is not installed'
+    Expect-True ($out -match 'WSL 2') 'the backend named'
+    Expect-True ($out -match 'Settings') 'where to change it'
+}
+
+It 'says how much room is needed when the disk is full' {
+    $out = Explain-Of 'write /var/lib/docker: no space left on device'
+    Expect-True ($out -match '3 GB') 'the size it needs'
+}
+
+It 'falls back to pointing at Docker output rather than inventing a cause' {
+    # Guessing wrong here is worse than saying nothing: it sends somebody off
+    # fixing a problem they do not have.
+    $out = Explain-Of 'something nobody has seen before'
+    Expect-True ($out -match 'from Docker itself') 'an honest fallback'
+    Expect-True (-not ($out -match 'credential|WSL|disk space')) 'no invented cause'
+}
+
 Write-Host ''
 if ($script:failed -gt 0) { Write-Host "$script:failed of $script:ran failed" -ForegroundColor Red; exit 1 }
 Write-Host "$script:ran passed" -ForegroundColor Green

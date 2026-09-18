@@ -150,81 +150,216 @@ function Read-EnvValues {
 
 # --- the doing --------------------------------------------------------------
 
+$script:TOTAL_STEPS = 5
+
+function Write-Phase {
+    param([int]$N, [string]$Title)
+    Write-Host ""
+    Write-Host ("==> [{0}/{1}] {2}" -f $N, $script:TOTAL_STEPS, $Title) -ForegroundColor Cyan
+}
+
+<#
+Run a native command, returning its combined output and exit code.
+
+This exists because of one PowerShell rule that bites hard here: with
+$ErrorActionPreference = 'Stop', ANY line a native program writes to stderr
+becomes a terminating error. Docker writes its ordinary progress there --
+"Image postgres:16-alpine Pulling" is stderr -- so a normal, healthy build
+killed this script before it could look at the exit code, and the person saw
+a PowerShell stack trace instead of the explanation below it.
+
+Exit code is the only thing that says whether a native command failed. This
+turns stderr back into text and reads that code.
+#>
+function Invoke-Native {
+    param([Parameter(Mandatory)][string]$Exe, [string[]]$Arguments = @(), [switch]$Echo)
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    $lines = New-Object System.Collections.Generic.List[string]
+    try {
+        & $Exe @Arguments 2>&1 | ForEach-Object {
+            $text = if ($_ -is [System.Management.Automation.ErrorRecord]) { $_.ToString() } else { "$_" }
+            $lines.Add($text)
+            if ($Echo) { Write-Host $text }
+        }
+        $code = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $prev
+    }
+    return @{ Output = ($lines -join [Environment]::NewLine); ExitCode = $code }
+}
+
 function Invoke-Step {
     param([Parameter(Mandatory)][string]$Describe, [Parameter(Mandatory)][scriptblock]$Action)
     if ($DryRun) { Write-Note "would $Describe"; return $null }
     return & $Action
 }
 
-function Test-DockerUsable {
-    # `docker info` rather than `docker --version`: Desktop can be installed
-    # and not running, which is the common Windows case and gives a completely
-    # different error further along if it is not caught here.
-    if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
-        Write-Fail 'Docker is not installed.'
-        Write-Note 'Install Docker Desktop: https://docs.docker.com/get-started/get-docker/'
+<#
+What Docker is doing right now, as one of: missing, stopped, no-compose, ready.
+
+Split from the acting on it because "not installed" and "installed but asleep"
+need completely different help, and the second is the common one: Docker
+Desktop does not run at boot unless someone ticked the box.
+#>
+function Get-DockerState {
+    if (-not (Get-Command docker -ErrorAction SilentlyContinue)) { return 'missing' }
+    if ((Invoke-Native -Exe 'docker' -Arguments @('info')).ExitCode -ne 0) { return 'stopped' }
+    if ((Invoke-Native -Exe 'docker' -Arguments @('compose', 'version')).ExitCode -ne 0) { return 'no-compose' }
+    return 'ready'
+}
+
+function Get-DockerDesktopPath {
+    foreach ($p in @(
+        "$env:ProgramFiles\Docker\Docker\Docker Desktop.exe",
+        "${env:ProgramFiles(x86)}\Docker\Docker\Docker Desktop.exe"
+    )) { if ($p -and (Test-Path $p)) { return $p } }
+    return $null
+}
+
+<#
+Start Docker Desktop and wait for the engine, reporting progress.
+
+Worth doing rather than telling somebody to go and start it: it is installed,
+it is not running, and the whole reason they are here is that they want it
+running. First start is genuinely slow -- it boots a Linux VM -- so silence
+would look like a hang.
+#>
+function Start-DockerAndWait {
+    param([int]$TimeoutSeconds = 240)
+    $exe = Get-DockerDesktopPath
+    if (-not $exe) {
+        Write-Warn 'Docker Desktop is not where it usually installs; start it yourself and re-run.'
         return $false
     }
-    docker info *> $null
-    if ($LASTEXITCODE -ne 0) {
-        Write-Fail 'Docker is installed but not running.'
-        Write-Note 'Start Docker Desktop and wait for it to report Running, then run this again.'
-        return $false
+    Write-Note 'Starting Docker Desktop. First start boots a Linux VM, so give it a minute.'
+    try { Start-Process $exe -ArgumentList '-Autostart' | Out-Null }
+    catch { Write-Warn "Could not start it: $($_.Exception.Message)"; return $false }
+
+    $waited = 0
+    while ($waited -lt $TimeoutSeconds) {
+        Start-Sleep -Seconds 5
+        $waited += 5
+        if ((Get-DockerState) -eq 'ready') {
+            Write-Host ""
+            Write-Note "Docker is ready (took ${waited}s)."
+            return $true
+        }
+        Write-Host "." -NoNewline
     }
-    docker compose version *> $null
-    if ($LASTEXITCODE -ne 0) {
-        Write-Fail 'This Docker has no `compose` subcommand (v2 is required).'
-        Write-Note 'Docker Desktop ships it; on Linux install the docker-compose-plugin package.'
-        return $false
+    Write-Host ""
+    Write-Warn "Docker did not become ready within ${TimeoutSeconds}s."
+    Write-Note 'Open Docker Desktop, wait for the whale icon to stop animating, then run this again.'
+    return $false
+}
+
+<#
+Turn a compose failure into something the person can act on.
+
+Docker's own wording for the two most likely first-run failures names neither
+the cause nor the remedy, and both are environmental rather than anything
+wrong with this software.
+#>
+function Explain-ComposeFailure {
+    param([string]$Output)
+    if ($Output -match 'error getting credentials|logon session does not exist') {
+        Write-Warn "Docker could not reach its credential helper."
+        Write-Note 'This happens when Docker runs as a different Windows user than the one'
+        Write-Note 'that started Docker Desktop -- over Remote Desktop, over SSH, or from a'
+        Write-Note 'scheduled task. Run this installer from your own desktop instead.'
+        return
     }
-    return $true
+    if ($Output -match 'wsl|WSL 2|virtualization') {
+        Write-Warn "Docker's Linux backend (WSL 2) is not available."
+        Write-Note 'Open Docker Desktop > Settings > General and tick "Use the WSL 2 based'
+        Write-Note 'engine", or enable virtualization in your BIOS if it is switched off.'
+        return
+    }
+    if ($Output -match 'no space left|disk') {
+        Write-Warn 'The machine appears to be out of disk space. The images need about 3 GB.'
+        return
+    }
+    Write-Note 'The output above is from Docker itself and says what it could not do.'
 }
 
 function Request-Value {
     param(
         [Parameter(Mandatory)][string]$Prompt,
         [string]$Current,
+        [string]$Default,
         [switch]$Secret
     )
     if (-not [string]::IsNullOrWhiteSpace($Current)) { return $Current }
-    if ($Yes) { throw "$Prompt is required, and -Yes forbids asking for it." }
-    if ($Secret) {
-        $secure = Read-Host -Prompt $Prompt -AsSecureString
-        return [System.Net.NetworkCredential]::new('', $secure).Password
+    if ($Yes) {
+        if (-not [string]::IsNullOrWhiteSpace($Default)) { return $Default }
+        throw "$Prompt is required, and -Yes forbids asking for it."
     }
-    return (Read-Host -Prompt $Prompt)
+    $shown = if ($Default) { "$Prompt [$Default]" } else { $Prompt }
+    if ($Secret) {
+        $secure = Read-Host -Prompt $shown -AsSecureString
+        $v = [System.Net.NetworkCredential]::new('', $secure).Password
+    } else {
+        $v = Read-Host -Prompt $shown
+    }
+    if ([string]::IsNullOrWhiteSpace($v)) { return $Default }
+    return $v
 }
 
 function Main {
     $root = Split-Path -Parent $PSCommandPath
     Set-Location $root
 
-    Write-Step 'Checking this is a Tektonix checkout'
+    Write-Host ""
+    Write-Host "  Tektonix installer" -ForegroundColor Cyan
+    Write-Host "  Sets up the Docker bundle: the agent, its database, the model router"
+    Write-Host "  and the review services, all in containers."
+
+    Write-Phase 1 'Checking the files'
     foreach ($needed in @('docker-compose.yml', 'docker/.env.example')) {
         if (-not (Test-Path (Join-Path $root $needed))) {
-            Write-Fail "$needed is missing -- run this from the root of the source tree."
+            Write-Fail "$needed is missing."
+            Write-Note 'Run this from inside the folder you extracted, not from beside it.'
             exit 1
         }
     }
-    Write-Note "found the bundle in $root"
+    Write-Note "Found everything in $root"
 
-    Write-Step 'Checking Docker'
-    if (-not $DryRun) {
-        if (-not (Test-DockerUsable)) { exit 1 }
-        Write-Note 'Docker is running and has compose v2'
+    Write-Phase 2 'Checking Docker'
+    if ($DryRun) {
+        Write-Note 'would check Docker is installed, running, and has compose v2'
     } else {
-        Write-Note 'would check that Docker is installed, running, and has compose v2'
+        $state = Get-DockerState
+        if ($state -eq 'missing') {
+            Write-Fail 'Docker Desktop is not installed. It is the one thing you need first.'
+            Write-Note 'Download: https://docs.docker.com/desktop/install/windows-install/'
+            if (-not $Yes) {
+                $open = Read-Host 'Open that page now? [Y/n]'
+                if ($open -notmatch '^[Nn]') { Start-Process 'https://docs.docker.com/desktop/install/windows-install/' }
+            }
+            Write-Note 'Install it, start it, then run this again.'
+            exit 1
+        }
+        if ($state -eq 'stopped') {
+            Write-Note 'Docker Desktop is installed but not running.'
+            if (-not (Start-DockerAndWait)) { exit 1 }
+            $state = Get-DockerState
+        }
+        if ($state -eq 'no-compose') {
+            Write-Fail 'This Docker has no `compose` command. Docker Desktop includes it;'
+            Write-Note 'a very old install may not. Update Docker Desktop and run this again.'
+            exit 1
+        }
+        Write-Note 'Docker is running.'
     }
 
-    Write-Step 'Writing .env'
+    Write-Phase 3 'Two settings'
     $envPath = Join-Path $root '.env'
     $content = if (Test-Path $envPath) {
-        Write-Note '.env exists -- keeping every value already in it'
+        Write-Note 'Keeping every value already in your .env'
         Get-Content $envPath -Raw
     } else {
         Get-Content (Join-Path $root 'docker/.env.example') -Raw
     }
-
     $existing = Read-EnvValues -Content $content
 
     $key = $OpenRouterKey
@@ -232,49 +367,84 @@ function Main {
     if ([string]::IsNullOrWhiteSpace($key) -and $existing.ContainsKey('OPENROUTER_API_KEY')) {
         $key = $existing['OPENROUTER_API_KEY']
     }
+    if ([string]::IsNullOrWhiteSpace($key) -and -not $Yes) {
+        Write-Host ""
+        Write-Host '  The agent calls models through OpenRouter, so it needs a key.'
+        Write-Host '  Get one at https://openrouter.ai/keys -- it is the only thing that costs money.'
+    }
     $key = Request-Value -Prompt 'OpenRouter API key' -Current $key -Secret
 
     $dir = $ProjectsDir
     if ([string]::IsNullOrWhiteSpace($dir) -and $existing.ContainsKey('PROJECTS_DIR')) {
         $dir = $existing['PROJECTS_DIR']
     }
-    $dir = Format-ProjectsDir (Request-Value -Prompt 'Folder holding your repositories' -Current $dir)
+    $suggested = Join-Path $env:USERPROFILE 'code'
+    if ([string]::IsNullOrWhiteSpace($dir) -and -not $Yes) {
+        Write-Host ""
+        Write-Host '  Which folder holds the repositories you want the agent to work on?'
+        Write-Host '  Everything under it becomes visible to the agent; nothing outside it does.'
+    }
+    $dir = Format-ProjectsDir (Request-Value -Prompt 'Projects folder' -Current $dir -Default $suggested)
 
     $verdict = Test-ProjectsDirValue -Value $dir
     if (-not $verdict.Ok) {
-        Write-Fail "PROJECTS_DIR: $($verdict.Reason)"
-        Write-Note 'Example on Windows:  C:\Users\you\code'
+        Write-Fail "That is not a usable folder: $($verdict.Reason)"
+        Write-Note 'It has to be a full path, for example C:\Users\you\code'
         exit 1
     }
     if (-not $DryRun -and -not (Test-Path $dir)) {
-        # Not fatal: compose would create it, but as an empty directory the
-        # agent then reports as having no repositories in it, which reads as a
-        # bug rather than as a typo.
-        Write-Warn "$dir does not exist yet. Check the spelling if that is a surprise."
+        if ($Yes) {
+            Write-Warn "$dir does not exist yet."
+        } else {
+            $make = Read-Host "$dir does not exist. Create it? [Y/n]"
+            if ($make -notmatch '^[Nn]') {
+                New-Item -ItemType Directory -Force -Path $dir | Out-Null
+                Write-Note "Created $dir"
+            } else {
+                Write-Warn 'Leaving it. The agent will show no repositories until it exists.'
+            }
+        }
     }
 
     $content = Set-EnvLine -Content $content -Key 'OPENROUTER_API_KEY' -Value $key
     $content = Set-EnvLine -Content $content -Key 'PROJECTS_DIR' -Value $dir
     Invoke-Step "write $envPath" { Set-Content -Path $envPath -Value $content -NoNewline -Encoding utf8 }
-    if (-not $DryRun) { Write-Note "wrote $envPath" }
+    if (-not $DryRun) { Write-Note 'Saved your settings to .env' }
 
-    Write-Step 'Starting the stack'
-    Invoke-Step 'run: docker compose up -d --build' {
-        docker compose up -d --build
-        if ($LASTEXITCODE -ne 0) { Write-Fail 'docker compose failed -- see the output above.'; exit 1 }
+    Write-Phase 4 'Building and starting'
+    if ($DryRun) {
+        Write-Note 'would run: docker compose up -d --build'
+    } else {
+        Write-Note 'The first run downloads and builds about 3 GB. Ten minutes is normal.'
+        Write-Note 'Docker prints its own progress below.'
+        Write-Host ""
+        $r = Invoke-Native -Exe 'docker' -Arguments @('compose', 'up', '-d', '--build') -Echo
+        if ($r.ExitCode -ne 0) {
+            Write-Host ""
+            Write-Fail 'Docker could not start the stack.'
+            Explain-ComposeFailure -Output $r.Output
+            exit 1
+        }
     }
 
-    Write-Step 'Done'
+    Write-Phase 5 'Done'
     if ($DryRun) {
         Write-Note 'Nothing was changed. Run without -DryRun to do it for real.'
         return
     }
-    Write-Note 'Console:  http://localhost:8100'
-    Write-Note 'The first-run admin password is printed once, in the agent log:'
+    $url = 'http://localhost:8100'
+    Write-Host ""
+    Write-Host "  Tektonix is running at $url" -ForegroundColor Green
+    Write-Host ""
+    Write-Note 'Your sign-in password is printed once, in the agent log:'
     Write-Note '  docker compose logs agent'
-    Write-Note 'Re-running this script is safe, and is also how you upgrade.'
+    Write-Note 'Running this again is safe, and is also how you upgrade.'
+    if (-not $Yes) {
+        $open = Read-Host 'Open it in your browser now? [Y/n]'
+        if ($open -notmatch '^[Nn]') { Start-Process $url }
+    }
 }
 
-# Dot-sourcing (`. ./install.ps1`) loads the functions WITHOUT installing
-# anything, which is what the test file does.
+# Sourcing (`. ./install.ps1`) loads the functions WITHOUT installing anything,
+# which is what the test file does.
 if ($MyInvocation.InvocationName -ne '.') { Main }

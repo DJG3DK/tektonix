@@ -8,17 +8,23 @@ cp docker/.env.example .env      # set OPENROUTER_API_KEY and PROJECTS_DIR
 docker compose up -d
 ```
 
-On Windows, or anywhere you would rather be asked than edit a file, run this
-instead:
+**On Windows, double-click `Install Tektonix.bat`.** It asks for the two
+values, starts Docker Desktop if it is installed but not running, waits for
+it, brings the stack up and offers to open the console. The window stays open
+at the end, so a failure is readable rather than a flash of text.
+
+From a terminal, or on macOS and Linux with PowerShell 7:
 
 ```
 powershell -ExecutionPolicy Bypass -File .\install.ps1
 ```
 
-Windows client editions default to an execution policy of Restricted, so
-`.\install.ps1` on its own fails with "running scripts is disabled on this
-system". The flag above applies to that one process and changes nothing about
-your machine.
+The `.bat` exists because neither half works without it. A `.ps1` cannot be
+double-clicked into running -- Explorer opens it in Notepad -- and Windows
+client editions default to an execution policy of Restricted, so even from a
+terminal the bare path fails with "running scripts is disabled on this
+system". The flag applies to that one process and changes nothing about your
+machine.
 
 It does exactly the two steps above: checks Docker is
 installed AND running, asks for the two values with no sensible default,
