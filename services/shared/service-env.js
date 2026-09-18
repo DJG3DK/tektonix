@@ -48,6 +48,23 @@ function readFrom(file, name) {
 function readServiceSecret(name, agentHome) {
     if (process.env[name]) return process.env[name].trim();
 
+    // <NAME>_FILE, the convention Docker and systemd both use for handing a
+    // secret to a process without putting it in the environment, where `ps`
+    // and a crash dump can read it. The bundle needs it for a different
+    // reason: the agent container generates this secret on first run and the
+    // two review containers have to end up with the same value, so it is
+    // written to a shared volume rather than duplicated in compose.
+    const fromFile = process.env[`${name}_FILE`];
+    if (fromFile) {
+        try {
+            const v = fs.readFileSync(fromFile, 'utf8').trim();
+            if (v) return v;
+        } catch {
+            // Fall through: a named-but-unreadable file is one more place to
+            // look that did not answer, not a reason to take the service down.
+        }
+    }
+
     const fromShared = readFrom(path.join(agentHome, SHARED_ENV), name);
     if (fromShared) return fromShared;
 

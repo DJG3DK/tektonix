@@ -52,6 +52,11 @@ try {
 // See services/shared/projects-config.js: projects.json supplies onboarded
 // projects (deploy section), these built-ins stay authoritative.
 const { loadProjects, healthProjectsCheck } = require('../shared/projects-config');
+
+// Set by the bundle's compose file. Not sniffed from /.dockerenv: an operator
+// running this service in a container of their own, with pm2 inside it, is
+// entitled to have deploys work -- so this is a declaration, not a guess.
+const IN_CONTAINER = process.env.TEKTONIX_BUNDLE === '1';
 const { runPreflight, formatPreflightError } = require('./preflight');
 
 // A function, never a constant bound at startup -- same fix as the
@@ -101,7 +106,12 @@ function projectOr404(req, res) {
 
 // Shared by the merge gate below and the read-only /api/review/status
 // endpoint further down — same file, same shape either way.
-const REVIEW_STATE_PATH = path.join(AGENT_HOME, 'services/commit-reviewer/state.json');
+// Same file the reviewer writes, and the same override, because in the bundle
+// the two are separate containers sharing a volume rather than two processes
+// sharing a directory.
+const REVIEW_STATE_PATH = process.env.REVIEW_STATE_DIR
+    ? path.join(process.env.REVIEW_STATE_DIR, 'state.json')
+    : path.join(AGENT_HOME, 'services/commit-reviewer/state.json');
 async function readReviewState() {
     try {
         return JSON.parse(await fs.promises.readFile(REVIEW_STATE_PATH, 'utf8'));
@@ -357,11 +367,26 @@ app.post('/api/projects/:name/restart', requireControlSecret, async (req, res) =
     } catch (e) {
         return res.status(500).json({ ok: false, error: e.message, stage: 'build', built });
     }
+    // Restarting a host process is the one thing this service cannot do from
+    // inside a container: pm2 runs on the host and the container has no view
+    // of it. Say that, rather than returning a pm2-not-found error the agent
+    // would read as something it broke and try to fix. The merge already
+    // happened either way -- review and merge are what the gate is for, and
+    // they work here. Deploying is the operator's, in the bundle.
+    const wanted = p.pm2Apps || [];
+    if (wanted.length && IN_CONTAINER) {
+        return res.json({
+            ok: true, built, restarted: [], skipped: wanted, reason: 'no_process_manager',
+            note: 'Merged and built. Restarting host processes is not available in the '
+                + 'container bundle -- pm2 runs on the host. Restart them yourself, or '
+                + 'use the host install if you want deploys automated.',
+        });
+    }
     try {
-        for (const appName of p.pm2Apps || []) {
+        for (const appName of wanted) {
             await run('pm2', ['restart', appName], '/');
         }
-        res.json({ ok: true, built, restarted: p.pm2Apps || [] });
+        res.json({ ok: true, built, restarted: wanted });
     } catch (e) { res.status(500).json({ ok: false, error: e.message, stage: 'restart', built }); }
 });
 
@@ -564,4 +589,12 @@ app.post('/api/review/check/:name', requireControlSecret, async (req, res) => {
 app.use(express.static(path.join(__dirname, 'public')));
 
 const PORT = 4100;
-app.listen(PORT, '127.0.0.1', () => console.log(`[Review] listening on 127.0.0.1:${PORT}`));
+// Loopback by default, because on a host install nginx is what is supposed to
+// reach this and anything else on the box is not. In the bundle the isolation
+// boundary is the compose network instead -- the port is published nowhere --
+// and the sibling containers cannot reach loopback inside this one. Declared
+// rather than sniffed, so the safe value is the one you get by not thinking
+// about it.
+const BIND_ADDRESS = process.env.REVIEW_BIND_ADDRESS
+    || (process.env.TEKTONIX_BUNDLE === '1' ? '0.0.0.0' : '127.0.0.1');
+app.listen(PORT, BIND_ADDRESS, () => console.log(`[Review] listening on ${BIND_ADDRESS}:${PORT}`));

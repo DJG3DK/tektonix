@@ -21,8 +21,19 @@ logger = logging.getLogger("tektonix")
 # former REVIEW_GATE_BASE_URL env var was mandatory at startup yet read
 # nowhere (it can't express both the 4100 status port and the 4101 control
 # port anyway), so it was dropped rather than left as a misleading dead knob.
-REVIEW_CONTROL_PORT = 4101  # localhost-only
+REVIEW_CONTROL_PORT = 4101  # localhost-only on a host install
 REVIEW_SERVICE_PORT = 4100
+
+# The host half, which is 127.0.0.1 everywhere except the container bundle:
+# there the review services are sibling containers with their own names, and
+# localhost is this container. Defaulting to loopback keeps a host install
+# exactly as it was, including the "localhost-only" property of the control
+# port -- in the bundle that property is provided by the compose network
+# instead, which publishes neither port.
+import os as _os_early
+
+REVIEW_SERVICE_HOST = _os_early.environ.get("REVIEW_SERVICE_HOST", "127.0.0.1")
+REVIEW_CONTROL_HOST = _os_early.environ.get("REVIEW_CONTROL_HOST", REVIEW_SERVICE_HOST)
 
 # audit C-4: the mutating control endpoints now require this shared secret.
 # Read from the agent's own env (load_dotenv in config.py). The check process
@@ -49,7 +60,7 @@ _CONTROL_HEADERS = (
 
 async def trigger_check(project: str) -> dict:
     async with httpx.AsyncClient(timeout=15) as client:
-        r = await client.post(f"http://127.0.0.1:{REVIEW_CONTROL_PORT}/check/{project}", headers=_CONTROL_HEADERS)
+        r = await client.post(f"http://{REVIEW_CONTROL_HOST}:{REVIEW_CONTROL_PORT}/check/{project}", headers=_CONTROL_HEADERS)
         r.raise_for_status()
         return r.json()
 
@@ -75,7 +86,7 @@ async def project_checks(force: bool = False) -> dict[str, dict]:
         return cached[1]
     try:
         async with httpx.AsyncClient(timeout=10) as client:
-            r = await client.get(f"http://127.0.0.1:{REVIEW_CONTROL_PORT}/projects", headers=_CONTROL_HEADERS)
+            r = await client.get(f"http://{REVIEW_CONTROL_HOST}:{REVIEW_CONTROL_PORT}/projects", headers=_CONTROL_HEADERS)
         if r.status_code != 200:
             logger.warning("project_checks: reviewer answered %s", r.status_code)
             return {}
@@ -114,7 +125,7 @@ def _reviewed_sha_is(got: str | None, expect: str) -> bool:
 
 async def _read_state(project: str) -> dict | None:
     async with httpx.AsyncClient(timeout=15) as client:
-        r = await client.get(f"http://127.0.0.1:{REVIEW_SERVICE_PORT}/api/review/status")
+        r = await client.get(f"http://{REVIEW_SERVICE_HOST}:{REVIEW_SERVICE_PORT}/api/review/status")
         r.raise_for_status()
         return r.json().get(project)
 
@@ -157,7 +168,7 @@ async def merge_and_deploy(project: str) -> dict:
         # raised JSONDecodeError up into the caller's committed_sha-losing
         # escalation path (C-6), possibly after a partial merge. So: parse JSON,
         # and only synthesize a stage error when the body cannot be decoded.
-        merge_res = await client.post(f"http://127.0.0.1:{REVIEW_SERVICE_PORT}/api/projects/{project}/merge", json={}, headers=_CONTROL_HEADERS)
+        merge_res = await client.post(f"http://{REVIEW_SERVICE_HOST}:{REVIEW_SERVICE_PORT}/api/projects/{project}/merge", json={}, headers=_CONTROL_HEADERS)
         try:
             merge_body = merge_res.json()
         except ValueError:
@@ -169,7 +180,7 @@ async def merge_and_deploy(project: str) -> dict:
             return {"ok": False, **merge_body, "stage": "merge"}
 
         restart_res = await client.post(
-            f"http://127.0.0.1:{REVIEW_SERVICE_PORT}/api/projects/{project}/restart", json={}, headers=_CONTROL_HEADERS, timeout=180
+            f"http://{REVIEW_SERVICE_HOST}:{REVIEW_SERVICE_PORT}/api/projects/{project}/restart", json={}, headers=_CONTROL_HEADERS, timeout=180
         )
         try:
             restart_body = restart_res.json()

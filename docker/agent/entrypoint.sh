@@ -39,9 +39,16 @@ fi
 
 # 2. projects.json. The agent needs the file to exist; what is IN it comes from
 #    the dashboard's own onboarding, so an empty one is the correct start.
-if [ ! -f /app/projects.json ]; then
-    echo '{"projects": {}}' > /app/projects.json
-    echo "[entrypoint] created an empty projects.json -- add projects from Settings"
+#
+#    It lives in the data volume, not beside the code: the two review services
+#    are separate containers that read the same file, and a project onboarded
+#    from the dashboard has to be visible to them without a rebuild. Both
+#    sides honour AGENT_PROJECTS_JSON.
+PROJECTS_FILE=${AGENT_PROJECTS_JSON:-/app/projects.json}
+if [ ! -f "$PROJECTS_FILE" ]; then
+    mkdir -p "$(dirname "$PROJECTS_FILE")"
+    echo '{"projects": {}}' > "$PROJECTS_FILE"
+    echo "[entrypoint] created an empty $PROJECTS_FILE -- add projects from Settings"
 fi
 
 # 3. Wait for Postgres. compose's depends_on only waits for the container, not

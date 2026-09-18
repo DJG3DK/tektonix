@@ -64,7 +64,15 @@ def load_config() -> Config:
 # Loaded from projects.json (gitignored, deployment-specific) with
 # projects.example.json as the committed template.
 
-_PROJECTS_CONFIG_PATH = Path(__file__).resolve().parent.parent / "projects.json"
+# AGENT_PROJECTS_JSON is what lets the container bundle put this file on a
+# shared volume: the agent writes it from onboarding and the two review
+# services read it, and in the bundle those are three separate containers. The
+# Node side has read the same variable since it was written; this is the half
+# that was missing. Unset on a host install, where the repo-root file is right.
+_PROJECTS_CONFIG_PATH = Path(
+    os.environ.get("AGENT_PROJECTS_JSON")
+    or Path(__file__).resolve().parent.parent / "projects.json"
+)
 _PROJECTS_EXAMPLE_PATH = Path(__file__).resolve().parent.parent / "projects.example.json"
 
 

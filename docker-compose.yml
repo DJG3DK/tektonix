@@ -68,6 +68,11 @@ services:
       # directories and every task would read an empty repo -- silently.
       # See agent/tools/sandbox.py's host_path().
       AGENT_HOST_PATH_MAP: /projects=${PROJECTS_DIR:?set PROJECTS_DIR in .env}
+      # Shared with the two review containers, which read the same file.
+      AGENT_PROJECTS_JSON: /app/data/projects.json
+      # The review services are siblings here, not localhost.
+      REVIEW_SERVICE_HOST: agent-review
+      REVIEW_CONTROL_HOST: commit-reviewer
     volumes:
       # Sibling containers, not nested. See docker/agent/Dockerfile.
       - /var/run/docker.sock:/var/run/docker.sock
@@ -80,8 +85,65 @@ services:
       - "${BIND_ADDRESS:-127.0.0.1}:${AGENT_PORT:-8100}:8100"
     restart: unless-stopped
 
+  # The review gate. This is the part that makes a merge mean something: one
+  # model writes the code, a second reviews the branch, and only a READY
+  # verdict merges. Leaving it out of the bundle meant the easiest install
+  # produced an agent with no gate -- which is most of the product.
+  #
+  # The one thing that does NOT work here is deploying after a merge: pm2
+  # runs on the host and a container cannot reach it. That endpoint says so
+  # rather than failing (TEKTONIX_BUNDLE, services/agent-review/server.js).
+  agent-review:
+    build:
+      context: .
+      dockerfile: docker/reviewer/Dockerfile
+    depends_on:
+      - agent
+    environment:
+      AGENT_HOME: /app
+      AGENT_PROJECTS_JSON: /app/data/projects.json
+      REVIEW_STATE_DIR: /app/review-state
+      # Written by the agent's entrypoint into the shared data volume on first
+      # run, so all three containers agree without it being in compose or in
+      # anyone's shell history.
+      REVIEW_CONTROL_SECRET_FILE: /app/data/review_control_secret
+      MODEL_ROUTER_URL: http://router:4001
+      TEKTONIX_BUNDLE: "1"
+    volumes:
+      - ${PROJECTS_DIR:?set PROJECTS_DIR in .env}:/projects
+      - agentdata:/app/data:ro
+      - reviewstate:/app/review-state
+    restart: unless-stopped
+
+  commit-reviewer:
+    build:
+      context: .
+      dockerfile: docker/reviewer/Dockerfile
+    command: ["node", "services/commit-reviewer/reviewer.js"]
+    depends_on:
+      - agent
+      - router
+    environment:
+      AGENT_HOME: /app
+      AGENT_PROJECTS_JSON: /app/data/projects.json
+      REVIEW_STATE_DIR: /app/review-state
+      REVIEW_CONTROL_SECRET_FILE: /app/data/review_control_secret
+      # The reviewer's own model call goes through the router like every other
+      # call, so its choice and its spend are visible in one place.
+      MODEL_ROUTER_URL: http://router:4001/v1
+      MODEL_ROUTER_KEY: ${MODEL_ROUTER_KEY:-sk-local-dev}
+      TEKTONIX_BUNDLE: "1"
+    volumes:
+      - ${PROJECTS_DIR:?set PROJECTS_DIR in .env}:/projects
+      - agentdata:/app/data:ro
+      - reviewstate:/app/review-state
+    restart: unless-stopped
+
 volumes:
   pgdata:
+  # Verdicts and their history. Separate from agentdata because the agent owns
+  # that one and these two write this one.
+  reviewstate:
   agentdata:
   agentlogs:
   routerlogs:

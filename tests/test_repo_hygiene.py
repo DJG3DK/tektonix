@@ -230,3 +230,101 @@ def test_no_private_project_names_anywhere_in_the_public_tree():
         "the maintainer's own projects appear in the public tree:\n  "
         + "\n  ".join(hits[:20])
     )
+
+
+# --- what may enter a docker build context --------------------------------
+
+def _dockerignore_matcher():
+    """A small approximation of Docker's .dockerignore matching.
+
+    Docker uses Go's filepath.Match plus `**`. Enough of it is implemented here
+    to answer the only question this test asks: would this path be sent to the
+    daemon?
+    """
+    patterns = []
+    for raw in (REPO / ".dockerignore").read_text().splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        negated = line.startswith("!")
+        if negated:
+            line = line[1:]
+        line = line.strip("/")
+        rx = ""
+        i = 0
+        while i < len(line):
+            if line.startswith("**/", i):
+                rx += "(?:.*/)?"
+                i += 3
+            elif line.startswith("**", i):
+                rx += ".*"
+                i += 2
+            elif line[i] == "*":
+                rx += "[^/]*"
+                i += 1
+            elif line[i] == "?":
+                rx += "[^/]"
+                i += 1
+            else:
+                rx += re.escape(line[i])
+                i += 1
+        patterns.append((negated, re.compile(rf"^{rx}(?:/.*)?$")))
+
+    def excluded(path: str) -> bool:
+        verdict = False
+        for negated, rx in patterns:
+            if rx.match(path):
+                verdict = not negated
+        return verdict
+
+    return excluded
+
+
+def test_the_docker_build_context_excludes_every_kind_of_secret():
+    """`docker build` sends the whole directory to the daemon, and .gitignore
+    has no say in it.
+
+    Found by building the review image and reading it back: with no
+    .dockerignore, a COPY of a services/ subtree baked in a directory of live
+    project credentials -- real .env, auth.json and keys.json, put there so the
+    reviewer can run tests that need them. An image is a tarball anybody can
+    unpack, and a pushed one is public.
+    """
+    excluded = _dockerignore_matcher()
+    must_not_ship = [
+        ".env",
+        "services/shared/.env",
+        "services/commit-reviewer/review-secrets/anyproject/.env",
+        "services/commit-reviewer/review-secrets/anyproject/config/keys.json",
+        "services/commit-reviewer/builtin-projects.local.js",
+        "services/model-router/config.yaml",
+        "projects.json",
+        "keys/vapid.json",
+        "logs/routing.jsonl",
+        "services/commit-reviewer/state.json",
+        "services/commit-reviewer/worktrees/p-abc/src/index.js",
+        ".git/config",
+        "frontend/node_modules/x/index.js",
+    ]
+    leaked = [p for p in must_not_ship if not excluded(p)]
+    assert not leaked, "these would be sent to the docker daemon:\n  " + "\n  ".join(leaked)
+
+
+def test_the_docker_build_context_still_contains_what_the_images_need():
+    """An over-broad rule is its own outage: the image builds and then the
+    service cannot start because the file it needs was filtered out."""
+    excluded = _dockerignore_matcher()
+    must_ship = [
+        "agent/server.py",
+        "services/commit-reviewer/reviewer.js",
+        "services/agent-review/server.js",
+        "services/shared/service-env.js",
+        "services/model-router/config.example.yaml",
+        "docker/.env.example",
+        "projects.example.json",
+        "requirements.txt",
+        "frontend/src/main.tsx",
+        "frontend/package.json",
+    ]
+    dropped = [p for p in must_ship if excluded(p)]
+    assert not dropped, "the images need these and .dockerignore drops them:\n  " + "\n  ".join(dropped)

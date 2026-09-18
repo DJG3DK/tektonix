@@ -80,10 +80,23 @@ data volume, writes an empty `projects.json`, waits for Postgres, and builds
 the sandbox image if the host does not already have it. All of it is
 idempotent: `down` and `up` again changes nothing.
 
+## The review gate is in the bundle
+
+`agent-review` and `commit-reviewer` come up with everything else. A task's
+branch is reviewed by a second model and only a READY verdict merges, which is
+the whole point of the thing and used to be missing from the easiest install.
+
+They share the agent's data volume read-only, so the control secret the agent
+generates on first run already matches, and they read the same `projects.json`
+a project onboarded from the dashboard writes.
+
 ## What is not in the bundle yet
 
-* **The review services** (`agent-review`, `commit-reviewer`). The review gate
-  is optional — INSTALL.md §7 — and they are the next piece.
+* **Deploying after a merge.** The review services can merge, but not restart
+  your app: pm2 runs on the host and a container cannot reach it. That endpoint
+  reports itself unavailable rather than failing, so a task ends at a real
+  merge. Restart it yourself, or use the host install if you want that
+  automated.
 * **Remote projects.** This bundle runs against projects on the machine it runs
   on. Driving a project on another box is M2/M3 in the roadmap.
 

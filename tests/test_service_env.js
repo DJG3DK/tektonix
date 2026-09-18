@@ -77,3 +77,31 @@ test('a value is not confused with a similarly named key', () => {
   const root = home({ [SHARED_ENV]: 'NOT_REVIEW_CONTROL_SECRET=wrong\nREVIEW_CONTROL_SECRET=right\n' });
   assert.equal(readServiceSecret('REVIEW_CONTROL_SECRET', root), 'right');
 });
+
+test('a <NAME>_FILE wins over the files on disk, and a missing one is not fatal', () => {
+    // The bundle's reason for existing: the agent container generates this
+    // secret on first run, and two other containers have to end up with the
+    // same value without it being duplicated in compose or exposed in `ps`.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'svcenv-'));
+    const secretFile = path.join(dir, 'secret');
+    fs.writeFileSync(secretFile, '  from-a-file\n');
+
+    const home = path.join(dir, 'home');
+    fs.mkdirSync(path.join(home, 'services', 'shared'), { recursive: true });
+    fs.writeFileSync(path.join(home, 'services', 'shared', '.env'), 'X_SECRET=from-shared-env\n');
+
+    process.env.X_SECRET_FILE = secretFile;
+    delete process.env.X_SECRET;
+    assert.equal(readServiceSecret('X_SECRET', home), 'from-a-file', 'the file wins, trimmed');
+
+    process.env.X_SECRET_FILE = path.join(dir, 'does-not-exist');
+    assert.equal(readServiceSecret('X_SECRET', home), 'from-shared-env',
+        'an unreadable path is one more place that did not answer, not a crash');
+
+    process.env.X_SECRET = 'from-the-environment';
+    assert.equal(readServiceSecret('X_SECRET', home), 'from-the-environment',
+        'the environment still wins over everything');
+
+    delete process.env.X_SECRET;
+    delete process.env.X_SECRET_FILE;
+});

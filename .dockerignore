@@ -1,0 +1,61 @@
+# What must never enter a build context.
+#
+# There was no .dockerignore, and `docker build` sends the whole directory to
+# the daemon regardless of .gitignore. A COPY of a whole services/ subtree
+# therefore baked in the operator's live secrets: review-secrets/ holds a
+# project's real .env, auth.json and keys.json so the reviewer can run tests
+# that need them. An image is a tarball anyone can `docker save` and unpack,
+# and a pushed one is public.
+#
+# Deny by category rather than by filename, because the next secret to appear
+# will have a name nobody predicted here.
+
+# --- secrets --------------------------------------------------------------
+.env
+.env.*
+!.env.example
+!docker/.env.example
+**/.env
+**/.env.*
+!**/.env.example
+*.key
+*.pem
+**/keys/
+**/review-secrets/
+**/*secret*
+.initial-admin-password
+
+# --- operator-specific configuration --------------------------------------
+projects.json
+**/builtin-projects.local.js
+services/model-router/config.yaml
+scripts/watchdog-services.json
+
+# --- state, logs and other machines' working copies ------------------------
+**/worktrees/
+**/state.json
+**/history.jsonl
+**/usage.jsonl
+logs/
+**/logs/
+archives/
+dist/
+data/
+memory/*.md
+!memory/*.example.md
+
+# --- build output and dependencies, which every Dockerfile installs itself --
+**/node_modules/
+**/.venv/
+**/venv/
+**/__pycache__/
+**/.pytest_cache/
+**/.ruff_cache/
+site/dist/
+
+# --- version control and local tooling -------------------------------------
+.git/
+.github/
+.claude/
+*.qcow2
+*.iso

@@ -31,7 +31,12 @@ const http = require('http');
 const crypto = require('crypto');
 const { execFile } = require('child_process');
 
-const STATE_PATH = path.join(__dirname, 'state.json');
+// REVIEW_STATE_DIR exists for the bundle, where this service is a container
+// and its verdicts have to outlive it -- and be readable by agent-review,
+// which is a different container. On a host install it is unset and the files
+// sit beside the code, exactly as before.
+const STATE_DIR = process.env.REVIEW_STATE_DIR || __dirname;
+const STATE_PATH = path.join(STATE_DIR, 'state.json');
 // state.json is mutable and gets wiped by clearReviewState() on every merge
 // (agent-review/server.js) — by design, so a stale review can't gate the
 // *next* commit. But that also means every finding, including non-blocking
@@ -40,7 +45,7 @@ const STATE_PATH = path.join(__dirname, 'state.json');
 // whether earlier minor findings had been addressed and the honest answer
 // was "no way to know anymore." This file is append-only and untouched by
 // clearReviewState, so a review's full findings survive its own merge.
-const HISTORY_PATH = path.join(__dirname, 'history.jsonl');
+const HISTORY_PATH = path.join(STATE_DIR, 'history.jsonl');
 // Review-only credentials, one subtree per project mirroring each project's
 // own relative secret paths. Never contains production values.
 const REVIEW_SECRETS_ROOT = path.join(AGENT_HOME, 'services/commit-reviewer/review-secrets');
@@ -294,11 +299,15 @@ function computeFileChurn(project, currentFindings) {
 // The router's own key now, not the upstream OpenRouter key — the reviewer no
 // longer needs (or should hold) provider credentials directly.
 function getOpenRouterKey() {
+  const name = REVIEW_DIRECT ? 'OPENROUTER_API_KEY' : 'MODEL_ROUTER_KEY';
+  // The environment first, because in the container bundle there is no
+  // services/model-router/.env to read -- the key arrives as an env var and
+  // the router is a sibling container. On a host install nothing changes:
+  // pm2 does not export it, so the file is still what answers.
+  if (process.env[name]) return process.env[name].trim();
   const env = fs.readFileSync(ROUTER_ENV_PATH, 'utf8');
-  // Evaluation path talks to OpenRouter directly, so it needs the upstream key.
-  const want = REVIEW_DIRECT ? /OPENROUTER_API_KEY=(.+)/ : /MODEL_ROUTER_KEY=(.+)/;
-  const m = env.match(want);
-  if (!m) throw new Error(`key not found in ${ROUTER_ENV_PATH}`);
+  const m = env.match(new RegExp(`^${name}=(.+)$`, 'm'));
+  if (!m) throw new Error(`${name} is set neither in the environment nor in ${ROUTER_ENV_PATH}`);
   return m[1].trim();
 }
 
@@ -1895,7 +1904,12 @@ function startControlServer(routerKey) {
     reviewProject(project, cfg, routerKey)
       .catch((err) => log(`[${project}] manual check failed: ${err.message}`));
   });
-  server.listen(CONTROL_PORT, '127.0.0.1', () => log(`control server listening on 127.0.0.1:${CONTROL_PORT}`));
+  // See agent-review/server.js for why this is not simply loopback. The
+  // control port is the one that takes mutating calls, so it stays behind the
+  // shared secret either way.
+  const bind = process.env.REVIEW_BIND_ADDRESS
+      || (process.env.TEKTONIX_BUNDLE === '1' ? '0.0.0.0' : '127.0.0.1');
+  server.listen(CONTROL_PORT, bind, () => log(`control server listening on ${bind}:${CONTROL_PORT}`));
 }
 
 async function main() {
