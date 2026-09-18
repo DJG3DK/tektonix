@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { render, screen } from "@testing-library/react";
 import "@testing-library/jest-dom/vitest";
@@ -112,13 +114,20 @@ describe("LandingPage", () => {
     expect(container.querySelector(".lp-pipeline .is-gate")).toBeTruthy();
   });
 
-  it("does not claim the Docker bundle includes the review services", () => {
-    // docker-compose.yml ships postgres, router and agent. Saying the review
-    // services are "as one stack" is the headline differentiator sold on a
-    // path that does not run them.
+  it("describes the bundle as what compose actually runs", () => {
+    // This sentence has now been wrong in both directions. It claimed the
+    // review services when compose lacked them, and denied them once compose
+    // had them. Pinned against the compose file rather than a fixed string, so
+    // the next change to one forces the other.
+    const compose = readFileSync(path.resolve(__dirname, "../../docker-compose.yml"), "utf8");
+    const hasReview = /^\s{2}(agent-review|commit-reviewer):/m.test(compose);
     render(<LandingPage />);
-    expect(document.body.textContent).not.toMatch(/review services as one stack/i);
-    expect(document.body.textContent).toMatch(/review services are not in this bundle yet/i);
+    const blurb = document.body.textContent ?? "";
+    if (hasReview) {
+      expect(blurb).toMatch(/review gate as one stack|and the review gate/i);
+    } else {
+      expect(blurb).not.toMatch(/review (services|gate) as one stack/i);
+    }
   });
 
   it("gives every screenshot alt text", () => {

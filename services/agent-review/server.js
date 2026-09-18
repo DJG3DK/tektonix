@@ -567,7 +567,11 @@ app.get('/api/review/status', async (req, res) => {
 // poll (e.g. right after a fresh commit lands and the review card still says
 // "not yet reviewed"). Fire-and-forget on the reviewer's side; this just
 // forwards its {ok, started} response.
-const REVIEW_CONTROL_URL = 'http://127.0.0.1:4101';
+// The reviewer is a separate container in the bundle, so its host is a
+// variable that still defaults to loopback. Without this, Check now in the
+// bundle asks THIS container for a control port it does not have.
+const REVIEW_CONTROL_URL = process.env.REVIEW_CONTROL_URL
+    || `http://${process.env.REVIEW_CONTROL_HOST || '127.0.0.1'}:4101`;
 app.post('/api/review/check/:name', requireControlSecret, async (req, res) => {
     const p = projectOr404(req, res); if (!p) return;
     try {

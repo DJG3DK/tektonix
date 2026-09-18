@@ -76,6 +76,13 @@ services:
       AGENT_HOST_PATH_MAP: /projects=${PROJECTS_DIR:?set PROJECTS_DIR in .env}
       # Shared with the two review containers, which read the same file.
       AGENT_PROJECTS_JSON: /app/data/projects.json
+      # Worktrees must live somewhere AGENT_HOST_PATH_MAP can translate, or
+      # the sandbox asks the host daemon to mount a path that exists only
+      # inside this container -- which succeeds, empty, and silently. The
+      # default (/home/agent-workspaces) is exactly that. Under /projects it
+      # is covered by the mapping already there, and nothing scans this root,
+      # so a dot-directory stays out of the way.
+      AGENT_SANDBOX_ROOT: /projects/.tektonix-workspaces
       # The review services are siblings here, not localhost.
       REVIEW_SERVICE_HOST: agent-review
       REVIEW_CONTROL_HOST: commit-reviewer
@@ -114,6 +121,7 @@ services:
       # anyone's shell history.
       REVIEW_CONTROL_SECRET_FILE: /app/data/review_control_secret
       MODEL_ROUTER_URL: http://router:4001
+      REVIEW_CONTROL_HOST: commit-reviewer
       TEKTONIX_BUNDLE: "1"
     volumes:
       - ${PROJECTS_DIR:?set PROJECTS_DIR in .env}:/projects

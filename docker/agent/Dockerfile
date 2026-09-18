@@ -53,7 +53,11 @@ RUN chmod +x /usr/local/bin/entrypoint.sh
 
 ENV PYTHONUNBUFFERED=1 \
     API_PORT=8100 \
-    AGENT_PROJECTS_ROOT=/projects
+    # AGENT_PROJECT_ROOTS, not AGENT_PROJECTS_ROOT. provisioning.py reads the
+    # first; the second was set here and read nowhere, so the allow-list fell
+    # back to its /home default and onboarding REFUSED every path under
+    # /projects -- the only place the bundle puts anything.
+    AGENT_PROJECT_ROOTS=/projects
 
 EXPOSE 8100
 HEALTHCHECK --interval=15s --timeout=5s --start-period=40s --retries=6 \

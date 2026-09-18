@@ -343,9 +343,10 @@ export function LandingPage() {
               <code className="lp-kicker">docker compose</code>
               <h3>The bundle</h3>
               <p>
-                Agent, database and router as one stack. Nothing to install but Docker itself,
-                and it runs the same on Windows and macOS as it does on Linux. The review
-                services are not in this bundle yet &mdash; they ship with the host install.
+                Agent, database, router and the review gate as one stack &mdash; a task&apos;s
+                branch is reviewed by a second model, and only a pass merges. Nothing to install
+                but Docker itself, and it runs the same on Windows and macOS as it does on Linux.
+                Deploying your app after a merge stays with the host install.
               </p>
               <pre><code>{`cp docker/.env.example .env
 docker compose up -d`}</code></pre>

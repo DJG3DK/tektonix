@@ -654,8 +654,9 @@ it finds missing, using your system package manager. It always asks first, the a
 no, and `--yes` on its own is not taken as permission.
 
 On Windows, double-click `Install Tektonix.bat`, or see
-[docker/README.md](docker/README.md) and `install.ps1`. That bundle does not
-include the review services yet.
+[docker/README.md](docker/README.md) and `install.ps1`. The bundle includes the
+review gate; what it cannot do is restart your app after a merge, because pm2
+runs on the host.
 
 <details>
 <summary>Manual bring-up, if you'd rather not use the installer</summary>

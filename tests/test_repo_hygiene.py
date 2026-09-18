@@ -369,3 +369,45 @@ def test_the_bundle_never_bind_mounts_a_path_a_fresh_install_lacks():
         "these mount a source that a fresh checkout does not have, so the "
         "container dies on a type mismatch:\n  " + "\n  ".join(offenders)
     )
+
+
+def test_the_bundle_sets_variable_names_the_code_actually_reads():
+    """An env var set in a Dockerfile and read nowhere is invisible: the
+    default silently applies and the failure surfaces somewhere unrelated.
+
+    AGENT_PROJECTS_ROOT was set in the agent image; provisioning.py reads
+    AGENT_PROJECT_ROOTS. The allow-list therefore stayed at its /home default
+    and onboarding refused every path under /projects -- the only place the
+    bundle puts anything -- with a message about allowed roots that named a
+    directory the container does not use.
+    """
+    compose = yaml.safe_load((REPO / "docker-compose.yml").read_text())
+    dockerfiles = list((REPO / "docker").rglob("Dockerfile"))
+    assert dockerfiles, "no Dockerfiles found"
+
+    declared = set()
+    for df in dockerfiles:
+        for m in re.finditer(r"^\s*(?:ENV\s+)?(AGENT_[A-Z0-9_]+)=", df.read_text(), re.M):
+            declared.add(m.group(1))
+    for svc in compose.get("services", {}).values():
+        env = svc.get("environment") or {}
+        names = env.keys() if isinstance(env, dict) else [e.split("=", 1)[0] for e in env]
+        declared.update(n for n in names if n.startswith("AGENT_"))
+
+    # Everything the Python and JS actually consult.
+    read = set()
+    for path in list((REPO / "agent").rglob("*.py")) + list((REPO / "services").rglob("*.js")):
+        if "node_modules" in str(path):
+            continue
+        text = path.read_text(errors="ignore")
+        # Any mention at all, including assignment to a constant that is read
+        # later (_HOST_PATH_MAP_ENV = "AGENT_HOST_PATH_MAP"). Deliberately
+        # permissive: the bug worth catching is a name that appears NOWHERE,
+        # and being clever about indirection only produces false alarms.
+        read.update(re.findall(r"AGENT_[A-Z0-9_]+", text))
+
+    unread = sorted(declared - read)
+    assert not unread, (
+        "the bundle sets these and nothing reads them, so their default silently "
+        "applies:\n  " + "\n  ".join(unread)
+    )

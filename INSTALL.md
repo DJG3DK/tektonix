@@ -38,8 +38,8 @@ suite passes on both, against a real Postgres. `install.sh` detects `apt`,
 
 Windows, macOS, or a one-command Docker install is a different path:
 [docker/README.md](docker/README.md). On Windows, double-click
-`Install Tektonix.bat`. That bundle does not include the review services
-yet.
+`Install Tektonix.bat`. The bundle includes the review gate; deploying your app
+after a merge is the one thing it leaves to the host install.
 
 ---
 
