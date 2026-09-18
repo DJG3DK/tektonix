@@ -21,7 +21,7 @@ cd "$AGENT_HOME"
 VERSION="${1:-$(git describe --tags --always --dirty 2>/dev/null || date -u +%Y%m%dT%H%M%SZ)}"
 OUT_DIR="$AGENT_HOME/dist"
 STAGE="$(mktemp -d)"
-NAME="3d-agent-$VERSION"
+NAME="tektonix-$VERSION"   # the product's name; the old one predates it
 trap 'rm -rf "$STAGE"' EXIT
 
 echo "packaging $NAME"
