@@ -126,9 +126,13 @@ def test_the_secret_diagram_names_every_file_the_doctor_checks():
     spec.loader.exec_module(doctor)
 
     install = pathlib.Path("INSTALL.md").read_text()
+    # Relative to the install root, not the checkout folder name. The old
+    # check used parent.name for `.env`, which is `3d-agent` on the
+    # maintainer's box and `tektonix` in CI -- both happen to appear in
+    # INSTALL.md -- and `workspace` anywhere else. The files are the claim.
     for path in (doctor.AGENT_ENV, doctor.ROUTER_ENV, doctor.SHARED_ENV, doctor.PROJECTS_JSON):
-        name = path.name if path.name != ".env" else str(path.parent.name)
-        assert name in install, f"INSTALL.md does not mention {path}"
+        rel = path.relative_to(doctor.ROOT).as_posix()
+        assert rel in install, f"INSTALL.md does not mention {rel}"
     assert "review-secrets" in install and "keys/" in install
 
 
