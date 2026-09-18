@@ -409,12 +409,14 @@ async def _verify_and_ship_inner(state: AgentState, repo: str, repo_root: str,
                         f"- [{f.get('severity', '?')}] {f.get('file', '')}: {f.get('issue', '')}"
                         for f in prior_review.get("findings", [])
                     )
+                    prior_detail = (prior_review.get("agentMessage")
+                                    or f"{prior_review.get('summary', '')}\n\n{findings}")
                     fresh_context = (
                         f"You are continuing an in-progress task. THE GOAL:\n{state['goal']}\n\n"
                         f"Work so far is committed as {pending_sha[:12]} (see `git log`/`git show` for "
                         f"what it contains) -- do NOT start over, build on it. The review service rejected "
                         f"that commit with these findings, which are the current blockers:\n\n"
-                        f"{prior_review.get('summary', '')}\n\n{findings}\n\n"
+                        f"{prior_detail}\n\n"
                         f"Fix these by ACTUALLY EDITING FILES with your edit/write tools, starting now. "
                         f"Do not restate this plan back -- your first action should be a tool call."
                     )
@@ -432,7 +434,7 @@ async def _verify_and_ship_inner(state: AgentState, repo: str, repo_root: str,
                     f"({pending_sha[:12]}) -- re-triggering review on an unchanged commit would just "
                     f"get the identical verdict again, so this gate won't do that. The findings from "
                     f"that rejection are still the real, current blockers:\n\n"
-                    f"{prior_review.get('summary', '')}\n\n"
+                    f"{prior_review.get('agentMessage') or prior_review.get('summary', '')}\n\n"
                     f"Actually make the file changes now -- call the edit/write tools. Describing a "
                     f"plan in text again will not be treated as progress."
                 )
@@ -627,6 +629,12 @@ async def _review_and_deploy(state: AgentState, repo: str, sha: str) -> dict:
 
     if review["verdict"] != "READY":
         findings = "\n".join(f"- [{f['severity']}] {f.get('file', '')}: {f['issue']}" for f in review.get("findings", []))
+        # The gate builds the wording now, and it is the only version carrying
+        # the failure OUTPUT. Without it a rejection said which checks failed
+        # but never why, so the only way to find out was to re-run them by
+        # hand -- in a workspace provisioned differently from the gate's, which
+        # is how a run can spend rounds fixing something that was never broken.
+        detail = review.get("agentMessage") or f"{review.get('summary', '')}\n\n{findings}"
         # audit M-14: honor the reviewer's own circuit breaker. It sets
         # `escalated` after MAX_CONSECUTIVE_FIXES non-converging rounds or when a
         # single file churns repeatedly (built for an observed 8-round loop), and
@@ -638,7 +646,7 @@ async def _review_and_deploy(state: AgentState, repo: str, sha: str) -> dict:
             reason = (
                 f"The independent review service escalated this after repeated non-converging "
                 f"rounds (its churn/consecutive-NEEDS_FIXES circuit breaker fired) -- a human "
-                f"should look rather than the agent nudging again.\n\n{review.get('summary', '')}\n\n{findings}"
+                f"should look rather than the agent nudging again.\n\n{detail}"
             )
             return {
                 "committed_sha": sha,
@@ -649,7 +657,7 @@ async def _review_and_deploy(state: AgentState, repo: str, sha: str) -> dict:
             }
         feedback = (
             f"The review service (an independent adversarial check, separate from the checks above) "
-            f"found real issues and rejected this:\n\n{review.get('summary', '')}\n\n{findings}\n\n"
+            f"found real issues and rejected this:\n\n{detail}\n\n"
             f"Fix these specifically, then let this gate re-review."
         )
         return {

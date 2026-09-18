@@ -46,6 +46,30 @@ const HISTORY_PATH = path.join(__dirname, 'history.jsonl');
 const REVIEW_SECRETS_ROOT = path.join(AGENT_HOME, 'services/commit-reviewer/review-secrets');
 const POLL_MS = 120_000; // 2 min — commits aren't frequent enough to need faster
 const MAX_CONSECUTIVE_FIXES = 3; // after this many NEEDS_FIXES in a row, escalate instead of re-nudging
+
+// A check whose COMMAND was never found did not fail -- it did not run, and
+// nothing was learned about the code. Telling those apart matters because the
+// two need opposite responses: a failing check is the agent's to fix, a
+// missing tool is the harness's, and asking an agent to fix the second is
+// asking it to debug an environment it cannot see. It will try anyway, which
+// is how a correct commit gets rejected round after round.
+//
+// Matches a SHELL failing to locate an executable ("sh: 1: eslint: not found",
+// "prettier: command not found"), never a module-resolution error from inside
+// a program ("Cannot find module './x'") -- that one is usually a real defect
+// in the code under review and must stay the agent's problem.
+const MISSING_TOOL_RE =
+  /(?:\b(?:sh|bash|zsh|dash)(?::\s*\d+)?:\s*\S+:\s*not found)|(?:\S+:\s*command not found)/i;
+
+// Pure, and exported for tests: marks each FAILED check whose output says its
+// own command was missing. Leaves passing checks alone -- output on a passing
+// check may quote anything.
+function classifyInfrastructureFailures(checkResults) {
+  for (const c of checkResults) {
+    if (!c.ok && MISSING_TOOL_RE.test(c.output || '')) c.infrastructure = true;
+  }
+  return checkResults;
+}
 // MAX_CONSECUTIVE_FIXES only catches straight-line failure — it resets to 0
 // the instant a round comes back READY. Seen live on a monorepo project'
 // variantOptions.ts: 8 rounds total, but verdict kept flipping
@@ -501,7 +525,30 @@ async function installChangedDependencies(cfg, worktreePath, diffFiles, log = ()
 }
 
 
-async function setupWorktree(project, cfg, sha, base) {
+// Which configured package directories a root install did NOT provision.
+// A real workspaces root installs every member, so those already have their
+// node_modules and are skipped; a directory that is its own npm project with
+// no `workspaces` entry pointing at it gets nothing from the root install and
+// needs its own. Exported so this is tested against real directories.
+function packagesNeedingOwnInstall(cfg, worktreePath) {
+  const out = [];
+  for (const rel of cfg.nodeModulesDirs || []) {
+    if (rel === '.' || rel === '') continue;
+    const dir = path.join(worktreePath, rel);
+    if (!fs.existsSync(path.join(dir, 'package.json'))) continue;
+    if (fs.existsSync(path.join(dir, 'node_modules'))) continue;
+    out.push(rel);
+  }
+  return out;
+}
+
+// A baseline result is only an answer about the environment it was measured
+// in, so the cache key names that environment as well as the commit.
+function baselineKey(base, depsChanged) {
+  return `${base}:${depsChanged ? 'install' : 'linked'}`;
+}
+
+async function setupWorktree(project, cfg, sha, base, { depsChangedOverride = null } = {}) {
   const worktreePath = path.join(WORKTREE_ROOT, `${project}-${sha.slice(0, 12)}`);
   // Self-heal before the rmSync: a previous attempt that died between setup
   // and cleanup (or whose cleanup umounts failed -- run() is best-effort and
@@ -544,7 +591,13 @@ async function setupWorktree(project, cfg, sha, base) {
   // prisma schema?' is answered against the branch's own work rather than
   // against whatever live happens to contain now.
   const diffFiles = (await git(cfg.live, ['diff', '--name-only', base || 'HEAD', sha])).output;
-  const depsChanged = /package\.json|pnpm-lock\.yaml|package-lock\.json/.test(diffFiles);
+  // `depsChangedOverride` exists for the baseline run below: a base worktree
+  // is built with sha === base, so its own diff is EMPTY and it would always
+  // take the symlink path while the branch took the install path. Comparing
+  // the two then compares provisioning, not code -- see markPreexistingFailures.
+  const depsChanged = depsChangedOverride === null
+    ? /package\.json|pnpm-lock\.yaml|package-lock\.json/.test(diffFiles)
+    : depsChangedOverride;
 
   const setupIssues = [];
   if (depsChanged) {
@@ -580,6 +633,33 @@ async function setupWorktree(project, cfg, sha, base) {
     } else {
       const install = await run(pm, ['install', '--prefer-offline', '--ignore-scripts'], worktreePath, 300_000);
       if (!install.ok) throw new Error(`${pm} install failed: ${install.output.slice(0, 1000)}`);
+    }
+    // A root install only covers the whole repo when the root manifest really
+    // declares workspaces. A repo can just as easily carry a second,
+    // standalone package (frontend/) with its own package.json and lockfile
+    // and no `workspaces` entry, and then a root install never touches it:
+    // every check configured with `dir: 'frontend'` resolves against the
+    // backend-only root node_modules and fails on missing tooling rather than
+    // on the code under review. Seen 2026-09-18: a backend-only diff that
+    // happened to touch package.json flipped this branch on, the three
+    // frontend checks failed with "eslint-plugin-react-hooks / prettier /
+    // vitest not found", and the branch could not be merged no matter what
+    // the agent did -- the verdict was NEEDS_FIXES while the review summary
+    // said the diff itself was clean.
+    //
+    // The `else` branch below already treats every nodeModulesDirs entry as
+    // its own root; this makes the depsChanged branch agree with it. Skipping
+    // an entry that already has node_modules keeps a genuine workspace root
+    // (where the root install DID cover everything) to exactly one install.
+    // --ignore-scripts for the same reason as above: a postinstall hook in an
+    // agent-authored manifest must not execute here.
+    for (const rel of packagesNeedingOwnInstall(cfg, worktreePath)) {
+      const dir = path.join(worktreePath, rel);
+      log(`[${project}] ${rel}/ is a standalone package the root install did not cover — installing it`);
+      const sub = await run(pm, ['install', '--prefer-offline', '--ignore-scripts'], dir, 300_000);
+      if (!sub.ok) {
+        setupIssues.push({ name: `install (${rel})`, ok: false, output: sub.output.slice(-4000) });
+      }
     }
   } else {
     // Workspace-internal packages (anything in nodeModulesDirs that has its
@@ -791,7 +871,7 @@ async function setupWorktree(project, cfg, sha, base) {
     }
   }
 
-  return { worktreePath, setupIssues };
+  return { worktreePath, setupIssues, depsChanged };
 }
 
 async function cleanupWorktree(cfg, worktreePath) {
@@ -858,17 +938,30 @@ function applyBaseline(checkResults, baselineForBase) {
   return checkResults;
 }
 
-async function markPreexistingFailures(project, cfg, base, checkResults, prevBaseline) {
+async function markPreexistingFailures(project, cfg, base, checkResults, prevBaseline, branchDepsChanged = null) {
   const eligible = new Set((cfg.checks || []).map((c) => c.name));
   const failed = checkResults.filter((c) => !c.ok && eligible.has(c.name));
   const baseline = { ...(prevBaseline || {}) };
-  const forBase = { ...(baseline[base] || {}) };
+  // Keyed by base sha AND provisioning mode, never by sha alone. The two modes
+  // produce genuinely different environments, so a result cached from one is
+  // not an answer about the other -- caching across them is the same
+  // apples-to-oranges comparison this function exists to prevent.
+  const baseKey = baselineKey(base, branchDepsChanged);
+  const forBase = { ...(baseline[baseKey] || {}) };
   const missing = failed.filter((c) => !(c.name in forBase));
   if (missing.length) {
     log(`[${project}] ${missing.map((c) => c.name).join(', ')} failed on the branch -- checking the base commit ${base.slice(0, 12)} for a pre-existing failure`);
     let basePath = null;
     try {
-      ({ worktreePath: basePath } = await setupWorktree(project, cfg, base, base));
+      // Provision the base EXACTLY as the branch was provisioned. Without
+      // this the comparison is meaningless: a base worktree diffs against
+      // itself, so depsChanged is always false there, and any check that only
+      // fails under the install path looked branch-specific no matter what.
+      // That is not hypothetical -- it blocked a correct commit for three
+      // rounds until the circuit breaker escalated it, because the base run
+      // inherited tooling from the live checkout that the branch run had to
+      // install for itself.
+      ({ worktreePath: basePath } = await setupWorktree(project, cfg, base, base, { depsChangedOverride: branchDepsChanged }));
       const only = { ...cfg, checks: cfg.checks.filter((c) => missing.some((m) => m.name === c.name)) };
       for (const r of await runChecks(only, basePath)) forBase[r.name] = r.ok;
     } catch (err) {
@@ -877,7 +970,7 @@ async function markPreexistingFailures(project, cfg, base, checkResults, prevBas
       if (basePath) await cleanupWorktree(cfg, basePath).catch(() => {});
     }
   }
-  baseline[base] = forBase;
+  baseline[baseKey] = forBase;
   applyBaseline(checkResults, forBase);
   const pre = checkResults.filter((c) => c.preexisting).map((c) => c.name);
   if (pre.length) log(`[${project}] pre-existing failing checks (also fail on base): ${pre.join(', ')}`);
@@ -1393,7 +1486,13 @@ function _blockingSeverity(sev) {
 }
 
 function buildAgentMessage(review, checkResults) {
-  const failedChecks = checkResults.filter((c) => !c.ok && !c.preexisting).map((c) => c.name);
+  const failing = checkResults.filter((c) => !c.ok && !c.preexisting);
+  // Split by who can actually act on it. A missing command is the harness's
+  // fault and unfixable from inside the repository; telling an agent to "fix
+  // frontend-lint" when the linter was never installed sends it to invent
+  // theories about code that is fine.
+  const unrunnable = failing.filter((c) => c.infrastructure);
+  const failedChecks = failing.filter((c) => !c.infrastructure).map((c) => c.name);
   const preexisting = checkResults.filter((c) => !c.ok && c.preexisting).map((c) => c.name);
   const blocking = review.findings.filter((f) => f.severity === 'blocking');
   const minor = review.findings.filter((f) => f.severity !== 'blocking');
@@ -1414,8 +1513,25 @@ function buildAgentMessage(review, checkResults) {
   if (failedChecks.length) {
     lines.push(`Failed checks: ${failedChecks.join(', ')}`);
   }
+  if (unrunnable.length) {
+    lines.push(`Checks that could NOT RUN: ${unrunnable.map((c) => c.name).join(', ')}. The command itself `
+      + `was missing from the review environment, so these never executed and say nothing about your code. `
+      + `This is a fault in the review harness — do NOT try to fix it from inside this repository, and do `
+      + `NOT change your code to work around it.`);
+  }
   if (preexisting.length) {
     lines.push(`Pre-existing failing checks (they fail the same way on the base commit, so they are NOT counted against this change and you should NOT try to fix them here): ${preexisting.join(', ')}`);
+  }
+  // The actual error text. Its absence is why an agent could be told only that
+  // "frontend-lint failed" and had to reconstruct the reason by experiment --
+  // it ran the checks itself, in a worktree provisioned differently, to find
+  // out what the gate had already seen and discarded.
+  const withOutput = failing.filter((c) => (c.output || '').trim());
+  if (withOutput.length) {
+    lines.push('', 'Failure output:');
+    for (const c of withOutput) {
+      lines.push(`--- ${c.name} ---`, (c.output || '').trim().slice(-1500));
+    }
   }
   if (blocking.length) {
     lines.push('Blocking findings:');
@@ -1478,7 +1594,11 @@ async function reviewProject(project, cfg, routerKey) {
   let worktreePath;
   try {
     let setupIssues;
-    ({ worktreePath, setupIssues } = await setupWorktree(project, cfg, sha, base));
+    // branchDepsChanged is carried to the baseline run so the base commit is
+    // provisioned the same way this branch was.
+    let branchDepsChanged;
+    ({ worktreePath, setupIssues, depsChanged: branchDepsChanged } =
+      await setupWorktree(project, cfg, sha, base));
     setStep(project, 'running checks');
     const checkResults = [
       ...setupIssues,
@@ -1524,7 +1644,11 @@ async function reviewProject(project, cfg, routerKey) {
       log(`[${project}] prior reviewed sha ${prevState.lastReviewedSha.slice(0, 12)} is not an ancestor of ${sha.slice(0, 12)} -- discarding stale review history instead of carrying it forward`);
       prevState = null;
     }
-    const baseline = await markPreexistingFailures(project, cfg, base, checkResults, prevState?.baseline);
+    // Before the baseline, so a missing tool is already labelled if the base
+    // run turns out to be missing it too (in which case it is pre-existing and
+    // blocks nothing).
+    classifyInfrastructureFailures(checkResults);
+    const baseline = await markPreexistingFailures(project, cfg, base, checkResults, prevState?.baseline, branchDepsChanged);
     const existingTestCoverage = gatherExistingTestCoverage(worktreePath, diff);
     const referencedFiles = gatherReferencedFiles(worktreePath, commitLog, diff);
 
@@ -1545,6 +1669,26 @@ async function reviewProject(project, cfg, routerKey) {
     // way verdict can never be NEEDS_FIXES without something specific to
     // point at, by construction.
     const mechanicalFailed = checkResults.some((c) => !c.ok && !c.preexisting);
+    // A check that could not run still blocks -- nothing was learned about the
+    // code, so READY would be a lie. But it must not be handed to the agent as
+    // something to fix: it is the harness's failure, invisible from inside the
+    // worktree. Escalate on the FIRST round instead of after three, because
+    // three rounds of an agent guessing at an environment it cannot see is
+    // exactly the loop this is here to stop.
+    const infraFailures = checkResults.filter((c) => !c.ok && !c.preexisting && c.infrastructure);
+    const infraFailed = infraFailures.length > 0;
+    if (infraFailed) {
+      // Say so in the summary, which is the field everything downstream
+      // actually reads. Without this the escalation reads as "your commit was
+      // rejected" and the next person to look starts debugging the diff.
+      const names = infraFailures.map((c) => c.name).join(', ');
+      const plural = infraFailures.length > 1 ? 'those checks' : 'that check';
+      review.summary = `The gate could not RUN ${names}: the command was missing from the review `
+        + `environment, so ${plural} never executed and nothing was learned about this commit either `
+        + `way. This is a fault in the review harness, not in the code under review -- it cannot be `
+        + `fixed from inside the repository, and the commit is blocked only because an unrun check `
+        + `cannot be counted as a pass.\n\n${review.summary || ''}`;
+    }
     const hasBlockingFindings = (review.findings || []).some((f) => f.severity === 'blocking');
     // audit H-9/H-10: ANY omitted file forces NEEDS_FIXES in NODE -- not left
     // to the model, which the prompt could talk out of it. (The unreadable-
@@ -1583,7 +1727,7 @@ async function reviewProject(project, cfg, routerKey) {
     // otherwise a later round would double-count this one (once read back
     // from history, once from currentFindings).
     const churn = verdict === 'READY' ? null : computeFileChurn(project, review.findings);
-    const escalated = verdict === 'READY' ? false : (wasEscalated || consecutiveNeedsFixes >= MAX_CONSECUTIVE_FIXES || Boolean(churn));
+    const escalated = verdict === 'READY' ? false : (wasEscalated || infraFailed || consecutiveNeedsFixes >= MAX_CONSECUTIVE_FIXES || Boolean(churn));
 
     const state = loadState();
     state[project] = {
@@ -1598,7 +1742,20 @@ async function reviewProject(project, cfg, routerKey) {
       summary: review.summary,
       findings: review.findings,
       omittedFiles,  // audit H-9: record what the review could not see
-      checkResults: checkResults.map((c) => ({ name: c.name, ok: c.ok, ...(c.preexisting ? { preexisting: true } : {}) })),
+      // Failures keep their output. Stripping it was why nothing downstream
+      // could say WHY a check failed -- the text was captured, shown to the
+      // review model, then dropped before anyone else could read it.
+      checkResults: checkResults.map((c) => ({
+        name: c.name,
+        ok: c.ok,
+        ...(c.preexisting ? { preexisting: true } : {}),
+        ...(c.infrastructure ? { infrastructure: true } : {}),
+        ...(c.ok ? {} : { output: (c.output || '').slice(-2000) }),
+      })),
+      // The message for whoever acts on this verdict. Built here rather than
+      // by each consumer so there is one wording, and so buildAgentMessage is
+      // on a live path instead of being exercised only by its own tests.
+      agentMessage: verdict === 'READY' ? null : buildAgentMessage(review, checkResults),
       baseline,  // per-base-sha cache of which checks fail on base, so a slow suite is re-run there once
       reviewedAt: new Date().toISOString(),
       consecutiveNeedsFixes,
@@ -1775,4 +1932,5 @@ module.exports = {
   setupWorktree, cleanupWorktree, runChecks, runBuildCheck, runDatabaseCheck, runSecretScan,
   materializeDependencyDirs, installChangedDependencies,
   detectNewCommit, reviewWithSonnet, buildAgentMessage, applyBaseline, TASK_BRANCH_RE,
+  classifyInfrastructureFailures, packagesNeedingOwnInstall, baselineKey,
 };
