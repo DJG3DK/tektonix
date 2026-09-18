@@ -8,7 +8,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const { readServiceSecret, SHARED_ENV, LEGACY_ENV } = require('../services/shared/service-env.js');
+const { readServiceSecret, SHARED_ENV, LEGACY_ENV, ANCIENT_ENV } = require('../services/shared/service-env.js');
 
 function home(files) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'svc-env-'));
@@ -19,6 +19,14 @@ function home(files) {
   return root;
 }
 
+test('the legacy fallback is the current router path, not the pre-rename one', () => {
+  // Doctor warns about services/model-router/.env. If this constant still
+  // said llm-router, an upgrade that never re-ran the installer would have
+  // the secret where doctor looks and nowhere the Node services read.
+  assert.equal(LEGACY_ENV, 'services/model-router/.env');
+  assert.equal(ANCIENT_ENV, 'services/llm-router/.env');
+});
+
 test('the shared env file is the home', () => {
   const root = home({ [SHARED_ENV]: 'REVIEW_CONTROL_SECRET=from-shared\n' });
   assert.equal(readServiceSecret('REVIEW_CONTROL_SECRET', root), 'from-shared');
@@ -27,6 +35,19 @@ test('the shared env file is the home', () => {
 test('the router env still works for a deployment installed before the split', () => {
   const root = home({ [LEGACY_ENV]: 'OPENROUTER_API_KEY=k\nREVIEW_CONTROL_SECRET=from-legacy\n' });
   assert.equal(readServiceSecret('REVIEW_CONTROL_SECRET', root), 'from-legacy');
+});
+
+test('the pre-rename llm-router path still works as a last resort', () => {
+  const root = home({ [ANCIENT_ENV]: 'REVIEW_CONTROL_SECRET=from-ancient\n' });
+  assert.equal(readServiceSecret('REVIEW_CONTROL_SECRET', root), 'from-ancient');
+});
+
+test('the current router leftover wins over the pre-rename path', () => {
+  const root = home({
+    [LEGACY_ENV]: 'REVIEW_CONTROL_SECRET=from-router\n',
+    [ANCIENT_ENV]: 'REVIEW_CONTROL_SECRET=from-ancient\n',
+  });
+  assert.equal(readServiceSecret('REVIEW_CONTROL_SECRET', root), 'from-router');
 });
 
 test('the shared file wins over the legacy one', () => {

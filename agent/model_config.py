@@ -1,9 +1,8 @@
 """Reads and edits this agent's own model pins in model-router/config.yaml --
-strictly scoped to the agent-* entries (see MANAGED_ROLES). The other
-entries in that file are not this agent's to set and are never read or
-written here: mail-chat/mail-triage (the mail agent), trade-gate (the
-trading bot), and deepseek-v4-pro/claude-haiku-4.5/gpt-4o-mini, which have
-no caller of their own and exist as router_settings.fallbacks targets.
+strictly scoped to the agent-* entries (see MANAGED_ROLES). Other entries
+in that file are not this agent's to set and are never read or written
+here. The unnamed fallback targets (deepseek-v4-pro, claude-haiku-4.5,
+gpt-4o-mini) exist as router_settings.fallbacks destinations.
 
 (The SIMPLE/MEDIUM/COMPLEX/REASONING tier system that used to live there was
 removed on 2026-09-13 along with smart-router and reasoning-tier -- built for

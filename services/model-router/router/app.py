@@ -47,9 +47,8 @@ def _parse_consumer_keys(raw: str) -> dict[str, str]:
     """`label=key,label=key` -> {key: label}.
 
     One key per caller, replacing a single shared master key. Without
-    it every consumer on the box -- the mail agent, the demo bot, the trading
-    gate -- would have to hold a credential that can call any alias, and
-    revoking one would mean rotating all of them.
+    it every consumer on the box would have to hold a credential that can
+    call any alias, and revoking one would mean rotating all of them.
 
     Keyed BY THE SECRET so a lookup is one dict hit and never a loop that
     leaks timing per configured label.

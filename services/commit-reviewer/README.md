@@ -82,7 +82,7 @@ worktrees/         ephemeral per-review checkouts (gitignored)
 ## Running it
 
 Runs under pm2 alongside the agent. It needs the router reachable at `MODEL_ROUTER_URL`
-(default `http://127.0.0.1:4000`) and `MODEL_ROUTER_KEY` in the router's `.env`.
+(default `http://127.0.0.1:4001/v1`) and `MODEL_ROUTER_KEY` in the router's `.env`.
 
 **Zero npm dependencies** — `reviewer.js` is Node stdlib only, so there is no `package.json` and
 nothing to install. (The `require('argon2')` you may grep into is a string: a check command

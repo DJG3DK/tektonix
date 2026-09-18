@@ -33,7 +33,7 @@ async def describe_image_bytes(image_bytes: bytes, mime: str, prompt: str | None
     # server-side, invisible to provider routing.
     model = ChatOpenAI(
         model="agent-vision",
-        base_url=os.environ.get("MODEL_ROUTER_URL", "http://127.0.0.1:4000/v1"),
+        base_url=os.environ.get("MODEL_ROUTER_URL", "http://127.0.0.1:4001/v1"),
         api_key=os.environ.get("MODEL_ROUTER_KEY", os.environ.get("OPENAI_API_KEY", "")),
         timeout=120,
     )

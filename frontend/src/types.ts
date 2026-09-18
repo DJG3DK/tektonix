@@ -313,16 +313,10 @@ export interface TraceSummary {
 // its model through this API (services/commit-reviewer/reviewer.js reads the
 // alias, not a model name).
 //
-// The model router is shared with two other services on the box, whose aliases
-// are deliberately not exposed here because this agent does not own them:
-// mail-chat/mail-triage (the mail agent) and trade-gate (the trading bot).
-//
-// The router's config also still carries an adaptive SIMPLE/MEDIUM/COMPLEX/
-// REASONING tier system with smart-router and reasoning-tier. That is dead
-// weight: it was built for OpenHands, which was archived on 2026-08-24, and
-// the ledger shows one smart-router call ever and zero for reasoning-tier
-// against 2261 agent-* calls in the last fortnight. Do not describe it as
-// belonging to anything; nothing calls it.
+// Aliases that do not begin agent- are deliberately not exposed here: this
+// page only edits the seats this agent owns. Fallback targets
+// (deepseek-v4-pro, claude-haiku-4.5, gpt-4o-mini) stay in the router config
+// and are not listed.
 export interface ModelPin {
   label: string;
   model: string;

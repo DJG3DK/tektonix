@@ -1,14 +1,10 @@
 # Tektonix model router configuration -- EXAMPLE.
 #
-# Consumers of this router (2026-09-13):
-#   * the LangGraph agent, through its 15 pinned agent-* roles -- including
-#     agent-reviewer, which the commit-reviewer service resolves by alias
-#   * the mail agent    -- mail-chat, mail-triage
-#   * the trading bot   -- trade-gate
-#
-# deepseek-v4-pro, claude-haiku-4.5 and gpt-4o-mini are deployments with no
-# caller of their own: they exist as router_settings.fallbacks targets for the
-# roles above. Do not delete one without checking that block.
+# This file is the seed for a fresh Tektonix install. It defines the agent's
+# 15 pinned agent-* roles -- including agent-reviewer, which the commit-reviewer
+# service resolves by alias -- plus three unnamed fallback targets
+# (deepseek-v4-pro, claude-haiku-4.5, gpt-4o-mini) that those roles may fail
+# over to. Do not delete a fallback without checking router_settings.fallbacks.
 #
 # The adaptive SIMPLE/MEDIUM/COMPLEX/REASONING tier system, smart-router,
 # reasoning-tier and their nine pool models were REMOVED on 2026-09-13. They
@@ -445,93 +441,6 @@ model_list:
       input_cost_per_token: 0.000002
       output_cost_per_token: 0.000012
 
-  # Agent_Email's mail triage (/home/agentEmail/agent/triage.py) — a SEPARATE
-  # application that happens to share this router. It is not part of 3d-agent
-  # and nothing of it lives in this repo; this entry exists so mail's model
-  # choice and mail's spend are decided here rather than hardcoded over there.
-  #
-  # Dedicated pin (2026-08-31): sender-level email categorisation. High volume,
-  # long context (a sender's sample subjects batched 25 at a time), and it
-  # drives MCP tools, so tool-calling has to be reliable — but the judgement
-  # itself is easy, so paying reasoning-tier prices for it is waste. It ran on
-  # gemini-3.1-pro-preview during the initial 9,467-message sweep ($2/$12 per
-  # M tokens); qwen3.8-flash does the same job at $0.15/$0.47 with the same 1M
-  # context and verified tool-call support. Operator pick, on cost.
-  # Agent_Email's in-app chat agent (/home/agentEmail/agent/chat.py). Same
-  # separate application as mail-triage below, different job, so a different
-  # dial: triage is high-volume and easy, chat is low-volume and hard.
-  #
-  # Dedicated pin (2026-08-31): conversational mail assistant driving the same
-  # 15 MCP tools. Operator shortlist was qwen3.8-max / glm-5.3 / grok-4.6;
-  # glm-5.3 picked on three counts — cheapest of the three ($1.40/$4.40 vs
-  # $2/$6 for both others), longest context by some way (1.31M, and thread
-  # dumps plus message bodies are what fills a mail agent's window), and the
-  # GLM family is already the trusted tool-caller in this config (glm-5.2 is
-  # the complexity router's last-resort default). Grok 4.6's 500K context was
-  # the deciding mark against it for this particular workload.
-  # reasoning effort pinned LOW (2026-09-02): glm-5.3 spiraled on a simple
-  # "can you see starred mail" turn - 40K reasoning tokens in one call, $0.72
-  # for one invisible turn - and reasoning streams as empty chunks, so the
-  # mail app's stall guard sees a live stream while the user sees nothing.
-  # A tool-driven mail agent needs quick tool calls, not deep chains.
-  # Operator swap (2026-09-02): glm-5.3 out after a week of reasoning-spiral
-  # and pacing complaints; qwen3.8-flash promoted from triage to chat (tools,
-  # tool_choice and structured outputs confirmed on OpenRouter, ~a tenth of
-  # glm's price), with deepseek-v4-flash-0731 taking triage. The requested
-  # "0423" snapshot does not exist on OpenRouter; 0731 is the dated flash
-  # snapshot, chosen over -latest so behavior stays pinned.
-  # Second swap (2026-09-03): qwen3.8-flash's sole provider (Alibaba) kept
-  # failing in a way no guard catches - returning a SUCCESSFUL call with zero
-  # completion tokens, or sitting minutes before the first one. An empty
-  # stream is not an exception, so the fallback never fired and turns died at
-  # the stall guard ("the agent just stops repeatedly"). deepseek-v4-flash-0731
-  # has been flawless all day as the triage judge on the same board, so it
-  # takes the wheel; qwen stays as the fallback instead of the driver.
-  # Third swap (2026-09-03, operator): split the two jobs across the DeepSeek
-  # tiers - flash keeps sorting (mail-triage below), V4 Pro becomes the chat
-  # brain. Pro is the -0813 GA snapshot, NOT the bare "deepseek-v4-pro" slug
-  # (that is pinned to April's 0423 - see the deepseek-v4-pro alias above).
-  # ~20x flash's price per token, which is exactly why chat.py delegates bulk
-  # per-item verdicts to mail-triage via delegate_judgement. reasoning effort
-  # stays low and the fallback to mail-triage stays: a Pro-pool blip degrades
-  # to flash instead of a dead turn.
-  - model_name: mail-chat
-    params:
-      model: openrouter/deepseek/deepseek-v4-pro-0813
-      timeout: 120
-      extra_body: {"provider": {"require_parameters": true}, "reasoning": {"effort": "low"}}
-    model_info:
-      input_cost_per_token: 0.00000132
-      output_cost_per_token: 0.00000396
-
-  - model_name: mail-triage
-    params:
-      model: openrouter/deepseek/deepseek-v4-flash-0731
-      extra_body: {"provider": {"require_parameters": true}}
-    model_info:
-      input_cost_per_token: 0.000000065
-      output_cost_per_token: 0.00000018
-
-  - model_name: trade-gate
-    params:
-      # Dedicated pin (2026-09-02): webapp's Agent Gate (src/core/agentGate.js)
-      # — the LLM entry veto/decider on strata & ctaTrend armed entries. Low
-      # volume (fires only when an entry arms; the bot also enforces its own
-      # maxCallsPerDay cap), but every call gates real money: one structured
-      # enter/skip JSON judging multi-TF price action, RSI/MACD divergences,
-      # approach direction and OI/funding. Judgement quality per call matters
-      # far more than rate, so it pins the strongest Anthropic tier rather
-      # than a cost tier. Anthropic-only, no fallbacks — deliberately: the
-      # gate's shadow win/loss cohorts (webapp data/agent/decisions.jsonl)
-      # are a running experiment on ONE model's judgement; a silent provider
-      # swap mid-sample would contaminate the cohorts.
-      model: openrouter/anthropic/claude-opus-5
-      api_key: os.environ/OPENROUTER_API_KEY
-      extra_body: {"provider": {"require_parameters": true, "only": ["Anthropic"], "allow_fallbacks": false}}
-    model_info:
-      input_cost_per_token: 0.000005
-      output_cost_per_token: 0.000025
-
   - model_name: agent-classifier
     params:
       # Dedicated pin (2026-08-23): a single cheap, non-agentic call per task
@@ -685,13 +594,6 @@ router_settings:
     # Frontend tiers (2026-09-09) fall back to the general seats they replace.
     - agent-planning-chat-frontend: ["agent-planning-chat-hard"]
     - agent-coder-frontend: ["agent-coder"]
-    # The mail chat agent. qwen3.8-flash has exactly one provider (Alibaba),
-    # so when that pool is slow there is nothing to route around WITHIN the
-    # alias - a hung first token killed a mail turn on 2026-09-03. mail-triage
-    # (deepseek-v4-flash-0731) is tool+structured-output verified and already
-    # part of the same mail system, so a flaky Alibaba minute degrades to the
-    # cheaper sibling instead of an error in the user's chat.
-    - mail-chat: ["mail-triage"]  # V4 Pro -> V4 Flash: cheaper sibling on a Pro-pool blip
     # agent-planner is ALSO gemini-3.7-flash and coordinates every task's work
     # pass -- the same upstream shared-pool 429s that killed a planning turn
     # can kill a work pass mid-task. Same remedy: fail over to the proven

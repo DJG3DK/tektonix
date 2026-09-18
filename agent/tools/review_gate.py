@@ -39,7 +39,7 @@ if not _os.environ.get("REVIEW_CONTROL_SECRET"):
     logging.getLogger("tektonix").warning(
         "REVIEW_CONTROL_SECRET is not set: merge and deploy calls to the review "
         "service will be rejected. Generate one and put the SAME value in this "
-        "app's .env and in services/model-router/.env (see .env.example).")
+        "app's .env and in services/shared/.env (see .env.example).")
 
 _CONTROL_HEADERS = (
     {"X-Review-Secret": _os.environ["REVIEW_CONTROL_SECRET"]}

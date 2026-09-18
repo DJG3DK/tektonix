@@ -4064,9 +4064,8 @@ async def get_model_config(user: User = Depends(require_full_auth)):
     """Current pins for this agent's own roles -- see model_config.MANAGED_ROLES
     (fifteen of them, including agent-reviewer, which the commit-reviewer
     service resolves by alias). The remaining entries in model-router/config.yaml
-    are not this agent's to set and are never exposed here: the mail agent's
-    and the trading bot's aliases, plus the three fallback targets that have no
-    caller of their own.
+    are not this agent's to set and are never exposed here: unnamed fallback
+    targets, and any alias another process on the box may have added.
     """
     auth.require_admin(user)
     # Live catalog prices, not the hand-written model_info blocks (which drift).

@@ -43,6 +43,36 @@ def test_the_map_names_the_ports_the_code_actually_uses():
     assert "4100" in pathlib.Path("services/agent-review/server.js").read_text()
 
 
+def test_operator_docs_send_health_checks_to_the_router_s_real_port():
+    """The LiteLLM proxy was :4000. The router has been :4001 since the
+    cutover. A troubleshooting curl at the old port looks like a down
+    router when the process is healthy."""
+    install = pathlib.Path("INSTALL.md").read_text()
+    playbook = pathlib.Path("docs/playbooks/add-a-managed-role.md").read_text()
+    assert "127.0.0.1:4001/health/liveliness" in install
+    assert "127.0.0.1:4000/health/liveliness" not in install
+    assert "127.0.0.1:4001/v1/models" in playbook
+    assert "127.0.0.1:4000/v1/models" not in playbook
+
+
+def test_the_review_secret_example_names_the_file_the_services_read():
+    """The Node services read REVIEW_CONTROL_SECRET from services/shared/.env.
+    .env.example used to tell a hand-rolled install to put it in the
+    router's .env -- the path that made the model proxy a secrets bus."""
+    text = pathlib.Path(".env.example").read_text()
+    # The assignment line, plus the comment block immediately above it.
+    key = text.index("\nREVIEW_CONTROL_SECRET=")
+    block = text[text.rfind("\n\n", 0, key):key]
+    assert "services/shared/.env" in block
+    assert "services/model-router/.env" not in block
+
+
+def test_vision_falls_back_to_the_router_s_real_port():
+    text = pathlib.Path("agent/tools/vision.py").read_text()
+    assert "127.0.0.1:4001/v1" in text
+    assert "127.0.0.1:4000/v1" not in text
+
+
 def test_the_health_routes_the_docs_promise_exist_in_the_code():
     assert '@app.get("/api/health")' in pathlib.Path("agent/server.py").read_text()
     assert "app.get('/health'" in pathlib.Path("services/agent-review/server.js").read_text()
