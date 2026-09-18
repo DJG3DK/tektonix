@@ -653,8 +653,9 @@ OpenRouter API key, which is the only paid dependency. The installer offers to i
 it finds missing, using your system package manager. It always asks first, the answer defaults to
 no, and `--yes` on its own is not taken as permission.
 
-On Windows, or for a one-command Docker install, see [docker/README.md](docker/README.md)
-and `install.ps1`. That bundle does not include the review services yet.
+On Windows, double-click `Install Tektonix.bat`, or see
+[docker/README.md](docker/README.md) and `install.ps1`. That bundle does not
+include the review services yet.
 
 <details>
 <summary>Manual bring-up, if you'd rather not use the installer</summary>

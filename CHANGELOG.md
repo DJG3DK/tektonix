@@ -25,8 +25,12 @@ port `:4000`. The router has been on `:4001` since the cutover.
 CONTRIBUTING claimed to list the exact CI jobs and then omitted the landing
 page, the model-router suite, and `ruff check services/model-router`. The
 list is five jobs now, and the hygiene test pins the commands that used to
-drift. The shipped example `projects.json` and watchdog list no longer name
-the maintainer's other services.
+drift.
+
+The landing page sold the Docker bundle as "agent, database, router and the
+review services as one stack". Compose runs three of those. The page now
+says the review services are not in the bundle yet, matching
+`docker/README.md`.
 
 ### The review dashboard could not press its own buttons
 

@@ -114,6 +114,22 @@ def test_the_backup_scripts_exist_and_are_executable(script):
     assert script in pathlib.Path("docs/backup.md").read_text()
 
 
+def test_the_landing_page_does_not_advertise_review_services_the_bundle_lacks():
+    """The public page sold the review gate as part of `docker compose up`.
+    compose runs postgres, router and agent. docker/README.md already said
+    the review services are not in the bundle; the landing page did not."""
+    compose = pathlib.Path("docker-compose.yml").read_text()
+    landing = pathlib.Path("site/src/LandingPage.tsx").read_text()
+    readme = pathlib.Path("docker/README.md").read_text()
+    has_review = "agent-review" in compose or "commit-reviewer" in compose
+    if has_review:
+        return
+    assert "review services as one stack" not in landing
+    assert "not in this bundle yet" in landing
+    assert "What is not in the bundle yet" in readme
+    assert "review services" in readme.lower()
+
+
 def test_the_doctor_and_release_scripts_exist_and_are_documented():
     """Slice 2: a layout diagram nobody can check is decoration."""
     for script in ("scripts/doctor.py", "scripts/package_release.sh"):

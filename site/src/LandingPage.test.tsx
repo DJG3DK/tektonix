@@ -112,6 +112,15 @@ describe("LandingPage", () => {
     expect(container.querySelector(".lp-pipeline .is-gate")).toBeTruthy();
   });
 
+  it("does not claim the Docker bundle includes the review services", () => {
+    // docker-compose.yml ships postgres, router and agent. Saying the review
+    // services are "as one stack" is the headline differentiator sold on a
+    // path that does not run them.
+    render(<LandingPage />);
+    expect(document.body.textContent).not.toMatch(/review services as one stack/i);
+    expect(document.body.textContent).toMatch(/review services are not in this bundle yet/i);
+  });
+
   it("gives every screenshot alt text", () => {
     render(<LandingPage />);
     screen.getAllByRole("img").forEach((img) => {

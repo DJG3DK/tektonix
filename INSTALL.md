@@ -37,8 +37,9 @@ suite passes on both, against a real Postgres. `install.sh` detects `apt`,
 `conf.d` depending on the distro's layout.
 
 Windows, macOS, or a one-command Docker install is a different path:
-[docker/README.md](docker/README.md) and `install.ps1`. That bundle does
-not include the review services yet.
+[docker/README.md](docker/README.md). On Windows, double-click
+`Install Tektonix.bat`. That bundle does not include the review services
+yet.
 
 ---
 
