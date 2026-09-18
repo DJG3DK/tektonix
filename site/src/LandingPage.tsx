@@ -343,8 +343,9 @@ export function LandingPage() {
               <code className="lp-kicker">docker compose</code>
               <h3>The bundle</h3>
               <p>
-                Agent, database, router and the review services as one stack. Nothing to install
-                but Docker itself, and it runs the same on Windows and macOS as it does on Linux.
+                Agent, database and router as one stack. Nothing to install but Docker itself,
+                and it runs the same on Windows and macOS as it does on Linux. The review
+                services are not in this bundle yet &mdash; they ship with the host install.
               </p>
               <pre><code>{`cp docker/.env.example .env
 docker compose up -d`}</code></pre>

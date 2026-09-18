@@ -653,6 +653,10 @@ OpenRouter API key, which is the only paid dependency. The installer offers to i
 it finds missing, using your system package manager. It always asks first, the answer defaults to
 no, and `--yes` on its own is not taken as permission.
 
+On Windows, double-click `Install Tektonix.bat`, or see
+[docker/README.md](docker/README.md) and `install.ps1`. That bundle does not
+include the review services yet.
+
 <details>
 <summary>Manual bring-up, if you'd rather not use the installer</summary>
 
@@ -903,16 +907,10 @@ source or a runtime knob — each starting with a test that fails until the wiri
 
 ## Testing
 
-```bash
-.venv/bin/python -m pytest -q
-.venv/bin/ruff check .
-cd frontend && npm test && npx tsc --noEmit -p tsconfig.app.json && npm run lint
-for f in tests/*.js; do node "$f"; done
-```
-
-The exact commands CI runs, in order, are in
-[CONTRIBUTING.md](CONTRIBUTING.md) — and a test asserts that list and
-`.github/workflows/ci.yml` still agree, because they drifted twice before anyone noticed.
+A fresh clone with no `.env` runs every check CI runs. The exact five jobs, in
+order, are in [CONTRIBUTING.md](CONTRIBUTING.md) — and a test asserts that list
+and `.github/workflows/ci.yml` still agree, because they drifted twice before
+anyone noticed.
 
 Python covers the graph nodes (including the commit gate's plan-completion, stale-review and
 pre-existing-failure handling), budget guard (including billed-vs-estimated cost), model routing,

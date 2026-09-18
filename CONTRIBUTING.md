@@ -50,15 +50,21 @@ node --version      # v24.x or newer
 python3 --version   # 3.12+
 ```
 
-The exact four things CI does, in order, from a clean clone:
+The exact five jobs CI runs, in order, from a clean clone:
 
 ```bash
 # 1. Python -- the suite plus lint. No network, no database, no .env needed.
 #    The planner's repo search shells out to ripgrep, so its tests need `rg`.
+#    The model router is its own service; its tests and lint run here too.
 python3 -m venv .venv && .venv/bin/pip install -q -r requirements.txt
 .venv/bin/python -m pytest -q
 .venv/bin/ruff check .
+.venv/bin/python -m pytest -q services/model-router/tests
+.venv/bin/ruff check services/model-router
 .venv/bin/python -m compileall -q scripts/ agent/
+# The commands onboarding proposes, run for real on this host's stacks.
+# Add --docker's worth by dropping the flag if you have Go/Rust/Ruby images.
+python3 scripts/verify_stack_checks.py --no-docker
 
 # 2. Frontend -- typecheck, lint, tests, build.
 cd frontend && npm ci
@@ -68,13 +74,25 @@ npm test
 npm run build
 cd ..
 
-# 3. The two Node services -- syntax on every file, then their unit tests.
+# 3. Landing page -- typecheck, lint, tests, build, then the newsletter signup.
+#    site/ is tektonix.io, not the product; CI still gates it.
+cd site && npm ci
+npx tsc --noEmit -p tsconfig.app.json
+npm run lint
+npm test
+npm run build
+cd server
+python3 -m venv .venv
+.venv/bin/pip install -q -r requirements.txt
+.venv/bin/python -m pytest -q test_newsletter.py
+cd ../..
+
+# 4. The two Node services -- syntax on every file, then their unit tests.
 for f in services/*/*.js services/shared/*.js; do node --check "$f"; done
 node tests/test_projects_config_merge.js
 node tests/test_reviewer_preexisting.js
 node tests/test_reviewer_gate_attribution.js
 pwsh tests/test_install_ps1.ps1
-bash tests/test_install_prereqs.sh
 node tests/test_reviewer_candidates.js
 node tests/test_preflight.js
 node tests/test_service_env.js
@@ -86,12 +104,9 @@ node tests/test_sw_push.js
 # through it and requires EROFS. Without root those cases skip.
 sudo REQUIRE_MOUNT_TESTS=1 node tests/test_reviewer_dependency_dirs.js
 
-# 3b. The commands onboarding proposes, run for real on this host's stacks.
-#     Add --docker's worth by dropping the flag if you have Go/Rust/Ruby images.
-python3 scripts/verify_stack_checks.py --no-docker
-
-# 4. Shell -- the scripts, the doctor on an unconfigured tree, a dry-run install.
+# 5. Shell -- the scripts, the doctor on an unconfigured tree, a dry-run install.
 bash -n install.sh scripts/*.sh
+bash tests/test_install_prereqs.sh
 python3 scripts/doctor.py --quiet || true
 PG_DSN=postgresql://placeholder@localhost:5432/placeholder \
   OPENROUTER_API_KEY=placeholder ./install.sh --dry-run --yes
@@ -108,7 +123,7 @@ its three answers from `/dev/tty`, which does not exist in a pipeline or in
 most editor terminals, and the failure looks like a broken installer rather
 than a missing flag. It writes nothing either way.
 
-If all four pass locally, CI will pass. If one behaves differently on your
+If all five pass locally, CI will pass. If one behaves differently on your
 machine, that is a bug worth reporting on its own — the point of the offline
 setup is that a contributor's box and CI agree.
 
@@ -158,7 +173,7 @@ Postgres.
 - One concern per PR. A refactor bundled with a fix is hard to review and hard
   to revert.
 - Say what breaks if you're wrong. Reviewers calibrate on that.
-- Run the four blocks under *Setting up to develop* before opening. CI runs
+- Run the five jobs under *Setting up to develop* before opening. CI runs
   exactly those on every pull request, all offline — no secrets, no database,
   no model calls.
 - Small PRs get read the same week. Large ones may sit — open an issue first

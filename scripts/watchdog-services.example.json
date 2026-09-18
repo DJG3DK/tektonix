@@ -1,15 +1,15 @@
 [
   {
-    "name": "storefront-api",
-    "repo": "storefront",
+    "name": "web-app-api",
+    "repo": "web-app",
     "live": "http://127.0.0.1:3000/health/live",
     "ready": "http://127.0.0.1:3000/health/ready",
-    "pm2": "storefront-api"
+    "pm2": "web-app-api"
   },
   {
     "name": "worker",
-    "repo": "storefront",
-    "live": "http://127.0.0.1:4000/healthz",
+    "repo": "web-app",
+    "live": "http://127.0.0.1:3001/healthz",
     "pm2": "worker"
   }
 ]

@@ -3,8 +3,8 @@ import react from '@vitejs/plugin-react'
 
 // The landing page. It builds to static HTML, CSS and images -- see
 // scripts/render.mjs, which renders the page at build time and then strips
-// the module script, because nothing on this page needs a runtime: the only
-// control is the sign-in link, and a link is HTML.
+// the module script, because nothing on this page needs a runtime: the
+// controls are links and a plain HTML form.
 //
 // Kept as a Vite/React project rather than hand-written HTML so the page is
 // still a component with real CSS bundling, asset hashing and tests -- the

@@ -73,8 +73,8 @@ withBuild('the built page is readable without JavaScript', () => {
   });
 
   it('ships no JavaScript at all', () => {
-    // The only control is the sign-in link. Anything that needed a runtime
-    // would render and then do nothing, because there is no runtime to load.
+    // The controls are links and a plain HTML form. Anything that needed a
+    // runtime would render and then do nothing, because there is no runtime.
     expect(built).not.toMatch(/<script[^>]+src=/);
   });
 
