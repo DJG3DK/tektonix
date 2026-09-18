@@ -67,6 +67,17 @@ def test_the_review_secret_example_names_the_file_the_services_read():
     assert "services/model-router/.env" not in block
 
 
+def test_the_installer_nginx_vhost_exposes_the_review_dashboard():
+    """The review UI's mutating routes require X-Review-Secret. The browser
+    never holds it; nginx injects it on /_review/. A vhost without that
+    location makes Check now / merge / restart 401 after a by-the-book
+    install."""
+    text = pathlib.Path("install.sh").read_text()
+    assert "location /_review/" in text
+    assert "X-Review-Secret" in text
+    assert "location /_review/" in pathlib.Path("INSTALL.md").read_text()
+
+
 def test_vision_falls_back_to_the_router_s_real_port():
     text = pathlib.Path("agent/tools/vision.py").read_text()
     assert "127.0.0.1:4001/v1" in text

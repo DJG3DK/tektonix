@@ -98,6 +98,20 @@ async def project_has_checks(project: str) -> bool | None:
     return bool(entry.get("checks"))
 
 
+def _reviewed_sha_is(got: str | None, expect: str) -> bool:
+    """The review we are waiting for, not a neighbour that shares a prefix.
+
+    lastReviewedSha used to be matched on the first 12 hex characters. Two
+    commits in the same repo can share that prefix; accepting the wrong
+    verdict would ship a since-changed diff as if it had been reviewed.
+    Full-string equality is the claim wait_for_review's docstring already
+    makes. Empty values never match.
+    """
+    if not got or not expect:
+        return False
+    return got == expect
+
+
 async def _read_state(project: str) -> dict | None:
     async with httpx.AsyncClient(timeout=15) as client:
         r = await client.get(f"http://127.0.0.1:{REVIEW_SERVICE_PORT}/api/review/status")
@@ -122,7 +136,7 @@ async def wait_for_review(project: str, expect_sha: str, timeout: int = 900, pol
         except httpx.HTTPError as e:
             logger.warning("wait_for_review: transient poll failure for %s (will retry): %s", project, e)
             state = None
-        if state and state.get("lastReviewedSha", "").startswith(expect_sha[:12]):
+        if state and _reviewed_sha_is(state.get("lastReviewedSha"), expect_sha):
             return state
         await asyncio.sleep(poll_interval)
         elapsed += poll_interval

@@ -62,3 +62,45 @@ def test_eviction_bounds_the_attempts_dict(monkeypatch):
     t[0] += rl._EVICT_INTERVAL + 10_000
     rl.check_rate_limit(_req({"x-real-ip": "203.0.113.250"}), "login")
     assert len(rl._attempts) < before, "stale keys were not evicted"
+
+
+def test_a_successful_2fa_clears_the_verify_window(monkeypatch):
+    """Login already cleared its window on success. verify-2fa did not, so a
+    few typos before a good code could lock a legitimate second factor."""
+    from fastapi.testclient import TestClient
+
+    import agent.server as srv
+
+    async def pending(pool, token):
+        return {"user_id": 1}
+
+    async def totp_ok(pool, config, uid, code):
+        return True
+
+    async def session(pool, uid):
+        return "sess"
+
+    async def user_row(pool, uid):
+        return {"id": 1, "email": "a@b.co", "role": "admin", "allowed_repos": None,
+                "totp_enabled": True, "must_change_password": False,
+                "auto_approve_commands": False, "require_merge_review": True}
+
+    monkeypatch.setattr(srv.auth, "resolve_pending_2fa", pending)
+    monkeypatch.setattr(srv.auth, "verify_totp_or_recovery", totp_ok)
+    monkeypatch.setattr(srv.auth, "create_session", session)
+    monkeypatch.setattr(srv.auth, "get_user_by_id", user_row)
+    monkeypatch.setattr(srv.app.state, "auth_pool", object(), raising=False)
+
+    prior = _req({"x-real-ip": "203.0.113.7"})
+    rl.check_rate_limit(prior, "verify-2fa")
+    rl.check_rate_limit(prior, "verify-2fa")
+    assert ("203.0.113.7", "verify-2fa") in rl._attempts
+
+    res = TestClient(srv.app).post(
+        "/api/auth/2fa/verify",
+        json={"temp_token": "t", "code": "123456"},
+        headers={"X-Real-IP": "203.0.113.7"},
+    )
+    assert res.status_code == 200, res.text
+    assert ("203.0.113.7", "verify-2fa") not in rl._attempts
+    assert ("203.0.113.7", "verify-2fa") not in rl._locked_until

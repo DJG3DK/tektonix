@@ -546,7 +546,14 @@ const REVIEW_CONTROL_URL = 'http://127.0.0.1:4101';
 app.post('/api/review/check/:name', requireControlSecret, async (req, res) => {
     const p = projectOr404(req, res); if (!p) return;
     try {
-        const r = await fetch(`${REVIEW_CONTROL_URL}/check/${encodeURIComponent(req.params.name)}`, { method: 'POST' });
+        // The browser never holds the secret. This process already checked
+        // it on the incoming request; the reviewer is a second localhost
+        // hop and needs the same header. Forgetting it here made "Check now"
+        // 401 even when nginx had injected the secret on the way in.
+        const r = await fetch(`${REVIEW_CONTROL_URL}/check/${encodeURIComponent(req.params.name)}`, {
+            method: 'POST',
+            headers: { 'X-Review-Secret': REVIEW_CONTROL_SECRET },
+        });
         const data = await r.json();
         res.status(r.status).json(data);
     } catch (e) {

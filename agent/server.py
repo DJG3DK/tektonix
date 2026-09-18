@@ -612,6 +612,7 @@ async def verify_2fa(req: Verify2FARequest, response: Response, request: Request
     ok = await auth.verify_totp_or_recovery(app.state.auth_pool, config, pending["user_id"], req.code.strip())
     if not ok:
         raise HTTPException(400, "invalid code")
+    rate_limit.clear_rate_limit(request, "verify-2fa")
     token = await auth.create_session(app.state.auth_pool, pending["user_id"])
     _set_session_cookie(response, token)
     row = await auth.get_user_by_id(app.state.auth_pool, pending["user_id"])

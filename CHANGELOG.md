@@ -23,6 +23,21 @@ read it. They do now, and the pre-rename path remains a last resort.
 A handful of docs and one fallback URL still sent people to the LiteLLM
 port `:4000`. The router has been on `:4001` since the cutover.
 
+### The review dashboard could not press its own buttons
+
+`POST /api/review/check/:name` required the control secret, then proxied to
+the reviewer **without** it, so "Check now" 401'd even when nginx had
+injected the header on the way in. The proxy now forwards the secret it
+already checked. A new nginx vhost also gets a `/_review/` location; an
+existing one still needs that added by hand (INSTALL.md §7).
+
+`wait_for_review` matched a verdict on the first 12 hex characters of the
+sha. It now requires the full string.
+
+A successful 2FA code left the verify-2fa rate-limit window counting, so a
+few typos before a good code could lock a legitimate login. Success clears
+it, the same way the password step already did.
+
 ## v0.7.0 — a page that is not the product, an installer that installs, and a gate that blames the right thing
 
 ### A Windows installer
