@@ -650,7 +650,9 @@ project, since that step decides which of your test commands an unattended agent
 run.
 
 What you need on the box: **Python 3.12+, Node 24+, Docker, Postgres, ripgrep, pm2** (optional) — and an
-OpenRouter API key, which is the only paid dependency.
+OpenRouter API key, which is the only paid dependency. The installer offers to install the ones
+it finds missing, using your system package manager. It always asks first, the answer defaults to
+no, and `--yes` on its own is not taken as permission.
 
 <details>
 <summary>Manual bring-up, if you'd rather not use the installer</summary>

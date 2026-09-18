@@ -11,6 +11,11 @@
 #   ./install.sh --yes           non-interactive; reads answers from the
 #                                environment (see --help)
 #
+# It can install the prerequisites it finds missing, but it always asks first
+# and the answer defaults to no. --yes does not count as permission for that:
+# "do not stop to ask me" should never quietly mean "put a Node runtime and a
+# database on this machine". INSTALL_PREREQS=1 is the explicit opt-in.
+#
 set -uo pipefail
 
 AGENT_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -40,6 +45,12 @@ Tektonix installer
 
   --dry-run   Print every action without performing it.
   --yes       Non-interactive. Answers come from the environment:
+                INSTALL_PREREQS=1   allow installing missing prerequisites
+                                    (git, python3, node, docker, ripgrep,
+                                     postgresql) with the system package
+                                     manager. Without it an unattended run
+                                     installs nothing and stops instead, and
+                                     an interactive run asks first either way.
                 PG_DSN              Postgres DSN (required)
                 OPENROUTER_API_KEY  OpenRouter key (required)
                 ADMIN_EMAIL         first admin account (default admin@example.com)
@@ -78,22 +89,134 @@ ask() {
         printf '%s' "$default"
         return
     fi
+    # Same as confirm: without a terminal the read cannot happen, and the
+    # default is the honest answer rather than a shell error.
+    if ! { exec 3</dev/tty; } 2>/dev/null; then
+        printf '%s' "$default"
+        return
+    fi
     if [ -n "$default" ]; then
-        read -r -p "  $prompt [$default]: " reply </dev/tty
+        read -r -p "  $prompt [$default]: " reply <&3
         printf '%s' "${reply:-$default}"
     else
-        read -r -p "  $prompt: " reply </dev/tty
-        printf '%s' "$reply"
+        read -r -p "  $prompt: " reply <&3
+        printf '%s' "${reply:-}"
     fi
+    exec 3<&-
 }
 
+# Reads from /dev/tty, not stdin, so `curl ... | bash` still asks the person
+# instead of consuming the script it is being fed. With no controlling
+# terminal at all there is nobody to ask: say so and answer no, rather than
+# letting the failed read look like a decision somebody made.
 confirm() {
     local prompt="$1"
     [ "$ASSUME_YES" = "1" ] && return 0
-    local reply
-    read -r -p "  $prompt [y/N] " reply </dev/tty
+    # Opening it is the only honest test. `[ -r /dev/tty ]` passes in places
+    # where the open then fails with ENXIO -- a process with no controlling
+    # terminal still has the device node -- and the failed redirection leaves
+    # `reply` unset, which under `set -u` aborts the installer outright.
+    if ! { exec 3</dev/tty; } 2>/dev/null; then
+        warn "no terminal to ask on — assuming no to: $prompt"
+        return 1
+    fi
+    local reply=""
+    read -r -p "  $prompt [y/N] " reply <&3
+    exec 3<&-
     [[ "$reply" =~ ^[Yy] ]]
 }
+
+# --- packages ---------------------------------------------------------------
+# Detected once and used twice: by the prerequisite offer below, and by the
+# nginx step much further down. Detection only -- calling this installs
+# nothing.
+#
+# Debian has sites-available/sites-enabled; Arch has neither, its nginx.conf
+# includes conf.d/*.conf and nothing else, so writing a "vhost" into a
+# sites-available directory that does not exist would silently do nothing.
+PKG_MGR=""
+PKG_INSTALL=""
+PKG_NGINX=""
+NGINX_LAYOUT="archlinux"
+detect_pkg_manager() {
+    if command -v apt-get >/dev/null 2>&1; then
+        PKG_MGR="apt"
+        PKG_INSTALL="sudo apt-get install -y -qq"
+        PKG_NGINX="nginx certbot python3-certbot-nginx"
+        NGINX_LAYOUT="debian"
+    elif command -v pacman >/dev/null 2>&1; then
+        PKG_MGR="pacman"
+        PKG_INSTALL="sudo pacman -S --noconfirm --needed"
+        PKG_NGINX="nginx certbot certbot-nginx"
+        NGINX_LAYOUT="archlinux"
+    elif command -v dnf >/dev/null 2>&1; then
+        PKG_MGR="dnf"
+        PKG_INSTALL="sudo dnf install -y"
+        PKG_NGINX="nginx certbot python3-certbot-nginx"
+        NGINX_LAYOUT="archlinux"   # conf.d layout, same as Arch
+    fi
+}
+detect_pkg_manager
+
+# What each command is called for the manager in play. Only the packages this
+# installer will ever offer to install are listed.
+prereq_package() {
+    case "$1" in
+        git)     printf 'git' ;;
+        rg)      printf 'ripgrep' ;;
+        python3) if [ "$PKG_MGR" = "pacman" ]; then printf 'python'; else printf 'python3'; fi ;;
+        node)    printf 'nodejs' ;;
+        docker)  if [ "$PKG_MGR" = "apt" ]; then printf 'docker.io'; else printf 'docker'; fi ;;
+        psql)    printf 'postgresql' ;;
+        *)       printf '%s' "$1" ;;
+    esac
+}
+
+# Offer to install the named commands. Returns 0 only if an install actually
+# ran, so the caller knows whether re-checking is worth it.
+#
+# Consent is required every time, and --yes is NOT consent: a non-interactive
+# run should mean "do not stop to ask me", never "put a Node runtime and a
+# database on this machine without telling me". INSTALL_PREREQS=1 is the
+# explicit opt-in for an unattended build that does want that.
+offer_to_install() {
+    [ "$#" -gt 0 ] || return 1
+    local cmd pkgs=""
+    for cmd in "$@"; do pkgs="$pkgs $(prereq_package "$cmd")"; done
+    pkgs="${pkgs# }"
+
+    if [ -z "$PKG_INSTALL" ]; then
+        warn "no supported package manager found (apt, pacman or dnf) — install these yourself"
+        return 1
+    fi
+
+    say ""
+    say "  This installer can install the missing ones for you:"
+    note "$PKG_INSTALL $pkgs"
+    if [ "$ASSUME_YES" = "1" ]; then
+        if [ "${INSTALL_PREREQS:-0}" != "1" ]; then
+            warn "--yes does not authorise installing packages — re-run with INSTALL_PREREQS=1 to allow it"
+            return 1
+        fi
+        say "  INSTALL_PREREQS=1 given — installing"
+    elif ! confirm "Install them now?"; then
+        warn "not installing anything — install them yourself and re-run"
+        return 1
+    fi
+
+    # shellcheck disable=SC2086  # both are deliberately word-split
+    run $PKG_INSTALL $pkgs || { warn "the package install did not succeed — see the output above"; return 1; }
+    return 0
+}
+
+# Sourcing with TEKTONIX_INSTALL_LIB=1 defines the helpers above and stops
+# before the installer does anything. That is how tests/test_install_prereqs.sh
+# checks the package-name mapping and, more importantly, the consent rules --
+# without a package manager, and without installing a thing.
+if [ "${TEKTONIX_INSTALL_LIB:-0}" = "1" ]; then
+    return 0 2>/dev/null \
+        || die "TEKTONIX_INSTALL_LIB=1 is for sourcing this file, not running it"
+fi
 
 # --- 0. preflight -----------------------------------------------------------
 step "Checking prerequisites"
@@ -106,38 +229,87 @@ need() {
     else
         warn "$cmd not found — $why"
         missing=1
+        ABSENT="$ABSENT $cmd"
     fi
 }
 
-need git    "required to create per-project worktrees"
-need python3 "the agent runs on Python 3.12+"
-need node   "the dashboard build and the review services need Node 24+"
-need docker "the agent's bash/edit tools run inside a container; without it the FIRST tool call of the first task fails"
-# ripgrep is what the planner's repo search shells out to. Soft, not fatal:
-# without it the search tools answer "not installed" and everything else
-# works, so a missing rg must not block the install (the CI dry-run runner
-# has no rg, and neither will many first installs).
-if command -v rg >/dev/null 2>&1; then
-    ok "rg — $(command -v rg)"
-else
-    warn "rg (ripgrep) not found — the planner's repo search needs it; install the 'ripgrep' package (apt/pacman/dnf) before the first planning session"
+# ABSENT collects what is not installed AT ALL, which is the only thing a
+# package manager can fix. A runtime that is present but too old is tracked
+# separately (OUTDATED): installing the distro's package would be a no-op,
+# since the version already on the machine IS the distro's package.
+check_prereqs() {
+    missing=0
+    ABSENT=""
+    OUTDATED=""
+
+    need git    "required to create per-project worktrees"
+    need python3 "the agent runs on Python 3.12+"
+    need node   "the dashboard build and the review services need Node 24+"
+    need docker "the agent's bash/edit tools run inside a container; without it the FIRST tool call of the first task fails"
+    # ripgrep is what the planner's repo search shells out to. Soft, not fatal:
+    # without it the search tools answer "not installed" and everything else
+    # works, so a missing rg must not block the install (the CI dry-run runner
+    # has no rg, and neither will many first installs). It is still offered,
+    # because being asked once beats reading a warning and forgetting.
+    if command -v rg >/dev/null 2>&1; then
+        ok "rg — $(command -v rg)"
+    else
+        warn "rg (ripgrep) not found — the planner's repo search needs it"
+        ABSENT="$ABSENT rg"
+    fi
+
+    if command -v python3 >/dev/null 2>&1; then
+        PY_OK=$(python3 -c 'import sys; print(1 if sys.version_info >= (3,12) else 0)' 2>/dev/null || echo 0)
+        [ "$PY_OK" = "1" ] || {
+            warn "python3 is $(python3 -V 2>&1 | cut -d" " -f2); 3.12+ required"
+            missing=1
+            OUTDATED="$OUTDATED python3"
+        }
+    fi
+
+    # 24, not 20: Node 20 left maintenance in April 2026, and the frontend's own
+    # test toolchain has already moved past it.
+    if command -v node >/dev/null 2>&1; then
+        NODE_MAJOR=$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)
+        [ "$NODE_MAJOR" -ge 24 ] 2>/dev/null || {
+            warn "node is v$NODE_MAJOR; 24+ required"
+            missing=1
+            OUTDATED="$OUTDATED node"
+        }
+    fi
+
+    if command -v docker >/dev/null 2>&1 && ! docker info >/dev/null 2>&1; then
+        warn "docker is installed but not usable by this user (try: sudo usermod -aG docker \$USER, then re-login)"
+        missing=1
+    fi
+
+    command -v pm2 >/dev/null 2>&1 && ok "pm2 — optional, for running as a service" \
+                                   || note "pm2 not found (optional: npm i -g pm2 to run as a managed service)"
+}
+
+check_prereqs
+
+# A dry run says what it would ask rather than asking: --dry-run promises to
+# show every action, and "it would have offered to install these" is one.
+if [ -n "$ABSENT" ] && [ "$DRY_RUN" = "1" ]; then
+    note "would offer to install:$ABSENT"
 fi
 
-PY_OK=$(python3 -c 'import sys; print(1 if sys.version_info >= (3,12) else 0)' 2>/dev/null || echo 0)
-[ "$PY_OK" = "1" ] || { warn "python3 is $(python3 -V 2>&1 | cut -d" " -f2); 3.12+ required"; missing=1; }
-
-# 24, not 20: Node 20 left maintenance in April 2026, and the frontend's own
-# test toolchain has already moved past it.
-NODE_MAJOR=$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)
-[ "$NODE_MAJOR" -ge 24 ] 2>/dev/null || { warn "node is v$NODE_MAJOR; 24+ required"; missing=1; }
-
-if command -v docker >/dev/null 2>&1 && ! docker info >/dev/null 2>&1; then
-    warn "docker is installed but not usable by this user (try: sudo usermod -aG docker \$USER, then re-login)"
-    missing=1
+# shellcheck disable=SC2086  # ABSENT is a deliberately word-split list
+if [ -n "$ABSENT" ] && [ "$DRY_RUN" != "1" ] && offer_to_install $ABSENT; then
+    step "Re-checking prerequisites"
+    check_prereqs
+    # A distro package can be older than this project's floor -- Debian and
+    # Ubuntu have shipped Node well behind 24 for most of its life. Saying
+    # "installed" and then failing the version check two lines later is the
+    # confusing outcome; name the real remedy instead.
+    case " $OUTDATED " in
+        *" node "*)    note "the distro's nodejs is older than 24 — use nvm or NodeSource for a current one" ;;
+    esac
+    case " $OUTDATED " in
+        *" python3 "*) note "the distro's python3 is older than 3.12 — use pyenv, or deadsnakes on Ubuntu" ;;
+    esac
 fi
-
-command -v pm2 >/dev/null 2>&1 && ok "pm2 — optional, for running as a service" \
-                               || note "pm2 not found (optional: npm i -g pm2 to run as a managed service)"
 
 [ "$missing" = "0" ] || die "install the missing prerequisites above, then re-run."
 
@@ -330,11 +502,31 @@ except OSError:
         warn "NOTHING IS LISTENING at $DB_HOST:$DB_PORT — Postgres is required."
         warn "The agent will not start without it: it retries the connection"
         warn "pool forever and never begins serving."
-        note "Debian/Ubuntu:  sudo apt install postgresql && sudo -u postgres createdb $DB_NAME"
-        note "Arch/CachyOS:   sudo pacman -S postgresql"
-        note "                sudo -u postgres initdb -D /var/lib/postgres/data   # Arch does NOT do this for you"
-        note "                sudo systemctl enable --now postgresql"
-        note "                sudo -u postgres createdb $DB_NAME"
+        if offer_to_install psql; then
+            # Arch ships the package without a data directory; Debian and
+            # Fedora initialise one for you. initdb on an already-initialised
+            # cluster refuses rather than destroys, so this guard is about
+            # noise, not safety.
+            if [ "$PKG_MGR" = "pacman" ] && [ ! -d /var/lib/postgres/data/base ]; then
+                run sudo -u postgres initdb -D /var/lib/postgres/data \
+                    || warn "initdb failed — initialise the cluster yourself"
+            fi
+            run sudo systemctl enable --now postgresql \
+                || warn "could not start postgresql — start it yourself, then re-run"
+            if run sudo -u postgres createdb "$DB_NAME" 2>/dev/null; then
+                ok "created $DB_NAME"
+            else
+                warn "database '$DB_NAME' was not created"
+                note "sudo -u postgres createdb $DB_NAME"
+            fi
+            note "the DSN in .env must also be able to authenticate — a password, or a peer/trust entry in pg_hba.conf"
+        else
+            note "Debian/Ubuntu:  sudo apt install postgresql && sudo -u postgres createdb $DB_NAME"
+            note "Arch/CachyOS:   sudo pacman -S postgresql"
+            note "                sudo -u postgres initdb -D /var/lib/postgres/data   # Arch does NOT do this for you"
+            note "                sudo systemctl enable --now postgresql"
+            note "                sudo -u postgres createdb $DB_NAME"
+        fi
     fi
 fi
 
@@ -482,26 +674,8 @@ else
 fi
 
 if [ -n "$DOMAIN" ] && [ "$DRY_RUN" != "1" ]; then
-    # Package manager and nginx layout both differ by distro. Debian has
-    # sites-available/sites-enabled; Arch has neither -- its nginx.conf
-    # includes conf.d/*.conf and nothing else, so writing a "vhost" into a
-    # sites-available directory that does not exist would silently do nothing.
-    if command -v apt-get >/dev/null 2>&1; then
-        PKG_INSTALL="sudo apt-get install -y -qq"
-        PKG_NGINX="nginx certbot python3-certbot-nginx"
-        NGINX_LAYOUT="debian"
-    elif command -v pacman >/dev/null 2>&1; then
-        PKG_INSTALL="sudo pacman -S --noconfirm --needed"
-        PKG_NGINX="nginx certbot certbot-nginx"
-        NGINX_LAYOUT="archlinux"
-    elif command -v dnf >/dev/null 2>&1; then
-        PKG_INSTALL="sudo dnf install -y"
-        PKG_NGINX="nginx certbot python3-certbot-nginx"
-        NGINX_LAYOUT="archlinux"   # conf.d layout, same as Arch
-    else
-        PKG_INSTALL=""
-        NGINX_LAYOUT="archlinux"
-    fi
+    # PKG_INSTALL/PKG_NGINX/NGINX_LAYOUT come from detect_pkg_manager, run at
+    # the top so the prerequisite step can use the same detection.
 
     for pkg_cmd in nginx certbot; do
         command -v "$pkg_cmd" >/dev/null 2>&1 || {

@@ -74,6 +74,7 @@ node tests/test_projects_config_merge.js
 node tests/test_reviewer_preexisting.js
 node tests/test_reviewer_gate_attribution.js
 pwsh tests/test_install_ps1.ps1
+bash tests/test_install_prereqs.sh
 node tests/test_reviewer_candidates.js
 node tests/test_preflight.js
 node tests/test_service_env.js

@@ -50,7 +50,11 @@ cd tektonix
 The installer asks three questions — your Postgres DSN, your OpenRouter key,
 and an admin email — and derives everything else. It will:
 
-- check every prerequisite and stop with a specific message if one is missing
+- check every prerequisite, offer to install any that are missing, and stop
+  with a specific message if one is still absent. Nothing is installed without
+  being asked, and the answer defaults to no; `--yes` alone does not authorise
+  it, because an unattended run should not quietly add a Node runtime and a
+  database to a machine. Set `INSTALL_PREREQS=1` when that is what you want.
 - generate `AUTH_SECRET_KEY` and a router master key **in the correct format**
   (see the footgun in §6)
 - write `.env` and `services/model-router/.env` with `600` permissions
