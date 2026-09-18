@@ -119,7 +119,8 @@ def _pub_path(project: str) -> Path:
 _SAFE_ARG = re.compile(r"^[A-Za-z0-9 @%+=:,./_-]*$")
 
 # Every program this module is allowed to start. Not a general-purpose runner:
-# it configures git and mints ssh keys, and that is the whole list.
+# it configures git and mints ssh keys, and that is the whole list. Kept for
+# the tests to read; _run compares against the literals themselves.
 _PROGRAMS = frozenset({"git", "ssh-keygen"})
 
 
@@ -139,11 +140,16 @@ def _run(args: list[str], cwd: str | None = None, timeout: int = 30) -> tuple[bo
     # exactly git and ssh-keygen, so the executable is never derived from
     # anything -- which is both the strongest statement available here and the
     # one a checker reads most easily.
-    program = args[0]
-    if program not in _PROGRAMS:
-        return False, f"refusing to run: {program!r} is not a command this module runs"
-
-    checked: list[str] = [program]
+    # Compared to literals, and the literal is what runs -- not args[0] after
+    # a membership test. The distinction is not pedantry: `args[0]` that has
+    # passed `in _PROGRAMS` is still the caller's value, and what actually
+    # starts a process here is now a constant written in this file.
+    if args[0] == "git":
+        checked: list[str] = ["git"]
+    elif args[0] == "ssh-keygen":
+        checked = ["ssh-keygen"]
+    else:
+        return False, f"refusing to run: {args[0]!r} is not a command this module runs"
     for i, arg in enumerate(args[1:], start=1):
         if not isinstance(arg, str):
             return False, f"refusing to run: argument {i} is not a string"
