@@ -47,6 +47,64 @@ A successful 2FA code left the verify-2fa rate-limit window counting, so a
 few typos before a good code could lock a legitimate login. Success clears
 it, the same way the password step already did.
 
+## v0.7.2 — the gate ships with the bundle, and Windows is a double-click
+
+### The review gate is in `docker compose` now
+
+`docker compose up -d` brings up five containers, not three: the agent, its
+database and the model router, plus both review services. A task's branch is
+reviewed by a second model and only a pass merges — on Windows, macOS and
+Linux, with no Node or process manager on the host.
+
+This was the gap worth closing. The easiest install used to produce an agent
+with no gate, which is most of what makes this different from a loop and a
+terminal.
+
+The one thing the bundle will not do is restart your application after a
+merge: a process manager runs on the host and a container cannot reach it.
+That endpoint reports itself unavailable rather than failing, so a task ends at
+a real merge. The host install still deploys.
+
+### Windows is a double-click
+
+`Install Tektonix.bat` checks Docker is installed and running, starts it and
+waits if it is asleep, asks for the two values that have no default, and opens
+the console when it finishes. It exists because a `.ps1` opens in Notepad and
+client Windows refuses scripts by default; the launcher passes the bypass for
+its own process only.
+
+Failures that are environmental rather than this software's get named, with
+the remedy, instead of Docker's own wording. Where the cause is not
+recognised, it says so rather than guessing.
+
+Verified on a clean Windows 11 machine: installer through to five running
+containers, agent healthy, console answering.
+
+### `docker compose up` works on a fresh copy
+
+It did not. The router bind-mounted a gitignored file, and Docker turns a
+missing bind source into a directory, so the container died on a type
+mismatch — for everyone who was not already running it. The default is the
+committed example now; `ROUTER_CONFIG` points it at your own.
+
+Three more of the same shape, each a one-line cause: the agent image set an
+environment variable name nothing read, so onboarding refused every path the
+bundle uses; worktrees defaulted outside the host path map, which would have
+mounted an empty directory silently; and the review dashboard reached the
+reviewer at a hardcoded loopback address that is a different container here.
+
+### Guards, so these do not come back
+
+Tests now fail the build when a bind mount names a source a fresh checkout
+lacks, when an environment variable is set and read nowhere, when anything
+private appears in the tree, and when the landing page's description of the
+bundle stops matching the compose file. The last one has been wrong in both
+directions, so it is pinned to the file rather than to a string.
+
+A `.dockerignore` denies by category rather than by filename, and two tests
+check both directions: nothing sensitive enters a build context, and nothing
+the images need is filtered out.
+
 ## v0.7.1 — the public tree is this product, and nothing else
 
 Re-cut of v0.7.0. Its tarball shipped a seed router config describing two
