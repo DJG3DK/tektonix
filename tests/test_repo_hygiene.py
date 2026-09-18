@@ -2,7 +2,7 @@
 
 Both of these were reported by a reviewer rather than by any check:
 
-* CONTRIBUTING.md promises "the exact four things CI does, in order" and then
+* CONTRIBUTING.md promises "the exact five jobs CI runs, in order" and then
   drifted from .github/workflows/ci.yml -- it named `tsc -b --noEmit` while
   CI ran `tsc --noEmit -p tsconfig.app.json`, and two whole CI steps were
   missing from it. A contributor who follows a stale list and then watches CI
@@ -51,7 +51,7 @@ def _ci_run_lines() -> list[str]:
 def _contributing_block() -> list[str]:
     """The commands inside CONTRIBUTING's 'exactly what CI does' block."""
     text = CONTRIBUTING.read_text()
-    marker = "The exact four things CI does"
+    marker = "The exact five jobs CI runs"
     assert marker in text, "CONTRIBUTING no longer claims to mirror CI -- update this test with it"
     block = text.split(marker, 1)[1].split("```bash", 1)[1].split("```", 1)[0]
     # unwrap `\`-continued lines so a wrapped command reads as one command
@@ -65,9 +65,12 @@ def _contributing_block() -> list[str]:
 _MUST_MIRROR = [
     "pytest -q",
     "ruff check .",
+    "pytest -q services/model-router/tests",
+    "ruff check services/model-router",
     "npx tsc --noEmit -p tsconfig.app.json",
     "npm run lint",
     "npm run build",
+    "test_newsletter.py",
     "node --check",
     "scripts/doctor.py --quiet",
     "install.sh --dry-run --yes",

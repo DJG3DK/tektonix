@@ -11,10 +11,10 @@ Two things follow from the split:
 * **It is not part of Tektonix.** `scripts/package_release.sh` deletes `site/`
   from the tarball, and `install.sh` never looks at it. Somebody self-hosting
   the agent gets the console; they have no use for a page selling it to them.
-* **It ships no JavaScript.** The only control is the sign-in link, and a link
-  is HTML. `npm run build` renders the page to static markup and then strips
-  the module script — see `scripts/render.mjs`, which fails the build if a
-  script tag ever survives.
+* **It ships no JavaScript.** The controls are links and a plain HTML form, and
+  both are HTML. `npm run build` renders the page to static markup and then
+  strips the module script — see `scripts/render.mjs`, which fails the build if
+  a script tag ever survives.
 
 ## The newsletter
 

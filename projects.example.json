@@ -1,16 +1,16 @@
 {
   "projects": {
-    "storefront": {
-      "sandbox": "/srv/sandboxes/storefront",
-      "live": "/srv/live/storefront"
+    "web-app": {
+      "sandbox": "/srv/sandboxes/web-app",
+      "live": "/srv/live/web-app"
     },
-    "trading-bot": {
-      "sandbox": "/srv/sandboxes/trading-bot",
-      "live": "/srv/live/trading-bot",
+    "api-service": {
+      "sandbox": "/srv/sandboxes/api-service",
+      "live": "/srv/live/api-service",
       "db_env_file": "config/.env",
       "review": {
         "secretFiles": ["config/auth.json", "config/keys.json"],
-        "readOnlyMounts": ["data/candles"],
+        "readOnlyMounts": ["data/cache"],
         "nodeModulesDirs": ["."],
         "checks": [
           { "name": "lint", "dir": ".", "cmd": "npm", "args": ["run", "lint"], "timeoutMs": 300000 },
@@ -18,18 +18,18 @@
         ]
       },
       "deploy": {
-        "pm2Apps": ["trading-bot"],
+        "pm2Apps": ["api-service"],
         "build": [{ "dir": ".", "cmd": "npm", "args": ["install", "--no-audit", "--no-fund"] }]
       }
     },
-    "scraper-service": {
-      "sandbox": "/srv/sandboxes/scraper-service",
-      "live": "/srv/live/scraper-service"
+    "worker": {
+      "sandbox": "/srv/sandboxes/worker",
+      "live": "/srv/live/worker"
     }
   },
   "test_env": {
-    "trading-bot": {
-      "EXAMPLE_LIVE_AUTH_FILE": "/srv/live/trading-bot/config/auth.json"
+    "api-service": {
+      "EXAMPLE_LIVE_AUTH_FILE": "/srv/live/api-service/config/auth.json"
     }
   }
 }

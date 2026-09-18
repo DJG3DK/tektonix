@@ -8,9 +8,9 @@
  *      DuckDuckGo and most LLM crawlers largely do not.
  *
  *   2. Strip the module <script> tag. Nothing on this page needs a runtime --
- *      the only control is a sign-in link -- so shipping React to render
- *      markup that is already in the file would be pure cost. The CSS <link>
- *      stays.
+ *      the controls are links and a plain HTML form -- so shipping React to
+ *      render markup that is already in the file would be pure cost. The CSS
+ *      <link> stays.
  *
  * renderToStaticMarkup, not renderToString: there is no hydration, so the
  * react-* attributes would be dead weight.
