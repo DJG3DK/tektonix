@@ -1,12 +1,19 @@
-# The newsletter signup behind tektonix.io. Three packages: a web framework, a
-# Postgres driver, and the server to run it. Deliberately separate from the
-# agent's requirements.txt -- this is the landing page's, and neither ships
-# with an installation.
-fastapi==0.122.0
-psycopg[binary,pool]==3.2.12
-python-multipart==0.0.22
-uvicorn==0.41.0
+# The newsletter signup behind tektonix.io. Four packages: a web framework, a
+# Postgres driver, form parsing and the server to run it. Separate from the
+# agent's requirements.txt because this is the landing page's service and
+# neither ships with an installation.
+#
+# Pinned to the SAME versions as the repo root. They were pinned lower when
+# this service was written, which was careless rather than deliberate: three
+# of those pins were already carrying published advisories the day they were
+# chosen, and Dependabot said so within a day. Two files naming the same
+# package should agree, and the newer set is the one already proven on this
+# box.
+fastapi==0.141.1
+psycopg[binary,pool]==3.3.4
+python-multipart==0.0.32
+uvicorn==0.52.3
 
 # Tests only.
 httpx==0.28.1
-pytest==8.4.2
+pytest==9.1.1

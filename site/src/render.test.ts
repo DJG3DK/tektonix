@@ -32,9 +32,10 @@ function bodyText(html: string): string {
   const marker = '<div id="root">';
   const body = html.slice(html.indexOf(marker) + marker.length);
   return body
-    // `gi`, not `g`: <SCRIPT> is as valid as <script>, and a tag this misses
-    // leaves its contents in the text these assertions then measure.
-    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    // Case-insensitive, and tolerant of whitespace in the closing tag:
+    // <SCRIPT> and </script > are both valid, and a tag this misses leaves
+    // its contents in the text these assertions then measure.
+    .replace(/<script\b[\s\S]*?<\/script\s*>/gi, ' ')
     .replace(/<[^>]+>/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
