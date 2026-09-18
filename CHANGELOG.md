@@ -37,6 +37,31 @@ A successful 2FA code left the verify-2fa rate-limit window counting, so a
 few typos before a good code could lock a legitimate login. Success clears
 it, the same way the password step already did.
 
+## v0.7.1 — the public tree is this product, and nothing else
+
+Re-cut of v0.7.0. Its tarball shipped a seed router config describing two
+applications that are not part of Tektonix, so that download is withdrawn
+rather than corrected in place. Everything in v0.7.0 is in this release.
+
+### Nothing of the maintainer's own software ships here
+
+Aliases for two other applications, comments naming their checkouts and their
+incidents, an example projects file built around one of them, and test
+fixtures using real strategy filenames. All gone. Fixtures were renamed rather
+than deleted: one only has to have the right shape, so the real names were
+never doing any work.
+
+`tests/test_repo_hygiene.py` now greps every tracked file for those names and
+fails with file and line. Nothing else catches a name that arrives inside a
+comment written to explain a real incident, which is how every one of these
+got in.
+
+### Fixes that the same audit surfaced
+
+The review secret now follows the router rename, the review dashboard can
+press its own buttons, a verdict has to match the full commit sha, and a good
+two-factor code clears its own rate-limit window.
+
 ## v0.7.0 — a page that is not the product, an installer that installs, and a gate that blames the right thing
 
 ### A Windows installer
