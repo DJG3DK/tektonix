@@ -2,19 +2,21 @@
 /**
  * Where the two Node services read their own secrets.
  *
- * REVIEW_CONTROL_SECRET used to live in `services/llm-router/.env` for one
- * reason: that file already existed and both services already read it for the
+ * REVIEW_CONTROL_SECRET used to live in the router's `.env` for one reason:
+ * that file already existed and both services already read it for the
  * OpenRouter key. So the model proxy became a secrets bus -- a file whose
  * blast radius is "anything that can read the router's config" ended up
  * holding the secret that authorises merge and deploy. Those are different
  * trust domains and they now have different files.
  *
  * Read order, first hit wins:
- *   1. process.env              -- an operator or pm2 passing it explicitly
- *   2. services/shared/.env     -- the home, written 0600 by install.sh
- *   3. services/llm-router/.env -- LEGACY. Deployments installed before
- *      2026-09-11 have it there and must keep working across an upgrade that
- *      does not re-run the installer. Logged once so it gets moved.
+ *   1. process.env                 -- an operator or pm2 passing it explicitly
+ *   2. services/shared/.env        -- the home, written 0600 by install.sh
+ *   3. services/model-router/.env  -- LEGACY. The router was renamed from
+ *      llm-router; this is where an upgrade that did not re-run the installer
+ *      still has the secret. Logged once so it gets moved.
+ *   4. services/llm-router/.env    -- ANCIENT. Only a tree that never took
+ *      the rename. Kept so that upgrade still boots.
  *
  * Deliberately a hand-rolled reader, not dotenv: these services have one
  * dependency each on purpose, the format in question is `KEY=value` lines,
@@ -25,7 +27,8 @@ const fs = require('fs');
 const path = require('path');
 
 const SHARED_ENV = 'services/shared/.env';
-const LEGACY_ENV = 'services/llm-router/.env';
+const LEGACY_ENV = 'services/model-router/.env';
+const ANCIENT_ENV = 'services/llm-router/.env';
 
 const warned = new Set();
 
@@ -59,7 +62,19 @@ function readServiceSecret(name, agentHome) {
         }
         return fromLegacy;
     }
+
+    const fromAncient = readFrom(path.join(agentHome, ANCIENT_ENV), name);
+    if (fromAncient) {
+        if (!warned.has(name)) {
+            warned.add(name);
+            console.warn(
+                `[service-env] ${name} was read from ${ANCIENT_ENV}. Move it to ${SHARED_ENV} ` +
+                `(mode 600): that path is the pre-rename leftover.`,
+            );
+        }
+        return fromAncient;
+    }
     return null;
 }
 
-module.exports = { readServiceSecret, SHARED_ENV, LEGACY_ENV };
+module.exports = { readServiceSecret, SHARED_ENV, LEGACY_ENV, ANCIENT_ENV };

@@ -71,6 +71,24 @@ def test_the_example_covers_every_managed_role():
     assert not missing, f"the example router config has no entry for: {missing}"
 
 
+_FALLBACK_TARGETS = {"deepseek-v4-pro", "claude-haiku-4.5", "gpt-4o-mini"}
+
+
+def test_the_example_does_not_ship_another_product_s_aliases():
+    """install.sh copies this file onto every fresh box. Other applications
+    that happen to share a router on the maintainer's machine are not
+    Tektonix, and a visitor grepping the example should not find them."""
+    from pathlib import Path
+
+    parsed = yaml.safe_load(Path("services/model-router/config.example.yaml").read_text())
+    aliases = {e["model_name"] for e in parsed["model_list"]}
+    leftovers = sorted(
+        name for name in aliases
+        if not str(name).startswith("agent-") and name not in _FALLBACK_TARGETS
+    )
+    assert not leftovers, f"example config ships aliases that are not this product: {leftovers}"
+
+
 def test_no_api_key_is_written_into_the_example():
     """It is committed, so it has to be a shape rather than a secret."""
     from pathlib import Path

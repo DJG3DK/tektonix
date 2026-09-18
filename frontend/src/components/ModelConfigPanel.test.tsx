@@ -195,8 +195,10 @@ describe("what the page says it controls", () => {
     expect(blurb).toMatch(/review service/);
   });
 
-  it("names the other consumers of the shared router", () => {
-    expect(blurb).toMatch(/mail agent/i);
-    expect(blurb).toMatch(/trading bot/i);
+  it("says non-agent aliases are left alone, without naming other products", () => {
+    expect(blurb).toMatch(/agent-/);
+    expect(blurb).toMatch(/left alone/);
+    expect(blurb).not.toMatch(/mail agent/i);
+    expect(blurb).not.toMatch(/trading bot/i);
   });
 });

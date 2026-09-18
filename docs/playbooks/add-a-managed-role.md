@@ -59,7 +59,7 @@ AssertionError: aliases invisible on the Models page: ['agent-your-role']
 
 ```bash
 .venv/bin/python -m pytest tests/test_managed_roles_complete.py tests/test_model_config.py -q
-curl -s 127.0.0.1:4000/v1/models | grep agent-<role>      # after a router restart
+curl -s 127.0.0.1:4001/v1/models | grep agent-<role>      # after a router restart
 ```
 
 The router only learns the alias on restart — and restarting it kills any

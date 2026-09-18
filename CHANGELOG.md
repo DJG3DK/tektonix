@@ -1,5 +1,43 @@
 # Changelog
 
+## Unreleased
+
+### The public tree is this product, not the box it grew on
+
+The example router config that `install.sh` copies onto a fresh install still
+carried the maintainer's mail-agent and trading-bot aliases, with comments
+naming `/home/agentEmail` and a live trading gate. The Models page introduced
+those callers by name. A visitor reading the seed file, or an operator opening
+Settings → Models on a brand-new box, was looking at somebody else's other
+software.
+
+Those aliases are gone from `config.example.yaml`. Existing `config.yaml`
+files are untouched. The Models page now says the property: aliases that do
+not begin `agent-` are left alone.
+
+The review-secret fallback the Node services claimed to keep for upgrades
+still pointed at `services/llm-router/.env` after the directory was renamed
+to `model-router`. Doctor warned about the current path; the services never
+read it. They do now, and the pre-rename path remains a last resort.
+
+A handful of docs and one fallback URL still sent people to the LiteLLM
+port `:4000`. The router has been on `:4001` since the cutover.
+
+### The review dashboard could not press its own buttons
+
+`POST /api/review/check/:name` required the control secret, then proxied to
+the reviewer **without** it, so "Check now" 401'd even when nginx had
+injected the header on the way in. The proxy now forwards the secret it
+already checked. A new nginx vhost also gets a `/_review/` location; an
+existing one still needs that added by hand (INSTALL.md §7).
+
+`wait_for_review` matched a verdict on the first 12 hex characters of the
+sha. It now requires the full string.
+
+A successful 2FA code left the verify-2fa rate-limit window counting, so a
+few typos before a good code could lock a legitimate login. Success clears
+it, the same way the password step already did.
+
 ## v0.7.0 — a page that is not the product, an installer that installs, and a gate that blames the right thing
 
 ### A Windows installer

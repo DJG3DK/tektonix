@@ -43,6 +43,47 @@ def test_the_map_names_the_ports_the_code_actually_uses():
     assert "4100" in pathlib.Path("services/agent-review/server.js").read_text()
 
 
+def test_operator_docs_send_health_checks_to_the_router_s_real_port():
+    """The LiteLLM proxy was :4000. The router has been :4001 since the
+    cutover. A troubleshooting curl at the old port looks like a down
+    router when the process is healthy."""
+    install = pathlib.Path("INSTALL.md").read_text()
+    playbook = pathlib.Path("docs/playbooks/add-a-managed-role.md").read_text()
+    assert "127.0.0.1:4001/health/liveliness" in install
+    assert "127.0.0.1:4000/health/liveliness" not in install
+    assert "127.0.0.1:4001/v1/models" in playbook
+    assert "127.0.0.1:4000/v1/models" not in playbook
+
+
+def test_the_review_secret_example_names_the_file_the_services_read():
+    """The Node services read REVIEW_CONTROL_SECRET from services/shared/.env.
+    .env.example used to tell a hand-rolled install to put it in the
+    router's .env -- the path that made the model proxy a secrets bus."""
+    text = pathlib.Path(".env.example").read_text()
+    # The assignment line, plus the comment block immediately above it.
+    key = text.index("\nREVIEW_CONTROL_SECRET=")
+    block = text[text.rfind("\n\n", 0, key):key]
+    assert "services/shared/.env" in block
+    assert "services/model-router/.env" not in block
+
+
+def test_the_installer_nginx_vhost_exposes_the_review_dashboard():
+    """The review UI's mutating routes require X-Review-Secret. The browser
+    never holds it; nginx injects it on /_review/. A vhost without that
+    location makes Check now / merge / restart 401 after a by-the-book
+    install."""
+    text = pathlib.Path("install.sh").read_text()
+    assert "location /_review/" in text
+    assert "X-Review-Secret" in text
+    assert "location /_review/" in pathlib.Path("INSTALL.md").read_text()
+
+
+def test_vision_falls_back_to_the_router_s_real_port():
+    text = pathlib.Path("agent/tools/vision.py").read_text()
+    assert "127.0.0.1:4001/v1" in text
+    assert "127.0.0.1:4000/v1" not in text
+
+
 def test_the_health_routes_the_docs_promise_exist_in_the_code():
     assert '@app.get("/api/health")' in pathlib.Path("agent/server.py").read_text()
     assert "app.get('/health'" in pathlib.Path("services/agent-review/server.js").read_text()
@@ -96,9 +137,13 @@ def test_the_secret_diagram_names_every_file_the_doctor_checks():
     spec.loader.exec_module(doctor)
 
     install = pathlib.Path("INSTALL.md").read_text()
+    # Relative to the install root, not the checkout folder name. The old
+    # check used parent.name for `.env`, which is `3d-agent` on the
+    # maintainer's box and `tektonix` in CI -- both happen to appear in
+    # INSTALL.md -- and `workspace` anywhere else. The files are the claim.
     for path in (doctor.AGENT_ENV, doctor.ROUTER_ENV, doctor.SHARED_ENV, doctor.PROJECTS_JSON):
-        name = path.name if path.name != ".env" else str(path.parent.name)
-        assert name in install, f"INSTALL.md does not mention {path}"
+        rel = path.relative_to(doctor.ROOT).as_posix()
+        assert rel in install, f"INSTALL.md does not mention {rel}"
     assert "review-secrets" in install and "keys/" in install
 
 

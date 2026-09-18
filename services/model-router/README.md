@@ -1,8 +1,7 @@
 # model-router
 
-The agent's model router. Every model call from every process on the box —
-the agent, the demo bot, the mail agent, the trading gate — resolves its
-`agent-*` alias here, under its own key.
+The agent's model router. Every model call from every process on the box
+resolves its alias here, under its own key.
 
 ```
 ./venv/bin/uvicorn router.app:app --host 127.0.0.1 --port 4001
@@ -83,4 +82,4 @@ file is exactly the moment to keep serving the one known to work.
 ./venv/bin/python -m pytest tests/ -q      # 48, no network
 ```
 
-Live checks live in `docs/runbooks/model-router-cutover.md`.
+Live checks live in `docs/runbooks/router-refusals.md`.

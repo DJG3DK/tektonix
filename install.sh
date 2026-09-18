@@ -718,6 +718,16 @@ if [ -n "$DOMAIN" ] && [ "$DRY_RUN" != "1" ]; then
         VHOST=/etc/nginx/conf.d/tektonix.conf
         sudo mkdir -p /etc/nginx/conf.d
     fi
+    # /_review/ injects this. A re-run that already has .env never generated
+    # it into the shell, so read the copy the services use.
+    if [ -z "${REVIEW_CONTROL_SECRET:-}" ]; then
+        for _secret_file in services/shared/.env .env; do
+            if [ -f "$_secret_file" ]; then
+                REVIEW_CONTROL_SECRET=$(awk -F= '/^REVIEW_CONTROL_SECRET=/{print substr($0, index($0,$2)); exit}' "$_secret_file")
+                [ -n "$REVIEW_CONTROL_SECRET" ] && break
+            fi
+        done
+    fi
     if [ -f "$VHOST" ]; then
         ok "nginx vhost already exists at $VHOST — leaving it alone"
     else
@@ -733,6 +743,24 @@ server {
     server_name $DOMAIN;
 
     location ^~ /.well-known/acme-challenge/ { root /var/www/html; allow all; }
+
+    location /_review/ {
+        # The review dashboard (services/agent-review, :4100). Its mutating
+        # routes require X-Review-Secret; the browser never holds that value.
+        # Injecting it here is the only way "Check now" / merge / restart
+        # work for an operator who reached this host through the same login
+        # that already gates /. The secret is written into this file at
+        # install time from services/shared/.env.
+        proxy_pass         http://127.0.0.1:4100/;
+        proxy_http_version 1.1;
+        proxy_set_header   Host \$host;
+        proxy_set_header   X-Real-IP \$remote_addr;
+        proxy_set_header   X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header   X-Forwarded-Proto \$scheme;
+        proxy_set_header   X-Review-Secret $REVIEW_CONTROL_SECRET;
+        proxy_read_timeout 1800s;
+        proxy_send_timeout 1800s;
+    }
 
     location / {
         # nginx's 1MB default rejects file attachments with its OWN 413 page

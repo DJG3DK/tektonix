@@ -144,7 +144,7 @@ export function LandingPage() {
     <div className="landing">
       <header className="lp-nav">
         <div className="lp-nav-inner">
-          {/* The lockup already reads "3D agent", so no wordmark beside it. */}
+          {/* The lockup already reads "Tektonix", so no wordmark beside it. */}
           <a className="lp-brand" href="#top" aria-label="Tektonix, back to top">
             <img src={logoUrl} alt="Tektonix" />
           </a>

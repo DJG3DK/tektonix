@@ -509,6 +509,21 @@ cd services/agent-review && npm install && node server.js
 Projects onboarded through the wizard are picked up automatically. See
 `services/commit-reviewer/README.md`.
 
+The review dashboard is served at `/_review/` on the same host as the
+console. `install.sh` writes that location into a **new** nginx vhost and
+injects `X-Review-Secret` there — the browser never holds the value, and
+without the header "Check now", merge and restart all 401. If you already
+have a vhost, add the location by hand:
+
+```nginx
+location /_review/ {
+    proxy_pass         http://127.0.0.1:4100/;
+    proxy_set_header   X-Review-Secret <the value in services/shared/.env>;
+    proxy_set_header   Host $host;
+    proxy_set_header   X-Forwarded-Proto $scheme;
+}
+```
+
 **Both sides need `REVIEW_CONTROL_SECRET`,** and they read it from different
 files: the agent from its own `.env`, the two Node services from
 `services/shared/.env`. `install.sh` generates one value into both. If you set
@@ -554,7 +569,7 @@ model call — start there:
 curl -s 127.0.0.1:8100/api/health | python3 -m json.tool   # agent
 curl -s 127.0.0.1:4100/health     | python3 -m json.tool   # merge + deploy
 curl -s 127.0.0.1:4101/health     | python3 -m json.tool   # reviewer
-curl -s -o /dev/null -w '%{http_code}\n' 127.0.0.1:4000/health/liveliness
+curl -s -o /dev/null -w '%{http_code}\n' 127.0.0.1:4001/health/liveliness
 ```
 
 Each returns 503 and names the failing dependency. For a specific symptom, see
