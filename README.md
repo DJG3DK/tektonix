@@ -271,11 +271,10 @@ managed roles on the Models page.
 ## Dashboard
 
 One React/Vite app (`frontend/`), served by the backend itself, at its own host. Signed out means
-the sign-in form: the public page that used to sit in front of it is a separate build (`site/`) on
-a separate host, and is **not** part of an installation — `scripts/package_release.sh` drops it and
-`install.sh` never builds it. A self-hosted Tektonix serves the console and nothing else. On this
-deployment that is `agent.tektonix.io` for the console and `tektonix.io` for the page; your own
-install has whatever single host you point at it. Live task and planning output arrives over WebSockets, with a
+the sign-in form. The public page is a separate build (`site/`) on its own host and is not part of
+an installation, since a self-hosted Tektonix has no use for a page selling it. On this deployment
+that is `agent.tektonix.io` for the console and `tektonix.io` for the page; your own install has
+whatever single host you point at it. Live task and planning output arrives over WebSockets, with a
 REST snapshot on every (re)connect — the socket only carries events from the moment it opens, so
 the snapshot is what makes a page opened mid-task show real history instead of starting blank.
 Multiple people can watch the same task at once; a second viewer connecting doesn't disconnect the
@@ -607,7 +606,7 @@ agent/
   tools/                 files, shell/bash, git, review_gate, planning_tools, vision, checks,
                          github_tools, router_ledger...
 docker/agent-sandbox/    the container image build tasks' bash/edit tools run inside
-frontend/                React + Vite dashboard (landing page, Planning, inbox, settings)
+frontend/                React + Vite console (Planning, tasks, inbox, settings)
 memory/                  *.example.md templates only -- live memory is in Postgres, not here
 skills/                  on-demand skill files (incl. a vendored reasoning skill under vendor/)
 services/                the rest of the system — one deployable each, all in this repo
@@ -921,7 +920,7 @@ Planning Chat's model selection, tool/memory parity, brief-first and draft gate,
 memory-key consistency, auth and the per-project auto-approve scope, the audit log, GitHub inbox
 sources (including code scanning grouped per rule), check detection for all ten stacks, onboarding
 containment, and uploads — against in-memory stores and mocked model calls, no live Postgres or
-real model calls required. Frontend Vitest covers the landing page, settings, inbox and streams.
+real model calls required. Frontend Vitest covers the console's settings, inbox and streams; `site/` has its own.
 The node tests cover `projects.json` merging, pre-existing check classification, deploy preflight,
 service-secret reading, the health routes' project check, the reviewer's read-only dependency
 borrow, and both services' live re-read of `projects.json`.

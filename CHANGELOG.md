@@ -2,159 +2,91 @@
 
 ## v0.7.0 — a page that is not the product, an installer that installs, and a gate that blames the right thing
 
-### The review gate stopped blaming the diff for its own failures
-
-A commit that touched only backend files, and that the reviewer itself called
-clean, was rejected three times and escalated. Nothing was wrong with it. Four
-defects had to line up, and each is fixed.
-
-The baseline was comparing two different environments. A failed check is
-re-run against the base commit to decide whether the branch caused it, but the
-base worktree is built with its sha equal to its base, so its own diff is
-empty, it never takes the dependency-install path, and it inherits tooling
-from the live checkout that the branch had to install for itself. The
-provisioning decision is now an argument, and the baseline run reuses whatever
-the branch used. Results are cached per environment as well as per commit,
-because an answer measured one way is not an answer about the other.
-
-A check that could not RUN was being counted as a check that FAILED. Those
-need opposite responses: a failing check is the agent's to fix, a missing
-command is the harness's, and an agent asked to fix the second is being asked
-to debug an environment it cannot see. It will try anyway. A missing command
-is now recognised from the shell's own wording — never from a module the code
-under review cannot resolve, which is usually a real defect — and escalates to
-a human on the first round. It still blocks: a check that did not run cannot
-be counted as a pass.
-
-A root dependency install was assumed to cover every package in a repository.
-It only does when the root manifest actually declares workspaces. A directory
-that is its own project got nothing, so every check configured to run there
-failed on missing tooling rather than on the code.
-
-And the rejection never said why. The failure output was captured, shown to
-the review model, then dropped before it was stored, so the only thing
-downstream could read was which checks failed. Output is kept with the
-verdict now, unrunnable checks are listed apart from real failures, and the
-message builder that did all this — already written, already tested, called
-from nowhere — is finally on the live path.
-
-### An installer that can install the prerequisites
-
-It checked for git, Python, Node and Docker, then stopped with "install the
-missing prerequisites above, then re-run", leaving the person to work out the
-package names for their distribution — while the script already knew how to
-drive apt, pacman and dnf, because it installs nginx and certbot that way.
-
-It offers now, for those four plus ripgrep, and for the Postgres server at the
-database step, including the initialisation step that Arch needs and Debian
-does for you. It asks every time and the answer defaults to no. `--yes` is
-deliberately not consent: an unattended run should mean "do not stop to ask
-me", never "put a Node runtime and a database on this machine".
-`INSTALL_PREREQS=1` is the explicit opt-in.
-
-Only genuinely absent commands are offered. A runtime that is present but
-below the floor is tracked separately, because installing the distribution's
-package cannot fix it — the version already there is that package. Debian and
-Ubuntu have shipped Node well behind the floor for most of its life, so the
-floors are re-checked after installing and a still-old runtime gets the real
-remedy rather than a second identical failure.
-
-Two prompt bugs surfaced while testing this, both older than the change.
-Testing whether the terminal device is readable does not tell you whether it
-can be opened: a process with no controlling terminal still has the node, the
-open fails, and the unset reply then aborted the installer outright.
-
 ### A Windows installer
 
-The runtime already ran on Windows. The bundle is documented as any host with
-Docker, the example environment file gives the Windows form of the projects
-directory, and the bind-mount translation detects a drive letter and joins
-with backslashes so a sibling container resolves against a Windows host. That
-was the hard part and it was done.
+The Docker bundle already ran on Windows: the bind-mount translation handles
+drive letters, and the example env file gives the Windows form of the projects
+directory. What was missing were the four steps between a downloaded copy and a
+running console, the first of which is `cp`.
 
-What was missing were the four steps between a downloaded copy of the source
-and a running console — and the first of them is `cp`, which is not a command
-Windows has, so the documented instructions could not be followed as written.
-`install.ps1` does them: checks Docker is installed and running, asks for the
-two values that have no sensible default, writes the environment file, and
-brings the stack up. It runs under PowerShell 7 on macOS and Linux too.
-Windows is why it exists.
+`install.ps1` does them — checks Docker is installed and running, asks for the
+two values that have no default, writes the `.env`, and brings the stack up.
+`-DryRun` and `-Yes` mean what they do in `install.sh`. It runs under
+PowerShell 7 on macOS and Linux too; Windows is why it exists.
 
-### Every code scanning alert closed
+### The installer can install the prerequisites
 
-Forty-four, plus the dependency alerts. The bulk were three hand-written
-versions of the same containment check — correct to a reader, invisible to the
-analyser, and one of them genuinely weaker than it looked, since a symlink
-inside the directory would have passed it. They are one function now, and the
-operations behind it are "write a private key here", "read this", "delete
-this". Stack traces no longer reach an error response, and the two places that
-build a command now dispatch on a literal rather than on a value that merely
-matched a list.
+It checked for git, Python, Node and Docker and then stopped, leaving you to
+work out the package names — while it already drove apt, pacman and dnf to
+install nginx and certbot.
+
+It offers now, for those four plus ripgrep, and for Postgres at the database
+step. It asks every time and the answer defaults to no. `--yes` is not consent:
+an unattended run should mean "do not stop to ask me", never "put a Node runtime
+and a database on this machine". `INSTALL_PREREQS=1` is the opt-in.
+
+Only absent commands are offered. A runtime that is present but below the floor
+gets the real remedy instead, since the distribution's package is the version
+already installed — Debian and Ubuntu ship Node well behind the floor.
+
+### Download the release instead of cloning
+
+Releases now carry `tektonix-<version>.tar.gz` and its checksum, and the landing
+page links to it. One archive serves both install paths on every operating
+system, with the dashboard prebuilt so no Node build runs on install.
+
+### The landing page is not part of the agent
+
+It never should have been. `tektonix.io` serves the public page,
+`agent.tektonix.io` serves the console, and `site/` is its own project that the
+release tarball drops — a self-hosted install has no use for a page selling the
+thing you just installed. The page ships no JavaScript; the console is
+`noindex`.
+
+**If you had the console installed as an app, reinstall it.** A service worker,
+an installed app and a push subscription all belong to an origin, and the
+console's origin changed. The old subscriptions were removed server-side;
+re-enable notifications from Settings once it is installed from the new host.
 
 ### A newsletter instead of a sign-in button
 
-The landing page's one action was "Sign in", which pointed at a private
-console the visitor has no account on. It was the right button when the page
-and the console were one document and one host; once they were not, it was an
-invitation to a locked door.
+"Sign in" pointed at a private console the visitor has no account on. It is a
+newsletter signup now — a name, an address, and what the list is for: the
+changelog for each release, plus what is being built next and what turned out
+to be a bad idea. Nothing sends yet.
 
-It is a newsletter signup now: a name, an address, and a line about what the
-list is for — the changelog for each release, plus what is being built next
-and what turned out to be a bad idea. Nothing sends yet, deliberately. There
-is a list to send to first.
+The form is plain HTML, since the page ships no JavaScript, and every outcome
+redirects to a real page rather than a status code a browser would show to
+nobody. A repeat signup counts as success. Addresses never reach the log, and
+every subscriber gets an unsubscribe token at signup so the first issue does
+not have to backfill one.
 
-The form is plain HTML, because the page still ships no JavaScript: `method`,
-`action`, two fields, and a same-origin POST that needs neither a fetch nor
-CORS. The server answers with a redirect to a real page rather than a status
-code a browser would show to nobody, so success and failure each have
-somewhere to land. A repeat signup is a success — the person meant "put me on
-the list", they are on the list, and an error would send them away believing
-it had not worked.
+### The review gate blames the right thing
 
-`site/server/` is the other end: one table, one endpoint, its own virtualenv
-and its own pm2 process. It goes where the landing page goes, which is to say
-not into an installation — a self-hosted agent has no business shipping an
-endpoint that writes to tektonix.io's mailing list. Addresses are never
-written to the log, because a log line is the easiest way for a mailing list
-to leak and it leaks into a file people tail. Every subscriber gets an
-unsubscribe token at signup, so the first issue does not have to backfill one
-for everybody.
+It rejected a clean commit three times and then escalated it. Four causes, all
+fixed:
 
-### The landing page is not part of the agent any more
+- The baseline re-ran failed checks against a base worktree provisioned
+  differently from the branch, so an environment difference read as the
+  branch's fault. Provisioning is now an argument the baseline reuses, and
+  results are cached per environment as well as per commit.
+- A check that could not RUN counted as one that FAILED. A missing command is
+  recognised as the harness's fault now and escalates to a human on the first
+  round, instead of being handed to an agent that cannot see the environment.
+  It still blocks: a check that did not run is not a pass.
+- A root dependency install was assumed to cover every package in a repository,
+  which only holds when the root manifest declares workspaces.
+- The rejection never said why. Check output was captured, shown to the review
+  model, then dropped before being stored; it is kept with the verdict now, and
+  unrunnable checks are listed apart from real failures.
 
-`tektonix.io` serves the public page; `agent.tektonix.io` serves the console.
-They were one build and one origin until now, which had two costs. A marketing
-page shared an origin, a bundle and a cookie jar with a private console. And
-every installation of Tektonix shipped a page selling Tektonix to the person
-who had just installed it.
+### Every code scanning alert closed
 
-`site/` is its own Vite project with its own dependencies, its own copy of the
-Drafting palette, and its own tests. `scripts/package_release.sh` deletes it
-from the tarball and `install.sh` never looks at it, so a self-hosted agent
-serves the console and nothing else — both halves checked by
-`tests/test_repo_hygiene.py`, since either one alone would let it back in.
-
-It also ships **no JavaScript**. The only control on the page is the sign-in
-link, and a link is HTML, so the build renders the page to static markup and
-then strips the module script; the build fails if a script tag ever survives.
-What deploys is HTML, CSS and images, which can sit on any static host.
-
-The console lost the things that only made sense while the two were one
-document: the landing page, the Open Graph card and the structured data (now
-on the page they describe), the back-to-overview button, and the ref that
-existed to tell a signed-out visitor apart from an expired session so the
-first was not shoved past the pitch. It is `noindex` now, because a private
-console has no business in a search result.
-
-**If you had the app installed, reinstall it.** A service worker, an installed
-app and a push subscription all belong to an origin, and the console's origin
-changed. The old subscriptions were removed server-side rather than left to
-fail on every alert; re-enable notifications from Settings once the app is
-installed from the new host.
-
-Also fixed on the way past: the GitHub inbox's approve links were still built
-from a URL last correct before the rename, so they pointed at a host that has
-not served the console since 2026-09-15.
+Forty-four, plus the dependency alerts. Most were three hand-written versions of
+one containment check, now a single function — one spelling was weaker than it
+looked, since a symlink inside the directory passed it. Stack traces no longer
+reach an error response, and the two places that build a command dispatch on a
+literal rather than on a value that matched a list.
 
 ## v0.6.0 — a name of its own, a router of its own, and a console you can carry
 
