@@ -29,16 +29,16 @@ class _Req:
 
 MANIFEST = {
     "codebase-map": "Structural map of the webapp codebase.",
-    "strata-architecture": "How webapp's STRATA strategy works -- SR level sources ... Read before touching strata.js, srLevelsModule.js.",
-    "srdivergence-architecture": "How webapp's SR-divergence strategy works -- ... Read before touching srDivergence.js, srLevelsModule.js.",
+    "gridder-architecture": "How a project's grid strategy works -- signal level sources ... Read before touching gridder.js, levelsModule.js.",
+    "trendsignal-architecture": "How webapp's trend-signal strategy works -- ... Read before touching trendSignal.js, levelsModule.js.",
     "cta-architecture": "How webapp's CTA trend-following strategy works -- MA ensemble ... Read before touching ctaTrend.js, ctaCore.js.",
     "bybit-perp-mechanics": "How Bybit USDT perpetuals settle -- funding sign/timing ... Read before touching bybitClient.js.",
 }
 
 
 def test_match_skills_routes_a_request_to_the_skill_that_covers_it():
-    matched = match_skills("a hard plan for the srDivergence strategy: fewer false entries", MANIFEST)
-    assert matched[0] == "srdivergence-architecture"
+    matched = match_skills("a hard plan for the trendSignal strategy: fewer false entries", MANIFEST)
+    assert matched[0] == "trendsignal-architecture"
     assert "codebase-map" not in matched, "the map is already mandated by the prompt"
 
 
@@ -57,15 +57,15 @@ def test_save_brief_pins_and_reports_matching_skills(monkeypatch):
     assert plan_ref["brief"] is None
 
     reply = save_brief.invoke({
-        "goal": "cut srDivergence false entries without losing trade count",
+        "goal": "cut trendSignal false entries without losing trade count",
         "deliverable": "a build-ready plan",
         "out_of_scope": "STRATA and CTA",
-        "needs": "srDivergence.js, its backtester",
+        "needs": "trendSignal.js, its backtester",
     })
 
-    assert plan_ref["brief"]["goal"].startswith("cut srDivergence")
-    assert plan_ref["brief"]["matched_skills"][0] == "srdivergence-architecture"
-    assert "/skills/srdivergence-architecture/SKILL.md" in reply
+    assert plan_ref["brief"]["goal"].startswith("cut trendSignal")
+    assert plan_ref["brief"]["matched_skills"][0] == "trendsignal-architecture"
+    assert "/skills/trendsignal-architecture/SKILL.md" in reply
     assert "BEFORE any list_project_dir/read_project_file" in reply
 
 
@@ -104,7 +104,7 @@ async def test_brief_first_hides_everything_but_save_brief_until_a_brief_exists(
 
 async def test_pinned_brief_is_appended_to_the_system_message_on_every_call():
     ref = {"brief": {"goal": "cut false entries", "deliverable": "a plan", "out_of_scope": "CTA",
-                     "needs": "srDivergence.js", "matched_skills": ["srdivergence-architecture"]}}
+                     "needs": "trendSignal.js", "matched_skills": ["trendsignal-architecture"]}}
     mw = PinnedBriefMiddleware(ref)
     seen = []
 
@@ -117,7 +117,7 @@ async def test_pinned_brief_is_appended_to_the_system_message_on_every_call():
     assert prompt.startswith("You are a planning assistant.")
     assert "PINNED BRIEF" in prompt and "GOAL: cut false entries" in prompt
     assert "OUT OF SCOPE: CTA" in prompt
-    assert "/skills/srdivergence-architecture/SKILL.md" in prompt
+    assert "/skills/trendsignal-architecture/SKILL.md" in prompt
     assert "call save_brief again" in prompt
 
 

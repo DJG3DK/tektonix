@@ -8,20 +8,20 @@ from agent.memory_freshness import (
     find_path_mentions, last_change_dates, render_flags, stale_flags, update_ledger,
 )
 
-TREE = ["src/strategies/srDivergence.js", "src/strategies/strata.js", "src/core/bot.js", "src/util/bot.js", "README.md"]
+TREE = ["src/strategies/trendSignal.js", "src/strategies/gridder.js", "src/core/bot.js", "src/util/bot.js", "README.md"]
 
 
 def test_finds_exact_paths_and_unique_basenames_only():
     memory = """# notes
-- SR_RECENCY_WEIGHT is plumbed through `src/strategies/srDivergence.js` and sweepable.
-- strata.js grades levels with a fixed recencyWeight.
+- LEVEL_RECENCY_WEIGHT is plumbed through `src/strategies/trendSignal.js` and sweepable.
+- gridder.js grades levels with a fixed recencyWeight.
 - bot.js is ambiguous (two of them) and must not resolve.
 - README.md is documentation.
 """
     mentions = find_path_mentions(memory, TREE)
     paths = [p for _, p in mentions]
-    assert "src/strategies/srDivergence.js" in paths
-    assert "src/strategies/strata.js" in paths, "a basename unique in the tree resolves"
+    assert "src/strategies/trendSignal.js" in paths
+    assert "src/strategies/gridder.js" in paths, "a basename unique in the tree resolves"
     assert not any(p.endswith("bot.js") for p in paths), "an ambiguous basename is not evidence"
     assert "README.md" in paths
 

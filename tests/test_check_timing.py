@@ -62,9 +62,9 @@ def test_the_median_ignores_one_pathological_run(store):
 
 
 def test_projects_are_measured_separately(store):
-    asyncio.run(check_timing.record(store, "trading-bot", 310))
+    asyncio.run(check_timing.record(store, "large-project", 310))
     asyncio.run(check_timing.record(store, "small-site", 19))
-    assert asyncio.run(check_timing.expected_seconds(store, "trading-bot")) == 310.0
+    assert asyncio.run(check_timing.expected_seconds(store, "large-project")) == 310.0
     assert asyncio.run(check_timing.expected_seconds(store, "small-site")) == 19.0
 
 

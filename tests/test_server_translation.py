@@ -259,7 +259,7 @@ from agent.planning_chat import _translate_message as translate_planning_msg
 def test_operator_messages_survive_hydration_as_user_entries():
     """HumanMessages were dropped entirely -- a refreshed planning page showed
     the agent answering nobody."""
-    entry = translate_planning_msg(HumanMessage(content="please fix the strata plotting"))
+    entry = translate_planning_msg(HumanMessage(content="please fix the gridder plotting"))
     assert entry["kind"] == "user"
     assert entry["summary"].startswith("please fix")
 

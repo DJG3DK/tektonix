@@ -2558,7 +2558,7 @@ async def _run_planning_turn_bg(session_id: str, repo: str, text: str, attachmen
         # never happens within a session. A HARD session's continuation
         # nudges are short by nature ("continue", "also check X") and
         # classify EASY on their text alone -- which flipped a session's
-        # model mid-plan: half a strata plan was written by the HARD pin and
+        # model mid-plan: half a plan was written by the HARD pin and
         # half by the EASY pin after a nudge (operator report; a restart
         # exposed it, but any short follow-up triggers the same flip). Once
         # a session has needed the hard model, its context IS the hard
@@ -5186,7 +5186,7 @@ if FRONTEND_DIST.is_dir():
             # rather than a lifetime: FileResponse already sends etag and
             # last-modified, and a max-age here would be exactly how long a
             # replaced icon or og:image outlives its deploy. Replacing the
-            # brand art on the trading bot on 2026-08-29 hit precisely that
+            # brand art on another application on 2026-08-29 hit precisely that
             # -- correct bytes on disk, a day of stale ones in every cache.
             # stat_result up front: FileResponse only sets etag and
             # last-modified when it is given one, otherwise it stats

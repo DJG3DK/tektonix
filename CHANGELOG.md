@@ -5,11 +5,10 @@
 ### The public tree is this product, not the box it grew on
 
 The example router config that `install.sh` copies onto a fresh install still
-carried the maintainer's mail-agent and trading-bot aliases, with comments
-naming `/home/agentEmail` and a live trading gate. The Models page introduced
-those callers by name. A visitor reading the seed file, or an operator opening
-Settings → Models on a brand-new box, was looking at somebody else's other
-software.
+carried aliases belonging to two applications that are not this product, with
+comments naming their checkouts, and the Models page introduced them by name.
+A visitor reading the seed file, or an operator opening Settings → Models on a
+brand-new box, was looking at an inventory of somebody else's software.
 
 Those aliases are gone from `config.example.yaml`. Existing `config.yaml`
 files are untouched. The Models page now says the property: aliases that do
@@ -51,6 +50,13 @@ running console, the first of which is `cp`.
 two values that have no default, writes the `.env`, and brings the stack up.
 `-DryRun` and `-Yes` mean what they do in `install.sh`. It runs under
 PowerShell 7 on macOS and Linux too; Windows is why it exists.
+
+Double-click `Install Tektonix.bat` to run it. A `.ps1` cannot be
+double-clicked into running — Explorer opens it in Notepad — and Windows client
+editions default to an execution policy of Restricted, so even from a terminal
+the bare path fails with "running scripts is disabled on this system". The
+launcher passes `-ExecutionPolicy Bypass` for that one process and leaves your
+machine's setting alone.
 
 ### The installer can install the prerequisites
 
@@ -1005,9 +1011,8 @@ OpenRouter API key. pm2 optional.
 **2026-08-29**
 
 The first public cut of 3D-Agent. It has run continuously on one deployment for
-several months against three real repositories — a live trading bot, an
-e-commerce monorepo and a Next.js site — but this is the first time anyone else
-can install it. Treat it accordingly: see *Known limits* below.
+several months against three real repositories of varying shape and size, but
+this is the first time anyone else can install it. Treat it accordingly: see *Known limits* below.
 
 ### What it does
 

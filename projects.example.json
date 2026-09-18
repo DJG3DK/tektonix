@@ -4,13 +4,13 @@
       "sandbox": "/srv/sandboxes/storefront",
       "live": "/srv/live/storefront"
     },
-    "trading-bot": {
-      "sandbox": "/srv/sandboxes/trading-bot",
-      "live": "/srv/live/trading-bot",
+    "large-project": {
+      "sandbox": "/srv/sandboxes/large-project",
+      "live": "/srv/live/large-project",
       "db_env_file": "config/.env",
       "review": {
         "secretFiles": ["config/auth.json", "config/keys.json"],
-        "readOnlyMounts": ["data/candles"],
+        "readOnlyMounts": ["data/fixtures"],
         "nodeModulesDirs": ["."],
         "checks": [
           { "name": "lint", "dir": ".", "cmd": "npm", "args": ["run", "lint"], "timeoutMs": 300000 },
@@ -18,7 +18,7 @@
         ]
       },
       "deploy": {
-        "pm2Apps": ["trading-bot"],
+        "pm2Apps": ["large-project"],
         "build": [{ "dir": ".", "cmd": "npm", "args": ["install", "--no-audit", "--no-fund"] }]
       }
     },
@@ -28,8 +28,8 @@
     }
   },
   "test_env": {
-    "trading-bot": {
-      "EXAMPLE_LIVE_AUTH_FILE": "/srv/live/trading-bot/config/auth.json"
+    "large-project": {
+      "EXAMPLE_LIVE_AUTH_FILE": "/srv/live/large-project/config/auth.json"
     }
   }
 }

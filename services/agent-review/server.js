@@ -33,7 +33,7 @@ const fs = require('fs');
 // below — a bare `pm2 restart` re-runs whatever's already compiled on disk,
 // so skipping this for a project with a build step deploys stale code while
 // looking like it succeeded. Checked each project directly rather than
-// assume: a trading-bot project runs straight from source (no build step, `main: src/index.js`),
+// assume: a large project runs straight from source (no build step, `main: src/index.js`),
 // a Next.js project is Next.js (`next build` then `next start` serves .next/),
 // a monorepo project' API is NestJS (`nest build`) and admin/storefront are Vite
 // static bundles nginx serves directly — not pm2 apps at all, so they need

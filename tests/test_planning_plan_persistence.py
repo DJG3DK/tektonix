@@ -177,7 +177,7 @@ async def test_live_stream_never_publishes_user_entries():
                     return _gen()
             return _Run()
 
-    msgs = [_HM(content="please fix the strata sidebar --- ATTACHED FILES ---"),
+    msgs = [_HM(content="please fix the gridder sidebar --- ATTACHED FILES ---"),
             AIMessage(content="On it.")]
     plan_ref = {"markdown": "# saved"}
     await run_planning_turn(_Agent(msgs), plan_ref, {"configurable": {"thread_id": "t"}},

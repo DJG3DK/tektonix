@@ -376,7 +376,7 @@ model_list:
       # would be spent on a task with nothing to reason about.
       #
       # Repinned 2026-08-26 from gemini-3.1-pro-preview after benchmarking four
-      # candidates on the real a trading-bot project inventory (599 files, ~5.2k tokens) and
+      # candidates on the real a large project inventory (599 files, ~5.2k tokens) and
       # grading every cited path against the filesystem:
       #
       #   model                       $/M in   ghost paths   bare filenames

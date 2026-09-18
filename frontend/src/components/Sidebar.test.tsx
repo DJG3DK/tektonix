@@ -91,9 +91,9 @@ describe("Sidebar — category expansion", () => {
   });
 
   it("keeps a running task visible in its own group regardless", () => {
-    const running = task({ goal: "verify the strata gate", status: "running" });
+    const running = task({ goal: "verify the entry gate", status: "running" });
     renderSidebar({ tasks: [running] });
-    expect(screen.getByText("verify the strata gate")).toBeInTheDocument();
+    expect(screen.getByText("verify the entry gate")).toBeInTheDocument();
   });
 
   it("shows a running task in the Running group only, never also in a category", () => {

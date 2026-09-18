@@ -367,9 +367,9 @@ def test_the_ledger_records_which_consumer_called(tmp_path):
     """Attribution is the reason the label exists: spend has to be answerable
     per consumer, not just per role."""
     path = tmp_path / "routing.jsonl"
-    ledger.record(call_id="c1", alias="mail-chat", model="m", caller="mail", path=path)
+    ledger.record(call_id="c1", alias="another-alias", model="m", caller="other-app", path=path)
     entry = json.loads(path.read_text().splitlines()[0])
-    assert entry["caller"] == "mail"
+    assert entry["caller"] == "other-app"
 
 
 def test_caller_is_optional_so_old_readers_are_unaffected(tmp_path):

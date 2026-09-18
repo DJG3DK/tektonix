@@ -22,7 +22,7 @@ agent can influence is not a gate.
 2. **Set up a worktree.** Detached checkout at the reviewed sha, with:
    - `node_modules` linked or bind-mounted from the live checkout (never installed fresh per review)
    - **review-only credentials**, never the live ones (see below)
-   - gitignored test inputs bound **read-only** — for the trading bot that is 348MB of candle data,
+   - gitignored test inputs bound **read-only** — one project's is 348MB of recorded market data,
      without which 31 of 49 suites self-skip and report green having asserted nothing
 
 3. **Run the real checks.** Lint, tests, build, database drift, secret scan. Whatever the repo says

@@ -36,11 +36,18 @@
     as a parameter, or the run fails saying which one is missing.
 
 .EXAMPLE
-    .\install.ps1
+    powershell -ExecutionPolicy Bypass -File .\install.ps1
     Asks for what it needs and starts the stack.
 
+    The -ExecutionPolicy is not optional advice. Windows client editions
+    default to Restricted, so `.\install.ps1` on a machine nobody has changed
+    fails with "running scripts is disabled on this system". Passing it on the
+    command line applies to that one process and leaves the machine's own
+    setting alone -- which is the right trade for a script somebody just
+    downloaded.
+
 .EXAMPLE
-    .\install.ps1 -DryRun
+    powershell -ExecutionPolicy Bypass -File .\install.ps1 -DryRun
     Shows what it would do, touching nothing.
 #>
 [CmdletBinding()]

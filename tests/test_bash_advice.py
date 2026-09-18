@@ -48,7 +48,7 @@ def test_reading_one_file_is_pointed_at_the_read_tool():
     for cmd in (
         "cd /workspace && cat package.json",
         "cat src/core/backtester.js",
-        "cd /workspace && sed -n '1,80p' src/strategies/srDivergence.js",
+        "cd /workspace && sed -n '1,80p' src/strategies/trendSignal.js",
         "head src/app.js",
         "cd /workspace && tail tests/test_x.js",
     ):
@@ -262,7 +262,7 @@ def test_a_command_that_only_reads_is_flagged_however_it_is_spelled(command):
 
 
 @pytest.mark.parametrize("command", [
-    "rg -n 'srDivergence' src",
+    "rg -n 'trendSignal' src",
     "grep -rn 'strategy' src | head -30",
     "cat src/bot.js | grep divergence",
     "find . -name '*.test.js' | head",

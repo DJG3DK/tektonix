@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import pathlib
 import re
+import subprocess
 
 import pytest
 import yaml
@@ -159,3 +160,70 @@ def test_the_console_and_the_landing_page_do_not_share_source():
             text = f.read_text()
             assert f"../../{other}/" not in text and f"/{other}/src/" not in text, (
                 f"{src}/{f.relative_to(root)} reaches into {other}/")
+
+
+# The maintainer's own software must not appear in the public tree.
+#
+# Each needle is assembled from halves so that this file, which is itself
+# scanned, does not trip its own check. That is not cleverness for its own
+# sake: an exclusion list is a hole, and the one file guaranteed to contain
+# every banned string should not be the one file nobody checks.
+_FORBIDDEN = [
+    ("3D", "Steals"),
+    ("3d-", "bot"),
+    ("3dweb", "catchers"),
+    ("3dcrypto", "bots"),
+    ("agent", "Email"),
+    ("Agent_", "Email"),
+    ("mail-", "chat"),
+    ("mail-", "triage"),
+    ("trade-", "gate"),
+    ("trading ", "bot"),
+    ("trading-", "bot"),
+]
+
+# Where the agent's own name legitimately appears, and the one place history is
+# allowed to keep its own wording.
+_SCAN_SKIP_PREFIXES = ("docs/history/",)
+
+
+def _tracked_text_files():
+    out = subprocess.run(["git", "ls-files"], cwd=REPO, capture_output=True, text=True)
+    for rel in out.stdout.split():
+        if rel.startswith(_SCAN_SKIP_PREFIXES):
+            continue
+        p = REPO / rel
+        if not p.is_file():
+            continue
+        try:
+            yield rel, p.read_text()
+        except (UnicodeDecodeError, OSError):
+            continue
+
+
+def test_no_private_project_names_anywhere_in_the_public_tree():
+    """This repository is public, and everything in it ships.
+
+    The seed router config carried three aliases belonging to two applications
+    that are not this product, with comments naming their checkouts, and the
+    Models page introduced them by name to every installation. Somebody reading
+    a fresh install was looking at an inventory of one maintainer's other
+    software.
+
+    A grep is the whole defence. Nothing else catches a name that arrives in a
+    comment written to explain a real incident, which is exactly how these got
+    in -- each one was true, useful, and nobody's business.
+    """
+    hits = []
+    for rel, text in _tracked_text_files():
+        low = text.lower()
+        for a, b in _FORBIDDEN:
+            needle = (a + b).lower()
+            if needle in low:
+                for n, line in enumerate(text.splitlines(), 1):
+                    if needle in line.lower():
+                        hits.append(f"{rel}:{n}: {line.strip()[:90]}")
+    assert not hits, (
+        "the maintainer's own projects appear in the public tree:\n  "
+        + "\n  ".join(hits[:20])
+    )

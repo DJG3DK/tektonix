@@ -37,7 +37,7 @@ from langgraph.errors import GraphBubbleUp
 
 def _describe(name: str, e: Exception) -> str:
     # OSError's str() embeds the absolute host path ("[Errno 20] Not a
-    # directory: '/home/agent-workspaces/a trading-bot project/.git/HEAD'"). agent/tools/
+    # directory: '/home/agent-workspaces/a large project/.git/HEAD'"). agent/tools/
     # files.py deliberately refuses to name the sandbox root to the model --
     # it leaks infrastructure detail and contradicts the "/workspace IS the
     # repo root" story the agent is told everywhere else -- so use the errno

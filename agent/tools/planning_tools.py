@@ -830,7 +830,7 @@ _SKILL_ALWAYS_EXCLUDED = frozenset({"codebase-map"})  # already mandated by the 
 def _keywords(text: str) -> set[str]:
     """Lowercase tokens worth matching on: words of 4+ letters that are not
     filler, plus every identifier-ish token (camelCase names, file stems) so
-    `srDivergence.js` in a request meets `srDivergence.js` in a description."""
+    `trendSignal.js` in a request meets `trendSignal.js` in a description."""
     import re
 
     out: set[str] = set()
@@ -840,7 +840,7 @@ def _keywords(text: str) -> set[str]:
         low = stem.lower()
         if len(low) >= 4 and low not in _STOPWORDS:
             out.add(low)
-        # split camelCase / snake_case so "sr divergence" meets "srDivergence"
+        # split camelCase / snake_case so "trend signal" meets "trendSignal"
         for part in re.split(r"(?<=[a-z0-9])(?=[A-Z])|[_-]", stem):
             pl = part.lower()
             if len(pl) >= 4 and pl not in _STOPWORDS:

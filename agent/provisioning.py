@@ -11,8 +11,8 @@ Everything in a project's config falls into one of three buckets:
    test suite needs, which pm2 apps serve this path). Detected, PROPOSED,
    and shown to the operator to accept or reject.
 3. Not derivable at all. The canonical example lives in this deployment:
-   a trading-bot project's `test:auth` and `test:routes` make real HTTP calls to
-   a live service -- the live trading bot -- and `test:routes` exercises
+   one project's `test:auth` and `test:routes` make real HTTP calls to
+   a live service -- a live service of the operator's -- and `test:routes` exercises
    POST /trade/open. Running them unattended would place real orders for
    zero review signal. No static analysis reliably distinguishes "hits a
    test server" from "hits your production system", so this module FLAGS
@@ -49,7 +49,7 @@ _SECRET_NAME_HINTS = re.compile(
 #
 # The idioms are listed per ecosystem rather than as one loose pattern
 # because the false-negative and the false-positive cost differently. A
-# missed call is the trading-bot incident again; a spurious match only means
+# missed call is the npm-script incident again; a spurious match only means
 # the operator is asked about a suite the wizard would otherwise have enabled
 # silently. Bare URLs are deliberately NOT matched: every Go file that cites
 # pkg.go.dev in a comment would flag, and a wizard that flags everything
@@ -546,7 +546,7 @@ def _suite_check(name: str, cmd: str, args: list[str], *, timeout: int) -> dict:
 def _guard_suite(live: Path, lang: str, full: dict, review: dict | None) -> tuple[list[dict], list[Candidate]]:
     """Apply the network-calling-tests rule to a whole-suite test command.
 
-    Same rule the npm path has followed since the trading-bot incident, with
+    Same rule the npm path has followed since the npm-script incident, with
     the same three outcomes:
 
     * the repo declares a curated review suite -> trust it, and offer the

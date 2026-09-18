@@ -60,7 +60,7 @@ def test_a_slim_frontend_majority_is_not_enough():
 
 
 def test_mostly_backend_paths_stay_general():
-    text = "Fix src/core/bot.js and src/strategies/strata.js; adjust the badge in frontend/src/components/Sidebar.tsx"
+    text = "Fix src/core/bot.js and src/strategies/gridder.js; adjust the badge in frontend/src/components/Sidebar.tsx"
     d = classify_frontend(text, category="bug-fix")
     assert d.route == "general"
 

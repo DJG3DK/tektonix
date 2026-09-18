@@ -18,7 +18,7 @@ usage.jsonl
 
 # ── Working directories ──────────────────────────────────────────────────────
 # Ephemeral git worktrees created per review, with node_modules bind-mounted
-# from the live checkout and read-only candle data mounted in.
+# from the live checkout and read-only large fixtures mounted in.
 worktrees/
 
 # ── Vendored binary ──────────────────────────────────────────────────────────

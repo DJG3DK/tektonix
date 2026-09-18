@@ -307,7 +307,7 @@ function getOpenRouterKey() {
 // live HEAD and inferred everything else, which has produced two distinct
 // classes of false finding: stale-lineage carry-over (patched at the prevState
 // check) and fully inverted diffs when live moved ahead of the sandbox (two
-// false `blocking` findings on a trading-bot project's pump-protection settings, which the
+// false `blocking` findings on one project's pump-protection settings, which the
 // commit had in fact ADDED). Both are symptoms of having no stable review unit.
 //
 // With per-task branches the base is `merge-base(live, branch)`, fixed at the
@@ -405,7 +405,7 @@ async function detectNewCommit(project, cfg, prev = loadState()[project]) {
  * writable: a check that writes -- a test fixture, a compile step, a
  * package's own cache -- would have edited production's installed
  * dependencies from inside the one step whose premise is that this code has
- * not been vetted. That is the same hole the live candle store already has a
+ * not been vetted. That is the same hole a live data store already has a
  * read-only remount for, and Linux silently ignores `-o ro` on a plain bind,
  * so the explicit remount is what makes the flag take effect. A mount that
  * cannot be made read-only is unmounted rather than left writable.
@@ -554,9 +554,9 @@ async function setupWorktree(project, cfg, sha, base, { depsChangedOverride = nu
   // and cleanup (or whose cleanup umounts failed -- run() is best-effort and
   // "target is busy" right after a check suite is real) leaves LIVE bind
   // mounts inside the stale directory, and rmSync then dies on the read-only
-  // candle mount with EROFS before any review can start. Seen live
-  // 2026-08-27: three crashed reviews left worktrees/a trading-bot project-1a1fcd8194c7
-  // with data/candles still ro-mounted, and every subsequent attempt failed
+  // read-only mount with EROFS before any review can start. Seen live
+  // 2026-08-27: three crashed reviews left worktrees/a large project-1a1fcd8194c7
+  // with data/fixtures still ro-mounted, and every subsequent attempt failed
   // instantly with "Read-only file system". Sweep /proc/self/mounts for
   // anything under this path and unmount deepest-first, so setup succeeds no
   // matter how its predecessor died.
@@ -784,7 +784,7 @@ async function setupWorktree(project, cfg, sha, base, { depsChangedOverride = nu
   // Fail closed. A missing review secret is recorded as a failed setup check
   // (same path as a regenerate failure) and never silently falls back to live --
   // a fallback would quietly restore exactly the exposure this removes.
-  // Read-only inputs the tests need but git doesn't carry. data/candles is
+  // Read-only inputs the tests need but git doesn't carry. data/fixtures is
   // gitignored (348M of live market data), so a worktree has none -- and the
   // suites that need it quietly self-skip rather than fail. Measured: 31 of 49
   // suites skipped cases that way, including all 18 grid suites (test:grid
@@ -792,7 +792,7 @@ async function setupWorktree(project, cfg, sha, base, { depsChangedOverride = nu
   // green while asserting nothing.
   //
   // Bound read-only, not symlinked or copied: the source is the live trading
-  // bot's own candle store, and a test that decided to write must not be able
+  // project's own data store, and a test that decided to write must not be able
   // to reach it. A plain `-o ro` bind is silently ignored by Linux, so the
   // explicit remount is what actually makes the flag take effect.
   for (const rel of cfg.readOnlyMounts || []) {
@@ -886,7 +886,7 @@ async function cleanupWorktree(cfg, worktreePath) {
     }
   }
   // Same reasoning for the read-only data mounts: a stale mount left behind
-  // would point into the live candle store from a deleted directory.
+  // would point into a live data store from a deleted directory.
   for (const rel of cfg.readOnlyMounts || []) {
     await run('umount', [path.join(worktreePath, rel)], '/');
   }

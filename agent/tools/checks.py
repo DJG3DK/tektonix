@@ -114,7 +114,7 @@ async def run_test(repo_root: str, repo_name: str) -> dict:
     # config file they deliberately target against a single real instance).
     #
     # Prefer `test:review` where the repo defines it. Plain `npm test` chains
-    # every test:* script, and for a trading-bot project two of those (test:auth, test:routes)
+    # every test:* script, and for a large project two of those (test:auth, test:routes)
     # drive the RUNNING production bot on a live service's own port -- so they
     # exercise whatever is deployed rather than the agent's own working tree,
     # and they hit live services as a side effect of a self-check.

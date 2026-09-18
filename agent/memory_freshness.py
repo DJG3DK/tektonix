@@ -4,7 +4,7 @@ the fact was recorded.
 /memories/AGENTS.md is loaded in full on every planning turn and every build
 task and treated as established fact. It has no timestamps, and consolidation
 rewrites the whole file nightly, so nothing in the file itself says how old a
-line is. The operator opened the 2026-09-08 srDivergence planning session
+line is. The operator opened the 2026-09-08 trendSignal planning session
 with "a lot of changes have happened to this repo, so your memory is stale" --
 and the planner's answer was to re-read the repo for twenty minutes.
 

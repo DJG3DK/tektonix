@@ -8,8 +8,19 @@ cp docker/.env.example .env      # set OPENROUTER_API_KEY and PROJECTS_DIR
 docker compose up -d
 ```
 
-On Windows, or anywhere you would rather be asked than edit a file, run
-`./install.ps1` instead. It does exactly the two steps above: checks Docker is
+On Windows, or anywhere you would rather be asked than edit a file, run this
+instead:
+
+```
+powershell -ExecutionPolicy Bypass -File .\install.ps1
+```
+
+Windows client editions default to an execution policy of Restricted, so
+`.\install.ps1` on its own fails with "running scripts is disabled on this
+system". The flag above applies to that one process and changes nothing about
+your machine.
+
+It does exactly the two steps above: checks Docker is
 installed AND running, asks for the two values with no sensible default,
 writes the `.env`, and brings the stack up. `-DryRun` prints every action
 without performing one; `-Yes` never prompts and fails naming whatever is

@@ -270,7 +270,7 @@ async def _verify_and_ship_inner(state: AgentState, repo: str, repo_root: str,
     # service issued READY for it, and the sha equality in the approval gate
     # guarantees the approval is for this commit and no other. Re-running the
     # full check suite here re-verified an unchanged commit and turned every
-    # "Approve & merge" click into 6-8 minutes of silence on a trading-bot project (51
+    # "Approve & merge" click into 6-8 minutes of silence on a large project (51
     # suites) before the merge actually happened. Jump straight to the
     # review/merge sequence -- wait_for_review re-serves its cached verdict
     # and the merge proceeds in seconds.
@@ -279,7 +279,7 @@ async def _verify_and_ship_inner(state: AgentState, repo: str, repo_root: str,
         return {**await _review_and_deploy(state, repo, approved), "incomplete_plan_streak": 0}
 
     # Announce the check phase BEFORE it runs. The suite takes 6-8 minutes on
-    # a trading-bot project and emits nothing while it grinds, which reads in the dashboard as
+    # a large project and emits nothing while it grinds, which reads in the dashboard as
     # a task frozen mid-step -- reported as a stall twice in one night. One
     # stream event turns dead air into an explained wait.
     # `phase` and `expected_seconds` are for the dashboard's idle banner, which

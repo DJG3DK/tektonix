@@ -67,27 +67,27 @@ test('projects.json entries become usable service configs', () => {
 test('built-in config wins over projects.json for the same project', () => {
     withProjectsFile({
         projects: {
-            'trading-bot': {
-                live: '/home/trading-bot',
-                sandbox: '/ws/trading-bot',
+            'large-project': {
+                live: '/home/large-project',
+                sandbox: '/ws/large-project',
                 // a naive generated config that would run EVERYTHING
                 review: { checks: [{ name: 'test', dir: '.', cmd: 'npm', args: ['test'] }] },
             },
         },
     }, (file) => {
         const builtins = {
-            'trading-bot': {
-                live: '/home/trading-bot',
-                sandbox: '/ws/trading-bot',
+            'large-project': {
+                live: '/home/large-project',
+                sandbox: '/ws/large-project',
                 // the hand-tuned list that deliberately excludes live-hitting suites
                 checks: [{ name: 'test', dir: '.', cmd: 'npm', args: ['run', 'test:review'] }],
                 secretFiles: ['config/keys.json'],
             },
         };
         const merged = loadProjects(builtins, { section: 'review', file });
-        assert.deepStrictEqual(merged['trading-bot'].checks[0].args, ['run', 'test:review'],
+        assert.deepStrictEqual(merged['large-project'].checks[0].args, ['run', 'test:review'],
             'hand-tuned checks must not be replaced by generated ones');
-        assert.deepStrictEqual(merged['trading-bot'].secretFiles, ['config/keys.json']);
+        assert.deepStrictEqual(merged['large-project'].secretFiles, ['config/keys.json']);
     });
 });
 

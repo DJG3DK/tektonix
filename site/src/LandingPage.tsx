@@ -348,10 +348,12 @@ export function LandingPage() {
               </p>
               <pre><code>{`cp docker/.env.example .env
 docker compose up -d`}</code></pre>
-              <p>
-                On Windows, <code>./install.ps1</code> does both steps for you &mdash; it checks
-                Docker is running, asks for the two values it needs, and starts the stack.
-              </p>
+              {/* The -ExecutionPolicy is part of the command, not a footnote.
+                  Windows client editions default to Restricted, so the bare
+                  path fails on a machine nobody has changed. Applying it to
+                  one process leaves the machine's own setting alone. */}
+              <p>On Windows, double-click <code>Install Tektonix.bat</code>, or run:</p>
+              <pre><code>{`powershell -ExecutionPolicy Bypass -File .\\install.ps1`}</code></pre>
               <p className="lp-reqs">Docker &middot; an OpenRouter API key</p>
             </article>
             <article className="lp-install">

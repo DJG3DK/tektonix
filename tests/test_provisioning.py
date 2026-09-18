@@ -288,7 +288,7 @@ def test_golangci_lint_is_proposed_only_when_the_repo_configures_it(go_repo):
 
 
 def test_go_suite_that_calls_the_network_is_not_a_check(tmp_path):
-    """The trading-bot rule, applied where there are no script names to flag:
+    """The large-project rule, applied where there are no script names to flag:
     the unit of suspicion is the suite, because `go test ./...` is."""
     repo = tmp_path / "gotrader"
     repo.mkdir()
@@ -540,7 +540,7 @@ def test_enabling_a_flagged_suite_runs_our_command_not_the_client_s(tmp_path):
 
 def test_python_suite_calling_the_network_is_flagged_too(tmp_path):
     """pytest has no per-suite script names either, so it gets the same rule
-    the npm path has had since the trading-bot incident."""
+    the npm path has had since the npm-script incident."""
     repo = tmp_path / "pynet"
     (repo / "tests").mkdir(parents=True)
     (repo / "pyproject.toml").write_text("[project]\nname = 'x'\n")

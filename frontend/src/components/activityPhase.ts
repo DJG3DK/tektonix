@@ -30,7 +30,7 @@ const PATTERNS: { id: ActivityPhase["id"]; label: string; re: RegExp; floor: num
     id: "checks",
     label: "Running the project's full check suite",
     re: /running the full check suite/i,
-    // A trading-bot suite is 111 tests and takes five minutes; a small repo
+    // A big suite is 111 tests and takes five minutes; a small repo
     // takes twenty seconds. The floor is set for the slow end, because the
     // cost of warning late is a mild delay and the cost of warning early is
     // an operator killing a healthy run.

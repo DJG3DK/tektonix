@@ -1,7 +1,7 @@
 """Telegram alerts for the events an operator would act on.
 
 Telegram, specifically, because the operator already lives there -- the
-trading bot's own alerts go to Telegram (engineNotify.js), so this reuses a
+Another application on the box already alerts over Telegram, so this reuses a
 channel that is already open on their phone rather than introducing a second
 messaging system to configure and monitor.
 
@@ -216,7 +216,7 @@ def diff_services(prev: dict, cur: dict) -> list[str]:
 
 async def watch_services(auth_pool, interval: float = 60.0, exclude: tuple = ("tektonix",)) -> None:
     """Poll `pm2 jlist` and alert on restarts/deaths of the OTHER services --
-    the model router, the trading bots, the reviewers. The agent backend itself is
+    the model router, other applications, the reviewers. The agent backend itself is
     excluded: its own restart resets this watcher's baseline (it runs inside
     that process), so it announces itself via the startup alert instead.
     Runs forever; every failure is swallowed after logging -- constraint 1.
