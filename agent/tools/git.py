@@ -1,4 +1,5 @@
 import os
+import hashlib
 import re
 import asyncio
 
@@ -265,3 +266,85 @@ async def sha_in_repo(repo_root: str, sha: str) -> bool:
         stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
     )
     return (await proc.wait()) == 0
+
+
+async def rebase_onto_base(repo_root: str, base_ref: str = "main") -> dict:
+    """Move the task branch onto the live tip when the tip has moved under it.
+
+    The merge into live is `--ff-only`, deliberately: it is what guarantees the
+    thing that merges is the thing that was reviewed. The cost is that a branch
+    whose base moved cannot land at all -- a reviewed, approved commit with
+    nowhere to go, at the end of a task somebody already paid for. The trigger
+    is ordinary: a push to main, or another merge, while a task is running.
+
+    So the branch moves instead of the rule. Called after the commit and before
+    the review, which is the one moment the tree is clean AND the agent is still
+    running to fix a conflict if there is one.
+
+    `patch_identical` is the interesting part. A rebase rewrites every sha, and
+    the reviewer discards its history when the sha it reviewed is no longer an
+    ancestor -- so a naive rebase costs a full review round every time someone
+    else pushes. Comparing the branch's own diff before and after answers
+    whether that round would learn anything: if the patch is byte-identical,
+    the review that exists still describes this change. Context lines shifting
+    because main edited nearby is enough to make it differ, and re-reviewing
+    then is the right, conservative answer.
+
+    Returns, and never raises:
+      moved=False                 the base is still where the branch forked. The
+                                  common case, and it costs two rev-parses.
+      moved, rebased, ok=True     moved, and the branch now sits on the new tip.
+      conflicts=[...], ok=False   moved, and the two changes disagree. The
+                                  rebase is ABORTED before returning, so the
+                                  branch is exactly as it was and the caller can
+                                  hand the file list to whoever can resolve it.
+    """
+    base_tip = await _git(f"rev-parse {base_ref}", repo_root, timeout=15)
+    if not base_tip["ok"]:
+        # No such ref. Not this function's problem to diagnose, and not a
+        # reason to fail a task: the branch is fine where it is.
+        return {"ok": True, "moved": False, "reason": f"{base_ref} does not resolve"}
+    tip = base_tip["output"].strip()
+
+    mb = await _git(f"merge-base HEAD {base_ref}", repo_root, timeout=15)
+    if not mb["ok"]:
+        return {"ok": True, "moved": False, "reason": "no merge base"}
+    fork = mb["output"].strip()
+
+    if fork == tip:
+        return {"ok": True, "moved": False, "base": tip}
+
+    before = await _git(f"diff {fork}..HEAD", repo_root, timeout=60)
+    patch_before = _digest(before["output"] if before["ok"] else "")
+
+    r = await _git(f"rebase {base_ref}", repo_root, timeout=120)
+    if not r["ok"]:
+        # Collect the file list BEFORE aborting -- afterwards there is nothing
+        # left to ask.
+        conflicted = await _git("diff --name-only --diff-filter=U", repo_root, timeout=15)
+        files = [f for f in (conflicted["output"] or "").splitlines() if f.strip()]
+        await _git("rebase --abort", repo_root, timeout=60)
+        return {
+            "ok": False,
+            "moved": True,
+            "rebased": False,
+            "conflicts": files,
+            "base": tip,
+            "output": r["output"][:1000],
+        }
+
+    after = await _git(f"diff {tip}..HEAD", repo_root, timeout=60)
+    patch_after = _digest(after["output"] if after["ok"] else "")
+
+    return {
+        "ok": True,
+        "moved": True,
+        "rebased": True,
+        "patch_identical": patch_before == patch_after and bool(patch_before),
+        "base": tip,
+        "previous_base": fork,
+    }
+
+
+def _digest(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8", "replace")).hexdigest()

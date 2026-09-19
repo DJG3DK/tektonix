@@ -50,7 +50,13 @@ from deepagents.backends import StoreBackend
 from agent.config import Config, PROJECTS
 from agent.deep_agent import EPISODES_ROUTE, episodes_namespace
 from agent.tools.checks import run_all_checks
-from agent.tools.git import current_sha, ensure_task_branch, git_commit, git_diff
+from agent.tools.git import (
+    current_sha,
+    ensure_task_branch,
+    git_commit,
+    git_diff,
+    rebase_onto_base,
+)
 from agent import check_timing
 from agent import runtime_settings as _rs
 from agent.tools.review_gate import merge_and_deploy, trigger_check, wait_for_review
@@ -565,6 +571,28 @@ async def _verify_and_ship_inner(state: AgentState, repo: str, repo_root: str,
     if not commit["ok"]:
         return _escalate(f"final commit failed: {commit['output'][:500]}")
 
+    # Live may have moved while this task was working. Rebasing here, rather
+    # than only when the merge refuses, has a second benefit: the review then
+    # measures this branch against the base it will actually merge into. A
+    # review against a stale base can miss a conflict entirely.
+    #
+    # Cheap when nothing moved, which is the usual case: two rev-parses.
+    rebase = await rebase_onto_base(repo_root)
+    if rebase.get("conflicts"):
+        return {
+            "iteration_count": state["iteration_count"] + 1,
+            "pending_feedback": (
+                "Live moved on while you were working, and rebasing onto it conflicts in:\n\n"
+                + "\n".join(f"  - {f}" for f in rebase["conflicts"]) + "\n\n"
+                "Re-apply your change on top of what is there now. Read those files first -- "
+                "somebody else edited them after you started."
+            ),
+            "no_diff_streak": 0,
+            "committed_sha": await current_sha(repo_root),
+        }
+    if rebase.get("rebased"):
+        print(f"[verify] {repo}: live moved during the task; rebased onto {rebase['base'][:12]}")
+
     sha = await current_sha(repo_root)
     # The plan read complete on this pass (or the nudge budget ran out), so
     # start that budget over -- a later loop-back can legitimately add fresh
@@ -723,6 +751,59 @@ async def _review_and_deploy(state: AgentState, repo: str, sha: str) -> dict:
         "cost_usd": 0.0,
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
+    if not deployed["ok"] and deployed.get("reason") == "diverged":
+        # Live moved between the review and the merge, so --ff-only is no
+        # longer possible. That rule is the whole guarantee that what merges is
+        # what was reviewed, so the branch moves instead: rebase onto the new
+        # tip and go round the review once more. Before this, a reviewed and
+        # approved commit simply had nowhere to land and the task stopped,
+        # having already been paid for.
+        repo_root = PROJECTS[repo]["sandbox"]
+        rb = await rebase_onto_base(repo_root)
+        if rb.get("conflicts"):
+            # Genuine disagreement between two changes. The agent has the task
+            # context and is still running, so it gets the file list -- the
+            # same shape as a review finding. The rebase was aborted, so the
+            # branch is exactly where it was.
+            feedback = (
+                "Live moved on while this was being reviewed, and rebasing onto it conflicts "
+                "in:\n\n" + "\n".join(f"  - {f}" for f in rb["conflicts"]) + "\n\n"
+                "Re-apply your change on top of what is there now. Read the current content of "
+                "those files first -- somebody else edited them after you started."
+            )
+            return {
+                "iteration_count": state["iteration_count"] + 1,
+                "pending_feedback": feedback,
+                "no_diff_streak": 0,
+                "committed_sha": sha,
+                "merge_approved_sha": None,
+                "review_gate_result": review,
+                "execution_log": [log_entry, deploy_entry],
+                "stale_pending_review_streak": 0,
+            }
+        if not rb.get("rebased"):
+            return {
+                "committed_sha": sha,
+                "merge_approved_sha": None,
+                "review_gate_result": review,
+                "execution_log": [log_entry, deploy_entry],
+                **_escalate(
+                    "live moved on and the branch could not be rebased onto it: "
+                    f"{rb.get('output') or rb.get('reason') or 'unknown'}"
+                ),
+            }
+        # Rebased cleanly. The sha changed, so the verdict that approved the
+        # old one no longer applies -- the review service checks exactly that,
+        # and it is right to. One more round, on the same work.
+        new_sha = await current_sha(repo_root)
+        same = " The patch is unchanged; this is the same work on a newer base." \
+            if rb.get("patch_identical") else ""
+        print(f"[verify] {repo}: live moved, rebased {sha[:12]} -> {new_sha[:12]}.{same}")
+        return {
+            **await _review_and_deploy(state, repo, new_sha),
+            "execution_log": [log_entry, deploy_entry],
+        }
+
     if not deployed["ok"]:
         # "build" failures are real compile/typecheck errors in the code the
         # agent just wrote -- the same kind of thing checks/NEEDS_FIXES loop

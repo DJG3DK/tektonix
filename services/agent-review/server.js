@@ -302,6 +302,22 @@ app.post('/api/projects/:name/merge', requireControlSecret, async (req, res) => 
             }
         }
 
+        // --ff-only is the guarantee that what merges is what was reviewed,
+        // so it stays. What used to happen when live moved after the review is
+        // that this threw a generic failure and the task stopped, holding a
+        // reviewed and approved commit with nowhere to land. Name it instead:
+        // the caller rebases the branch and comes back.
+        const ahead = await git(p.live, ['rev-list', '--count', `${agentRef}..HEAD`]);
+        if (parseInt(ahead.trim(), 10) > 0) {
+            return res.status(409).json({
+                ok: false, reason: 'diverged',
+                error: `live has moved on by ${ahead.trim()} commit(s) since this branch forked, `
+                     + 'so a fast-forward is no longer possible. Rebase the branch onto live and '
+                     + 'merge again.',
+                liveSha: (await git(p.live, ['rev-parse', 'HEAD'])).trim(),
+            });
+        }
+
         const output = await git(p.live, ['merge', '--ff-only', agentRef]);
         await clearReviewState(req.params.name);
 
