@@ -264,10 +264,30 @@ async def ship_as_pull_request(project: str, branch: str, sha: str, title: str) 
         return {"ok": False, "stage": "ship",
                 "error": f"{project} has no GitHub origin to open a pull request against"}
 
-    push = await _git(f"push --quiet origin {branch}", live, timeout=300)
+    # The push has to authenticate, and how depends on what the remote is.
+    #
+    # A project cloned from a URL has a plain https origin with no credentials
+    # on it -- the token is deliberately not written into .git/config, which
+    # anyone who can read the checkout can read. So the token goes on the
+    # command line for this one push and nowhere else: `git push <url>` takes
+    # a URL in place of a remote name, and nothing about it is stored.
+    #
+    # A project with an SSH origin already has a deploy key configured through
+    # core.sshCommand, so the plain remote name is right and adding a token
+    # would do nothing.
+    configured = await _git("config --local --get remote.origin.url", live, timeout=15)
+    origin = configured["output"].strip() if configured["ok"] else ""
+    if origin.startswith("https://"):
+        target = f"https://x-access-token:{token}@github.com/{slug}.git"
+    else:
+        target = "origin"
+
+    push = await _git(f"push --quiet {target} {branch}", live, timeout=300)
     if not push["ok"]:
+        # git echoes the URL it was given, token and all.
+        detail = push["output"].replace(token, "***")[:300]
         return {"ok": False, "stage": "ship",
-                "error": f"could not push {branch}: {push['output'][:300]}"}
+                "error": f"could not push {branch}: {detail}"}
 
     try:
         pr = await github_repos.open_pull_request(

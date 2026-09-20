@@ -130,3 +130,85 @@ def test_a_rejected_push_does_not_claim_a_pull_request(monkeypatch):
 def test_a_github_refusal_is_reported_rather_than_raised(monkeypatch):
     r = _ship(monkeypatch, pr=PermissionError("403: resource not accessible"))
     assert r["ok"] is False and "could not open a pull request" in r["error"]
+
+
+# --- authenticating the push ------------------------------------------------
+
+def _ship_capturing_push(monkeypatch, origin, token="tok"):
+    """Runs the ship step and returns the push command it issued."""
+    import agent.config as agent_config
+    import agent.tools.git as gitmod
+
+    monkeypatch.setitem(agent_config.PROJECTS, "demo", {"live": "/tmp/live"})
+    monkeypatch.setattr(agent_config, "load_config",
+                        lambda: type("C", (), {"github_token": token})())
+    monkeypatch.setattr(github_repos, "open_pull_request",
+                        lambda *a, **k: _async({"number": "1", "url": "u", "state": "open"}))
+
+    seen = {}
+
+    async def fake_git(cmd, root, timeout=30):
+        if cmd.startswith("remote get-url"):
+            return {"ok": True, "output": "git@github.com:o/r.git"}
+        if cmd.startswith("config --local --get remote.origin.url"):
+            return {"ok": True, "output": origin}
+        if cmd.startswith("push"):
+            seen["cmd"] = cmd
+            return {"ok": True, "output": ""}
+        return {"ok": True, "output": ""}
+
+    monkeypatch.setattr(gitmod, "_git", fake_git)
+    asyncio.run(review_gate.ship_as_pull_request("demo", "agent/t1", "abc123", "T"))
+    return seen.get("cmd", "")
+
+
+def _async(value):
+    async def f(*a, **k):
+        return value
+    return f()
+
+
+def test_an_https_origin_is_pushed_with_a_credential(monkeypatch):
+    """A cloned project's origin has no credentials on it -- the token is
+    deliberately never written into .git/config. Without this the push fails
+    with "authentication required" at the very last step of a finished task.
+    """
+    cmd = _ship_capturing_push(monkeypatch, "https://github.com/o/r.git")
+    assert "x-access-token:tok@github.com/o/r.git" in cmd
+    assert " origin " not in cmd, "the remote name would carry no credentials"
+
+
+def test_an_ssh_origin_is_pushed_by_remote_name(monkeypatch):
+    """That project already has a deploy key wired through core.sshCommand.
+    Putting a token on the command line would do nothing except risk logging
+    it."""
+    cmd = _ship_capturing_push(monkeypatch, "git@github.com:o/r.git")
+    assert cmd.strip().endswith("origin agent/t1")
+    assert "x-access-token" not in cmd
+
+
+def test_a_failed_push_does_not_echo_the_token(monkeypatch):
+    """git repeats the URL it was given, token and all, and that string goes
+    into a task log an operator reads and may paste."""
+    import agent.config as agent_config
+    import agent.tools.git as gitmod
+
+    monkeypatch.setitem(agent_config.PROJECTS, "demo", {"live": "/tmp/live"})
+    monkeypatch.setattr(agent_config, "load_config",
+                        lambda: type("C", (), {"github_token": "s3cret"})())
+
+    async def fake_git(cmd, root, timeout=30):
+        if cmd.startswith("remote get-url"):
+            return {"ok": True, "output": "git@github.com:o/r.git"}
+        if cmd.startswith("config --local"):
+            return {"ok": True, "output": "https://github.com/o/r.git"}
+        if cmd.startswith("push"):
+            return {"ok": False,
+                    "output": "fatal: could not read from https://x-access-token:s3cret@github.com/o/r.git"}
+        return {"ok": True, "output": ""}
+
+    monkeypatch.setattr(gitmod, "_git", fake_git)
+    r = asyncio.run(review_gate.ship_as_pull_request("demo", "agent/t1", "abc", "T"))
+    assert r["ok"] is False
+    assert "s3cret" not in r["error"]
+    assert "***" in r["error"]
