@@ -358,6 +358,11 @@ async def work_node(state: AgentState, app_config: Config, checkpointer, pg_stor
         # Frontend work runs on the Kimi coder seat (agent/frontend_route.py);
         # decided at creation, carried in state so a resume keeps it.
         route=state.get("route", "general"),
+        # The other projects this task may READ, for "use the one in X as a
+        # template". Captured at creation from its creator's access; absent
+        # on a task checkpointed before this existed, which then reads
+        # nothing but its own repo (agent/tools/reference_tools.py).
+        reference_repos=state.get("reference_repos") or [],
     )
     inner_config = inner_thread_config(task_id, repo, state.get("inner_thread_generation", 0))
     pending_feedback = state.get("pending_feedback")

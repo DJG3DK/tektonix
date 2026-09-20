@@ -124,7 +124,11 @@ def test_every_prompt_carries_it():
                    "TEST_WRITER_SYSTEM_PROMPT + absent_files",
                    "_FILESYSTEM_GUIDANCE + absent_files"):
         assert prompt in src, prompt
-    assert ") + absent_files," in src, "the coordinator's own prompt"
+    # The coordinator's own prompt. Matched loosely on purpose: other
+    # conditional blocks are appended after this one (the reference-project
+    # note), and this test is about absent_files being there, not about
+    # being last.
+    assert ") + absent_files" in src, "the coordinator's own prompt"
 
 
 def test_the_work_node_passes_the_goal():

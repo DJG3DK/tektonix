@@ -107,3 +107,66 @@ def test_the_preview_port_is_published_to_loopback_only():
     import inspect
     src = inspect.getsource(sandbox.start_preview_container)
     assert '"-p", f"127.0.0.1:{host_port}:{container_port}"' in src
+
+
+# --- the planner's copy ---------------------------------------------------
+#
+# Planning is cross-project by design, so its preview names the repo the way
+# its read and search tools do -- and goes through the same allow-list. The
+# body is shared with the build agent's, so what is worth pinning here is the
+# gate in front of it, not the rendering behind it.
+
+def _planner_preview(monkeypatch, allowed, projects):
+    import agent.tools.planning_tools as pt
+
+    monkeypatch.setattr(pt, "PROJECTS", projects, raising=False)
+    started = []
+
+    async def fake_start(cmd, cwd, port, env=None):
+        started.append(cwd)
+        return {"ok": True, "container": "c1", "port": 51234, "url": "http://127.0.0.1:51234"}
+
+    async def fake_wait(*a, **k):
+        return {"ok": True}
+
+    async def fake_render(url, origin, question=""):
+        return f"rendered {url}"
+
+    async def fake_stop(name):
+        return None
+
+    async def no_logs(*a, **k):
+        return ""
+
+    monkeypatch.setattr(preview, "start_preview_container", fake_start)
+    monkeypatch.setattr(preview, "wait_for_preview", fake_wait)
+    monkeypatch.setattr(preview, "stop_preview_container", fake_stop)
+    monkeypatch.setattr(preview, "preview_logs", no_logs)
+    monkeypatch.setattr(pt, "run_browse_page_on_origin", fake_render)
+    return preview.make_project_preview_tool(allowed), started
+
+
+_TWO = {"shop": {"sandbox": "/ws/shop"}, "blog": {"sandbox": "/ws/blog"}}
+
+
+def test_the_planner_can_preview_any_project_it_may_read(monkeypatch):
+    tool, started = _planner_preview(monkeypatch, None, _TWO)
+    out = asyncio.run(tool.ainvoke({"repo": "blog", "command": "npm run dev", "port": 3000}))
+    assert "rendered" in out
+    assert started == ["/ws/blog"], "it ran the project it was asked for"
+
+
+def test_the_planner_cannot_preview_a_project_it_may_not_read(monkeypatch):
+    """A session on a project the operator may see must not start one they
+    may not -- the same gate the planner's read and search tools use."""
+    tool, started = _planner_preview(monkeypatch, ["shop"], _TWO)
+    out = asyncio.run(tool.ainvoke({"repo": "blog", "command": "npm run dev", "port": 3000}))
+    assert out.startswith("ERROR:") and "not permitted" in out
+    assert started == [], "a container was started for a project off the allow-list"
+
+
+def test_an_unknown_project_is_refused_rather_than_started(monkeypatch):
+    tool, started = _planner_preview(monkeypatch, None, _TWO)
+    out = asyncio.run(tool.ainvoke({"repo": "nope", "command": "npm run dev", "port": 3000}))
+    assert out.startswith("ERROR:") and "unknown repo" in out
+    assert started == []

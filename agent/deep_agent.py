@@ -1286,6 +1286,7 @@ async def build_deep_agent(
     route: str = "general",
     task_id: str | None = None,
     goal: str = "",
+    reference_repos: list[str] | None = None,
 ):
     """NOTE: async, unlike a typical factory -- it needs to `await` reading
     both memory files before constructing the agent. This is a deliberate
@@ -1353,10 +1354,48 @@ async def build_deep_agent(
 
     visual_tools = [make_browse_page_tool(), make_preview_tool(lambda: repo_root)]
     project_tools = [*project_tools, *visual_tools]
-    # The investigator gets browse_page but not preview_app: reading a page is
-    # read-only, starting the project is not.
+
+    # Reading the operator's OTHER projects, for "use the one in X as a
+    # template". Host-side and read-only -- no mount, no write path, no bash
+    # -- so the sandbox boundary is exactly where it was; what changes is
+    # that a pattern from another project can reach a build task as something
+    # other than prose in the plan. Empty when there is nothing else this
+    # task may read, so the seat is not offered tools that can only refuse.
+    from agent.tools.reference_tools import make_reference_tools  # noqa: PLC0415
+
+    reference_tools = make_reference_tools(repo, reference_repos)
+    project_tools = [*project_tools, *reference_tools]
+    # Named in the prompt, not just discoverable in the tool list: a model
+    # asked to "do it like the other project does" will otherwise say it has
+    # no way to see that project, which is what it used to have to say.
+    reference_note = ""
+    if reference_tools:
+        others = sorted({r for r in (reference_repos or []) if r != repo and r in PROJECTS})
+        reference_note = (
+            "\n\nANOTHER PROJECT AS A REFERENCE:\n\n"
+            f"You can READ the operator's other projects: {', '.join(others)}. "
+            "`search_project(repo, pattern)`, `read_project_file(repo, path)`, "
+            "`list_project_dir(repo, path)` and `find_files(repo, glob)` take the project "
+            "name as their first argument.\n\n"
+            "Use them when the task points at one -- \"like the one in X\", \"the same "
+            "approach as X\", \"match X's look\". Search for the thing first, then read "
+            "only what the hit points at. They are READ-ONLY and they are for the OTHER "
+            f"projects: {repo} itself is this task's repo, and you reach it with `read`, "
+            "`bash` and `edit` as usual.\n\n"
+            "Borrow the approach, not the file. Another project's code was written against "
+            "its own conventions, its own dependencies and its own data -- copying it across "
+            "wholesale is how you get an import that does not resolve and a pattern nobody "
+            f"else in {repo} follows."
+        )
+    # The investigator gets both. It was given browse_page alone on the
+    # grounds that starting the project is not read-only -- but it already has
+    # `bash` in the same sandbox, so it could always start a server; what it
+    # could not do was SEE one, and it is the seat that gets sent to find out
+    # what a page currently does. preview_app is also the tidier way to do it:
+    # bash leaves a dev server running, this tears the container down in a
+    # finally.
     read_only_tools = [tool_by_name["read"], tool_by_name["bash"], tool_by_name["describe_image"],
-                       *github_tools, visual_tools[0]]
+                       *github_tools, *visual_tools, *reference_tools]
     if db_tool is not None:
         read_only_tools.append(db_tool)
     run_checks_tool = _make_run_checks_tool(repo_root, repo)
@@ -1415,7 +1454,7 @@ async def build_deep_agent(
             "multiple files, finding every call site of something, or answering a question that "
             "needs digging before any change can be made. Cannot write or edit files."
         ),
-        "system_prompt": INVESTIGATOR_SYSTEM_PROMPT + absent_files,
+        "system_prompt": INVESTIGATOR_SYSTEM_PROMPT + absent_files + reference_note,
         "tools": read_only_tools,
         "model": investigator_model,
         "middleware": [
@@ -1455,7 +1494,11 @@ async def build_deep_agent(
             "coverage, never source-inspection-only tests."
         ),
         "system_prompt": TEST_WRITER_SYSTEM_PROMPT + absent_files,
-        "tools": [*project_tools, run_checks_tool],
+        # Not the reference tools: it writes tests for THIS repo against this
+        # repo's suite, and nothing in its prompt tells it another project
+        # exists. Tools a seat was never told about are how the investigator
+        # ended up with a prompt describing preview_app it did not have.
+        "tools": [*[t for t in project_tools if t not in reference_tools], run_checks_tool],
         "model": test_writer_model,
         "middleware": [
             # Same trap removal as planning_chat (2026-08-27): built-in
@@ -1532,7 +1575,7 @@ async def build_deep_agent(
             project_memory_content=project_memory_content,
             org_memory_content=org_memory_content,
             skills_summary=skills_summary,
-        ) + absent_files,
+        ) + absent_files + reference_note,
         middleware=[
             SanitizeToolCallsMiddleware(),  # a malformed tool call in history never reaches a provider (2026-09-09)
             HiddenToolsMiddleware("glob", "grep", "execute", "delete"),

@@ -36,6 +36,41 @@ logger = logging.getLogger("tektonix")
 _READY_TIMEOUT_S = 150
 
 
+async def run_preview(cwd: str, command: str, port: int,
+                      path: str = "/", question: str = "") -> str:
+    """Start `command` in `cwd`'s sandbox, render `path`, stop it again.
+
+    The whole body of the tool, with the workspace passed in rather than
+    closed over, so the seats that each reach a workspace differently -- a
+    build task bound to one, a planning session naming any project it may
+    read -- share one implementation and one teardown.
+    """
+    if not command.strip():
+        return "ERROR: give the command that starts the app"
+    started = await start_preview_container(command, cwd, port)
+    if not started.get("ok"):
+        return f"ERROR: {started.get('error', 'could not start the app')}"
+
+    container = started["container"]
+    try:
+        ready = await wait_for_preview(started["port"], container, timeout=_READY_TIMEOUT_S)
+        if not ready.get("ok"):
+            logs = ready.get("logs") or ""
+            return (f"ERROR: {ready.get('error')}\n\n"
+                    f"The app's own output:\n{logs[-2000:]}")
+
+        from agent.tools.planning_tools import run_browse_page_on_origin  # noqa: PLC0415
+
+        url = started["url"] + (path if path.startswith("/") else f"/{path}")
+        rendered = await run_browse_page_on_origin(url, started["url"], question)
+        logs = await preview_logs(container, tail=25)
+        if logs.strip():
+            rendered += f"\n\n--- the app's own output while that loaded ---\n{logs[-1500:]}"
+        return rendered
+    finally:
+        await stop_preview_container(container)
+
+
 def make_preview_tool(cwd_for_repo):
     """`preview_app`, bound to one project's workspace.
 
@@ -64,29 +99,57 @@ def make_preview_tool(cwd_for_repo):
         Returns the page's visible text plus a description of how it actually
         looks. The app is stopped again before this returns.
         """
-        if not command.strip():
-            return "ERROR: give the command that starts the app"
-        started = await start_preview_container(command, cwd_for_repo(), port)
-        if not started.get("ok"):
-            return f"ERROR: {started.get('error', 'could not start the app')}"
+        return await run_preview(cwd_for_repo(), command, port, path, question)
 
-        container = started["container"]
+    return preview_app
+
+
+def make_project_preview_tool(allowed_repos):
+    """`preview_app` for a seat that may reach more than one project.
+
+    Planning is deliberately cross-project (agent/tools/planning_tools.py), so
+    this one names the repo the way the planner's read and search tools do,
+    and goes through the same allow-list: a session on a project the operator
+    may see cannot start one they may not.
+
+    A planning session starting a container is a side effect in a seat that is
+    otherwise read-only, which is why it was left out at first. The reason it
+    belongs anyway: planning a restyle meant reading the CSS and guessing at
+    the page, while the thing that could have answered it was one container
+    away. It writes nothing -- the workspace is the agent's own worktree, the
+    container is thrown away, and the port is loopback.
+    """
+    from agent.tools.planning_tools import _project_root  # noqa: PLC0415
+    from agent.tools.tool_errors import tool_errors_to_text  # noqa: PLC0415
+
+    @tool
+    @tool_errors_to_text
+    async def preview_app(repo: str, command: str, port: int,
+                          path: str = "/", question: str = "") -> str:
+        """Run one of the operator's projects and LOOK at it in a real browser.
+
+        Use it when the conversation is about how something LOOKS -- a
+        restyle, a layout, "what does this page do now", or comparing a
+        project against a reference. Reading the CSS tells you what the rules
+        say; this tells you what the page is.
+
+        `repo` is the project to run -- this session's own, or another one you
+        may read. `command` starts the app in the foreground the way that
+        project starts it (for example "npm run dev -- --host 0.0.0.0 --port
+        5173"); it must listen on 0.0.0.0, not localhost, or nothing outside
+        the container can reach it. `port` is the port that command listens
+        on. `path` is the page to open. `question` narrows what you are told
+        about the render.
+
+        Returns the page's visible text plus a description of how it actually
+        looks. The app is stopped again before this returns. For a site that
+        is already running somewhere, use browse_page instead -- it is far
+        cheaper than starting a copy.
+        """
         try:
-            ready = await wait_for_preview(started["port"], container, timeout=_READY_TIMEOUT_S)
-            if not ready.get("ok"):
-                logs = ready.get("logs") or ""
-                return (f"ERROR: {ready.get('error')}\n\n"
-                        f"The app's own output:\n{logs[-2000:]}")
-
-            from agent.tools.planning_tools import run_browse_page_on_origin  # noqa: PLC0415
-
-            url = started["url"] + (path if path.startswith("/") else f"/{path}")
-            rendered = await run_browse_page_on_origin(url, started["url"], question)
-            logs = await preview_logs(container, tail=25)
-            if logs.strip():
-                rendered += f"\n\n--- the app's own output while that loaded ---\n{logs[-1500:]}"
-            return rendered
-        finally:
-            await stop_preview_container(container)
+            repo_root = _project_root(repo, allowed_repos)
+        except ValueError as e:
+            return f"ERROR: {e}"
+        return await run_preview(repo_root, command, port, path, question)
 
     return preview_app

@@ -442,8 +442,9 @@ def make_planning_tools(
     is_admin: bool = False,
     actor: str | None = None,
 ) -> tuple[list, dict]:
-    """Returns ([web_search, browse_page, list_project_dir, read_project_file,
-    search_project, find_files, save_brief, save_plan, create_project], plan_ref).
+    """Returns ([web_search, browse_page, preview_app, list_project_dir,
+    read_project_file, search_project, find_files, save_brief, save_plan,
+    create_project], plan_ref).
 
     `is_admin`/`actor` are the caller's role and email, threaded in
     explicitly the way `allowed_repos` is (server.py send_planning_message ->
@@ -857,7 +858,15 @@ def make_planning_tools(
             "unless the operator changes the name. Keep planning as if the project already exists."
         )
 
-    return [web_search, browse_page, list_project_dir, read_project_file, search_project, find_files, save_brief, save_plan, create_project], plan_ref
+    # Standing the project up and looking at it. browse_page reaches a site
+    # that is already running; this one is for a project that is not, which
+    # is most of them during planning.
+    from agent.tools.preview import make_project_preview_tool  # noqa: PLC0415
+
+    preview_app = make_project_preview_tool(allowed_repos)
+
+    return [web_search, browse_page, preview_app, list_project_dir, read_project_file,
+            search_project, find_files, save_brief, save_plan, create_project], plan_ref
 
 
 _STOPWORDS = frozenset("""

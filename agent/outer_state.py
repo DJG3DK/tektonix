@@ -182,6 +182,15 @@ class AgentState(TypedDict):
     # operator actually looked at.
     merge_approved_sha: str | None
 
+    # Which OTHER projects this task may read, for "use the one in X as a
+    # template". Resolved at creation from the creator's own access -- always
+    # a concrete list, never None-means-everything, so a task resumed from a
+    # checkpoint written before this existed falls back to its own repo alone
+    # rather than silently to all of them. Same capture-at-creation rule as
+    # auto_approve_commands: a later access change neither widens nor narrows
+    # a task already in flight. See agent/tools/reference_tools.py.
+    reference_repos: list[str]
+
 
 def initial_state(
     task_id: str,
@@ -193,6 +202,7 @@ def initial_state(
     require_merge_review: bool = True,
     route: str = "general",
     route_reason: str | None = None,
+    reference_repos: list[str] | None = None,
 ) -> AgentState:
     return AgentState(
         task_id=task_id,
@@ -223,4 +233,5 @@ def initial_state(
         require_merge_review=require_merge_review,
         pending_merge_approval=None,
         merge_approved_sha=None,
+        reference_repos=list(reference_repos or []),
     )

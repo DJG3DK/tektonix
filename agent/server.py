@@ -921,6 +921,10 @@ async def _github_create_task(repo: str, goal: str, budget: float, route: str) -
         auto_approve_commands=auto,
         # Never from a preference. See this function's docstring.
         require_merge_review=True,
+        # Nobody typed this goal and nobody is watching it start, so it gets
+        # the narrowest scope there is: its own repository. Reading another
+        # project is for a person asking for it.
+        reference_repos=[],
         origin="github",
     )
     return out["task_id"]
@@ -2093,11 +2097,13 @@ async def _run_task(
     require_merge_review: bool = True,
     route: str = "general",
     route_reason: str | None = None,
+    reference_repos: list[str] | None = None,
 ) -> None:
     state = initial_state(
         task_id=task_id, goal=goal, repo=repo, budget_usd=budget_usd,
         auto_approve_commands=auto_approve_commands,
         require_merge_review=require_merge_review,
+        reference_repos=reference_repos,
         route=route, route_reason=route_reason,
     )
     await _stream_graph(task_id, repo, goal, budget_usd, state, category=category,
@@ -3023,9 +3029,23 @@ async def stream_planning_session(ws: WebSocket, session_id: str):
             del _planning_subscribers[session_id]  # audit M-34
 
 
+def _readable_repos(user: User) -> list[str]:
+    """Which projects a task started by `user` may READ for reference.
+
+    Their own access, resolved here rather than carried as "None means
+    everything": the task stores a concrete list, so a task resumed from a
+    checkpoint written before this existed falls back to its own repo alone
+    instead of silently to all of them. See agent/tools/reference_tools.py.
+    """
+    if user.allowed_repos is None:
+        return sorted(PROJECTS)
+    return sorted(r for r in user.allowed_repos if r in PROJECTS)
+
+
 async def _start_task(
     goal: str, repo: str, budget_usd: float | None, route: str, *,
     auto_approve_commands: bool, require_merge_review: bool,
+    reference_repos: list[str] | None = None,
     attachments: list[dict] | None = None, origin: str | None = None,
 ) -> dict:
     """Classify, route and launch a task. The New Task form, Build Now and the
@@ -3073,6 +3093,7 @@ async def _start_task(
             # Snapshot of the creator's own settings -- see outer_state.py.
             auto_approve_commands=auto_approve_commands,
             require_merge_review=require_merge_review,
+            reference_repos=reference_repos or [],
             route=decision.route, route_reason=decision.reason,
         )
     )
@@ -3092,6 +3113,9 @@ async def create_task(req: CreateTaskRequest, user: User = Depends(require_full_
         # Per project, not per account: see User.auto_approves.
         auto_approve_commands=user.auto_approves(req.repo),
         require_merge_review=user.require_merge_review,
+        # What this task may read for reference, from the creator's own
+        # access at the time -- see _readable_repos.
+        reference_repos=_readable_repos(user),
         attachments=[a.model_dump() for a in req.attachments] if req.attachments else None,
     )
 
