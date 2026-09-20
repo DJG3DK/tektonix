@@ -309,8 +309,25 @@ async def work_node(state: AgentState, app_config: Config, checkpointer, pg_stor
     # and --ff-only merges failing on "diverging branches" (observed live
     # 2026-08-26, a branch 9 commits behind main).
     if state["iteration_count"] == 0 and not state.get("committed_sha"):
-        from agent.tools.git import sync_workspace_to_base
+        from agent.tools.git import fetch_base_from_origin, sync_workspace_to_base
         from agent.config import PROJECTS
+
+        # The local checkout is a cache of GitHub, not the source of truth.
+        # Fetch FIRST, then move the workspace, so "the current live tip" means
+        # the current one rather than whatever this machine last saw. Against
+        # the live repo: the workspace is a worktree of it and shares its refs.
+        #
+        # Every failure here is ordinary -- no remote, offline, a host that is
+        # down, or local commits that cannot fast-forward -- and none of them
+        # stops the task. It runs from the local tip exactly as it used to.
+        live_root = (PROJECTS[repo] or {}).get("live")
+        if live_root:
+            fetched = await fetch_base_from_origin(live_root)
+            if fetched.get("advanced"):
+                print(f"[work] {repo}: origin had moved; live main now at {fetched['base'][:12]}")
+            elif fetched.get("diverged"):
+                print(f"[work] {repo}: local main has commits origin does not -- left alone")
+
         sync = await sync_workspace_to_base(PROJECTS[repo]["sandbox"])
         print(f"[work] {repo}: workspace sync -> {sync}")
 

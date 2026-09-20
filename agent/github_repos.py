@@ -176,3 +176,36 @@ def push_initial(live: str, name: str, *, attempts: int = _REMOTE_ATTEMPTS,
     if not ok:
         return False, f"origin set to {ssh_url} but `git push -u origin main` failed: {out[-300:]}"
     return True, f"pushed main to {ssh_url}"
+
+
+async def open_pull_request(token: str, slug: str, head: str, base: str,
+                            title: str, body: str = "") -> dict[str, str]:
+    """Open a pull request, or return the one that is already open.
+
+    The alternative to fast-forwarding the base branch. A project set to ship
+    this way never has its base branch written to by the agent at all: the
+    review gate still decides whether the work is good, and a person decides
+    whether it lands.
+
+    An existing PR for the same head is a SUCCESS, not an error. A task that
+    was resumed, or re-ran its ship step after a transient failure, has already
+    opened one -- and 422 "A pull request already exists" would otherwise turn
+    a completed piece of work into a failure at the last step.
+    """
+    try:
+        pr = await _post(token, f"/repos/{slug}/pulls",
+                         {"title": title, "head": head, "base": base, "body": body})
+    except ValueError as e:
+        if "already exists" not in str(e).lower():
+            raise
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            owner = slug.split("/", 1)[0]
+            r = await client.get(f"{API}/repos/{slug}/pulls", headers=_headers(token),
+                                 params={"head": f"{owner}:{head}", "state": "open"})
+        r.raise_for_status()
+        existing = r.json()
+        if not existing:
+            raise
+        pr = existing[0]
+    return {"number": str(pr.get("number", "")), "url": pr.get("html_url", ""),
+            "state": pr.get("state", "")}

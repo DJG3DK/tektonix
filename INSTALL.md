@@ -513,6 +513,19 @@ cd services/agent-review && npm install && node server.js
 Projects onboarded through the wizard are picked up automatically. See
 `services/commit-reviewer/README.md`.
 
+### How a project ships once the gate passes
+
+Per project, in `projects.json`:
+
+| `ship` | What happens after a passing review |
+|---|---|
+| `push` | The default, and what every existing project does. Fast-forwards the base branch and runs the project's deploy steps. |
+| `pr` | Pushes the task branch and opens a pull request instead. The base branch is never written by the agent; a person merges. |
+
+`pr` needs `GITHUB_TOKEN` to carry `pull_requests: write` — the token is
+read-only elsewhere in this document, and that is the one place it is not
+enough.
+
 The review dashboard is served at `/_review/` on the same host as the
 console. The agent proxies that path itself, to the review service, injecting
 `X-Review-Secret` — the browser never holds the value — and admits only an

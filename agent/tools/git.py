@@ -348,3 +348,63 @@ async def rebase_onto_base(repo_root: str, base_ref: str = "main") -> dict:
 
 def _digest(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8", "replace")).hexdigest()
+
+
+async def fetch_base_from_origin(live_root: str, base_ref: str = "main") -> dict:
+    """Bring the live checkout's base branch up to date with `origin`.
+
+    The local copy is a cache of GitHub, not the source of truth. Without this
+    a task branches from whatever the machine last saw, does good work against
+    it, and finds out at merge time -- which is the expensive end. The rebase
+    path handles that when it happens; this makes it happen less.
+
+    Fast-forward only, and deliberately: if local `main` has commits that are
+    not on the remote, somebody committed here directly and this function has
+    no business rewriting or merging that. It says so and leaves it, and the
+    task proceeds from the local tip exactly as before.
+
+    Called against the LIVE repo rather than the workspace, because the
+    workspace is a worktree of it and shares its refs -- fetching once updates
+    both. Never raises: no remote, no network and an unreachable host are all
+    ordinary, and none of them is a reason to fail a task that could run
+    offline perfectly well.
+    """
+    remotes = await _git("remote", live_root, timeout=15)
+    if not remotes["ok"] or "origin" not in remotes["output"].split():
+        return {"ok": True, "fetched": False, "reason": "no origin remote"}
+
+    f = await _git(f"fetch --quiet origin {base_ref}", live_root, timeout=120)
+    if not f["ok"]:
+        return {"ok": True, "fetched": False,
+                "reason": f"fetch failed: {f['output'][:200]}"}
+
+    local = await _git(f"rev-parse {base_ref}", live_root, timeout=15)
+    remote = await _git("rev-parse FETCH_HEAD", live_root, timeout=15)
+    if not (local["ok"] and remote["ok"]):
+        return {"ok": True, "fetched": True, "advanced": False, "reason": "could not compare"}
+    local_sha, remote_sha = local["output"].strip(), remote["output"].strip()
+    if local_sha == remote_sha:
+        return {"ok": True, "fetched": True, "advanced": False, "base": local_sha}
+
+    # Only when the local branch is strictly behind. `--is-ancestor` answers
+    # exactly that, and answers it about the commit graph rather than about
+    # timestamps or counts.
+    anc = await _git(f"merge-base --is-ancestor {base_ref} FETCH_HEAD", live_root, timeout=15)
+    if not anc["ok"]:
+        return {"ok": True, "fetched": True, "advanced": False,
+                "diverged": True,
+                "reason": f"local {base_ref} has commits origin does not; leaving it alone"}
+
+    # Fast-forward the branch ref without touching the working tree: `main` is
+    # checked out in the live worktree, and a task may be running in another
+    # worktree of the same repo. `update-ref` moves the pointer only.
+    head = await _git("rev-parse --abbrev-ref HEAD", live_root, timeout=15)
+    if head["ok"] and head["output"].strip() == base_ref:
+        up = await _git("merge --ff-only FETCH_HEAD", live_root, timeout=60)
+    else:
+        up = await _git(f"update-ref refs/heads/{base_ref} {remote_sha}", live_root, timeout=15)
+    if not up["ok"]:
+        return {"ok": True, "fetched": True, "advanced": False,
+                "reason": f"could not fast-forward: {up['output'][:200]}"}
+    return {"ok": True, "fetched": True, "advanced": True,
+            "base": remote_sha, "previous": local_sha}

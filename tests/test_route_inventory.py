@@ -203,6 +203,7 @@ EXPECTED: list[tuple[str, str, str | None]] = [
     ('POST', '/api/planning/sessions/{session_id}/message', 'require_full_auth'),
     ('POST', '/api/planning/sessions/{session_id}/new-project', 'require_full_auth'),
     ('POST', '/api/planning/sessions/{session_id}/stop', 'require_full_auth'),
+    ('POST', '/api/projects/clone', 'require_full_auth'),
     ('POST', '/api/projects/create', 'require_full_auth'),
     ('POST', '/api/projects/detect', 'require_full_auth'),
     ('POST', '/api/projects/provision', 'require_full_auth'),

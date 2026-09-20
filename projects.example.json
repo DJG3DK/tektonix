@@ -2,29 +2,69 @@
   "projects": {
     "web-app": {
       "sandbox": "/srv/sandboxes/web-app",
-      "live": "/srv/live/web-app"
+      "live": "/srv/live/web-app",
+      "ship": "push"
     },
     "large-project": {
       "sandbox": "/srv/sandboxes/large-project",
       "live": "/srv/live/large-project",
       "db_env_file": "config/.env",
       "review": {
-        "secretFiles": ["config/auth.json", "config/keys.json"],
-        "readOnlyMounts": ["data/fixtures"],
-        "nodeModulesDirs": ["."],
+        "secretFiles": [
+          "config/auth.json",
+          "config/keys.json"
+        ],
+        "readOnlyMounts": [
+          "data/fixtures"
+        ],
+        "nodeModulesDirs": [
+          "."
+        ],
         "checks": [
-          { "name": "lint", "dir": ".", "cmd": "npm", "args": ["run", "lint"], "timeoutMs": 300000 },
-          { "name": "test", "dir": ".", "cmd": "npm", "args": ["run", "test:review"], "timeoutMs": 900000 }
+          {
+            "name": "lint",
+            "dir": ".",
+            "cmd": "npm",
+            "args": [
+              "run",
+              "lint"
+            ],
+            "timeoutMs": 300000
+          },
+          {
+            "name": "test",
+            "dir": ".",
+            "cmd": "npm",
+            "args": [
+              "run",
+              "test:review"
+            ],
+            "timeoutMs": 900000
+          }
         ]
       },
       "deploy": {
-        "pm2Apps": ["large-project"],
-        "build": [{ "dir": ".", "cmd": "npm", "args": ["install", "--no-audit", "--no-fund"] }]
-      }
+        "pm2Apps": [
+          "large-project"
+        ],
+        "build": [
+          {
+            "dir": ".",
+            "cmd": "npm",
+            "args": [
+              "install",
+              "--no-audit",
+              "--no-fund"
+            ]
+          }
+        ]
+      },
+      "ship": "push"
     },
     "worker": {
       "sandbox": "/srv/sandboxes/worker",
-      "live": "/srv/live/worker"
+      "live": "/srv/live/worker",
+      "ship": "push"
     }
   },
   "test_env": {

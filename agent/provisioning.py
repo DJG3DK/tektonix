@@ -1602,3 +1602,91 @@ def recommended_choices(report: DetectionReport) -> dict:
         "build_steps": list(report.build_steps),
         "db_env_file": report.db_env_file,
     }
+
+
+# What a person will paste into the wizard. Deliberately narrow: an https URL,
+# an ssh URL, or owner/repo. Anything else is a path, which the wizard already
+# handles, and guessing between the two is how you clone a directory name.
+_GITHUB_HTTPS = re.compile(r"^https://(?:www\.)?github\.com/([\w.-]+)/([\w.-]+?)(?:\.git)?/?$")
+_GITHUB_SSH = re.compile(r"^(?:ssh://)?git@github\.com[:/]([\w.-]+)/([\w.-]+?)(?:\.git)?/?$")
+_GITHUB_SLUG = re.compile(r"^([\w.-]+)/([\w.-]+?)(?:\.git)?$")
+
+
+def parse_github_source(source: str, *, allow_slug: bool = True) -> tuple[str, str] | None:
+    """`owner, repo` if this names a GitHub repository, else None.
+
+    None is the answer for a filesystem path, which tells the caller to treat
+    the input as a path and carry on exactly as before.
+
+    `allow_slug=False` drops the bare `owner/repo` form, and exists because
+    `owner/repo` and `relative/path` are the same string. Nothing can tell them
+    apart, so the two callers answer it differently rather than guessing:
+    Clone is an explicit action against an explicit input and accepts the bare
+    form; Detect only recognises an unmistakable URL, so a relative path still
+    gets the "must be absolute" it always got.
+    """
+    text = (source or "").strip()
+    if not text or text.startswith(("/", ".", "~")) or "\\" in text:
+        return None
+    forms = (_GITHUB_HTTPS, _GITHUB_SSH, _GITHUB_SLUG) if allow_slug else (_GITHUB_HTTPS, _GITHUB_SSH)
+    for rx in forms:
+        m = rx.match(text)
+        if m:
+            owner, repo = m.group(1), m.group(2)
+            if owner in (".", "..") or repo in (".", ".."):
+                return None
+            return owner, repo
+    return None
+
+
+def clone_repository(source: str, parent: str | None = None, *, name: str | None = None,
+                     existing_names: list[str] | None = None, token: str | None = None) -> str:
+    """Clone a GitHub repository into an allowed root and return its realpath.
+
+    The point of the milestone this belongs to: a project that exists nowhere
+    but GitHub can be onboarded without the operator checking it out first. The
+    clone lands where `create_repository` would have put a new one, under the
+    same containment rule, and the caller then runs the ordinary detection flow
+    against the path -- nothing downstream knows or cares how the directory got
+    there.
+
+    A token is used for the URL only when one is supplied, and never written to
+    disk: the remote is rewritten to the plain https URL immediately after, so
+    the credential does not end up in .git/config for anyone to find.
+    """
+    parsed = parse_github_source(source)
+    if not parsed:
+        raise ProvisioningError(f"{source!r} is not a GitHub URL or owner/repo")
+    owner, repo = parsed
+
+    name = validate_project_name(name or repo, existing_names)
+    parent = parent or allowed_roots()[0]
+    if not os.path.isabs(parent):
+        raise ProvisioningError("parent must be an absolute path")
+    target = os.path.join(parent, name)
+    real = assert_path_allowed(target)
+    if os.path.lexists(target) or os.path.lexists(real):
+        raise ProvisioningError(f"{real} already exists -- onboard it with the wizard instead")
+    if not os.path.isdir(parent):
+        raise ProvisioningError(f"{parent} does not exist or is not a directory")
+
+    public_url = f"https://github.com/{owner}/{repo}.git"
+    clone_url = (f"https://x-access-token:{token}@github.com/{owner}/{repo}.git"
+                 if token else public_url)
+
+    ok, out = _run_git(["clone", "--quiet", clone_url, real], cwd=parent)
+    if not ok:
+        shutil.rmtree(real, ignore_errors=True)
+        # The token, if there was one, is in the URL git echoes back.
+        safe = out.replace(token, "***") if token else out
+        raise ProvisioningError(f"clone of {owner}/{repo} failed: {safe}"[:800])
+
+    if token:
+        # Same reason the token is not in the clone URL on disk: .git/config is
+        # world-readable to anyone who can read the checkout.
+        _run_git(["remote", "set-url", "origin", public_url], cwd=real)
+
+    if not os.path.isdir(os.path.join(real, ".git")):
+        shutil.rmtree(real, ignore_errors=True)
+        raise ProvisioningError(f"clone of {owner}/{repo} produced no git repository")
+    return real

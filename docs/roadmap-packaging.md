@@ -203,6 +203,27 @@ deployment it owns.
 dashboard by URL, complete a task, and land it as a pull request — with no
 `deploy` block, no pm2, and nothing pre-checked-out.
 
+**Built, 2026-09-20.** All four parts:
+
+* **Fetch before each task.** `fetch_base_from_origin` fast-forwards the live
+  base branch from `origin` at the start of a task, so the branch forks from
+  the real tip. Fast-forward only: local commits are never rewritten, and a
+  missing remote, an unreachable host or a diverged branch all leave the task
+  running exactly as before.
+* **Clone on add.** `POST /api/projects/clone` takes a GitHub URL or
+  `owner/repo`, clones into an allowed root and hands the path to the ordinary
+  detection flow. A token is used for the URL only and never written to
+  `.git/config`.
+* **Ship as a pull request.** Per-project `ship: "push" | "pr"`, defaulting to
+  `push`. `pr` pushes the task branch and opens a PR, leaving the base branch
+  untouched. An already-open PR for the same head counts as success.
+* **Credentials.** `pr` needs `pull_requests: write`; the failure names that
+  scope rather than reporting a bare 403.
+
+**Still open, and it is the done-when:** no GitHub-only project has been taken
+through the whole path on a live repository. Each part is proven end to end on
+real git, with only the GitHub API stood in for.
+
 **Known gap at this point:** the clone is still on the machine running the
 agent. That is the point, not a limitation.
 

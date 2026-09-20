@@ -4326,12 +4326,57 @@ async def list_projects_config(user: User = Depends(require_full_auth)):
     }
 
 
-@app.post("/api/projects/detect")
-async def detect_project_endpoint(req: DetectProjectRequest, user: User = Depends(require_full_auth)):
-    """Read-only inspection of a candidate directory. Creates nothing."""
+@app.post("/api/projects/clone")
+async def clone_project_endpoint(req: DetectProjectRequest, user: User = Depends(require_full_auth)):
+    """Clone a GitHub repository into an allowed root, then detect it.
+
+    Separate from /detect on purpose: that one promises to create nothing, and
+    an operator who pastes a URL expecting a look is entitled to that promise.
+    This one says in its name that it writes.
+
+    Everything after the clone is the ordinary onboarding path, against the
+    path the clone produced -- the wizard, the worktree and projects.json do
+    not know the directory arrived over the network.
+    """
     auth.require_admin(user)
     from agent import provisioning  # noqa: PLC0415
 
+    source = req.path.strip()
+    if not provisioning.parse_github_source(source):
+        raise HTTPException(400, f"{source!r} is not a GitHub URL or owner/repo")
+    try:
+        path = await asyncio.to_thread(
+            provisioning.clone_repository, source,
+            existing_names=list(PROJECTS), token=getattr(config, "github_token", None),
+        )
+        report = await asyncio.to_thread(
+            provisioning.detect_project, path, existing_names=list(PROJECTS)
+        )
+    except provisioning.ProvisioningError as e:
+        raise HTTPException(400, str(e))
+    out = report.to_dict()
+    out["cloned_to"] = path
+    from agent import project_removal  # noqa: PLC0415
+    out["archives"] = project_removal.list_archives(report.name) if report.name else []
+    return out
+
+
+@app.post("/api/projects/detect")
+async def detect_project_endpoint(req: DetectProjectRequest, user: User = Depends(require_full_auth)):
+    """Read-only inspection of a candidate directory. Creates nothing.
+
+    A GitHub URL is reported as such rather than treated as a path, so the
+    wizard can offer to clone instead of failing with "no such directory".
+    """
+    auth.require_admin(user)
+    from agent import provisioning  # noqa: PLC0415
+
+    if provisioning.parse_github_source(req.path.strip(), allow_slug=False):
+        raise HTTPException(
+            400,
+            "that is a GitHub repository, not a path on this machine. "
+            "Use Clone to bring it down first.",
+        )
     try:
         report = await asyncio.to_thread(
             provisioning.detect_project, req.path.strip(), existing_names=list(PROJECTS)

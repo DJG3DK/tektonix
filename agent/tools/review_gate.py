@@ -230,3 +230,53 @@ def _refresh_codebase_map(project: str) -> None:
         logger.info("kicked codebase-map refresh for %s after merge+deploy", project)
     except Exception:  # noqa: BLE001 -- best-effort by design
         logger.exception("could not start post-ship cartographer for %s", project)
+
+
+async def ship_as_pull_request(project: str, branch: str, sha: str, title: str) -> dict:
+    """Push the task branch and open a pull request against the base branch.
+
+    The other way to ship, for a project whose base branch the agent is not
+    allowed to write. The review gate is unchanged and has already run: this is
+    only what happens AFTER a pass. A person merges.
+
+    Returns the same shape merge_and_deploy does, so the caller treats the two
+    outcomes identically apart from what it tells the operator.
+    """
+    from agent.config import PROJECTS, load_config  # noqa: PLC0415
+    from agent.tools.git import _git  # noqa: PLC0415
+    from agent import github_repos  # noqa: PLC0415
+    from agent.tools import github_tools  # noqa: PLC0415
+
+    cfg = PROJECTS.get(project) or {}
+    live = cfg.get("live")
+    base = cfg.get("base_branch") or "main"
+    if not live:
+        return {"ok": False, "stage": "ship", "error": f"{project} has no live path"}
+
+    token = getattr(load_config(), "github_token", None)
+    if not token:
+        return {"ok": False, "stage": "ship",
+                "error": "shipping as a pull request needs GITHUB_TOKEN with pull_requests: write"}
+
+    remote = await _git("remote get-url origin", live, timeout=15)
+    slug = github_tools.repo_slug_from_remote(remote["output"].strip()) if remote["ok"] else None
+    if not slug:
+        return {"ok": False, "stage": "ship",
+                "error": f"{project} has no GitHub origin to open a pull request against"}
+
+    push = await _git(f"push --quiet origin {branch}", live, timeout=300)
+    if not push["ok"]:
+        return {"ok": False, "stage": "ship",
+                "error": f"could not push {branch}: {push['output'][:300]}"}
+
+    try:
+        pr = await github_repos.open_pull_request(
+            token, slug, head=branch, base=base, title=title,
+            body=f"Opened by Tektonix for task branch `{branch}` at `{sha[:12]}`.\n\n"
+                 f"The automated review gate passed before this was opened.",
+        )
+    except (PermissionError, LookupError, ValueError) as e:
+        return {"ok": False, "stage": "ship", "error": f"could not open a pull request: {e}"}
+
+    return {"ok": True, "shipped": "pull_request", "pull_request": pr["url"],
+            "number": pr["number"], "branch": branch}

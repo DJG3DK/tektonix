@@ -39,6 +39,7 @@ retry/resume with no new diff correctly resumes polling review for that
 existing commit instead of stranding a real, unreviewed change.
 """
 
+import re
 import json
 import time
 import uuid
@@ -59,7 +60,12 @@ from agent.tools.git import (
 )
 from agent import check_timing
 from agent import runtime_settings as _rs
-from agent.tools.review_gate import merge_and_deploy, trigger_check, wait_for_review
+from agent.tools.review_gate import (
+    merge_and_deploy,
+    ship_as_pull_request,
+    trigger_check,
+    wait_for_review,
+)
 from agent.project_checks import autodetect_checks_if_none
 from agent.tools.git import sha_in_repo
 from agent.outer_state import AgentState
@@ -742,7 +748,18 @@ async def _review_and_deploy(state: AgentState, repo: str, sha: str) -> dict:
             "stale_pending_review_streak": 0,
         }
 
-    deployed = await merge_and_deploy(repo)
+    # How this project ships. "push" fast-forwards the base branch and deploys,
+    # which is what every existing project does and stays the default. "pr"
+    # opens a pull request instead and touches the base branch not at all --
+    # for a repository whose base branch the agent is not allowed to write.
+    #
+    # The gate is identical either way: this is only what happens after a pass.
+    ship_mode = (PROJECTS.get(repo) or {}).get("ship", "push")
+    if ship_mode == "pr":
+        branch = f"agent/{re.sub(r'[^A-Za-z0-9._-]', '-', str(state['task_id'])).strip('-.') or 'task'}"
+        deployed = await ship_as_pull_request(repo, branch, sha, state["goal"].splitlines()[0][:72])
+    else:
+        deployed = await merge_and_deploy(repo)
     deploy_entry = {
         "node": "verify_and_ship",
         "step_id": None,
