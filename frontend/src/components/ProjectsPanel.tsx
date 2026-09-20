@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import {
+  cloneProject,
   detectProject,
+  looksLikeGitHubUrl,
   listProjectArchives,
   listProjectsConfig,
   deleteProjectArchive,
@@ -111,7 +113,13 @@ export function ProjectsPanel({ onChanged }: { onChanged?: () => void | Promise<
     setError(null);
     setReport(null);
     try {
-      const r = await detectProject(path.trim());
+      /* A GitHub URL is not a path on this machine. Clone it first, then the
+         rest of the wizard is identical -- it never learns how the directory
+         got there. */
+      const input = path.trim();
+      const r = looksLikeGitHubUrl(input)
+        ? await cloneProject(input)
+        : await detectProject(input);
       setReport(r);
       setSecrets(Object.fromEntries(r.secret_files.map((c) => [c.value, c.enabled])));
       setMounts(Object.fromEntries(r.read_only_mounts.map((c) => [c.value, c.enabled])));
@@ -145,6 +153,10 @@ export function ProjectsPanel({ onChanged }: { onChanged?: () => void | Promise<
           checks: [...report.checks, ...extraChecks],
           build_steps: report.build_steps,
           db_env_file: report.db_env_file,
+          /* How it arrived decides how it ships: a repository the agent
+             cloned opens pull requests rather than writing to a base branch
+             nobody asked it to own. */
+          cloned_from_github: report.cloned_from_github ?? false,
         },
         grant_access: true,
         restore_archive: restoreFrom,
@@ -265,18 +277,24 @@ export function ProjectsPanel({ onChanged }: { onChanged?: () => void | Promise<
             <div className="wiz-row">
               <input
                 className="wiz-input"
-                placeholder="/absolute/path/to/your/repo"
+                placeholder="/absolute/path/to/your/repo  or  https://github.com/owner/repo"
                 value={path}
                 onChange={(e) => setPath(e.target.value)}
                 onKeyDown={(e) => { if (e.key === "Enter" && path.trim()) void handleDetect(); }}
               />
+              {/* The label says which of the two things is about to happen.
+                  Inspect promises to create nothing; cloning plainly does. */}
               <button className="wiz-btn wiz-btn--primary" disabled={!path.trim()} onClick={() => void handleDetect()}>
-                Inspect
+                {looksLikeGitHubUrl(path) ? "Clone" : "Inspect"}
               </button>
             </div>
           )}
 
-          {stage === "detecting" && <p className="wiz-status">Inspecting {path}…</p>}
+          {stage === "detecting" && (
+            <p className="wiz-status">
+              {looksLikeGitHubUrl(path) ? `Cloning ${path}…` : `Inspecting ${path}…`}
+            </p>
+          )}
           {error && <p className="wiz-error">{error}</p>}
 
           {stage === "review" && report && (

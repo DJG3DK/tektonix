@@ -822,6 +822,10 @@ export interface DetectionReport {
   live: string;
   sandbox: string;
   is_git_repo: boolean;
+  /* Set only by the clone route. Carried into provisioning so the project's
+     `ship` default reflects how it arrived. */
+  cloned_from_github?: boolean;
+  cloned_to?: string;
   package_manager: string | null;
   languages: string[];
   node_modules_dirs: string[];
@@ -900,6 +904,27 @@ export async function listProjectsConfig(): Promise<{
   config_path: string;
 }> {
   const res = await apiFetch(`${API_BASE}/projects`);
+  if (!res.ok) throw new Error(await errText(res));
+  return res.json();
+}
+
+/* Everything the wizard sends is a path today. `owner/repo` and
+   `relative/path` are the same string, so only an unmistakable URL switches
+   the button to Clone -- guessing wrong here means cloning a directory name. */
+export function looksLikeGitHubUrl(text: string): boolean {
+  const t = text.trim();
+  return /^https:\/\/(www\.)?github\.com\/[\w.-]+\/[\w.-]+(\.git)?\/?$/.test(t)
+    || /^(ssh:\/\/)?git@github\.com[:/][\w.-]+\/[\w.-]+(\.git)?\/?$/.test(t);
+}
+
+/* Clones first, then detects, and says so in its name: /detect promises to
+   create nothing and an operator pasting a URL is entitled to that promise. */
+export async function cloneProject(source: string): Promise<DetectionReport> {
+  const res = await apiFetch(`${API_BASE}/projects/clone`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path: source }),
+  });
   if (!res.ok) throw new Error(await errText(res));
   return res.json();
 }
