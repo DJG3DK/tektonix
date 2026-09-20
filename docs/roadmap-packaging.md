@@ -153,10 +153,27 @@ clean image (the host install had those dependencies already, so
 503 forever, so the entrypoint generates one the same way it generates the
 signing key.
 
-**Still open:** the review services are not in the bundle yet (M1b), and
-Windows itself is untested — that is the operator's next step, and the only
-variable left is whether Docker Desktop's own path translation agrees with the
-map.
+**Bundle complete, 2026-09-18.** `agent-review` and `commit-reviewer` run in
+compose alongside the other three, so the gate is on the easy path. Deploying
+after a merge is the one thing they will not do from a container: a process
+manager runs on the host, and that endpoint reports itself unavailable rather
+than failing.
+
+**Windows, 2026-09-19.** Run on a clean Windows 11 machine: the launcher
+through to five containers, agent healthy, console answering. Docker Desktop's
+path translation agrees with the map — the open question above is closed.
+
+**Still open, and it is the done-when above:** no task has been completed on
+Windows. What is proven is the install, not a task through review to a merge.
+Two things are known to sit between those:
+
+* The registry pull is untested there. Docker Desktop's credential helper
+  needs the logon session that started it, which no automated route has; the
+  proven run used preloaded images. A person at their own desktop is the
+  untested-but-likely-fine case.
+* The review dashboard is not reachable in the bundle: 4100/4101 are
+  unpublished and there is no nginx to serve `/_review/`. The gate runs and
+  the agent drives it; a human cannot press *Check now*.
 
 ### M2 — GitHub-based projects *(replaces the old remote-projects milestone)*
 
