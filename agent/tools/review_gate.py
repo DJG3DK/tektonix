@@ -253,10 +253,22 @@ async def ship_as_pull_request(project: str, branch: str, sha: str, title: str) 
     if not live:
         return {"ok": False, "stage": "ship", "error": f"{project} has no live path"}
 
-    token = getattr(load_config(), "github_token", None)
+    # Per-project first, the environment second -- the same resolution the
+    # GitHub inbox uses. Settings > GitHub is documented as the preferred place
+    # to put a token, and a ship step that ignored it would quietly use the
+    # wrong one for a project that has its own.
+    from agent import github_settings  # noqa: PLC0415
+
+    cfg_obj = load_config()
+    try:
+        token = github_settings.token_for(github_settings.current(), cfg_obj, project)
+    except Exception:  # noqa: BLE001 -- unreadable settings must not beat the env fallback
+        token = getattr(cfg_obj, "github_token", None)
     if not token:
         return {"ok": False, "stage": "ship",
-                "error": "shipping as a pull request needs GITHUB_TOKEN with pull_requests: write"}
+                "error": "shipping as a pull request needs a GitHub token with "
+                         "`pull_requests: write` -- set one in Settings > GitHub for this "
+                         "project, or GITHUB_TOKEN in the environment"}
 
     remote = await _git("remote get-url origin", live, timeout=15)
     slug = github_tools.repo_slug_from_remote(remote["output"].strip()) if remote["ok"] else None

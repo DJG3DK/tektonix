@@ -212,3 +212,38 @@ def test_a_failed_push_does_not_echo_the_token(monkeypatch):
     assert r["ok"] is False
     assert "s3cret" not in r["error"]
     assert "***" in r["error"]
+
+
+def test_a_projects_own_token_is_preferred_over_the_environment(monkeypatch):
+    """Settings > GitHub is the documented place to put a token, and it stores
+    them per project. A ship step that only read GITHUB_TOKEN would quietly use
+    the wrong credential for a project that has its own."""
+    import agent.config as agent_config
+    import agent.tools.git as gitmod
+    from agent import github_settings
+
+    monkeypatch.setitem(agent_config.PROJECTS, "demo", {"live": "/tmp/live"})
+    monkeypatch.setattr(agent_config, "load_config",
+                        lambda: type("C", (), {"github_token": "env-token"})())
+    monkeypatch.setattr(github_settings, "current", lambda: {"tokens": {}, "projects": {}})
+    monkeypatch.setattr(github_settings, "token_for", lambda s, c, repo: "the-projects-own-token")
+
+    captured = {}
+
+    async def fake_git(cmd, root, timeout=30):
+        if cmd.startswith("remote get-url"):
+            return {"ok": True, "output": "git@github.com:o/r.git"}
+        if cmd.startswith("config --local"):
+            return {"ok": True, "output": "https://github.com/o/r.git"}
+        if cmd.startswith("push"):
+            captured["push"] = cmd
+            return {"ok": True, "output": ""}
+        return {"ok": True, "output": ""}
+
+    monkeypatch.setattr(gitmod, "_git", fake_git)
+    monkeypatch.setattr(github_repos, "open_pull_request",
+                        lambda *a, **k: _async({"number": "1", "url": "u", "state": "open"}))
+
+    asyncio.run(review_gate.ship_as_pull_request("demo", "agent/t1", "abc", "T"))
+    assert "the-projects-own-token" in captured["push"]
+    assert "env-token" not in captured["push"]

@@ -4347,6 +4347,8 @@ async def clone_project_endpoint(req: DetectProjectRequest, user: User = Depends
     try:
         path = await asyncio.to_thread(
             provisioning.clone_repository, source,
+            # The project does not exist yet, so there is no per-project token
+            # to prefer -- the environment fallback is the only one there is.
             existing_names=list(PROJECTS), token=getattr(config, "github_token", None),
         )
         report = await asyncio.to_thread(
