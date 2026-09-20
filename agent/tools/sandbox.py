@@ -26,6 +26,8 @@ import asyncio
 from agent import runtime_settings as _rs
 import logging
 import os
+import socket
+import contextlib
 import uuid
 
 from agent.tools.shell import ShellTimeout
@@ -318,3 +320,124 @@ async def run_shell_sandboxed(
 
     output = stdout.decode("utf-8", errors="replace")
     return {"ok": proc.returncode == 0, "exit_code": proc.returncode, "output": output[-20_000:]}
+
+# --- previewing a running app ----------------------------------------------
+
+async def start_preview_container(cmd: str, cwd: str, container_port: int,
+                                  env: dict | None = None) -> dict:
+    """Start `cmd` detached in a sandbox container with one port published.
+
+    The same image, mounts and hardening every other sandboxed command gets.
+    Two differences, both required to look at a running app: it is detached
+    rather than waited on, and one port is published to LOOPBACK on the host
+    so the browser in this process can reach it.
+
+    Published to 127.0.0.1 specifically, on a port this function allocates:
+    the model chooses what to run and which container port it listens on, and
+    never which host port or interface. Nothing here is reachable from off the
+    box.
+
+    Returns {ok, container, url, port} -- the caller is responsible for
+    stop_preview_container, and should use try/finally rather than trusting a
+    happy path.
+    """
+    if not isinstance(container_port, int) or not (1 <= container_port <= 65535):
+        return {"ok": False, "error": f"{container_port!r} is not a port number"}
+
+    # Ask the OS for a free port and hand the number to Docker. There is a
+    # race between closing this socket and Docker binding it; it is the same
+    # race every ephemeral-port allocator has, and losing it means the run
+    # fails loudly on a bind error rather than silently using somebody's port.
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        host_port = s.getsockname()[1]
+
+    container_name = f"agent-preview-{uuid.uuid4().hex[:12]}"
+    env_args: list[str] = []
+    for k, v in (env or {}).items():
+        env_args += ["-e", f"{k}={v}"]
+
+    docker_args = [
+        "docker", "run", "--rm", "-d", "--name", container_name,
+        "-v", f"{host_path(cwd)}:/workspace",
+        *_node_modules_mounts(cwd),
+        "-p", f"127.0.0.1:{host_port}:{container_port}",
+        "-w", "/workspace",
+        "--memory", SANDBOX_MEMORY_LIMIT,
+        "--cpus", SANDBOX_CPU_LIMIT,
+        "--pids-limit", SANDBOX_PIDS_LIMIT,
+        "--cap-drop", "ALL",
+        "--security-opt", "no-new-privileges",
+        "-e", "CI=true",
+        *env_args,
+        SANDBOX_IMAGE,
+        "bash", "-c", cmd,
+    ]
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *docker_args,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+        )
+        out, _ = await asyncio.wait_for(proc.communicate(), timeout=60)
+    except (TimeoutError, OSError) as e:
+        await _kill_container(container_name)
+        return {"ok": False, "error": f"could not start the preview: {e}"}
+    if proc.returncode != 0:
+        return {"ok": False, "error": (out or b"").decode(errors="replace")[:600]}
+
+    return {"ok": True, "container": container_name, "port": host_port,
+            "url": f"http://127.0.0.1:{host_port}"}
+
+
+async def wait_for_preview(host_port: int, container: str, timeout: int = 120) -> dict:
+    """Wait until something answers on the port, or the container dies.
+
+    Watching the container matters as much as watching the port: a dev server
+    that exits immediately on a syntax error would otherwise be a full timeout
+    of silence, and the logs that say why are gone once it is reaped.
+    """
+    deadline = asyncio.get_event_loop().time() + timeout
+    while asyncio.get_event_loop().time() < deadline:
+        try:
+            reader, writer = await asyncio.wait_for(
+                asyncio.open_connection("127.0.0.1", host_port), timeout=2)
+            writer.close()
+            with contextlib.suppress(Exception):
+                await writer.wait_closed()
+            return {"ok": True}
+        except (TimeoutError, OSError):
+            pass
+        if not await _container_running(container):
+            logs = await preview_logs(container)
+            return {"ok": False, "error": "the app exited before it served anything",
+                    "logs": logs}
+        await asyncio.sleep(1)
+    return {"ok": False, "error": f"nothing answered on the port within {timeout}s",
+            "logs": await preview_logs(container)}
+
+
+async def _container_running(name: str) -> bool:
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "docker", "inspect", "-f", "{{.State.Running}}", name,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+        out, _ = await asyncio.wait_for(proc.communicate(), timeout=15)
+    except (TimeoutError, OSError):
+        return False
+    return (out or b"").decode(errors="replace").strip() == "true"
+
+
+async def preview_logs(container: str, tail: int = 60) -> str:
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "docker", "logs", "--tail", str(tail), container,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
+        out, _ = await asyncio.wait_for(proc.communicate(), timeout=20)
+    except (TimeoutError, OSError):
+        return ""
+    return (out or b"").decode(errors="replace")[-4000:]
+
+
+async def stop_preview_container(name: str) -> None:
+    await _kill_container(name)

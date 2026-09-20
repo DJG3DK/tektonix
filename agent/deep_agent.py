@@ -1065,6 +1065,26 @@ def _make_run_checks_tool(repo_root: str, repo: str):
 # distinction the hard way: `ls`/`read_file`/`grep` fail with "No files
 # found"/"not found" against real repo paths (they structurally cannot see
 # the repo) before it stumbles onto /workspace via bash trial-and-error.
+_VISUAL_GUIDANCE = """LOOKING AT WHAT YOU CHANGED:
+
+If you change anything a person SEES -- layout, colour, spacing, a component, \
+a template, a stylesheet -- the checks will not tell you whether it looks \
+right, and neither will the reviewer. Both only know whether it runs.
+
+`preview_app` starts this project the way the project starts and renders it in \
+a real browser: `preview_app("npm run dev -- --host 0.0.0.0 --port 5173", 5173, \
+"/")`. The command must bind 0.0.0.0 rather than localhost, or nothing outside \
+the container can reach it. Ask a `question` about the specific thing you \
+changed rather than "how does it look".
+
+Use it to check your own work before you say you are done, and again if the \
+answer surprises you. `browse_page` is the same idea for a page that is \
+already served somewhere -- a staging deploy, a design you are matching, a \
+project that runs on another host.
+
+Do not use either for a change nobody looks at.
+"""
+
 _FILESYSTEM_GUIDANCE = """IMPORTANT -- two separate filesystems, not one:
 - Your built-in `ls`/`read_file`/`write_file`/`edit_file` tools ONLY see this \
 agent's own memory/skills paths (/memories/, /org-memory/, /skills/, /episodes/) -- NEVER the \
@@ -1126,7 +1146,7 @@ prompt doesn't ask you to examine an image, don't go analyze one on your own ini
 inspection via bash. If the prompt already states a fact (a product name, a file path, a value), \
 treat it as given and move on to the actual investigation instead of re-deriving it yourself.
 
-""" + _FILESYSTEM_GUIDANCE + """
+""" + _FILESYSTEM_GUIDANCE + _VISUAL_GUIDANCE + """
 
 IMPORTANT: your final report is what returns to the coordinator -- everything else you did (every \
 file you read, every command you ran) stays isolated in your own context and is NOT automatically \
@@ -1166,7 +1186,7 @@ Also make sure any new test file is actually registered as an npm script and inc
 project's aggregate `test` script in package.json -- a test that exists on disk but was never wired \
 in silently never runs as part of any check.
 
-""" + _FILESYSTEM_GUIDANCE + """
+""" + _FILESYSTEM_GUIDANCE + _VISUAL_GUIDANCE + """
 
 Your final report returns to the coordinator; the rest of your own work stays isolated in your own \
 context. Report which file(s) you wrote/changed and a short summary of what the tests actually \
@@ -1193,7 +1213,7 @@ eyes on test quality, and a test you author yourself to validate your own implem
 the blind spot it exists to remove. (Trivial mechanical fixes -- updating an expectation string, \
 renaming an import -- are fine to do directly.)
 
-""" + _FILESYSTEM_GUIDANCE + """
+""" + _FILESYSTEM_GUIDANCE + _VISUAL_GUIDANCE + """
 
 DELEGATE RESEARCH: before you can change something you usually have to find out how it works. \
 The moment that costs more than a couple of looks -- you are about to open a third file, or run a \
@@ -1321,7 +1341,22 @@ async def build_deep_agent(
     github_tools = make_github_tools(token_source(config))
     github_tools = [*github_tools, make_github_inbox_tool(store)]
     project_tools = [*project_tools, *github_tools]
-    read_only_tools = [tool_by_name["read"], tool_by_name["bash"], tool_by_name["describe_image"], *github_tools]
+
+    # Seeing the work. A frontend task used to be done blind -- edit the CSS,
+    # run the tests, and neither the agent nor the reviewer ever looked at the
+    # page. browse_page renders any public URL (a design reference, a staging
+    # deploy, a project that runs somewhere else); preview_app starts THIS
+    # project in the sandbox and renders that. Both come back as visible text
+    # plus a description of how it actually looks.
+    from agent.tools.planning_tools import make_browse_page_tool  # noqa: PLC0415
+    from agent.tools.preview import make_preview_tool  # noqa: PLC0415
+
+    visual_tools = [make_browse_page_tool(), make_preview_tool(lambda: repo_root)]
+    project_tools = [*project_tools, *visual_tools]
+    # The investigator gets browse_page but not preview_app: reading a page is
+    # read-only, starting the project is not.
+    read_only_tools = [tool_by_name["read"], tool_by_name["bash"], tool_by_name["describe_image"],
+                       *github_tools, visual_tools[0]]
     if db_tool is not None:
         read_only_tools.append(db_tool)
     run_checks_tool = _make_run_checks_tool(repo_root, repo)

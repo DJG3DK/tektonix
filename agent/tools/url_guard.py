@@ -120,7 +120,7 @@ async def assert_public_url(raw_url: str) -> str:
     return raw_url
 
 
-def make_route_guard(on_block=None):
+def make_route_guard(on_block=None, allow_origin: str | None = None):
     """A Playwright route handler that applies the same check to EVERY
     request a page makes -- the initial navigation, each redirect hop, and
     every subresource.
@@ -128,9 +128,20 @@ def make_route_guard(on_block=None):
     Checking only the URL passed to goto() is not enough: Playwright follows
     redirects internally, so a public URL that 302s to an internal one would
     never be re-examined by the caller.
+
+    `allow_origin` is the one deliberate exception, for previewing an app the
+    agent just started: a loopback origin THIS PROCESS chose, on a port it
+    allocated, for a container it launched. The model supplies a command and a
+    path, never a host -- so this does not give it a way to reach 127.0.0.1:4101
+    or a cloud metadata service, which is what the rest of this module is for.
+    Exactly one origin, matched whole, and everything else still goes through
+    the public check.
     """
 
     async def handler(route, request):
+        if allow_origin and _same_origin(request.url, allow_origin):
+            await route.continue_()
+            return
         try:
             await assert_public_url(request.url)
         except UnsafeUrlError as e:
@@ -141,3 +152,22 @@ def make_route_guard(on_block=None):
         await route.continue_()
 
     return handler
+
+
+def _same_origin(url: str, origin: str) -> bool:
+    """Scheme, host and port all equal. Compared as parsed parts rather than
+    by prefix: "http://127.0.0.1:8080" is a prefix of
+    "http://127.0.0.1:8080.evil.test" and that is exactly the trick."""
+    from urllib.parse import urlsplit
+
+    def parts(u: str):
+        # .port raises on a malformed authority ("8080.evil.test"), which is
+        # itself the answer: not this origin.
+        p = urlsplit(u)
+        try:
+            return (p.scheme, p.hostname, p.port)
+        except ValueError:
+            return None
+
+    a, b = parts(url), parts(origin)
+    return a is not None and a == b

@@ -173,7 +173,48 @@ async def _run_web_search(query: str, num_results: int) -> str:
         return "\n\n".join(lines) if lines else f"No results found for {query!r}."
 
 
-async def _run_browse_page(url: str, want_screenshot: bool, question: str) -> str:
+def make_browse_page_tool():
+    """`browse_page` as a standalone tool.
+
+    It lived inside the planning toolset, which meant the agent doing the
+    frontend work was the one that could not look at a page -- it could
+    describe an image somebody handed it and had no way to produce one.
+    """
+    from agent.tools.tool_errors import tool_errors_to_text  # noqa: PLC0415
+
+    @tool
+    @tool_errors_to_text
+    async def browse_page(url: str, screenshot: bool = False, question: str = "") -> str:
+        """Load a real webpage (JS-rendered, via a real headless browser) and
+        read its visible text. `screenshot=True` also describes how the page
+        actually LOOKS -- layout, colour, typography, spacing -- which is the
+        only way to check visual work, since the tests do not. `question`
+        narrows either the reading or the description.
+
+        Public addresses only. To look at THIS project, use preview_app.
+        """
+        if not (url.startswith("http://") or url.startswith("https://")):
+            return f"ERROR: {url!r} is not a valid http(s) URL"
+        return await _run_browse_page(url, screenshot, question)
+
+    return browse_page
+
+
+async def run_browse_page_on_origin(url: str, allow_origin: str, question: str = "") -> str:
+    """Render a page on ONE loopback origin this process just allocated.
+
+    For previewing an app the agent started, where the public-address rule
+    that protects every other browse would block the very thing being looked
+    at. The exception is narrow on purpose: the caller supplies the origin, it
+    is matched whole, and every other request the page makes still goes
+    through the public check -- so a previewed page that pulls a script from
+    169.254.169.254 is still refused.
+    """
+    return await _run_browse_page(url, True, question, allow_origin=allow_origin)
+
+
+async def _run_browse_page(url: str, want_screenshot: bool, question: str,
+                           allow_origin: str | None = None) -> str:
 
     from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
@@ -182,15 +223,17 @@ async def _run_browse_page(url: str, want_screenshot: bool, question: str) -> st
     # a public URL that 302s to 127.0.0.1 or 169.254.169.254 would never come
     # back through here. The route guard re-checks every request the page
     # makes -- initial navigation, each redirect hop, and subresources.
-    try:
-        await assert_public_url(url)
-    except UnsafeUrlError as e:
-        return f"ERROR: {e}"
+    if not allow_origin:
+        try:
+            await assert_public_url(url)
+        except UnsafeUrlError as e:
+            return f"ERROR: {e}"
 
     blocked: list[str] = []
 
     async with _browser_page() as page:
-        await page.route("**/*", make_route_guard(lambda u, why: blocked.append(f"{u} ({why})")))
+        await page.route("**/*", make_route_guard(
+            lambda u, why: blocked.append(f"{u} ({why})"), allow_origin=allow_origin))
         try:
             await page.goto(url, wait_until="load", timeout=_NAV_TIMEOUT_MS)
         except (TimeoutError, PlaywrightTimeoutError):

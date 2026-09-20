@@ -79,13 +79,18 @@ def test_an_empty_path_is_returned_unchanged(monkeypatch):
 # ---------------------------------------------------------------------------
 
 def test_every_bind_mount_source_goes_through_the_map():
-    """Three `-v` sources: the workspace, the live .git of a worktree, and the
-    borrowed node_modules. A new one added without the map is the silent bug
-    this whole module exists to prevent."""
+    """Four `-v` sources: the workspace for a command and again for a preview,
+    the live .git of a worktree, and the borrowed node_modules. A new one
+    added without the map is the silent bug this whole module exists to
+    prevent -- the host daemon resolves the source, so a container-only path
+    mounts an empty directory and says nothing.
+
+    The count is here so that adding a mount is a decision rather than an
+    accident; the assertion that matters is the one below it."""
     import inspect
     src = inspect.getsource(sandbox)
     mounts = [ln for ln in src.split("\n") if '"-v"' in ln]
-    assert len(mounts) == 3, f"a bind mount was added or removed: {mounts}"
+    assert len(mounts) == 4, f"a bind mount was added or removed: {mounts}"
     for ln in mounts:
         assert "host_path(" in ln, f"bind mount source not mapped: {ln.strip()}"
 
