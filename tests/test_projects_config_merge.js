@@ -124,3 +124,33 @@ test('config is re-read per call so runtime onboarding is picked up', () => {
 });
 
 console.log(`\n${passed} passed`);
+
+test('a deploy restart list reaches the deploy service flat', () => {
+    // projects.json nests it under `deploy`; the service reads `p.restart`.
+    // The flattening is what connects the two, and a project on Docker
+    // Compose gets nothing at all if it does not happen.
+    withProjectsFile({
+        projects: {
+            composed: {
+                live: '/srv/live/composed',
+                sandbox: '/srv/ws/composed',
+                deploy: {
+                    restart: [{ kind: 'compose', cmd: 'docker', args: ['compose', 'up', '-d'], dir: '.' }],
+                },
+            },
+        },
+    }, (file) => {
+        const merged = loadProjects({}, { section: 'deploy', file });
+        assert.equal(merged.composed.restart[0].cmd, 'docker');
+        assert.deepStrictEqual(merged.composed.restart[0].args, ['compose', 'up', '-d']);
+    });
+});
+
+test('a project with no deploy block has no restart list to iterate', () => {
+    withProjectsFile({
+        projects: { bare: { live: '/srv/live/bare', sandbox: '/srv/ws/bare' } },
+    }, (file) => {
+        const merged = loadProjects({}, { section: 'deploy', file });
+        assert.equal(merged.bare.restart, undefined, 'server.js guards with `|| []`');
+    });
+});

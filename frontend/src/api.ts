@@ -836,6 +836,9 @@ export interface DetectionReport {
   checks: CheckStep[];
   build_steps: CheckStep[];
   pm2_apps: ProvisionCandidate[];
+  /** How this machine could restart the project after a merge. Empty for a
+   *  project this box does not run, which is most of them. */
+  restart_commands: ProvisionCandidate[];
   secret_files: ProvisionCandidate[];
   read_only_mounts: ProvisionCandidate[];
   risky_scripts: ProvisionCandidate[];

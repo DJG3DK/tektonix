@@ -389,6 +389,22 @@ app.post('/api/projects/:name/restart', requireControlSecret, async (req, res) =
     // would read as something it broke and try to fix. The merge already
     // happened either way -- review and merge are what the gate is for, and
     // they work here. Deploying is the operator's, in the bundle.
+    // How this project is restarted, when it is not (or not only) a pm2 app.
+    // Detected and confirmed at onboarding, never free text: the wizard may
+    // only confirm commands the server proposed, so `docker compose up -d`
+    // and `systemctl restart x` get here the same way a check command does.
+    for (const step of p.restart || []) {
+        if (!step || !step.cmd) continue;
+        try {
+            await run(step.cmd, step.args || [], path.join(p.live, step.dir || '.'));
+            built.push(`${step.cmd} ${(step.args || []).join(' ')}`.trim());
+        } catch (e) {
+            return res.status(500).json({
+                ok: false, error: e.message, stage: 'restart', built,
+            });
+        }
+    }
+
     const wanted = p.pm2Apps || [];
     if (wanted.length && IN_CONTAINER) {
         return res.json({

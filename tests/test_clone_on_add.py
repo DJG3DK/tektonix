@@ -206,6 +206,7 @@ def test_an_unrecognised_ship_value_is_dropped_rather_than_stored():
         pm2_apps: list = []
         node_modules_dirs: list = []
         dependency_dirs: list = []
+        restart_commands: list = []
 
     clean = provisioning.validate_choices(_R(), {"ship": "yolo"})
     assert "ship" not in clean

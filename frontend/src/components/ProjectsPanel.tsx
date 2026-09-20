@@ -68,6 +68,20 @@ function CandidateList({
 /** `onChanged` fires after a successful provision so App can reload its repo
  *  list -- a project configured here used to reach the planner's Repo
  *  dropdown only after a full page reload. */
+/* What a merge will actually do, said out loud. Three outcomes, and the one
+   that used to be silent -- "merge only" -- is the one somebody needs told. */
+function deployOutcome(apps: Record<string, boolean>, restarts: Record<string, boolean>): string {
+  const pm2 = Object.entries(apps).filter(([, on]) => on).map(([v]) => v);
+  const cmds = Object.entries(restarts).filter(([, on]) => on).map(([v]) => v);
+  if (!pm2.length && !cmds.length) {
+    return "merge only — nothing on this machine is restarted";
+  }
+  const parts = [];
+  if (pm2.length) parts.push(`restart ${pm2.join(", ")}`);
+  if (cmds.length) parts.push(cmds.join(", "));
+  return `merge, then ${parts.join(" and ")}`;
+}
+
 export function ProjectsPanel({ onChanged }: { onChanged?: () => void | Promise<void> } = {}) {
   const [existing, setExisting] = useState<Record<string, { live: string; sandbox: string }>>({});
   const [stage, setStage] = useState<Stage>("idle");
@@ -84,6 +98,7 @@ export function ProjectsPanel({ onChanged }: { onChanged?: () => void | Promise<
   const [secrets, setSecrets] = useState<Record<string, boolean>>({});
   const [mounts, setMounts] = useState<Record<string, boolean>>({});
   const [apps, setApps] = useState<Record<string, boolean>>({});
+  const [restarts, setRestarts] = useState<Record<string, boolean>>({});
   const [risky, setRisky] = useState<Record<string, boolean>>({});
 
   const [archives, setArchives] = useState<ProjectArchive[]>([]);
@@ -124,6 +139,7 @@ export function ProjectsPanel({ onChanged }: { onChanged?: () => void | Promise<
       setSecrets(Object.fromEntries(r.secret_files.map((c) => [c.value, c.enabled])));
       setMounts(Object.fromEntries(r.read_only_mounts.map((c) => [c.value, c.enabled])));
       setApps(Object.fromEntries(r.pm2_apps.map((c) => [c.value, c.enabled])));
+      setRestarts(Object.fromEntries((r.restart_commands ?? []).map((c) => [c.value, c.enabled])));
       setRisky(Object.fromEntries(r.risky_scripts.map((c) => [c.value, c.enabled])));
       setStage("review");
     } catch (e) {
@@ -148,6 +164,7 @@ export function ProjectsPanel({ onChanged }: { onChanged?: () => void | Promise<
           secret_files: on(secrets),
           read_only_mounts: on(mounts),
           pm2_apps: on(apps),
+          restart_commands: on(restarts),
           node_modules_dirs: report.node_modules_dirs,
           dependency_dirs: report.dependency_dirs,
           checks: [...report.checks, ...extraChecks],
@@ -381,6 +398,20 @@ export function ProjectsPanel({ onChanged }: { onChanged?: () => void | Promise<
                     items={report.pm2_apps} chosen={apps}
                     onToggle={(v, on) => setApps((s) => ({ ...s, [v]: on }))}
                   />
+                  {(report.restart_commands ?? []).length > 0 && (
+                    <CandidateList
+                      title="Or run this to restart it"
+                      help="Found on this machine. Only offered for a project this box actually runs."
+                      items={report.restart_commands} chosen={restarts}
+                      onToggle={(v, on) => setRestarts((s) => ({ ...s, [v]: on }))}
+                    />
+                  )}
+                  {/* Onboarding used to end without ever saying what a merge
+                      would do. Somebody whose project is not a pm2 app got a
+                      merge and nothing else, and no sentence told them. */}
+                  <p className="wiz-outcome">
+                    After a passing review: <b>{deployOutcome(apps, restarts)}</b>
+                  </p>
                 </>
               )}
 

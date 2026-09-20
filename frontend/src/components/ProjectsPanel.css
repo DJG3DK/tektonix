@@ -212,3 +212,13 @@
 }
 .wiz-restore-opt code { font-size: var(--fs-xs); word-break: break-all; }
 .wiz-restore-opt em { font-style: normal; color: var(--text-faint); }
+
+/* What a merge will actually do. The silent case -- merge only -- is the one
+   somebody needs told, so this is never hidden. */
+.wiz-outcome {
+  margin: var(--s3, 0.75rem) 0 0;
+  padding: var(--s2, 0.5rem) var(--s3, 0.75rem);
+  border-left: 3px solid var(--accent, #f5b301);
+  background: var(--surface, #16161d);
+  color: var(--text, #e8e8ef);
+}

@@ -319,6 +319,10 @@ class DetectionReport:
     # distinction only this codebase could see.
     git_remote: str | None = None
     github_slug: str | None = None
+    # How this machine could restart the project after a merge. Empty for a
+    # project this box does not run, which is the common case for a repository
+    # somebody is only sending pull requests to.
+    restart_commands: list[Candidate] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     blockers: list[str] = field(default_factory=list)
 
@@ -1122,6 +1126,64 @@ def _missing_toolchain(live: Path, checks: list[dict]) -> list[str]:
     return missing
 
 
+def _detect_restart_commands(live: Path) -> list[Candidate]:
+    """How this machine could restart this project after a merge.
+
+    Only ever finds something for a project this box actually RUNS. A
+    repository somebody is only working on -- cloned to send pull requests --
+    has no compose file it owns, no unit pointing into it and no process
+    running from it, so nothing is proposed and a merge stays a merge. That is
+    the gate: not "is it local" (every project is), but "does this machine run
+    it".
+
+    Each candidate carries the exact command, because the wizard may only
+    confirm commands this server proposed -- see validate_choices. An operator
+    who needs something else edits projects.json, which is the same boundary
+    every other executed command sits behind.
+    """
+    out: list[Candidate] = []
+
+    for name in ("docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml"):
+        if (live / name).is_file():
+            out.append(Candidate(
+                value="docker compose up -d --build",
+                reason=f"{name} in the project root",
+                check={"kind": "compose", "cmd": "docker",
+                       "args": ["compose", "up", "-d", "--build"], "dir": "."},
+            ))
+            break
+
+    # systemd rarely records a WorkingDirectory, so ExecStart's own path is
+    # the second place to look: a unit running a binary from inside the
+    # project is running this project.
+    systemctl = shutil.which("systemctl")
+    if systemctl:
+        real_live = os.path.realpath(live)
+        try:
+            listing = subprocess.run(
+                [systemctl, "list-units", "--type=service", "--no-legend", "--plain", "--all"],
+                capture_output=True, text=True, timeout=20)
+            units = [ln.split()[0] for ln in (listing.stdout or "").splitlines() if ln.split()]
+        except (subprocess.SubprocessError, OSError):
+            units = []
+        for unit in units[:400]:
+            try:
+                shown = subprocess.run(
+                    [systemctl, "show", unit, "-p", "WorkingDirectory", "-p", "ExecStart"],
+                    capture_output=True, text=True, timeout=10).stdout or ""
+            except (subprocess.SubprocessError, OSError):
+                continue
+            if not any(real_live in line for line in shown.splitlines()):
+                continue
+            out.append(Candidate(
+                value=f"systemctl restart {unit}",
+                reason=f"{unit} runs from inside this project",
+                check={"kind": "systemd", "cmd": "systemctl",
+                       "args": ["restart", unit], "dir": "."},
+            ))
+    return out
+
+
 def _detect_pm2_apps(live: Path) -> list[Candidate]:
     """pm2 apps whose working directory is inside this project. Proposed, not
     assumed: restarting the wrong app on merge takes down an unrelated
@@ -1286,6 +1348,7 @@ def detect_project(live_path: str, sandbox_root: str | None = None,
             "every change ships on human review alone")
 
     report.pm2_apps = _detect_pm2_apps(live)
+    report.restart_commands = _detect_restart_commands(live)
     if not report.pm2_apps:
         report.warnings.append(
             "no pm2 app found serving this path -- merges will build but not restart anything")
@@ -1344,6 +1407,10 @@ def validate_choices(report: DetectionReport, choices: dict) -> dict:
     offered_secrets = {c.value for c in report.secret_files}
     offered_mounts = {c.value for c in report.read_only_mounts}
     offered_apps = {c.value for c in report.pm2_apps}
+    # Keyed by the command's own text, so a confirmed restart is the command
+    # THIS server proposed rather than one that arrived over HTTP. Same rule
+    # as checks and build steps, and for the same reason: these execute.
+    offered_restarts = {c.value: c.check for c in report.restart_commands if c.check}
     offered_nm = set(report.node_modules_dirs)
 
     clean: dict = {}
@@ -1385,6 +1452,16 @@ def validate_choices(report: DetectionReport, choices: dict) -> dict:
     clean["secret_files"] = _subset("secret_files", offered_secrets, relative_to=live)
     clean["read_only_mounts"] = _subset("read_only_mounts", offered_mounts, relative_to=live)
     clean["pm2_apps"] = _subset("pm2_apps", offered_apps)
+    restarts = []
+    for value in choices.get("restart_commands") or []:
+        value = str(value)
+        if value not in offered_restarts:
+            raise ProvisioningError(
+                f"restart {value!r} was not proposed for this project -- the wizard can only "
+                "confirm detected commands, not introduce new ones")
+        restarts.append(offered_restarts[value])
+    if restarts:
+        clean["restart_commands"] = restarts
     clean["node_modules_dirs"] = _subset("node_modules_dirs", offered_nm, relative_to=live)
     clean["dependency_dirs"] = _subset("dependency_dirs", set(report.dependency_dirs),
                                        relative_to=live)
@@ -1442,6 +1519,10 @@ def config_from_choices(report_name: str, live: str, sandbox: str, choices: dict
         entry["review"] = review
 
     deploy: dict = {}
+    if choices.get("restart_commands"):
+        # After the build steps, before nothing: this is what "deploy" means
+        # for a project this machine runs but does not run under pm2.
+        deploy["restart"] = list(choices["restart_commands"])
     if choices.get("pm2_apps"):
         deploy["pm2Apps"] = list(choices["pm2_apps"])
     if choices.get("build_steps"):
