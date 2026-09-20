@@ -318,6 +318,11 @@ app.post('/api/projects/:name/merge', requireControlSecret, async (req, res) => 
             });
         }
 
+        // The commit live was on a moment ago. Returned so the deploy step
+        // can ask what this merge actually changed, rather than rebuilding
+        // everything on the chance that something did.
+        const mergedFrom = (await git(p.live, ['rev-parse', 'HEAD'])).trim();
+
         const output = await git(p.live, ['merge', '--ff-only', agentRef]);
         await clearReviewState(req.params.name);
 
@@ -343,7 +348,7 @@ app.post('/api/projects/:name/merge', requireControlSecret, async (req, res) => 
             push = { ok: false, error: e.message };
         }
 
-        res.json({ ok: true, output, push });
+        res.json({ ok: true, output, push, mergedFrom });
     } catch (e) { res.status(409).json({ ok: false, error: e.message }); }
 });
 
@@ -359,6 +364,7 @@ app.post('/api/projects/:name/merge', requireControlSecret, async (req, res) => 
 app.post('/api/projects/:name/restart', requireControlSecret, async (req, res) => {
     const p = projectOr404(req, res); if (!p) return;
     const built = [];
+    const skipped = [];
     // Build steps that reach out to a live dependency (a prerender reading
     // the catalog from the running API) fail with an unhelpful error and
     // look like a code problem when that dependency is down. Check the
@@ -368,6 +374,39 @@ app.post('/api/projects/:name/restart', requireControlSecret, async (req, res) =
     if (preflightFailures.length) {
         return res.status(500).json({ ok: false, error: formatPreflightError(preflightFailures), stage: 'preflight', built });
     }
+    // Which build steps this merge actually made stale.
+    //
+    // Running every build on every merge is wasted minutes on most of them,
+    // and on a project with several packages it is most of the wall clock
+    // after a one-line change. `since` is the commit live was on before the
+    // merge, handed back by the merge endpoint -- the server computes the
+    // diff itself rather than trusting a list of directories from a caller.
+    //
+    // A step whose directory the diff did not touch is skipped, with two
+    // deliberate exceptions: a step rooted at "." covers the whole repo and
+    // always runs, and a change to any dependency manifest or lockfile runs
+    // everything, because that is how a change outside a directory reaches
+    // the build inside it.
+    let changed = null;
+    const since = typeof req.body?.since === 'string' ? req.body.since.trim() : '';
+    if (/^[0-9a-f]{7,40}$/i.test(since)) {
+        try {
+            const names = await git(p.live, ['diff', '--name-only', since, 'HEAD']);
+            changed = names.split('\n').map((f) => f.trim()).filter(Boolean);
+        } catch {
+            changed = null;   // cannot tell, so do not skip anything
+        }
+    }
+    const MANIFESTS = /(^|\/)(package\.json|package-lock\.json|pnpm-lock\.yaml|yarn\.lock|requirements\.txt|pyproject\.toml|go\.mod|Cargo\.toml|composer\.json|Gemfile)$/;
+    const manifestChanged = changed !== null && changed.some((f) => MANIFESTS.test(f));
+
+    function stepIsStale(step) {
+        if (changed === null || manifestChanged) return true;
+        const dir = (step.dir || '.').replace(/^\.\//, '').replace(/\/$/, '');
+        if (!dir || dir === '.') return true;
+        return changed.some((f) => f === dir || f.startsWith(`${dir}/`));
+    }
+
     // `|| []` on both: a project with nothing to build and nothing to restart
     // deploys as a no-op rather than throwing. A dashboard-created project has
     // no `deploy` block at all (an empty repo detects no build steps and no pm2
@@ -376,6 +415,10 @@ app.post('/api/projects/:name/restart', requireControlSecret, async (req, res) =
     // round the work loop chasing a TypeError in this file.
     try {
         for (const step of p.build || []) {
+            if (!stepIsStale(step)) {
+                skipped.push(step.dir);
+                continue;
+            }
             const dir = path.join(p.live, step.dir);
             await run(step.cmd, step.args, dir);
             built.push(step.dir);
@@ -408,7 +451,8 @@ app.post('/api/projects/:name/restart', requireControlSecret, async (req, res) =
     const wanted = p.pm2Apps || [];
     if (wanted.length && IN_CONTAINER) {
         return res.json({
-            ok: true, built, restarted: [], skipped: wanted, reason: 'no_process_manager',
+            ok: true, built, builds_skipped: skipped,
+            restarted: [], skipped: wanted, reason: 'no_process_manager',
             note: 'Merged and built. Restarting host processes is not available in the '
                 + 'container bundle -- pm2 runs on the host. Restart them yourself, or '
                 + 'use the host install if you want deploys automated.',
@@ -418,7 +462,7 @@ app.post('/api/projects/:name/restart', requireControlSecret, async (req, res) =
         for (const appName of wanted) {
             await run('pm2', ['restart', appName], '/');
         }
-        res.json({ ok: true, built, restarted: wanted });
+        res.json({ ok: true, built, skipped, restarted: wanted });
     } catch (e) { res.status(500).json({ ok: false, error: e.message, stage: 'restart', built }); }
 });
 

@@ -179,8 +179,15 @@ async def merge_and_deploy(project: str) -> dict:
             # determination that this failed at the merge step.
             return {"ok": False, **merge_body, "stage": "merge"}
 
+        # The commit live was on before the merge, straight from the merge
+        # response. The deploy step uses it to ask what this merge actually
+        # changed, so a one-line backend fix stops rebuilding a frontend it
+        # did not touch. Absent or unusable means build everything, which is
+        # what happened before this existed.
         restart_res = await client.post(
-            f"http://{REVIEW_SERVICE_HOST}:{REVIEW_SERVICE_PORT}/api/projects/{project}/restart", json={}, headers=_CONTROL_HEADERS, timeout=180
+            f"http://{REVIEW_SERVICE_HOST}:{REVIEW_SERVICE_PORT}/api/projects/{project}/restart",
+            json={"since": merge_body.get("mergedFrom") or ""},
+            headers=_CONTROL_HEADERS, timeout=180,
         )
         try:
             restart_body = restart_res.json()
