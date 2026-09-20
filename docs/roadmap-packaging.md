@@ -163,17 +163,17 @@ than failing.
 through to five containers, agent healthy, console answering. Docker Desktop's
 path translation agrees with the map — the open question above is closed.
 
+**Review dashboard reachable, 2026-09-20.** The agent proxies `/_review/`
+itself, admitting only an admin over the session the console already required,
+so *Check now*, the diff view and the manual merge work in the bundle with the
+ports still unpublished. nginx keeps its location as an optimisation.
+
 **Still open, and it is the done-when above:** no task has been completed on
 Windows. What is proven is the install, not a task through review to a merge.
-Two things are known to sit between those:
-
-* The registry pull is untested there. Docker Desktop's credential helper
-  needs the logon session that started it, which no automated route has; the
-  proven run used preloaded images. A person at their own desktop is the
-  untested-but-likely-fine case.
-* The review dashboard is not reachable in the bundle: 4100/4101 are
-  unpublished and there is no nginx to serve `/_review/`. The gate runs and
-  the agent drives it; a human cannot press *Check now*.
+One known thing sits between them: the registry pull is untested there, because
+Docker Desktop's credential helper needs the logon session that started it and
+no automated route has one. The proven run used preloaded images. A person at
+their own desktop is the untested-but-likely-fine case.
 
 ### M2 — GitHub-based projects *(replaces the old remote-projects milestone)*
 
