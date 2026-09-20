@@ -59,6 +59,12 @@ class AgentState(TypedDict):
     # confirmed shipped. See verify_and_ship.py's comments at each transition.
     committed_sha: str | None
 
+    # Where the work went, for a project that ships as a pull request. Set on
+    # the shipped return so the dashboard can link it: a PR is not finished
+    # work, it is work waiting for a person, and making them read the step log
+    # to find the URL is how it gets forgotten.
+    pull_request_url: str | None
+
     # Set by verify_and_ship when routing back to "work" with something new
     # to tell the deep agent (a check failure's real output, or the review
     # service's findings) -- consumed and cleared by work_node the next time

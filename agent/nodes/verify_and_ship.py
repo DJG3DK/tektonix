@@ -760,10 +760,20 @@ async def _review_and_deploy(state: AgentState, repo: str, sha: str) -> dict:
         deployed = await ship_as_pull_request(repo, branch, sha, state["goal"].splitlines()[0][:72])
     else:
         deployed = await merge_and_deploy(repo)
+    # Say what actually happened. "merged and deployed" after a pull request
+    # opened is simply untrue -- nothing merged, nothing deployed, and the one
+    # thing the operator needs is the link, which was buried in a stringified
+    # dict.
+    if not deployed["ok"]:
+        ship_summary = "merge/deploy FAILED" if ship_mode != "pr" else "could not open a pull request"
+    elif deployed.get("shipped") == "pull_request":
+        ship_summary = f"pull request opened: {deployed.get('pull_request', '')}"
+    else:
+        ship_summary = "merged and deployed"
     deploy_entry = {
         "node": "verify_and_ship",
         "step_id": None,
-        "summary": "merged and deployed" if deployed["ok"] else "merge/deploy FAILED",
+        "summary": ship_summary,
         "detail": str(deployed)[:2000],
         "cost_usd": 0.0,
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -869,10 +879,16 @@ async def _review_and_deploy(state: AgentState, repo: str, sha: str) -> dict:
     checks_entry = await autodetect_checks_if_none(repo)
     if checks_entry is not None:
         shipped_log.append(checks_entry)
-    return {
+    out = {
         "committed_sha": None,  # shipped -- nothing left to track
         "pending_merge_approval": None,
         "merge_approved_sha": None,  # consumed by this merge; a future commit needs its own approval
         "review_gate_result": review,
         "execution_log": shipped_log,
     }
+    # A pull request is not finished work, it is work waiting for a person.
+    # Carried on the task itself so the dashboard can link it rather than
+    # making somebody read the step log to find out where it went.
+    if deployed.get("shipped") == "pull_request":
+        out["pull_request_url"] = deployed.get("pull_request")
+    return out

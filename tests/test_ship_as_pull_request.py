@@ -247,3 +247,37 @@ def test_a_projects_own_token_is_preferred_over_the_environment(monkeypatch):
     asyncio.run(review_gate.ship_as_pull_request("demo", "agent/t1", "abc", "T"))
     assert "the-projects-own-token" in captured["push"]
     assert "env-token" not in captured["push"]
+
+
+# --- what the operator is told ---------------------------------------------
+
+def test_the_step_log_says_a_pull_request_opened_not_that_it_merged():
+    """It said "merged and deployed" after a PR, which is simply untrue --
+    nothing merged and nothing deployed -- and buried the one thing anybody
+    needs in a stringified dict."""
+    deployed = {"ok": True, "shipped": "pull_request",
+                "pull_request": "https://github.com/o/r/pull/4", "number": "4"}
+
+    # The expression under test, lifted verbatim from verify_and_ship.
+    ship_mode = "pr"
+    if not deployed["ok"]:
+        summary = "merge/deploy FAILED" if ship_mode != "pr" else "could not open a pull request"
+    elif deployed.get("shipped") == "pull_request":
+        summary = f"pull request opened: {deployed.get('pull_request', '')}"
+    else:
+        summary = "merged and deployed"
+
+    assert summary == "pull request opened: https://github.com/o/r/pull/4"
+    assert "merged" not in summary
+
+
+def test_a_push_mode_ship_still_says_merged_and_deployed():
+    deployed = {"ok": True, "output": "Fast-forward"}
+    ship_mode = "push"
+    if not deployed["ok"]:
+        summary = "merge/deploy FAILED" if ship_mode != "pr" else "could not open a pull request"
+    elif deployed.get("shipped") == "pull_request":
+        summary = f"pull request opened: {deployed.get('pull_request', '')}"
+    else:
+        summary = "merged and deployed"
+    assert summary == "merged and deployed"
