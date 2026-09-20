@@ -1986,12 +1986,18 @@ async def _stream_graph(task_id: str, repo: str, goal: str, budget_usd: float, g
             category=category, status=status, created_at=original_created_at or time.time(),
             cost_so_far=values.get("cost_so_far", 0.0),
             escalation_reason=values.get("escalation_reason"),
+            # Where the work went, for a project that ships as a pull request.
+            # On the task record rather than only in the step log, because a
+            # PR is work waiting for a person and a link nobody can find is a
+            # link nobody follows.
+            pull_request_url=values.get("pull_request_url"),
         )
         _publish(task_id, {
             "type": "status",
             "status": status,
             "escalation_reason": values.get("escalation_reason"),
             "pending_approval": values.get("pending_approval"),
+            "pull_request_url": values.get("pull_request_url"),
         })
         # Telegram: every rest state IS the actionable moment -- escalated,
         # waiting on an approval, waiting on the merge look, or done.

@@ -55,6 +55,9 @@ export interface TaskMeta {
   created_at: number;
   cost_so_far?: number;
   escalation_reason?: string | null;
+  /** Set when the project ships as a pull request instead of merging. The
+   * task is finished and the work is waiting for a person. */
+  pull_request_url?: string | null;
   error?: string;
   /** Fixed taxonomy from agent/classify.py, set once at creation -- absent
    * on tasks created before the classifier existed. */
@@ -138,6 +141,7 @@ export interface TaskState {
   review_gate_result: ReviewGateResult | null;
   pending_approval: PendingApproval | null;
   committed_sha?: string | null;
+  pull_request_url?: string | null;
 }
 
 export interface RepoStats {

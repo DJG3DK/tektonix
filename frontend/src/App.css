@@ -118,3 +118,36 @@ body {
     color: var(--text);
   }
 }
+
+/* A task that shipped as a pull request. The link is the outcome, not a
+   detail: nothing merged, and somebody has to go and look. Styled as a
+   result rather than as a warning, because it is the success case. */
+.task-pr {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--s2, 0.5rem);
+  margin: var(--s4, 1rem) 0;
+  padding: var(--s3, 0.75rem) var(--s4, 1rem);
+  border: 1px solid var(--border, #2a2a35);
+  border-left: 3px solid var(--accent, #f5b301);
+  border-radius: var(--radius, 8px);
+  background: var(--surface, #16161d);
+}
+
+.task-pr-label {
+  font-weight: 620;
+  color: var(--text, #e8e8ef);
+}
+
+.task-pr-link {
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  color: var(--accent, #f5b301);
+  word-break: break-all;
+}
+
+.task-pr-note {
+  flex-basis: 100%;
+  color: var(--text-dim, #9a9aa8);
+  font-size: 0.9em;
+}

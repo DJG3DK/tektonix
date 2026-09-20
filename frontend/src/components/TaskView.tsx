@@ -167,6 +167,25 @@ export function TaskView({ task, stream, setGeneration }: Props) {
               onDecided={() => setGeneration((g) => g + 1)}
             />
           )}
+          {/* A project that ships as a pull request finishes with the work
+              waiting for a person. The link is the whole outcome, so it sits
+              above the resume panel rather than in the step log. */}
+          {task.pull_request_url && (
+            <div className="task-pr">
+              <span className="task-pr-label">Opened a pull request</span>
+              <a
+                className="task-pr-link"
+                href={task.pull_request_url}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                {task.pull_request_url.replace(/^https:\/\/github\.com\//, "")}
+              </a>
+              <span className="task-pr-note">
+                Nothing was merged &mdash; review and merge it on GitHub.
+              </span>
+            </div>
+          )}
           {(status === "escalated" || status === "stopped" || status === "done" || stream.orphaned) && (
             <ResumePanel
               taskId={task.task_id}
