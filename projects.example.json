@@ -3,7 +3,8 @@
     "web-app": {
       "sandbox": "/srv/sandboxes/web-app",
       "live": "/srv/live/web-app",
-      "ship": "push"
+      "ship": "push",
+      "base_branch": "main"
     },
     "large-project": {
       "sandbox": "/srv/sandboxes/large-project",
@@ -59,12 +60,14 @@
           }
         ]
       },
-      "ship": "push"
+      "ship": "push",
+      "base_branch": "main"
     },
     "worker": {
       "sandbox": "/srv/sandboxes/worker",
       "live": "/srv/live/worker",
-      "ship": "push"
+      "ship": "push",
+      "base_branch": "main"
     }
   },
   "test_env": {
