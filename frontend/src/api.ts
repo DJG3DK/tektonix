@@ -874,16 +874,34 @@ export interface RemoveProjectResult {
   name: string;
   steps: ProvisionStep[];
   archive: string | null;
-  live_untouched: string;
+  /** The checkout that was left alone. Null when it was deleted instead. */
+  live_untouched: string | null;
+  /** The checkout that was deleted. Null when it was left where it was. */
+  live_removed: string | null;
+}
+
+/** Whether the live checkout could be deleted along with the project, and the
+ *  reason either way. The reason is shown to the operator verbatim: "you may
+ *  not delete this" is only useful with the because. */
+export interface CheckoutRemovable {
+  live: string;
+  removable: boolean;
+  reason: string;
+}
+
+export async function checkoutRemovable(name: string): Promise<CheckoutRemovable> {
+  const res = await apiFetch(`${API_BASE}/projects/${encodeURIComponent(name)}/checkout`);
+  if (!res.ok) throw new Error(await errText(res));
+  return res.json();
 }
 
 export async function removeProject(
-  name: string, memory: "archive" | "delete",
+  name: string, memory: "archive" | "delete", files: "keep" | "delete" = "keep",
 ): Promise<RemoveProjectResult> {
   const res = await apiFetch(`${API_BASE}/projects/${encodeURIComponent(name)}`, {
     method: "DELETE",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ memory }),
+    body: JSON.stringify({ memory, files }),
   }, 120_000);
   if (!res.ok) throw new Error(await errText(res));
   return res.json();

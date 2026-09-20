@@ -11,6 +11,7 @@ import {
   type ProjectArchive,
   type ProvisionCandidate,
   type ProvisionStep,
+  type RemoveProjectResult,
 } from "../api";
 import { RemoveProject } from "./RemoveProject";
 import { DeployKeyCard } from "./DeployKeyCard";
@@ -92,6 +93,13 @@ export function ProjectsPanel({ onChanged }: { onChanged?: () => void | Promise<
   const [doneMsg, setDoneMsg] = useState<string | null>(null);
   // Which configured project has its push-access panel open.
   const [expanded, setExpanded] = useState<string | null>(null);
+  /* Which project's removal panel is open. Held here because the Remove
+     button that opens it lives on the row, outside that panel. */
+  const [removing, setRemoving] = useState<string | null>(null);
+  /* What the last removal did. Rendered here rather than in RemoveProject:
+     the project leaves the list the moment it is removed, taking that panel
+     with it, so a summary inside it is unmounted before anybody reads it. */
+  const [removed, setRemoved] = useState<RemoveProjectResult | null>(null);
 
   // Per-candidate operator choices, keyed by list then value. Seeded from the
   // report's recommendation on first render of the review step.
@@ -217,30 +225,65 @@ export function ProjectsPanel({ onChanged }: { onChanged?: () => void | Promise<
             </div>
           </div>
 
+          {removed && (
+            <div className="wiz-removed" role="status">
+              <p>
+                <strong>{removed.name}</strong> is no longer configured.
+                {removed.archive
+                  ? <> Its memory is archived as <code>{removed.archive}</code>.</>
+                  : <> Its memory was deleted.</>}
+                {removed.live_removed
+                  ? <> <code>{removed.live_removed}</code> was deleted; everything in it was on its remote.</>
+                  : <> <code>{removed.live_untouched}</code> was not touched — no files, no branches, no remote.</>}
+              </p>
+              <StepList steps={removed.steps} />
+              <button type="button" className="wiz-btn" onClick={() => setRemoved(null)}>Dismiss</button>
+            </div>
+          )}
+
           <ul className="wiz-existing">
             {Object.entries(existing).map(([name, cfg]) => (
               <li key={name} className="wiz-existing-item">
-                <button
-                  type="button"
-                  className="wiz-existing-row"
-                  onClick={() => setExpanded(expanded === name ? null : name)}
-                >
-                  <Icon name={expanded === name ? "chevronDown" : "chevronRight"} />
-                  <strong>{name}</strong>
-                  <code>{cfg.live}</code>
-                </button>
+                {/* Remove sits on the row, not inside it. It used to be
+                    reachable only by expanding the project first, with
+                    nothing on the row saying it was in there -- so the only
+                    way anyone found it was by already knowing. */}
+                <div className="wiz-existing-head">
+                  <button
+                    type="button"
+                    className="wiz-existing-row"
+                    aria-expanded={expanded === name}
+                    onClick={() => setExpanded(expanded === name ? null : name)}
+                  >
+                    <Icon name={expanded === name ? "chevronDown" : "chevronRight"} />
+                    <strong>{name}</strong>
+                    <code>{cfg.live}</code>
+                  </button>
+                  <button
+                    type="button"
+                    className="wiz-existing-remove"
+                    aria-label={`Remove ${name} from Tektonix`}
+                    onClick={() => { setExpanded(name); setRemoving(name); }}
+                  >
+                    Remove
+                  </button>
+                </div>
                 {expanded === name && (
                   <>
                     <DeployKeyCard project={name} />
                     <RemoveProject
                       name={name}
                       live={cfg.live}
-                      onRemoved={async () => {
+                      open={removing === name}
+                      onOpenChange={(v) => setRemoving(v ? name : null)}
+                      onRemoved={async (res) => {
+                        setRemoved(res);
                         // Both: this panel's own table, and App's repo list,
                         // which feeds the planner and task composer dropdowns.
                         // Refreshing only the first leaves a removed project
                         // selectable everywhere else until a page reload.
                         setExpanded(null);
+                        setRemoving(null);
                         await load();
                         await loadArchives();
                         await onChanged?.();

@@ -161,6 +161,7 @@ EXPECTED: list[tuple[str, str, str | None]] = [
     ('GET', '/api/planning/sessions/{session_id}', 'require_full_auth'),
     ('GET', '/api/projects', 'require_full_auth'),
     ('GET', '/api/projects/archives', 'require_full_auth'),
+    ('GET', '/api/projects/{name}/checkout', 'require_full_auth'),
     ('GET', '/api/projects/{name}/deploy-key', 'require_full_auth'),
     ('GET', '/api/push/key', 'require_full_auth'),
     ('GET', '/api/repos', 'require_full_auth'),

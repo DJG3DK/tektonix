@@ -1110,10 +1110,13 @@ async def _github_poll_loop(startup_delay: float = 20.0) -> None:
 
 
 class RemoveProjectRequest(BaseModel):
-    # What to do with everything the agent LEARNED about this project. The
-    # project's own repository is never in scope either way -- see
-    # agent/project_removal.py's docstring for why that is the whole design.
+    # What to do with everything the agent LEARNED about this project.
     memory: Literal["archive", "delete"] = "archive"
+    # And what to do with the checkout. `keep` is the default and the rule the
+    # removal module is built around; `delete` is for a repository Tektonix
+    # cloned by itself and the operator never wanted, and is refused unless
+    # the server can show that nothing would be lost by it.
+    files: Literal["keep", "delete"] = "keep"
 
 
 class UpdateThemeRequest(BaseModel):
@@ -4223,6 +4226,37 @@ async def delete_project_archive(filename: str, user: User = Depends(require_ful
     return {"ok": True}
 
 
+def _checkout_verdict(name: str) -> dict:
+    """Whether `name`'s checkout could be deleted along with the project.
+
+    Split out so the answer the operator is shown and the answer the deletion
+    acts on come from one place; the deletion asks again at the moment it
+    would delete, because a working tree can change between the two.
+    """
+    from agent import project_removal  # noqa: PLC0415
+
+    entry = PROJECTS.get(name) or {}
+    live = entry.get("live", "")
+    secrets = (entry.get("review") or {}).get("secretFiles") or []
+    runs = project_removal.runs_on_this_box(entry)
+    removable, reason = project_removal.checkout_disposable(live, secrets, runs)
+    return {"live": live, "removable": removable, "reason": reason}
+
+
+@app.get("/api/projects/{name}/checkout")
+async def project_checkout_endpoint(name: str, user: User = Depends(require_full_auth)):
+    """What deleting this project's checkout would cost, before anyone picks.
+
+    Asked for when the removal panel opens rather than with the project list:
+    it is several git commands per project, and nobody needs the answer until
+    they are standing in front of the choice.
+    """
+    auth.require_admin(user)
+    if name not in PROJECTS:
+        raise HTTPException(404, f"no project named {name!r}")
+    return await asyncio.to_thread(_checkout_verdict, name)
+
+
 @app.delete("/api/projects/{name}")
 async def remove_project_endpoint(name: str, req: RemoveProjectRequest,
                                   user: User = Depends(require_full_auth)):
@@ -4254,6 +4288,18 @@ async def remove_project_endpoint(name: str, req: RemoveProjectRequest,
             "or removing it would pull the workspace out from under the agent mid-edit"))
 
     live, sandbox = entry.get("live", ""), entry.get("sandbox", "")
+    secret_files = (entry.get("review") or {}).get("secretFiles") or []
+    runs_here = project_removal.runs_on_this_box(entry)
+
+    # Checked here, before a single destructive step: a refusal after the
+    # memory is archived and the worktree is gone is a half-removed project
+    # and an operator with no idea which half.
+    if req.files == "delete":
+        ok, reason = await asyncio.to_thread(
+            project_removal.checkout_disposable, live, secret_files, runs_here)
+        if not ok:
+            raise HTTPException(409, f"{live} cannot be deleted: {reason}")
+
     steps: list[dict] = []
     archived: str | None = None
 
@@ -4305,12 +4351,20 @@ async def remove_project_endpoint(name: str, req: RemoveProjectRequest,
     steps.append({"step": "config", "ok": True,
                   "detail": f"{name} removed; the review services drop it on their next poll"})
 
+    # Last, because everything above is recoverable and this is not.
+    deleted = False
+    if req.files == "delete":
+        deleted, detail = await asyncio.to_thread(
+            project_removal.delete_checkout, live, secret_files, runs_here)
+        steps.append({"step": "checkout", "ok": deleted, "detail": detail})
+
     await audit.record(_audit_store(), actor=user.email, action="project.remove",
-                       target=name, detail=f"memory {req.memory}",
-                       extra={"archive": archived})
+                       target=name, detail=f"memory {req.memory}, files {req.files}",
+                       extra={"archive": archived, "checkout_deleted": deleted})
 
     return {"ok": True, "name": name, "steps": steps, "archive": archived,
-            "live_untouched": live}
+            "live_untouched": None if deleted else live,
+            "live_removed": live if deleted else None}
 
 
 @app.get("/api/projects")

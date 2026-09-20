@@ -67,6 +67,13 @@
   line-height: 1.45;
 }
 
+/* A disabled choice still has to read as a sentence explaining itself --
+   that "why not" is the useful half of refusing it. */
+.rmproj-choice label:has(input:disabled) { cursor: default; opacity: 0.72; }
+.rmproj-choice label:has(input:disabled) strong { color: var(--text-dim); }
+.rmproj-choice legend code { font-family: var(--font-mono); font-size: var(--fs-xs, 11px); }
+.rmproj-checking { margin: 0; padding: var(--s2); font-size: var(--fs-sm); color: var(--text-faint); }
+
 .rmproj-type { display: flex; flex-direction: column; gap: 6px; font-size: var(--fs-sm); color: var(--text-dim); }
 .rmproj-type code { color: var(--text); }
 .rmproj-type .wiz-input { max-width: 320px; }

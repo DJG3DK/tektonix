@@ -1,6 +1,5 @@
-import { useState } from "react";
-import { removeProject, type RemoveProjectResult } from "../api";
-import { StepList } from "./StepList";
+import { useEffect, useState } from "react";
+import { removeProject, checkoutRemovable, type RemoveProjectResult, type CheckoutRemovable } from "../api";
 import "./RemoveProject.css";
 
 /* Taking a project off the agent.
@@ -12,37 +11,62 @@ import "./RemoveProject.css";
  *
  * The panel leads with what is NOT affected, because that is the question
  * anyone hovering over a red button in a list of their repositories is
- * actually asking. The live repo, its branches and its remote are untouched;
- * the agent forgets the project, that is all.
+ * actually asking. The live repo, its branches and its remote are untouched
+ * unless the operator explicitly asks for them to go, which is only offered
+ * when the server can show that nothing would be lost by it.
+ *
+ * Open/closed is the parent's state: the button that opens this sits on the
+ * project row, above the panel, so the panel cannot own it. The OUTCOME goes
+ * to the parent for the same reason: a removed project leaves the list, this
+ * panel goes with it, and a summary rendered in here would be unmounted
+ * before anybody read it.
  */
-export function RemoveProject({ name, live, onRemoved }: {
+export function RemoveProject({ name, live, open, onOpenChange, onRemoved }: {
   name: string;
   live: string;
-  onRemoved: () => void | Promise<void>;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onRemoved: (result: RemoveProjectResult) => void | Promise<void>;
 }) {
-  const [open, setOpen] = useState(false);
   const [memory, setMemory] = useState<"archive" | "delete">("archive");
+  const [files, setFiles] = useState<"keep" | "delete">("keep");
+  /* Whether the checkout could be deleted, and why not when it could not.
+     Asked for when the panel opens rather than with the project list: it is
+     several git commands per project and nobody needs the answer until they
+     are standing in front of the choice. */
+  const [checkout, setCheckout] = useState<CheckoutRemovable | null>(null);
   const [typed, setTyped] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [result, setResult] = useState<RemoveProjectResult | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    setCheckout(null);
+    let cancelled = false;
+    checkoutRemovable(name)
+      .then((r) => !cancelled && setCheckout(r))
+      .catch(() => !cancelled && setCheckout({
+        live, removable: false, reason: "could not check what is in the checkout",
+      }));
+    return () => { cancelled = true; };
+  }, [open, name, live]);
 
   function reset() {
-    setOpen(false);
+    onOpenChange(false);
     setTyped("");
     setError(null);
     setMemory("archive");
+    setFiles("keep");
   }
 
   async function go() {
     setBusy(true);
     setError(null);
     try {
-      const res = await removeProject(name, memory);
-      setResult(res);
-      setOpen(false);
+      const res = await removeProject(name, memory, files);
+      onOpenChange(false);
       setTyped("");
-      await onRemoved();
+      await onRemoved(res);
     } catch (e) {
       setError(e instanceof Error ? e.message : "could not remove the project");
     } finally {
@@ -50,28 +74,10 @@ export function RemoveProject({ name, live, onRemoved }: {
     }
   }
 
-  if (result) {
-    return (
-      <div className="rmproj-done">
-        <p className="rmproj-done-head">
-          <strong>{result.name}</strong> is no longer configured.
-          {result.archive
-            ? <> Its memory is archived as <code>{result.archive}</code>.</>
-            : <> Its memory was deleted.</>}
-        </p>
-        <StepList steps={result.steps} />
-        <p className="rmproj-note">
-          <code>{result.live_untouched}</code> was not touched — the repository, its branches
-          and its remote are exactly as they were.
-        </p>
-      </div>
-    );
-  }
-
   if (!open) {
     return (
       <div className="rmproj">
-        <button type="button" className="rmproj-open" onClick={() => setOpen(true)}>
+        <button type="button" className="rmproj-open" onClick={() => onOpenChange(true)}>
           Remove from Tektonix
         </button>
         <span className="rmproj-hint">The repository itself is not affected.</span>
@@ -83,8 +89,10 @@ export function RemoveProject({ name, live, onRemoved }: {
     <div className="rmproj-confirm">
       <p className="rmproj-lead">
         Tektonix will stop watching <strong>{name}</strong>: its workspace, its deploy key and its
-        configuration go away. <code>{live}</code> is <strong>not</strong> touched — no files, no
-        branches, no remote.
+        configuration go away.
+        {files === "keep"
+          ? <> <code>{live}</code> is <strong>not</strong> touched — no files, no branches, no remote.</>
+          : <> <code>{live}</code> will be <strong>deleted</strong> from this machine.</>}
       </p>
 
       <fieldset className="rmproj-choice">
@@ -119,6 +127,50 @@ export function RemoveProject({ name, live, onRemoved }: {
         </label>
       </fieldset>
 
+      {/* Offered only when the server can show that nothing would be lost:
+          every commit on a remote, nothing uncommitted or stashed, no
+          declared secret file in the directory, and nothing this box runs
+          out of it. Anything else and the reason is shown instead of the
+          choice -- a refusal is only useful with the because. */}
+      <fieldset className="rmproj-choice">
+        <legend>The checkout at <code>{live}</code></legend>
+        {checkout === null ? (
+          <p className="rmproj-checking">Checking what is in it…</p>
+        ) : (
+          <>
+            <label className={files === "keep" ? "is-chosen" : ""}>
+              <input
+                type="radio"
+                name={`files-${name}`}
+                checked={files === "keep"}
+                onChange={() => setFiles("keep")}
+              />
+              <span>
+                <strong>Leave it where it is</strong>
+                <em>The directory, its branches and its remote stay exactly as they are.</em>
+              </span>
+            </label>
+            <label className={files === "delete" ? "is-chosen" : ""}>
+              <input
+                type="radio"
+                name={`files-${name}`}
+                checked={files === "delete"}
+                disabled={!checkout.removable}
+                onChange={() => setFiles("delete")}
+              />
+              <span>
+                <strong>Delete it from this machine</strong>
+                <em>
+                  {checkout.removable
+                    ? `For a repository Tektonix cloned and you no longer want here. ${checkout.reason}.`
+                    : `Not offered: ${checkout.reason}.`}
+                </em>
+              </span>
+            </label>
+          </>
+        )}
+      </fieldset>
+
       <label className="rmproj-type">
         <span>Type <code>{name}</code> to confirm</span>
         <input
@@ -138,7 +190,9 @@ export function RemoveProject({ name, live, onRemoved }: {
           disabled={typed !== name || busy}
           onClick={() => void go()}
         >
-          {busy ? "Removing…" : memory === "archive" ? "Remove and archive" : "Remove and delete"}
+          {busy ? "Removing…"
+            : files === "delete" ? "Remove and delete the checkout"
+            : memory === "archive" ? "Remove and archive" : "Remove and delete"}
         </button>
         <button type="button" className="wiz-btn" disabled={busy} onClick={reset}>
           Cancel

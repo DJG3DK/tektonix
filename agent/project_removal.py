@@ -278,3 +278,171 @@ def remove_project_entry(projects_path: Path, repo: str) -> bool:
     tmp.write_text(json.dumps(data, indent=2) + "\n")
     os.replace(tmp, projects_path)
     return True
+
+
+# ---------------------------------------------------------------------------
+# the checkout itself
+# ---------------------------------------------------------------------------
+#
+# Everything above leaves the live repository alone, and that is still the
+# default and still the promise. This section is the one case where it is not
+# what the operator wants: a repository Tektonix cloned by itself minutes ago,
+# usually because a stale list offered to add something that was already
+# there. Removing the project then leaves 16MB of clone behind and a shell is
+# the only way to finish the job -- which is a manual step inside a flow the
+# dashboard otherwise owns end to end.
+#
+# So deleting the checkout is offered, never assumed, and only when it can be
+# shown that nothing would be lost: every commit is on a remote, there is
+# nothing uncommitted, nothing stashed, and none of the secret files this
+# project declared are sitting in it. Anything short of that is a refusal
+# naming what is in the way, because the one mistake with no undo here is
+# deleting a repository somebody still needed.
+
+
+def _git(live: str, args: list[str]) -> tuple[bool, str]:
+    try:
+        r = subprocess.run(["git", *args], cwd=live,  # noqa: S603,S607
+                           capture_output=True, text=True, timeout=60, check=False)
+    except (OSError, subprocess.SubprocessError) as e:
+        return False, str(e)
+    return r.returncode == 0, (r.stdout or "").strip()
+
+
+def runs_on_this_box(entry: dict[str, Any] | None) -> str | None:
+    """What this machine runs out of the project's checkout, if anything.
+
+    Read from the project's own deploy config, which is the only place that
+    knows. A checkout with a pm2 app or a restart command behind it is
+    serving something right now: every commit in it can be on the remote and
+    deleting the directory still takes a site down. "Nothing would be lost"
+    and "nothing would break" are different questions, and this is the
+    second one.
+    """
+    deploy = ((entry or {}).get("deploy") or {})
+    apps = [a for a in (deploy.get("pm2Apps") or []) if a]
+    if apps:
+        return f"pm2 runs {', '.join(str(a) for a in apps)} from it"
+    if deploy.get("restart"):
+        return "this box restarts it after a merge"
+    return None
+
+
+def _pm2_serves(live: str) -> tuple[bool, str]:
+    """Whether pm2 runs anything out of `live`. Returns (clear, reason).
+
+    Asked of pm2 rather than of the project's config because the config is
+    not where the answer lives: the projects this box has always served keep
+    their pm2 apps in the review service's own JavaScript config, which the
+    Python side never reads. Going by projects.json alone reported "nothing
+    runs this" for exactly the checkouts whose deletion would take a site
+    down.
+
+    pm2 not being installed is a clear answer -- nothing here is run by it.
+    pm2 being installed and unanswerable is not, and an unanswerable question
+    before an irreversible delete is a no.
+    """
+    root = os.path.realpath(live)
+    try:
+        r = subprocess.run(["pm2", "jlist"],  # noqa: S603,S607
+                           capture_output=True, text=True, timeout=30, check=False)
+    except FileNotFoundError:
+        return True, ""
+    except (OSError, subprocess.SubprocessError) as e:
+        return False, f"pm2 could not be asked what runs from it ({type(e).__name__})"
+    if r.returncode != 0:
+        return False, "pm2 could not be asked what runs from it"
+    try:
+        apps = json.loads(r.stdout or "[]")
+    except ValueError:
+        return False, "pm2's reply could not be read"
+
+    for app in apps if isinstance(apps, list) else []:
+        env = app.get("pm2_env") or {}
+        for key in ("pm_cwd", "pm_exec_path"):
+            where = env.get(key) or ""
+            if not where:
+                continue
+            real = os.path.realpath(where)
+            if real == root or real.startswith(root + os.sep):
+                name = app.get("name") or "something"
+                return False, f"pm2 runs {name} from it"
+    return True, ""
+
+
+def checkout_disposable(live: str, secret_files: list[str] | None = None,
+                        runs_here: str | None = None) -> tuple[bool, str]:
+    """Whether deleting `live` would lose anything that is not also elsewhere.
+
+    Returns (ok, reason); the reason is a sentence for the operator either
+    way, because "you may not delete this" is only useful with the "because".
+
+    The questions, in the order that makes a refusal most informative: does
+    this machine run anything out of it, is it a git checkout at all, does it
+    have a remote, is the tree clean, is anything stashed, is every commit on
+    a local branch also on a remote, and is any file the project declared
+    secret sitting in it. That last one is the gitignored `.env` case --
+    `git status` will not mention it, and it is exactly the file whose loss is
+    unrecoverable.
+    """
+    if runs_here:
+        return False, f"{runs_here}, so deleting it would take that down"
+    if not live or not os.path.isdir(live):
+        return False, f"there is no directory at {live}"
+    if not os.path.exists(os.path.join(live, ".git")):
+        return False, "it is not a git checkout, so nothing in it is anywhere else"
+
+    ok, remotes = _git(live, ["remote"])
+    if not ok or not remotes:
+        return False, "it has no git remote, so this checkout is the only copy"
+
+    ok, dirty = _git(live, ["status", "--porcelain"])
+    if not ok:
+        return False, "git could not read its status, so it is not safe to assume anything"
+    if dirty:
+        n = len(dirty.splitlines())
+        return False, f"it has {n} uncommitted change{'' if n == 1 else 's'}"
+
+    _, stashed = _git(live, ["stash", "list"])
+    if stashed:
+        n = len(stashed.splitlines())
+        return False, f"it has {n} stash{'' if n == 1 else 'es'}"
+
+    # Commits reachable from a local branch and from no remote branch. A task
+    # branch that was merged and never pushed as a branch does NOT show up
+    # here -- its commits are in the branch that was pushed -- so this catches
+    # real unpublished work rather than the agent's own bookkeeping.
+    ok, unpushed = _git(live, ["log", "--branches", "--not", "--remotes", "--oneline"])
+    if ok and unpushed:
+        n = len(unpushed.splitlines())
+        return False, f"it has {n} commit{'' if n == 1 else 's'} that are not on any remote"
+
+    for rel in secret_files or []:
+        if os.path.exists(os.path.join(live, rel)):
+            return False, f"it holds {rel}, which git does not carry"
+
+    # Last, because it costs a subprocess and every refusal above is cheaper.
+    clear, why = _pm2_serves(live)
+    if not clear:
+        return False, f"{why}, so deleting it would take that down"
+
+    return True, f"every commit is on a remote and nothing is uncommitted in {live}"
+
+
+def delete_checkout(live: str, secret_files: list[str] | None = None,
+                    runs_here: str | None = None) -> tuple[bool, str]:
+    """Delete the live checkout, after checking again that it is safe to.
+
+    The check runs here as well as wherever the operator was shown it: the
+    answer is read off a working tree that anything could have written to in
+    between, and this is the call that cannot be undone.
+    """
+    ok, reason = checkout_disposable(live, secret_files, runs_here)
+    if not ok:
+        return False, f"left {live} alone -- {reason}"
+    try:
+        shutil.rmtree(live)
+    except OSError as e:
+        return False, f"could not delete {live}: {e}"
+    logger.info("removed checkout %s", live)
+    return True, f"deleted {live}"

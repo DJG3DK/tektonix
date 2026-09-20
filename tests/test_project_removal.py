@@ -347,3 +347,105 @@ def test_a_failed_archive_removes_nothing(wired, monkeypatch, store):
     assert "demo" in agent_config.PROJECTS
     assert wired["sandbox"].is_dir()
     assert store.data[("demo",)], "memory was purged after the archive failed"
+
+
+# ---------------------------------------------------------------------------
+# deleting the checkout too
+# ---------------------------------------------------------------------------
+#
+# The default above is still "the repository is never touched". This is the
+# opt-in for the one case where that leaves the operator in a shell: a
+# repository Tektonix cloned by itself and nobody wanted.
+
+def _no_pm2(monkeypatch) -> None:
+    """Answer the "what does this box run from it" probe without depending on
+    whether the machine running the tests happens to have pm2, or a daemon."""
+    real_run = subprocess.run
+
+    def fake_run(cmd, *a, **kw):
+        if cmd and cmd[0] == "pm2":
+            raise FileNotFoundError("pm2")
+        return real_run(cmd, *a, **kw)
+
+    monkeypatch.setattr(pr.subprocess, "run", fake_run)
+
+
+def _publish(live: Path, tmp_path: Path) -> Path:
+    """Give `live` a remote that has every one of its commits."""
+    origin = tmp_path / "origin.git"
+    subprocess.run(["git", "init", "-q", "--bare", "--initial-branch=main", str(origin)],
+                   check=True)
+    subprocess.run(["git", "remote", "add", "origin", str(origin)], cwd=live, check=True)
+    subprocess.run(["git", "push", "-q", "-u", "origin", "main"], cwd=live, check=True)
+    return origin
+
+
+def test_the_checkout_route_reports_why_it_cannot_go(wired):
+    """A refusal is only useful with the because, so the panel is told it
+    before the operator picks rather than after they type the name."""
+    res = TestClient(srv.app).get("/api/projects/demo/checkout")
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["live"] == str(wired["live"])
+    assert body["removable"] is False
+    assert "only copy" in body["reason"], "this repo has no remote"
+
+
+def test_the_checkout_route_says_yes_for_a_fully_pushed_clone(wired, tmp_path, monkeypatch):
+    _no_pm2(monkeypatch)
+    _publish(wired["live"], tmp_path)
+    body = TestClient(srv.app).get("/api/projects/demo/checkout").json()
+    assert body["removable"] is True
+
+
+def test_the_checkout_route_is_admin_only(wired, monkeypatch):
+    monkeypatch.setitem(srv.app.dependency_overrides, srv.require_full_auth, lambda: _USER)
+    assert TestClient(srv.app).get("/api/projects/demo/checkout").status_code == 403
+
+
+def test_deleting_a_checkout_that_is_the_only_copy_is_refused_before_anything_happens(wired):
+    """And nothing else is removed either: a refusal that landed after the
+    memory was archived and the workspace was gone would be a half-removed
+    project and an operator with no idea which half."""
+    res = TestClient(srv.app).request(
+        "DELETE", "/api/projects/demo", json={"memory": "archive", "files": "delete"})
+    assert res.status_code == 409
+    assert "only copy" in res.json()["detail"]
+    assert wired["live"].is_dir()
+    assert wired["sandbox"].is_dir(), "the workspace went despite the refusal"
+    assert "demo" in agent_config.PROJECTS
+
+
+def test_a_fully_pushed_checkout_is_deleted_when_asked(wired, tmp_path, archives, store, monkeypatch):
+    _no_pm2(monkeypatch)
+    _publish(wired["live"], tmp_path)
+    res = TestClient(srv.app).request(
+        "DELETE", "/api/projects/demo", json={"memory": "archive", "files": "delete"})
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert not wired["live"].exists(), "the checkout is still there"
+    assert body["live_removed"] == str(wired["live"])
+    assert body["live_untouched"] is None
+    step = {s["step"]: s for s in body["steps"]}["checkout"]
+    assert step["ok"] and "deleted" in step["detail"]
+
+
+def test_the_default_still_leaves_the_checkout_alone(wired, tmp_path, archives, store):
+    """`files` is opt-in. A client that does not send it -- which is every
+    client written before this existed -- must keep the old promise."""
+    _publish(wired["live"], tmp_path)
+    res = TestClient(srv.app).request("DELETE", "/api/projects/demo", json={"memory": "archive"})
+    assert res.status_code == 200, res.text
+    assert wired["live"].is_dir()
+    assert res.json()["live_untouched"] == str(wired["live"])
+    assert res.json()["live_removed"] is None
+
+
+def test_a_checkout_this_box_serves_is_refused_even_when_fully_pushed(wired, tmp_path, monkeypatch):
+    _publish(wired["live"], tmp_path)
+    srv.PROJECTS["demo"]["deploy"] = {"pm2Apps": ["demo-api"]}
+    res = TestClient(srv.app).request(
+        "DELETE", "/api/projects/demo", json={"memory": "archive", "files": "delete"})
+    assert res.status_code == 409
+    assert "demo-api" in res.json()["detail"]
+    assert wired["live"].is_dir()

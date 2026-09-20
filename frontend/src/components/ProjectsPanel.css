@@ -146,8 +146,32 @@
   .wiz-input { min-width: 0; }
 }
 
-/* Configured projects expand to reveal per-project push access. */
+/* Configured projects expand to reveal per-project push access. Remove is on
+   the row rather than inside it: hidden behind the disclosure, the only way
+   anyone found it was by already knowing it was there. */
 .wiz-existing-item { display: block; }
+.wiz-existing-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.wiz-existing-head .wiz-existing-row { flex: 1; min-width: 0; }
+.wiz-existing-head code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wiz-existing-remove {
+  flex-shrink: 0;
+  background: none;
+  border: 1px solid var(--border, #3a3a3a);
+  border-radius: 5px;
+  padding: 2px 9px;
+  font: inherit;
+  font-size: 11.5px;
+  color: var(--text-faint);
+  cursor: pointer;
+}
+.wiz-existing-remove:hover {
+  color: var(--danger, #e5484d);
+  border-color: var(--danger, #e5484d);
+}
 .wiz-existing-row {
   display: flex;
   align-items: baseline;
@@ -163,6 +187,23 @@
 }
 .wiz-existing-row:hover { color: var(--text); }
 .wiz-existing-row svg { flex-shrink: 0; width: 13px; height: 13px; align-self: center; }
+
+/* What the last removal did. Lives above the list because the project it
+   describes is gone from the list by the time this renders. */
+.wiz-removed {
+  margin: 12px 0;
+  padding: var(--s3);
+  border: 1px solid var(--border, #3a3a3a);
+  border-radius: var(--radius-sm, 6px);
+  background: var(--surface-raised, rgba(255, 255, 255, 0.03));
+  font-size: 12.5px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  align-items: flex-start;
+}
+.wiz-removed p { margin: 0; line-height: 1.5; }
+.wiz-removed code { font-family: var(--font-mono); font-size: 11.5px; }
 
 /* ── archived memory from removed projects ──────────────────────────────── */
 .wiz-archives {
