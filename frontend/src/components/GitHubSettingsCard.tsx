@@ -1,9 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import {
-  getGitHubSettings, pollGitHubNow, saveGitHubSettings, testGitHubToken,
-  type GitHubMode, type GitHubProjectSettings, type GitHubSettings, type GitHubSettingsPatch,
-  type GitHubSettingsResponse, type GitHubSource, type GitHubTokenProbe,
-} from "../api";
+import { getGitHubSettings, listGitHubRepos, onboardFromGitHub, pollGitHubNow, saveGitHubSettings, testGitHubToken, type GitHubMode, type GitHubProjectSettings, type GitHubSettings, type GitHubSettingsPatch, type GitHubSettingsResponse, type GitHubSource, type GitHubRepo, type GitHubTokenProbe } from "../api";
 import { useSettingsSave } from "./SettingsSaveBar";
 import "./GitHubSettingsCard.css";
 
@@ -67,6 +63,11 @@ export function GitHubSettingsCard() {
   const [newName, setNewName] = useState("");
   const [newToken, setNewToken] = useState("");
   const [probe, setProbe] = useState<{ name: string; result: GitHubTokenProbe | null; error: string | null; busy: boolean } | null>(null);
+  /* What a token can actually reach. Asked for by name, answered by GitHub,
+     so it reflects the grant rather than anything stored here. */
+  const [repoList, setRepoList] = useState<{ name: string; repos: GitHubRepo[]; error: string | null; busy: boolean } | null>(null);
+  const [adding, setAdding] = useState<string | null>(null);
+  const [addMsg, setAddMsg] = useState<string | null>(null);
   const [pollMsg, setPollMsg] = useState<string | null>(null);
   const [polling, setPolling] = useState(false);
 
@@ -138,6 +139,32 @@ export function GitHubSettingsCard() {
     setRemoved((r) => r.filter((n) => n !== name));
     setNewName("");
     setNewToken("");
+  }
+
+  async function showRepos(name: string) {
+    setRepoList({ name, repos: [], error: null, busy: true });
+    setAddMsg(null);
+    try {
+      const arg = pendingTokens[name] ? { token: pendingTokens[name] } : { name };
+      const res = await listGitHubRepos(arg);
+      setRepoList({ name, repos: res.repos, error: null, busy: false });
+    } catch (e) {
+      setRepoList({ name, repos: [], error: e instanceof Error ? e.message : "failed", busy: false });
+    }
+  }
+
+  async function addRepo(slug: string, tokenName: string, ship: "push" | "pr") {
+    setAdding(slug);
+    setAddMsg(null);
+    try {
+      const res = await onboardFromGitHub({ slug, token_name: tokenName, ship });
+      setAddMsg(`Added ${res.name} — ${ship === "pr" ? "opens pull requests" : "merges and deploys"}.`);
+      await showRepos(tokenName);   // re-read, so it moves to "already added"
+    } catch (e) {
+      setAddMsg(e instanceof Error ? e.message : "could not add it");
+    } finally {
+      setAdding(null);
+    }
   }
 
   async function runTest(name: string) {
@@ -248,6 +275,14 @@ export function GitHubSettingsCard() {
               <button type="button" className="gh-btn" disabled={probe?.busy} onClick={() => runTest(name)}>
                 {probe?.name === name && probe.busy ? "Testing…" : "Test"}
               </button>
+              <button
+                type="button"
+                className="gh-btn"
+                disabled={pending || repoList?.busy}
+                onClick={() => void showRepos(name)}
+              >
+                {repoList?.name === name && repoList.busy ? "Listing…" : "Repositories"}
+              </button>
               <button type="button" className="gh-btn gh-btn--danger" onClick={() => {
                 if (pending) setPendingTokens((p) => { const { [name]: _drop, ...rest } = p; return rest; });
                 else setRemoved((r) => [...r, name]);
@@ -276,6 +311,66 @@ export function GitHubSettingsCard() {
                 </span>
               ))}
               {probe.result?.warning && <span className="gh-probe-warn">{probe.result.warning}</span>}
+            </>
+          )}
+        </div>
+      )}
+      {repoList && !repoList.busy && (
+        <div className="gh-repos">
+          {repoList.error ? (
+            <p className="gh-probe gh-probe--bad">{repoList.name}: {repoList.error}</p>
+          ) : (
+            <>
+              <p className="settings-hint">
+                What <b>{repoList.name}</b> can reach, straight from GitHub. Change what a
+                token may see in GitHub and this list follows. Adding one clones it here and
+                onboards it.
+              </p>
+              {addMsg && <p className="gh-repos-msg">{addMsg}</p>}
+              <ul className="gh-repo-list">
+                {repoList.repos.map((r) => (
+                  <li key={r.slug} className={`gh-repo ${r.onboarded_as ? "is-onboarded" : ""}`}>
+                    <span className="gh-repo-slug">{r.slug}</span>
+                    <span className="gh-repo-meta">
+                      {r.private ? "private" : "public"}
+                      {r.archived ? " · archived" : ""}
+                      {r.push ? "" : " · read-only"}
+                      {r.default_branch !== "main" ? ` · ${r.default_branch}` : ""}
+                    </span>
+                    {r.onboarded_as ? (
+                      <span className="gh-repo-added">already added as {r.onboarded_as}</span>
+                    ) : (
+                      <span className="gh-repo-actions">
+                        {/* Two buttons rather than a default: how work lands is
+                            the operator's call, and burying it in a rule about
+                            where the project came from made it invisible. */}
+                        <button
+                          type="button"
+                          className="gh-btn"
+                          disabled={!r.push || adding !== null || r.archived}
+                          title={r.push ? "Opens a pull request; your base branch is never written"
+                                        : "This token cannot write to that repository"}
+                          onClick={() => void addRepo(r.slug, repoList.name, "pr")}
+                        >
+                          {adding === r.slug ? "Adding…" : "Add · pull requests"}
+                        </button>
+                        <button
+                          type="button"
+                          className="gh-btn"
+                          disabled={!r.push || adding !== null || r.archived}
+                          title="Merges into the base branch and deploys"
+                          onClick={() => void addRepo(r.slug, repoList.name, "push")}
+                        >
+                          Add · merge
+                        </button>
+                      </span>
+                    )}
+                  </li>
+                ))}
+                {repoList.repos.length === 0 && (
+                  <li className="settings-hint">This token reaches no repositories.</li>
+                )}
+              </ul>
             </>
           )}
         </div>

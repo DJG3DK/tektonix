@@ -917,6 +917,53 @@ export function looksLikeGitHubUrl(text: string): boolean {
     || /^(ssh:\/\/)?git@github\.com[:/][\w.-]+\/[\w.-]+(\.git)?\/?$/.test(t);
 }
 
+export interface GitHubRepo {
+  slug: string;
+  name: string;
+  owner: string;
+  private: boolean;
+  archived: boolean;
+  default_branch: string;
+  push: boolean;
+  pushed_at: string | null;
+  /** The project name it is already onboarded as, matched on the remote each
+   *  checkout actually has -- not on how it was added. */
+  onboarded_as: string | null;
+}
+
+/* Every repository a token can reach. The token carries its own grant, so
+   this goes stale when that changes in GitHub rather than when somebody
+   remembers to update a list here. */
+export async function listGitHubRepos(body: { name?: string; token?: string }): Promise<{
+  repos: GitHubRepo[];
+  onboarded: string[];
+}> {
+  const res = await apiFetch(`${API_BASE}/github/repos`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(await errText(res));
+  return res.json();
+}
+
+/* Clone and provision in one step, with the answers the wizard would have
+   pre-ticked. The long way round still exists for a project with unusual
+   checks. */
+export async function onboardFromGitHub(body: {
+  slug: string;
+  token_name?: string;
+  ship?: "push" | "pr";
+}): Promise<{ ok: boolean; name: string; path: string; ship: string; steps: ProvisionStep[] }> {
+  const res = await apiFetch(`${API_BASE}/projects/onboard-github`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(await errText(res));
+  return res.json();
+}
+
 /* Clones first, then detects, and says so in its name: /detect promises to
    create nothing and an operator pasting a URL is entitled to that promise. */
 export async function cloneProject(source: string): Promise<DetectionReport> {

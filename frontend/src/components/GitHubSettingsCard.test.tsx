@@ -9,6 +9,8 @@ const getGitHubSettings = vi.fn();
 const saveGitHubSettings = vi.fn();
 const testGitHubToken = vi.fn();
 const pollGitHubNow = vi.fn();
+const listGitHubRepos = vi.fn();
+const onboardFromGitHub = vi.fn();
 vi.mock("../api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../api")>();
   return {
@@ -17,6 +19,8 @@ vi.mock("../api", async (importOriginal) => {
     saveGitHubSettings: (...a: unknown[]) => saveGitHubSettings(...a),
     testGitHubToken: (...a: unknown[]) => testGitHubToken(...a),
     pollGitHubNow: () => pollGitHubNow(),
+    listGitHubRepos: (...a: unknown[]) => listGitHubRepos(...a),
+    onboardFromGitHub: (...a: unknown[]) => onboardFromGitHub(...a),
   };
 });
 
@@ -184,5 +188,53 @@ describe("renaming a token", () => {
     const box = screen.getByLabelText("rename main");
     expect(box.getAttribute("type")).not.toBe("password");
     expect((box as HTMLInputElement).value).toBe("main");
+  });
+});
+
+describe("the repositories a token can reach", () => {
+  it("lists them, marks the ones already onboarded, and offers the rest", async () => {
+    // The token carries its own grant, so this is the honest answer to "which
+    // repositories are available" -- and it is the thing you act on, rather
+    // than a diagnostic printed beside a green tick.
+    listGitHubRepos.mockResolvedValue({
+      onboarded: ["proj"],
+      repos: [
+        { slug: "org/already", name: "already", owner: "org", private: true, archived: false,
+          default_branch: "main", push: true, pushed_at: null, onboarded_as: "proj" },
+        { slug: "org/fresh", name: "fresh", owner: "org", private: true, archived: false,
+          default_branch: "main", push: true, pushed_at: null, onboarded_as: null },
+        { slug: "org/readonly", name: "readonly", owner: "org", private: false, archived: false,
+          default_branch: "main", push: false, pushed_at: null, onboarded_as: null },
+      ],
+    });
+    const user = userEvent.setup();
+    render(<GitHubSettingsCard />);
+    await screen.findAllByRole("button", { name: "Repositories" });
+    await user.click(screen.getAllByRole("button", { name: "Repositories" })[0]);
+
+    expect(await screen.findByText("org/fresh")).toBeInTheDocument();
+    expect(screen.getByText(/already added as proj/)).toBeInTheDocument();
+    // A token that cannot write cannot open a pull request either.
+    const readonlyRow = screen.getByText("org/readonly").closest("li")!;
+    within(readonlyRow).getAllByRole("button").forEach((b) => expect(b).toBeDisabled());
+  });
+
+  it("asks how work should land rather than deciding from where it came", async () => {
+    listGitHubRepos.mockResolvedValue({
+      onboarded: [],
+      repos: [{ slug: "org/fresh", name: "fresh", owner: "org", private: true, archived: false,
+        default_branch: "main", push: true, pushed_at: null, onboarded_as: null }],
+    });
+    onboardFromGitHub.mockResolvedValue({ ok: true, name: "fresh", path: "/p", ship: "pr", steps: [] });
+    const user = userEvent.setup();
+    render(<GitHubSettingsCard />);
+    await screen.findAllByRole("button", { name: "Repositories" });
+    await user.click(screen.getAllByRole("button", { name: "Repositories" })[0]);
+    await screen.findByText("org/fresh");
+
+    await user.click(screen.getByRole("button", { name: /Add · pull requests/ }));
+    expect(onboardFromGitHub).toHaveBeenCalledWith(
+      expect.objectContaining({ slug: "org/fresh", ship: "pr" }),
+    );
   });
 });

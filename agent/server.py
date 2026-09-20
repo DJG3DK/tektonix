@@ -4333,6 +4333,121 @@ async def list_projects_config(user: User = Depends(require_full_auth)):
     }
 
 
+class GitHubReposRequest(BaseModel):
+    name: str | None = None      # a stored token, by label
+    token: str | None = None     # or a pasted one, before saving
+
+
+@app.post("/api/github/repos")
+async def github_repos_endpoint(req: GitHubReposRequest, user: User = Depends(require_full_auth)):
+    """Every repository a token can reach, and which are already onboarded.
+
+    The token carries its own grant, so this is the honest answer to "which
+    repositories are available" -- and it goes stale when the grant changes in
+    GitHub rather than when somebody remembers to update something here.
+
+    `onboarded` is matched on the remote each existing project actually has,
+    not on how it was added. A project the operator typed a path for is just
+    as likely to be on GitHub as one the agent cloned, and calling those
+    different kinds of project is a distinction only this codebase can see.
+    """
+    auth.require_admin(user)
+    import subprocess  # noqa: PLC0415
+
+    from agent import github_repos as gh_repos, github_settings  # noqa: PLC0415
+    from agent.tools import github_tools  # noqa: PLC0415
+
+    raw = (req.token or "").strip()
+    if not raw and req.name:
+        settings = await github_settings.load(app.state.store)
+        entry = settings["tokens"].get(req.name)
+        if not entry:
+            raise HTTPException(404, f"no token named {req.name!r}")
+        raw = github_settings.decrypt_token(config, entry["enc"])
+    if not raw:
+        raise HTTPException(400, "give a stored token's name, or a token to try")
+
+    try:
+        repos = await gh_repos.list_accessible(raw)
+    except PermissionError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"could not reach GitHub: {type(e).__name__}")
+
+    # What each configured project's checkout actually points at.
+    known: dict[str, str] = {}
+    for name, cfg in PROJECTS.items():
+        live = (cfg or {}).get("live")
+        if not live:
+            continue
+        try:
+            out = await asyncio.to_thread(
+                subprocess.run, ["git", "config", "--local", "--get", "remote.origin.url"],
+                capture_output=True, text=True, cwd=live, timeout=10,
+            )
+        except Exception:  # noqa: BLE001 -- a project whose checkout is gone is not this route's problem
+            continue
+        slug = github_tools.repo_slug_from_remote((out.stdout or "").strip())
+        if slug:
+            known[slug.lower()] = name
+
+    for r in repos:
+        r["onboarded_as"] = known.get(r["slug"].lower())
+    return {"repos": repos, "onboarded": sorted(set(known.values()))}
+
+
+class OnboardFromGitHubRequest(BaseModel):
+    slug: str                    # owner/repo, from the repo list
+    token_name: str | None = None
+    ship: str | None = None      # push | pr; the default is asked for, not inferred
+
+
+@app.post("/api/projects/onboard-github")
+async def onboard_github_endpoint(req: OnboardFromGitHubRequest,
+                                  user: User = Depends(require_full_auth)):
+    """Clone a repository the token can reach, and provision it in one step.
+
+    The long way round -- clone, read the report, tick the boxes -- still
+    exists and is what somebody wants for a project with unusual checks. This
+    is for the common case: a repository the operator can see in the list,
+    onboarded with exactly the answers the wizard would have pre-ticked.
+    """
+    auth.require_admin(user)
+    from agent import github_settings, provisioning  # noqa: PLC0415
+
+    slug = (req.slug or "").strip()
+    if not provisioning.parse_github_source(slug):
+        raise HTTPException(400, f"{slug!r} is not a GitHub repository")
+
+    token = getattr(config, "github_token", None)
+    if req.token_name:
+        settings = await github_settings.load(app.state.store)
+        entry = settings["tokens"].get(req.token_name)
+        if not entry:
+            raise HTTPException(404, f"no token named {req.token_name!r}")
+        token = github_settings.decrypt_token(config, entry["enc"])
+
+    try:
+        path = await asyncio.to_thread(
+            provisioning.clone_repository, slug, existing_names=list(PROJECTS), token=token,
+        )
+        report = await asyncio.to_thread(
+            provisioning.detect_project, path, existing_names=list(PROJECTS)
+        )
+        choices = provisioning.validate_choices(report, provisioning.recommended_choices(report))
+    except provisioning.ProvisioningError as e:
+        raise HTTPException(400, str(e))
+    # Asked for, not inferred. A repository the agent cloned defaults to
+    # opening pull requests, but the operator chose that in the list.
+    choices["ship"] = req.ship if req.ship in ("push", "pr") else "pr"
+    if report.blockers:
+        raise HTTPException(400, "; ".join(report.blockers))
+
+    ok, steps = await _provision_from_report(report, choices, user, True)
+    return {"ok": ok, "name": report.name, "path": path, "steps": steps,
+            "ship": choices["ship"], "slug": slug}
+
+
 @app.post("/api/projects/clone")
 async def clone_project_endpoint(req: DetectProjectRequest, user: User = Depends(require_full_auth)):
     """Clone a GitHub repository into an allowed root, then detect it.

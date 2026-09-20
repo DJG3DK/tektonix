@@ -312,6 +312,13 @@ class DetectionReport:
     read_only_mounts: list[Candidate] = field(default_factory=list)
     risky_scripts: list[Candidate] = field(default_factory=list)
     db_env_file: str | None = None
+    # Where this project's code also lives, if anywhere. Detected from the
+    # checkout rather than inferred from how it was onboarded: a project the
+    # operator typed a path for is just as likely to be on GitHub as one the
+    # agent cloned, and treating those as different kinds of project is a
+    # distinction only this codebase could see.
+    git_remote: str | None = None
+    github_slug: str | None = None
     warnings: list[str] = field(default_factory=list)
     blockers: list[str] = field(default_factory=list)
 
@@ -1193,6 +1200,16 @@ def detect_project(live_path: str, sandbox_root: str | None = None,
         return report
     if (live / ".git").exists():
         report.is_git_repo = True
+        # --local, not `remote get-url`: the latter applies url.*.insteadOf
+        # from the global config, which on a box with a token helper rewrites
+        # an ssh remote into an https one carrying the secret. See
+        # deploy_keys._configured_origin, which learned this the same way.
+        ok, remote = _run_git(["config", "--local", "--get", "remote.origin.url"], cwd=str(live))
+        if ok and remote.strip():
+            report.git_remote = remote.strip()
+            from agent.tools import github_tools  # noqa: PLC0415
+
+            report.github_slug = github_tools.repo_slug_from_remote(report.git_remote)
     else:
         report.blockers.append(
             f"{live} is not a git repository -- the agent works on a per-task branch in a "

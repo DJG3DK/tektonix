@@ -209,3 +209,45 @@ async def open_pull_request(token: str, slug: str, head: str, base: str,
         pr = existing[0]
     return {"number": str(pr.get("number", "")), "url": pr.get("html_url", ""),
             "state": pr.get("state", "")}
+
+
+async def list_accessible(token: str, limit: int = 200) -> list[dict[str, Any]]:
+    """Every repository this token can reach, with what it may do to each.
+
+    A fine-grained token carries its own grant, so this is the honest answer to
+    "which repositories are available?" -- no guessing, and it goes stale the
+    moment the operator changes the grant in GitHub rather than the moment
+    somebody remembers to update a list here.
+
+    Sorted by most recently pushed, because that is the order somebody looking
+    for the repo they were just working on expects.
+    """
+    out: list[dict[str, Any]] = []
+    page = 1
+    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        while len(out) < limit:
+            r = await client.get(f"{API}/user/repos", headers=_headers(token),
+                                 params={"per_page": 100, "page": page, "sort": "pushed"})
+            if r.status_code in (401, 403):
+                raise PermissionError(f"GitHub refused the repository list ({r.status_code}): {_reason(r)}")
+            r.raise_for_status()
+            batch = r.json()
+            if not batch:
+                break
+            for repo in batch:
+                perms = repo.get("permissions") or {}
+                out.append({
+                    "slug": repo.get("full_name", ""),
+                    "name": repo.get("name", ""),
+                    "owner": (repo.get("owner") or {}).get("login", ""),
+                    "private": bool(repo.get("private")),
+                    "archived": bool(repo.get("archived")),
+                    "default_branch": repo.get("default_branch") or "main",
+                    "clone_url": repo.get("clone_url", ""),
+                    "push": bool(perms.get("push")),
+                    "pushed_at": repo.get("pushed_at"),
+                })
+            if len(batch) < 100:
+                break
+            page += 1
+    return out[:limit]

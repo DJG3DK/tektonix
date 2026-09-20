@@ -206,8 +206,65 @@ async def merge_and_deploy(project: str) -> dict:
         # must never couple to this node's lifetime or the server's event
         # loop -- and NOT --force, so a merge that changed no structure costs
         # a pure-Python tree walk and no model call (the hash gate decides).
+        # The review service pushes the merged base branch to origin itself,
+        # but with `git push origin` and no credentials -- which works for an
+        # SSH origin carrying a deploy key and fails for an HTTPS one. A
+        # cloned project has exactly that: an https remote with nothing on it,
+        # because the token is deliberately never written into .git/config.
+        #
+        # So the push it could not do happens here, where the token lives. The
+        # merge already happened and is not being rolled back, so this is
+        # reported rather than allowed to fail the ship -- same posture the
+        # review service takes.
+        pushed = await _push_https_origin_if_needed(project)
+        out = {"ok": True, "merge": merge_body, "restart": restart_body}
+        if pushed is not None:
+            out["origin_push"] = pushed
+
         _refresh_codebase_map(project)
-        return {"ok": True, "merge": merge_body, "restart": restart_body}
+        return out
+
+
+async def _push_https_origin_if_needed(project: str) -> dict | None:
+    """Push the base branch to an https origin the review service could not.
+
+    None when there is nothing to do: no origin, an SSH origin (a deploy key
+    already carries it), or no token. Never raises.
+    """
+    from agent.config import PROJECTS, load_config  # noqa: PLC0415
+    from agent.tools.git import _git  # noqa: PLC0415
+    from agent import github_settings  # noqa: PLC0415
+
+    cfg = PROJECTS.get(project) or {}
+    live = cfg.get("live")
+    if not live:
+        return None
+    base = cfg.get("base_branch") or "main"
+
+    configured = await _git("config --local --get remote.origin.url", live, timeout=15)
+    origin = configured["output"].strip() if configured["ok"] else ""
+    if not origin.startswith("https://"):
+        return None
+
+    from agent.tools import github_tools  # noqa: PLC0415
+
+    slug = github_tools.repo_slug_from_remote(origin)
+    if not slug:
+        return {"ok": False, "reason": "origin is https but not a GitHub URL"}
+
+    cfg_obj = load_config()
+    try:
+        token = github_settings.token_for(github_settings.current(), cfg_obj, project)
+    except Exception:  # noqa: BLE001
+        token = getattr(cfg_obj, "github_token", None)
+    if not token:
+        return {"ok": False, "reason": "no GitHub token, so origin stays behind"}
+
+    r = await _git(f"push https://x-access-token:{token}@github.com/{slug}.git {base}",
+                   live, timeout=300)
+    if not r["ok"]:
+        return {"ok": False, "reason": r["output"].replace(token, "***")[:200]}
+    return {"ok": True, "pushed": base}
 
 
 def _refresh_codebase_map(project: str) -> None:

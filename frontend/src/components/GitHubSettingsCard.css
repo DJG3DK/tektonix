@@ -79,3 +79,56 @@
   font-weight: 400;
   font-size: 0.9em;
 }
+
+/* What a token can reach, straight from GitHub. The list is the answer to
+   "which repositories are available", so it is the thing you act on rather
+   than a diagnostic printed beside a tick. */
+.gh-repos { margin: var(--s3, 0.75rem) 0; }
+
+.gh-repos-msg {
+  margin: var(--s2, 0.5rem) 0;
+  color: var(--text, #e8e8ef);
+}
+
+.gh-repo-list {
+  list-style: none;
+  margin: var(--s2, 0.5rem) 0 0;
+  padding: 0;
+  max-height: 22rem;
+  overflow-y: auto;
+  border: 1px solid var(--border, #2a2a35);
+  border-radius: var(--radius, 8px);
+}
+
+.gh-repo {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s2, 0.5rem);
+  padding: var(--s2, 0.5rem) var(--s3, 0.75rem);
+  border-bottom: 1px solid var(--border, #2a2a35);
+}
+
+.gh-repo:last-child { border-bottom: 0; }
+.gh-repo.is-onboarded { opacity: 0.65; }
+
+.gh-repo-slug {
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  flex: 1 1 16rem;
+}
+
+.gh-repo-meta {
+  color: var(--text-dim, #9a9aa8);
+  font-size: 0.9em;
+}
+
+.gh-repo-added {
+  color: var(--text-dim, #9a9aa8);
+  font-size: 0.9em;
+}
+
+.gh-repo-actions {
+  display: flex;
+  gap: var(--s2, 0.5rem);
+  flex-wrap: wrap;
+}
