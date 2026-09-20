@@ -132,12 +132,15 @@ def test_the_route_surface_has_not_silently_changed():
 
 # Generated with:
 #   python -c "import tests.test_route_inventory as t; print(t._inventory())"
-EXPECTED: list[tuple[str, str, str | None]] = [   ('DELETE', '/api/auth/users/{user_id}', 'require_full_auth'),
+EXPECTED: list[tuple[str, str, str | None]] = [
+    ('DELETE', '/_review/{path:path}', 'require_full_auth'),
+    ('DELETE', '/api/auth/users/{user_id}', 'require_full_auth'),
     ('DELETE', '/api/planning/sessions/{session_id}', 'require_full_auth'),
     ('DELETE', '/api/projects/archives/{filename}', 'require_full_auth'),
     ('DELETE', '/api/projects/{name}', 'require_full_auth'),
     ('DELETE', '/api/projects/{name}/deploy-key', 'require_full_auth'),
     ('DELETE', '/api/tasks/{task_id}', 'require_full_auth'),
+    ('GET', '/_review/{path:path}', 'require_full_auth'),
     ('GET', '/api/analytics', 'require_full_auth'),
     ('GET', '/api/analytics/models', 'require_full_auth'),
     ('GET', '/api/analytics/tool-reliability', 'require_full_auth'),
@@ -168,7 +171,9 @@ EXPECTED: list[tuple[str, str, str | None]] = [   ('DELETE', '/api/auth/users/{u
     ('GET', '/api/tasks', 'require_full_auth'),
     ('GET', '/api/tasks/{task_id}', 'require_full_auth'),
     ('GET', '/api/tasks/{task_id}/diff', 'require_full_auth'),
+    ('PATCH', '/_review/{path:path}', 'require_full_auth'),
     ('PATCH', '/api/auth/users/{user_id}', 'require_full_auth'),
+    ('POST', '/_review/{path:path}', 'require_full_auth'),
     ('POST', '/api/auth/2fa/confirm', 'get_current_user'),
     ('POST', '/api/auth/2fa/disable', 'require_full_auth'),
     ('POST', '/api/auth/2fa/setup', 'get_current_user'),
@@ -217,7 +222,6 @@ EXPECTED: list[tuple[str, str, str | None]] = [   ('DELETE', '/api/auth/users/{u
     ('POST', '/api/tasks/{task_id}/resume', 'require_full_auth'),
     ('POST', '/api/tasks/{task_id}/stop', 'require_full_auth'),
     ('POST', '/api/uploads', 'require_full_auth'),
-    (   'WS',
-        '/api/planning/sessions/{session_id}/stream',
-        'get_user_from_ws_cookie (in-body, pre-handshake)'),
+    ('PUT', '/_review/{path:path}', 'require_full_auth'),
+    ('WS', '/api/planning/sessions/{session_id}/stream', 'get_user_from_ws_cookie (in-body, pre-handshake)'),
     ('WS', '/api/tasks/{task_id}/stream', 'get_user_from_ws_cookie (in-body, pre-handshake)')]

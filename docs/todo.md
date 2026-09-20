@@ -33,7 +33,7 @@ refusal, a rebase, and a fast-forward that lands both changes.
 
 ## The review dashboard is unreachable in the bundle
 
-**Status:** not started. Raised 2026-09-20.
+**Status:** done, 2026-09-20.
 
 ### What breaks
 
@@ -52,7 +52,19 @@ already the authenticated front door — and it works on a host install too,
 which would make the nginx snippet in INSTALL.md §7 optional rather than
 required.
 
-### Open question
+### What was done
 
-Whether to then drop the nginx location entirely, or leave it as the faster
-path and have the proxy be the fallback.
+`/_review/{path}` on the agent's own server forwards to the review service,
+admitting only an admin over the session the console already required. The
+secret is SET there, never forwarded: a caller who sends their own
+`X-Review-Secret` cannot influence what the review service sees, because this
+endpoint's authority comes from the session rather than from a header.
+
+The nginx location stays, as an optimisation rather than a prerequisite. It
+keeps the traffic out of the Python process where somebody already has nginx;
+INSTALL.md §7 says so now.
+
+Covered by `tests/test_review_proxy.py`, and verified against the running
+service: a read route returns real data, and a mutating one returns the gate's
+own `not_reviewed` rather than `invalid or missing X-Review-Secret`, which is
+what proves the injection reached it.

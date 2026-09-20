@@ -514,10 +514,15 @@ Projects onboarded through the wizard are picked up automatically. See
 `services/commit-reviewer/README.md`.
 
 The review dashboard is served at `/_review/` on the same host as the
-console. `install.sh` writes that location into a **new** nginx vhost and
-injects `X-Review-Secret` there — the browser never holds the value, and
-without the header "Check now", merge and restart all 401. If you already
-have a vhost, add the location by hand:
+console. The agent proxies that path itself, to the review service, injecting
+`X-Review-Secret` — the browser never holds the value — and admits only an
+admin over the session the console already required. That works on a host
+install and in the container bundle, where there is no nginx at all, so
+nothing below is required any more.
+
+`install.sh` still writes an nginx location for it on a new vhost, which keeps
+the traffic out of the Python process. It is now an optimisation rather than a
+prerequisite. If you already have a vhost and want the same, add it by hand:
 
 ```nginx
 location /_review/ {
