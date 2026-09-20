@@ -66,3 +66,16 @@
   .gh-grid2 { grid-template-columns: 1fr; }
 }
 .gh-invariant { margin-top: 6px; }
+
+/* Renaming a token in place. The label is the operator's, and they change
+   theirs in GitHub as they work out what each one is for. */
+.gh-token-rename {
+  flex: 1 1 12rem;
+  min-width: 8rem;
+}
+
+.gh-token-was {
+  color: var(--text-dim, #9a9aa8);
+  font-weight: 400;
+  font-size: 0.9em;
+}

@@ -1108,6 +1108,9 @@ export interface GitHubSettingsPatch {
   notify?: { telegram: boolean; email: boolean; email_to: string };
   add_tokens?: Record<string, string>;
   remove_tokens?: string[];
+  /** {old: new}. Projects point at a token by name, so the server moves them
+   *  with it -- otherwise every one silently falls back to the env token. */
+  rename_tokens?: Record<string, string>;
   projects?: Record<string, Partial<GitHubProjectSettings> & { policies?: Partial<Record<GitHubSource, GitHubMode>> }>;
 }
 

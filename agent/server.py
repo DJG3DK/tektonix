@@ -774,6 +774,7 @@ class GitHubSettingsPatch(BaseModel):
     notify: dict | None = None
     add_tokens: dict[str, str] | None = None
     remove_tokens: list[str] | None = None
+    rename_tokens: dict[str, str] | None = None
     projects: dict[str, dict] | None = None
 
 

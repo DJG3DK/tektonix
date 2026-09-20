@@ -61,6 +61,9 @@ export function GitHubSettingsCard() {
   const [draft, setDraft] = useState<Draft | null>(null);
   const [pendingTokens, setPendingTokens] = useState<Record<string, string>>({});
   const [removed, setRemoved] = useState<string[]>([]);
+  /* {old: new}, staged like every other edit so one Save applies the lot. */
+  const [renames, setRenames] = useState<Record<string, string>>({});
+  const [renaming, setRenaming] = useState<string | null>(null);
   const [newName, setNewName] = useState("");
   const [newToken, setNewToken] = useState("");
   const [probe, setProbe] = useState<{ name: string; result: GitHubTokenProbe | null; error: string | null; busy: boolean } | null>(null);
@@ -83,19 +86,20 @@ export function GitHubSettingsCard() {
 
   const dirtyCount = useMemo(() => {
     if (!draft || !base) return 0;
-    let n = Object.keys(pendingTokens).length + removed.length;
+    let n = Object.keys(pendingTokens).length + removed.length + Object.keys(renames).length;
     if (draft.poll_interval_min !== base.poll_interval_min) n++;
     if (draft.public_url !== base.public_url) n++;
     if (draft.notify.telegram !== base.notify.telegram || draft.notify.email !== base.notify.email || draft.notify.email_to !== base.notify.email_to) n++;
     for (const name of Object.keys(draft.projects)) if (projectChanged(draft.projects[name], base.projects[name])) n++;
     return n;
-  }, [draft, base, pendingTokens, removed]);
+  }, [draft, base, pendingTokens, removed, renames]);
 
   async function save() {
     if (!draft || !base || !data) return;
     const patch: GitHubSettingsPatch = {};
     if (Object.keys(pendingTokens).length) patch.add_tokens = pendingTokens;
     if (removed.length) patch.remove_tokens = removed;
+    if (Object.keys(renames).length) patch.rename_tokens = renames;
     if (draft.poll_interval_min !== base.poll_interval_min) patch.poll_interval_min = draft.poll_interval_min;
     if (draft.public_url !== base.public_url) patch.public_url = draft.public_url;
     if (draft.notify.telegram !== base.notify.telegram || draft.notify.email !== base.notify.email || draft.notify.email_to !== base.notify.email_to) patch.notify = draft.notify;
@@ -111,6 +115,8 @@ export function GitHubSettingsCard() {
     setDraft(draftOf(res.settings, next.projects));
     setPendingTokens({});
     setRemoved([]);
+    setRenames({});
+    setRenaming(null);
   }
 
   function discard() {
@@ -118,6 +124,8 @@ export function GitHubSettingsCard() {
     setDraft(draftOf(data.settings, data.projects));
     setPendingTokens({});
     setRemoved([]);
+    setRenames({});
+    setRenaming(null);
   }
 
   useSettingsSave("github", dirtyCount, save, discard);
@@ -200,10 +208,43 @@ export function GitHubSettingsCard() {
           const meta = data.settings.tokens[name];
           return (
             <li key={name} className="gh-token">
-              <span className="gh-token-name">{name}</span>
+              {renaming === name ? (
+                <input
+                  className="gh-input gh-token-rename"
+                  defaultValue={renames[name] ?? name}
+                  autoFocus
+                  aria-label={`rename ${name}`}
+                  onKeyDown={(e) => {
+                    if (e.key === "Escape") setRenaming(null);
+                    if (e.key === "Enter") {
+                      const next = (e.target as HTMLInputElement).value.trim();
+                      if (next && next !== name) setRenames((r) => ({ ...r, [name]: next }));
+                      else setRenames((r) => { const { [name]: _d, ...rest } = r; return rest; });
+                      setRenaming(null);
+                    }
+                  }}
+                  onBlur={(e) => {
+                    const next = e.target.value.trim();
+                    if (next && next !== name) setRenames((r) => ({ ...r, [name]: next }));
+                    setRenaming(null);
+                  }}
+                />
+              ) : (
+                <span className="gh-token-name">
+                  {renames[name] ?? name}
+                  {renames[name] && <span className="gh-token-was"> (was {name})</span>}
+                </span>
+              )}
               <span className="gh-token-hint">
                 {pending ? "unsaved" : `${meta?.hint ?? ""}${meta?.created_at ? ` · added ${new Date(meta.created_at * 1000).toLocaleDateString()}` : ""}`}
               </span>
+              {/* Renaming is the common correction: the label here is the
+                  operator's, and they rename tokens in GitHub as they work out
+                  what each one is for. Remove-and-re-add meant pasting the
+                  secret again and losing every project mapped to it. */}
+              <button type="button" className="gh-btn" disabled={pending} onClick={() => setRenaming(name)}>
+                Rename
+              </button>
               <button type="button" className="gh-btn" disabled={probe?.busy} onClick={() => runTest(name)}>
                 {probe?.name === name && probe.busy ? "Testing…" : "Test"}
               </button>
@@ -240,8 +281,11 @@ export function GitHubSettingsCard() {
         </div>
       )}
       <div className="gh-add">
-        <input className="gh-input" placeholder="name (e.g. main)" value={newName} onChange={(e) => setNewName(e.target.value)} aria-label="token name" />
-        <input className="gh-input gh-input--wide" placeholder="github_pat_…" type="password" autoComplete="off" value={newToken}
+        {/* "name (e.g. main)" read like a branch. It is a label of the
+            operator's choosing, and saying so is the whole fix. */}
+        <input className="gh-input" placeholder="label, e.g. DJG3dk-Projects" value={newName}
+          onChange={(e) => setNewName(e.target.value)} aria-label="token name" />
+        <input className="gh-input gh-input--wide" placeholder="paste the token — github_pat_…" type="password" autoComplete="off" value={newToken}
           onChange={(e) => setNewToken(e.target.value)} aria-label="token value" />
         <button type="button" className="gh-btn gh-btn--primary" disabled={!newName.trim() || !newToken.trim()} onClick={addToken}>Add token</button>
       </div>

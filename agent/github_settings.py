@@ -234,6 +234,7 @@ def apply_patch(config: Config, settings: dict[str, Any], patch: dict[str, Any])
       poll_interval_min, public_url, notify{telegram,email,email_to}
       add_tokens: {name: raw_token}     stored encrypted
       remove_tokens: [name]             projects using one fall back to env
+      rename_tokens: {old: new}         projects pointing at it follow
       projects: {repo: {token, policies{source: mode}, budget_usd, max_open_auto, authors, route}}
     """
     out = copy.deepcopy(settings)
@@ -258,6 +259,27 @@ def apply_patch(config: Config, settings: dict[str, Any], patch: dict[str, Any])
         for proj in out["projects"].values():
             if proj.get("token") == name:
                 proj["token"] = None
+    # A token's name is a label the operator chose, and they rename them in
+    # GitHub as their understanding of what each one is for improves. Without
+    # this the only way to correct one here was remove and re-add, which means
+    # pasting the secret again and losing every project mapped to it.
+    for old, new in (patch.get("rename_tokens") or {}).items():
+        old, new = str(old).strip(), str(new).strip()
+        if old not in out["tokens"]:
+            raise ValueError(f"no token named {old!r}")
+        if not new or len(new) > 40:
+            raise ValueError("token name must be 1-40 characters")
+        if new == old:
+            continue
+        if new in out["tokens"]:
+            raise ValueError(f"a token named {new!r} already exists")
+        out["tokens"][new] = out["tokens"].pop(old)
+        # Projects point at a token BY NAME, so the rename has to follow or
+        # every one of them silently falls back to the environment token.
+        for proj in out["projects"].values():
+            if proj.get("token") == old:
+                proj["token"] = new
+
     for name, raw in (patch.get("add_tokens") or {}).items():
         name = str(name).strip()
         raw = str(raw or "").strip()

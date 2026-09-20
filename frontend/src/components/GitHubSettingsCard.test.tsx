@@ -155,3 +155,34 @@ describe("GitHubSettingsCard", () => {
     expect(await screen.findByText(/proj: 3 found, 1 proposed, 0 started/)).toBeInTheDocument();
   });
 });
+
+describe("renaming a token", () => {
+  it("stages a rename and sends it with the other edits", async () => {
+    // Operators rename tokens in GitHub as they work out what each is for.
+    // Without this the only route was remove-and-re-add: paste the secret
+    // again, and lose every project mapped to it on the way.
+    const user = userEvent.setup();
+    render(<GitHubSettingsCard />);
+    await screen.findAllByRole("button", { name: "Rename" });
+
+    await user.click(screen.getAllByRole("button", { name: "Rename" })[0]);
+    const box = screen.getByLabelText("rename main");
+    await user.clear(box);
+    await user.type(box, "DJG3dk-Projects{Enter}");
+
+    expect(screen.getByText(/was main/)).toBeInTheDocument();
+  });
+
+  it("does not ask for the secret again", async () => {
+    const user = userEvent.setup();
+    render(<GitHubSettingsCard />);
+    await screen.findAllByRole("button", { name: "Rename" });
+    await user.click(screen.getAllByRole("button", { name: "Rename" })[0]);
+    // The rename box is a plain text field -- an input with no type is text.
+    // What matters is that it is NOT a password prompt: renaming must not
+    // make somebody paste the secret again.
+    const box = screen.getByLabelText("rename main");
+    expect(box.getAttribute("type")).not.toBe("password");
+    expect((box as HTMLInputElement).value).toBe("main");
+  });
+});
