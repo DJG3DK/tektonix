@@ -4338,6 +4338,65 @@ class GitHubReposRequest(BaseModel):
     token: str | None = None     # or a pasted one, before saving
 
 
+def _project_remote_slugs() -> dict[str, str]:
+    """`owner/repo` (lowercased) -> project name, for every configured project
+    whose checkout has a GitHub origin.
+
+    Read from the checkouts rather than from projects.json, because how a
+    project was added says nothing about where it lives now: one the operator
+    typed a path for is just as likely to be on GitHub as one the agent
+    cloned. Blocking calls -- run it in a thread.
+    """
+    import subprocess  # noqa: PLC0415
+
+    from agent.tools import github_tools  # noqa: PLC0415
+
+    known: dict[str, str] = {}
+    for name, cfg in PROJECTS.items():
+        live = (cfg or {}).get("live")
+        if not live:
+            continue
+        try:
+            out = subprocess.run(
+                ["git", "config", "--local", "--get", "remote.origin.url"],
+                capture_output=True, text=True, cwd=live, timeout=10, check=False,
+            )
+        except Exception:  # noqa: BLE001 -- a project whose checkout is gone is not this route's problem
+            continue
+        slug = github_tools.repo_slug_from_remote((out.stdout or "").strip())
+        if slug:
+            known[slug.lower()] = name
+    return known
+
+
+async def _onboarded_as(slug: str, token: str | None) -> str | None:
+    """The project a repository is ALREADY onboarded as, or None.
+
+    Tries the slug as given, then asks GitHub what each configured project's
+    remote is called now. A repository transferred to an organisation leaves
+    every checkout made before the move pointing at the old path, which GitHub
+    still serves by redirect -- so the remote works, the slug no longer
+    matches, and without this the same repository can be onboarded twice, one
+    copy live and one a fresh clone beside it.
+
+    The resolving loop is bounded by the number of configured projects whose
+    remote did not match outright, and only runs on the manual add path.
+    """
+    from agent import github_repos as gh_repos  # noqa: PLC0415
+
+    known = await asyncio.to_thread(_project_remote_slugs)
+    hit = known.get(slug.lower())
+    if hit or not token:
+        return hit
+    for other, name in known.items():
+        if other == slug.lower():
+            continue
+        current = await gh_repos.resolve_slug(token, other)
+        if current and current.lower() == slug.lower():
+            return name
+    return None
+
+
 @app.post("/api/github/repos")
 async def github_repos_endpoint(req: GitHubReposRequest, user: User = Depends(require_full_auth)):
     """Every repository a token can reach, and which are already onboarded.
@@ -4352,10 +4411,7 @@ async def github_repos_endpoint(req: GitHubReposRequest, user: User = Depends(re
     different kinds of project is a distinction only this codebase can see.
     """
     auth.require_admin(user)
-    import subprocess  # noqa: PLC0415
-
     from agent import github_repos as gh_repos, github_settings  # noqa: PLC0415
-    from agent.tools import github_tools  # noqa: PLC0415
 
     raw = (req.token or "").strip()
     if not raw and req.name:
@@ -4375,21 +4431,19 @@ async def github_repos_endpoint(req: GitHubReposRequest, user: User = Depends(re
         raise HTTPException(502, f"could not reach GitHub: {type(e).__name__}")
 
     # What each configured project's checkout actually points at.
-    known: dict[str, str] = {}
-    for name, cfg in PROJECTS.items():
-        live = (cfg or {}).get("live")
-        if not live:
-            continue
-        try:
-            out = await asyncio.to_thread(
-                subprocess.run, ["git", "config", "--local", "--get", "remote.origin.url"],
-                capture_output=True, text=True, cwd=live, timeout=10,
-            )
-        except Exception:  # noqa: BLE001 -- a project whose checkout is gone is not this route's problem
-            continue
-        slug = github_tools.repo_slug_from_remote((out.stdout or "").strip())
-        if slug:
-            known[slug.lower()] = name
+    known = await asyncio.to_thread(_project_remote_slugs)
+
+    # A checkout made before the repository was renamed or transferred still
+    # has the old path in its origin, and GitHub keeps serving that by
+    # redirect -- the remote works, the slug matches nothing below, and the
+    # row offers to clone a project that is already here. Ask what each
+    # unmatched one is called now. Bounded by the projects the token's own
+    # list did not already account for, which is normally none.
+    listed = {r["slug"].lower() for r in repos}
+    for stale in [s for s in known if s not in listed]:
+        current = await gh_repos.resolve_slug(raw, stale)
+        if current and current.lower() != stale:
+            known.setdefault(current.lower(), known[stale])
 
     for r in repos:
         r["onboarded_as"] = known.get(r["slug"].lower())
@@ -4426,6 +4480,22 @@ async def onboard_github_endpoint(req: OnboardFromGitHubRequest,
         if not entry:
             raise HTTPException(404, f"no token named {req.token_name!r}")
         token = github_settings.decrypt_token(config, entry["enc"])
+
+    # A repository that is already a project must not become a second one.
+    # The list this slug was picked from is built when somebody opens it, and
+    # a transfer in GitHub after that moves a project's remote out from under
+    # it -- so the refusal belongs here, where the clone is, and not only in
+    # the list. Without it, adding a repository already onboarded under its
+    # old path clones it again next to the live checkout, and two projects
+    # then point at one repository.
+    duplicate = await _onboarded_as(slug, token)
+    if duplicate:
+        raise HTTPException(
+            409,
+            f"{slug} is already onboarded as {duplicate!r}"
+            + ("" if duplicate.lower() == slug.split("/")[-1].lower()
+               else " (its checkout still has the path this repository had before it moved)"),
+        )
 
     try:
         path = await asyncio.to_thread(
@@ -4668,11 +4738,20 @@ async def _provision_from_report(report, choices: dict, user: User,
     except Exception as e:  # noqa: BLE001 -- reported, never fatal
         _step("memory", False, _public_error(e))
 
-    try:
-        summary = await cartographer.run_cartographer(config, name, app.state.store, force=True)
-        _step("codebase-map", True, str(summary)[:300])
-    except Exception as e:  # noqa: BLE001
-        _step("codebase-map", False, f"{_public_error(e)} -- run scripts/run_cartographer.py {name} later")
+    # Started, not awaited. Reading a whole repository is minutes of model
+    # calls on anything real, and awaiting it here held the HTTP response open
+    # for all of them -- past the browser's own timeout, which aborts the
+    # request while the server carries on and finishes. The operator then sees
+    # a failure next to a project that does in fact exist, and the obvious
+    # next move is to add it again. The map is best-effort by design (a
+    # project without one is a usable project), so it belongs off this path.
+    _spawn_background(
+        cartographer.run_cartographer(config, name, app.state.store, force=True),
+        f"cartographer:{name}",
+    )
+    _step("codebase-map", True,
+          f"building in the background -- agents get it when it lands; "
+          f"scripts/run_cartographer.py {name} re-runs it")
 
     if grant_access and user.allowed_repos is not None:
         try:

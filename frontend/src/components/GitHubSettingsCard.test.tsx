@@ -237,4 +237,45 @@ describe("the repositories a token can reach", () => {
       expect.objectContaining({ slug: "org/fresh", ship: "pr" }),
     );
   });
+
+  it("says an add that outran the page is still running, not that it failed", async () => {
+    // The server does not stop when the browser gives up. Reporting a failure
+    // beside a repository that is in fact being cloned is what led to the
+    // same repository being added twice.
+    listGitHubRepos.mockResolvedValue({
+      onboarded: [],
+      repos: [{ slug: "org/fresh", name: "fresh", owner: "org", private: true, archived: false,
+        default_branch: "main", push: true, pushed_at: null, onboarded_as: null }],
+    });
+    onboardFromGitHub.mockRejectedValue(new Error("request timed out after 180s"));
+    const user = userEvent.setup();
+    render(<GitHubSettingsCard />);
+    await screen.findAllByRole("button", { name: "Repositories" });
+    await user.click(screen.getAllByRole("button", { name: "Repositories" })[0]);
+    await screen.findByText("org/fresh");
+
+    const reads = listGitHubRepos.mock.calls.length;
+
+    await user.click(screen.getByRole("button", { name: /Add · pull requests/ }));
+    expect(await screen.findByText(/still running on the server/)).toBeInTheDocument();
+    // and the list is re-read, in case it landed while we waited
+    await waitFor(() => expect(listGitHubRepos.mock.calls.length).toBeGreaterThan(reads));
+  });
+
+  it("keeps the outcome of an add visible through the re-read that follows it", async () => {
+    listGitHubRepos.mockResolvedValue({
+      onboarded: [],
+      repos: [{ slug: "org/fresh", name: "fresh", owner: "org", private: true, archived: false,
+        default_branch: "main", push: true, pushed_at: null, onboarded_as: null }],
+    });
+    onboardFromGitHub.mockResolvedValue({ ok: true, name: "fresh", path: "/p", ship: "pr", steps: [] });
+    const user = userEvent.setup();
+    render(<GitHubSettingsCard />);
+    await screen.findAllByRole("button", { name: "Repositories" });
+    await user.click(screen.getAllByRole("button", { name: "Repositories" })[0]);
+    await screen.findByText("org/fresh");
+
+    await user.click(screen.getByRole("button", { name: /Add · pull requests/ }));
+    expect(await screen.findByText(/Added fresh/)).toBeInTheDocument();
+  });
 });

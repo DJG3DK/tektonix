@@ -251,3 +251,29 @@ async def list_accessible(token: str, limit: int = 200) -> list[dict[str, Any]]:
                 break
             page += 1
     return out[:limit]
+
+
+async def resolve_slug(token: str, slug: str) -> str | None:
+    """What `owner/repo` is called NOW, following a rename or a transfer.
+
+    A checkout made before the repository moved still has the old path in its
+    origin. GitHub keeps serving that by redirect, so the remote goes on
+    working while the slug matches nothing `list_accessible` returns -- and a
+    list that matches on the slug alone then calls an onboarded project
+    missing and offers to clone it a second time.
+
+    Returns None when the token cannot see it, which is the honest answer for
+    a repository the grant does not cover, and for one that no longer exists.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT, follow_redirects=True) as client:
+            r = await client.get(f"{API}/repos/{slug}", headers=_headers(token))
+    except httpx.HTTPError:
+        return None
+    if r.status_code != 200:
+        return None
+    try:
+        full = (r.json() or {}).get("full_name")
+    except ValueError:
+        return None
+    return str(full) if full else None

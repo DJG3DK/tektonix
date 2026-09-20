@@ -12,6 +12,7 @@ worked. So the assertions here follow one project all the way through:
 Nothing is mocked except authentication and the cartographer's model call.
 """
 
+import asyncio
 import json
 import os
 import subprocess
@@ -376,3 +377,41 @@ def test_a_go_project_onboards_with_real_checks(go_repo, wired, monkeypatch):
     assert seen["nodeModulesDirs"] is None, \
         "the reviewer's node_modules loops must tolerate a project that has none"
     assert seen["build"] == ["go"]
+
+
+def test_provision_does_not_wait_for_the_codebase_map(sample_repo, wired, monkeypatch):
+    """Reading a whole repository is minutes of model calls. Awaiting it here
+    held the HTTP response open past the browser's own timeout, so the page
+    reported a failure while the server went on and finished -- and the
+    obvious next move, adding it again, is what put two projects on one
+    repository. The map is started, not waited for."""
+    _stub_side_effects(monkeypatch)
+    started = []
+    never_finishes = asyncio.Event()
+
+    async def hangs(config, repo, store, force=False):
+        started.append(repo)
+        await never_finishes.wait()          # exactly what a long map looks like
+
+    monkeypatch.setattr(srv.cartographer, "run_cartographer", hangs)
+    client = TestClient(srv.app)
+
+    report = client.post("/api/projects/detect", json={"path": str(sample_repo)}).json()
+    res = client.post("/api/projects/provision", json={
+        "path": report["live"],
+        "choices": {
+            "secret_files": [], "read_only_mounts": [], "pm2_apps": [],
+            "node_modules_dirs": report["node_modules_dirs"],
+            "checks": report["checks"], "build_steps": report["build_steps"],
+            "db_env_file": report["db_env_file"],
+        },
+        "grant_access": False,
+    })
+
+    assert res.status_code == 200, res.text
+    assert res.json()["ok"] is True
+    assert started == ["orders-api"], "the map must still be kicked off"
+    step = {s["step"]: s for s in res.json()["steps"]}["codebase-map"]
+    assert step["ok"] and "background" in step["detail"], \
+        "and the operator must be told where it went"
+    never_finishes.set()

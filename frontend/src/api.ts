@@ -958,11 +958,14 @@ export async function onboardFromGitHub(body: {
   token_name?: string;
   ship?: "push" | "pr";
 }): Promise<{ ok: boolean; name: string; path: string; ship: string; steps: ProvisionStep[] }> {
+  // A clone of a real repository plus the wizard's own steps runs past the
+  // default 60s. The map is built in the background server-side, so this is
+  // the clone and nothing slower.
   const res = await apiFetch(`${API_BASE}/projects/onboard-github`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
-  });
+  }, 180_000);
   if (!res.ok) throw new Error(await errText(res));
   return res.json();
 }
@@ -970,11 +973,12 @@ export async function onboardFromGitHub(body: {
 /* Clones first, then detects, and says so in its name: /detect promises to
    create nothing and an operator pasting a URL is entitled to that promise. */
 export async function cloneProject(source: string): Promise<DetectionReport> {
+  // Same ceiling as the one-step add: this is a clone over the network.
   const res = await apiFetch(`${API_BASE}/projects/clone`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ path: source }),
-  });
+  }, 180_000);
   if (!res.ok) throw new Error(await errText(res));
   return res.json();
 }
@@ -998,11 +1002,13 @@ export async function provisionProject(body: {
   /** An archive FILENAME from the detection report, never a path. */
   restore_archive?: string | null;
 }): Promise<ProvisionResult> {
+  // The worktree and the starter memory, not the map -- that is started in
+  // the background -- but a worktree on a large repo is still not instant.
   const res = await apiFetch(`${API_BASE}/projects/provision`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
-  });
+  }, 180_000);
   if (!res.ok) throw new Error(await errText(res));
   return res.json();
 }

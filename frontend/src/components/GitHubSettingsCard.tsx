@@ -141,9 +141,12 @@ export function GitHubSettingsCard() {
     setNewToken("");
   }
 
-  async function showRepos(name: string) {
+  // `keepMsg` is for the re-read that follows an add: the outcome of that add
+  // is the one thing worth saying, and clearing it here left every add -- the
+  // ones that worked included -- reporting nothing at all.
+  async function showRepos(name: string, keepMsg = false) {
     setRepoList({ name, repos: [], error: null, busy: true });
-    setAddMsg(null);
+    if (!keepMsg) setAddMsg(null);
     try {
       const arg = pendingTokens[name] ? { token: pendingTokens[name] } : { name };
       const res = await listGitHubRepos(arg);
@@ -159,9 +162,18 @@ export function GitHubSettingsCard() {
     try {
       const res = await onboardFromGitHub({ slug, token_name: tokenName, ship });
       setAddMsg(`Added ${res.name} — ${ship === "pr" ? "opens pull requests" : "merges and deploys"}.`);
-      await showRepos(tokenName);   // re-read, so it moves to "already added"
+      await showRepos(tokenName, true);   // re-read, so it moves to "already added"
     } catch (e) {
-      setAddMsg(e instanceof Error ? e.message : "could not add it");
+      const msg = e instanceof Error ? e.message : "could not add it";
+      // The server does not stop when the browser gives up: a timed-out add
+      // is still running and usually still lands. Saying "failed" next to a
+      // repository that is about to appear is how one repository became two
+      // projects, so say what is actually true and re-read the list either
+      // way -- if it finished while we waited, the row moves by itself.
+      setAddMsg(msg.includes("timed out")
+        ? `${slug} is taking longer than this page waits — it is still running on the server. Open Repositories again in a minute; it will say "already added" once it lands.`
+        : msg);
+      await showRepos(tokenName, true).catch(() => {});
     } finally {
       setAdding(null);
     }
