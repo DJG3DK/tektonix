@@ -4356,6 +4356,11 @@ async def clone_project_endpoint(req: DetectProjectRequest, user: User = Depends
         raise HTTPException(400, str(e))
     out = report.to_dict()
     out["cloned_to"] = path
+    # Carried into provisioning so the entry's `ship` default reflects how the
+    # project arrived. A repository the agent cloned is not one it was asked
+    # to own, so it opens pull requests unless the operator says otherwise.
+    out["cloned_from_github"] = True
+    out["recommended_ship"] = "pr"
     from agent import project_removal  # noqa: PLC0415
     out["archives"] = project_removal.list_archives(report.name) if report.name else []
     return out

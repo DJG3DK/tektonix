@@ -519,8 +519,14 @@ Per project, in `projects.json`:
 
 | `ship` | What happens after a passing review |
 |---|---|
-| `push` | The default, and what every existing project does. Fast-forwards the base branch and runs the project's deploy steps. |
-| `pr` | Pushes the task branch and opens a pull request instead. The base branch is never written by the agent; a person merges. |
+| `push` | Fast-forwards the base branch, runs the project's deploy steps, and pushes the base branch to `origin`. The default for a project onboarded from a path you already had. |
+| `pr` | Pushes the task branch and opens a pull request instead. The base branch is never written by the agent; a person merges. The default for a project the agent **cloned** from a URL. |
+
+The default follows how the project arrived. A checkout you already had is one
+you own and deploy, so merging into its base branch is the point. A repository
+cloned because you pasted a URL is not that — nobody asked the agent to own it,
+and its base branch may carry other people's work — so it opens a pull request
+and you merge. Either is a default, not a rule: set `ship` yourself to override.
 
 `pr` needs `GITHUB_TOKEN` to carry `pull_requests: write` — the token is
 read-only elsewhere in this document, and that is the one place it is not

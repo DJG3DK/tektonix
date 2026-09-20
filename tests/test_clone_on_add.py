@@ -154,3 +154,58 @@ def test_a_bare_slug_is_ambiguous_and_the_two_callers_answer_it_differently(text
 def test_an_unmistakable_url_is_recognised_by_both(text):
     assert parse_github_source(text) is not None
     assert parse_github_source(text, allow_slug=False) is not None
+
+
+# --- how a cloned project ships ---------------------------------------------
+
+def test_a_cloned_project_opens_pull_requests_by_default():
+    """The question this answers: if the agent edits a repository it cloned,
+    does it push to main or open a PR?
+
+    It opens a PR. A path the operator already had checked out is one they own
+    and deploy, and merging into its base branch is the point. A repository
+    cloned because somebody pasted a URL is not that: nobody asked the agent to
+    own it, and its base branch may carry other people's work. Pushing straight
+    to it would be the surprising answer.
+    """
+    entry = provisioning.config_from_choices(
+        "widget", "/srv/live/widget", "/srv/ws/widget",
+        {"cloned_from_github": True},
+    )
+    assert entry["ship"] == "pr"
+
+
+def test_a_project_onboarded_from_a_local_path_still_pushes():
+    """Every existing project keeps doing exactly what it did."""
+    entry = provisioning.config_from_choices(
+        "widget", "/srv/live/widget", "/srv/ws/widget", {},
+    )
+    assert "ship" not in entry, "absent means push, which is the documented default"
+
+
+def test_the_operator_can_override_either_way():
+    """A default, not a rule."""
+    cloned_but_push = provisioning.config_from_choices(
+        "w", "/l", "/s", {"cloned_from_github": True, "ship": "push"})
+    assert cloned_but_push["ship"] == "push"
+
+    local_but_pr = provisioning.config_from_choices("w", "/l", "/s", {"ship": "pr"})
+    assert local_but_pr["ship"] == "pr"
+
+
+def test_an_unrecognised_ship_value_is_dropped_rather_than_stored():
+    """projects.json is read by three processes. A value none of them
+    understands is worse than the default."""
+    class _R:
+        live = "/srv/live/w"
+        checks: list = []
+        risky_scripts: list = []
+        build_steps: list = []
+        secret_files: list = []
+        read_only_mounts: list = []
+        pm2_apps: list = []
+        node_modules_dirs: list = []
+        dependency_dirs: list = []
+
+    clean = provisioning.validate_choices(_R(), {"ship": "yolo"})
+    assert "ship" not in clean

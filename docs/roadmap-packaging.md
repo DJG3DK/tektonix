@@ -214,9 +214,11 @@ dashboard by URL, complete a task, and land it as a pull request — with no
   `owner/repo`, clones into an allowed root and hands the path to the ordinary
   detection flow. A token is used for the URL only and never written to
   `.git/config`.
-* **Ship as a pull request.** Per-project `ship: "push" | "pr"`, defaulting to
-  `push`. `pr` pushes the task branch and opens a PR, leaving the base branch
-  untouched. An already-open PR for the same head counts as success.
+* **Ship as a pull request.** Per-project `ship: "push" | "pr"`. The default
+  follows provenance: a path the operator already had keeps pushing, a
+  repository the agent cloned opens a pull request. `pr` pushes the task
+  branch and leaves the base branch untouched, and an already-open PR for the
+  same head counts as success.
 * **Credentials.** `pr` needs `pull_requests: write`; the failure names that
   scope rather than reporting a bare 403.
 

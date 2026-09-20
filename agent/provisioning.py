@@ -1331,6 +1331,15 @@ def validate_choices(report: DetectionReport, choices: dict) -> dict:
 
     clean: dict = {}
 
+    # How the project ships. Not a detected value and not a command anything
+    # executes, so it is validated by shape rather than against an offer --
+    # but it is still allow-listed, because "anything the client sent" is how
+    # a projects.json entry grows a key nobody audited.
+    if choices.get("ship") in ("push", "pr"):
+        clean["ship"] = choices["ship"]
+    if choices.get("cloned_from_github"):
+        clean["cloned_from_github"] = True
+
     checks = []
     for c in choices.get("checks") or []:
         name = (c or {}).get("name")
@@ -1379,6 +1388,25 @@ def config_from_choices(report_name: str, live: str, sandbox: str, choices: dict
     be silently overwritten by a re-detection.
     """
     entry: dict = {"live": live, "sandbox": sandbox}
+
+    # How this project ships, decided by how it ARRIVED rather than by a
+    # global default.
+    #
+    # A path the operator already had checked out is one they own and deploy:
+    # merging into its base branch is the whole point, and that stays the
+    # default. A repository the agent cloned because somebody pasted a URL is
+    # a different thing -- nobody asked it to own that repository, and its
+    # base branch may well have other people's work on it. Pushing straight to
+    # it would be the surprising answer, so a clone opens a pull request and a
+    # person merges.
+    #
+    # Either can be changed afterwards in projects.json; this is the default,
+    # not a rule.
+    if choices.get("ship") in ("push", "pr"):
+        entry["ship"] = choices["ship"]
+    elif choices.get("cloned_from_github"):
+        entry["ship"] = "pr"
+
     if choices.get("db_env_file"):
         entry["db_env_file"] = choices["db_env_file"]
 
