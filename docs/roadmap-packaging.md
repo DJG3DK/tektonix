@@ -175,7 +175,7 @@ Docker Desktop's credential helper needs the logon session that started it and
 no automated route has one. The proven run used preloaded images. A person at
 their own desktop is the untested-but-likely-fine case.
 
-### M2 — GitHub-based projects *(replaces the old remote-projects milestone)*
+### M2 — GitHub-based projects *(replaces the old remote-projects milestone)* — **done**
 
 The agent stops requiring that you already have the repo checked out, and
 starts treating the local checkout as a **cache of GitHub** rather than as a
@@ -222,9 +222,16 @@ dashboard by URL, complete a task, and land it as a pull request — with no
 * **Credentials.** `pr` needs `pull_requests: write`; the failure names that
   scope rather than reporting a bare 403.
 
-**Still open, and it is the done-when:** no GitHub-only project has been taken
-through the whole path on a live repository. Each part is proven end to end on
-real git, with only the GitHub API stood in for.
+**Done, 2026-09-21.** A repository that existed only on GitHub -- never
+checked out on this box -- was added from the dashboard by its listing, cloned,
+onboarded, given a real task, and the work landed. The done-when above is met.
+
+Three defects the live run found that the end-to-end tests had not, all fixed:
+the one-step add held the HTTP response open for the codebase map and timed
+out in the browser while succeeding on the server; a repository transferred to
+an organisation no longer matched the project that already held it, so the
+list offered to add it a second time; and a timed-out add reported failure
+next to a project that was in fact being created. See `ee4c172`.
 
 **Known gap at this point:** the clone is still on the machine running the
 agent. That is the point, not a limitation.
@@ -287,9 +294,10 @@ installer around a stack that still needs manual setup.
 
 ## Open questions
 
-* Does the socket-mounted sibling-container model hold on Docker Desktop for
+* ~~Does the socket-mounted sibling-container model hold on Docker Desktop for
   Windows, where the daemon lives in a WSL2 VM and the "host" path is already
-  a translation? M1 answers this.
+  a translation?~~ **Closed 2026-09-19:** it does. Docker Desktop's path
+  translation agrees with the map on a clean Windows 11 machine.
 * Postgres in the bundle, or SQLite for a single-user local edition? Postgres
   is one more container but zero code change; SQLite is a smaller install and
   a real port of the checkpointer. **M3 forces this question anyway** — the
