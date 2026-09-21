@@ -43,6 +43,7 @@ from agent.config import Config, PROJECTS
 from agent.deep_agent import (
     EPISODES_ROUTE,
     MEMORY_PATH,
+    resplit_memory_sections,
     project_namespace,
     read_memory_or_empty,
     route_local_path,
@@ -247,6 +248,15 @@ async def run_consolidation(config: Config, repo: str, checkpointer, store: Base
     memory_changed = structured.updated_memory.strip() != current_memory.strip()
     if memory_changed:
         await project_backend.awrite(MEMORY_KEY, structured.updated_memory)
+        # And the section layer, for a project that has one. This job writes
+        # the whole memory to one key; every seat's prompt reads the sections
+        # instead once a project is split, so without this the consolidation
+        # would keep succeeding nightly and quietly stop reaching any agent --
+        # which is the silent failure the split exists to prevent, arriving
+        # from the other side. A no-op for a project that was never split.
+        resplit = await resplit_memory_sections(project_backend, structured.updated_memory)
+        if resplit:
+            print(f"[consolidation] {repo}: re-split memory into {len(resplit)} section(s)")
 
     last_path = episode_paths[-1]
     new_marker = last_path[len(EPISODES_ROUTE):]

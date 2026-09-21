@@ -1348,6 +1348,56 @@ async def load_memory_index(backend: StoreBackend) -> memory_sections.MemoryInde
     return memory_sections.parse_index_document(raw) if raw is not None else memory_sections.MemoryIndex(entries=[])
 
 
+async def resplit_memory_sections(
+    backend: StoreBackend, text: str, *, budget_tokens: int | None = None,
+) -> list[str]:
+    """Rewrite the section layer from `text`, for a project that already has one.
+
+    The nightly consolidator (agent/consolidation.py) reads the whole memory,
+    asks a model for an updated whole memory, and writes it back. Once a
+    project is split, that write lands on a key the prompt no longer reads --
+    so without this the consolidator would go on working, report success
+    every night, and quietly stop reaching any agent. That is the exact
+    failure this subsystem exists to prevent, arriving through the back door.
+
+    Deterministic, and no model in the path: the same split the migration
+    performs, against the text it is handed. Stale section files from a
+    heading the consolidator removed are deleted, and the index is written
+    LAST so an interruption leaves an orphaned body rather than an index
+    entry pointing at nothing.
+
+    Returns the slugs written. Does nothing, and returns [], for a project
+    that has never been split -- whether because it is under
+    SPLIT_FLOOR_CHARS or because the migration has not run.
+    """
+    index = await load_memory_index(backend)
+    if not index.entries:
+        return []
+
+    budget = budget_tokens if budget_tokens is not None else int(
+        _rs.value("memory_inline_token_budget"))
+    preamble, sections = memory_sections.split_sections(text)
+    entries = memory_sections.build_index(sections, preamble=preamble, budget_tokens=budget)
+
+    await backend.awrite(route_local_path("/memories/", SECTIONS_CORE_PATH), preamble)
+    for section in sections:
+        await backend.awrite(
+            route_local_path("/memories/", memory_sections.section_path(section.slug)), section.body)
+
+    # Anything the consolidator dropped. Left behind it is unreachable rather
+    # than harmful -- nothing indexes it -- but it would be read back by a
+    # later "all" and reappear as memory nobody wrote.
+    fresh = {s.slug for s in sections}
+    for old in index.entries:
+        if old.slug not in fresh:
+            await backend.adelete(route_local_path("/memories/", memory_sections.section_path(old.slug)))
+
+    await backend.awrite(
+        route_local_path("/memories/", SECTIONS_INDEX_PATH),
+        memory_sections.index_to_json(entries, source_digest=memory_sections.source_digest(text)))
+    return [s.slug for s in sections]
+
+
 async def gather_memory_sections(
     backend: StoreBackend, entries: list[memory_sections.IndexEntry],
 ) -> tuple[list[str], list[str]]:
