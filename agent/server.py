@@ -40,6 +40,7 @@ from agent.config import PROJECTS, load_config, require_server_config
 from agent import env_config
 from agent.observability import install_langsmith
 from agent.outer_graph import build_outer_graph, initial_state, open_checkpointer, open_store, project_lock
+from agent.routers import push as push_routes
 from agent.messages import add_message
 from agent.tools.model_rates import warm_rates
 from agent import model_config
@@ -350,6 +351,15 @@ if config.cors_allow_origins:
         allow_headers=["*"],
     )
 
+# Per-seam routers (agent/routers/). server.py is past 5,600 lines and is
+# being split one seam at a time, never in one pass -- see docs/todo.md and
+# docs/playbooks/README.md. tests/test_route_inventory.py is what makes each
+# move safe: it pins every route's path, method and auth dependency, so a
+# seam that moves either looks identical from outside or fails the snapshot.
+# Included here, after the middleware and before the routes that are still in
+# this file, so the order a request passes through is unchanged.
+app.include_router(push_routes.router)
+
 
 # audit M-9: response security headers (defence-in-depth behind React's escaping,
 # on an app that renders model-produced text throughout). CSRF still rests on the
@@ -548,34 +558,13 @@ def _set_session_cookie(response: Response, token: str) -> None:
         SESSION_COOKIE_NAME, token, max_age=auth.SESSION_TTL_SECONDS,
         httponly=True, samesite="strict", secure=True, path="/",
     )
-def _forced_screen_block(user: User) -> str | None:
-    """Return a reason string if `user` is parked behind a forced screen, else
-    None. Factored out (audit H-1) so the WebSocket handlers enforce the exact
-    same two gates as require_full_auth -- previously they authenticated only
-    the session and let a must-change-password / no-2FA account open the live
-    task and planning streams and watch tool-call arguments and results.
-    """
-    if user.must_change_password:
-        return "password change required before using this"
-    if user.role == "admin" and not user.totp_enabled:
-        return "2FA setup required before using this"
-    return None
-
-
-async def require_full_auth(user: User = Depends(auth.get_current_user)) -> User:
-    # Both forced-screen flags are enforced server-side here, not only via
-    # the frontend routing app.tsx does for the
-    # same two flags -- a session cookie alone would otherwise be enough to
-    # reach every real endpoint directly, skipping both forced screens
-    # entirely (the same "nginx allows all IPs" reasoning that makes
-    # frontend-only gating unsafe applies here too). 2FA is admin-only
-    # (never mandatory for a role="user" account, see agent/auth.py's own
-    # module docstring); a temporary/generated password must always be
-    # replaced before anything else, regardless of role.
-    blocked = _forced_screen_block(user)
-    if blocked:
-        raise HTTPException(403, blocked)
-    return user
+# Both live in agent/auth.py now: a route module under agent/routers/ cannot
+# import them from here without making the import a cycle. Re-exported rather
+# than redefined so require_full_auth stays the SAME object -- the route
+# inventory identifies a guard by its __name__, and every test that overrides
+# it does so through app.dependency_overrides, which is keyed by identity.
+_forced_screen_block = auth.forced_screen_block
+require_full_auth = auth.require_full_auth
 
 
 @app.get("/api/health")
@@ -1149,17 +1138,6 @@ class UpdateThemeRequest(BaseModel):
     theme: str
 
 
-class PushSubscribeRequest(BaseModel):
-    endpoint: str
-    p256dh: str
-    auth: str
-    label: str | None = None
-
-
-class PushUnsubscribeRequest(BaseModel):
-    endpoint: str
-
-
 class UpdateMergeReviewRequest(BaseModel):
     require_merge_review: bool
 
@@ -1188,74 +1166,6 @@ async def set_own_theme(req: UpdateThemeRequest, user: User = Depends(require_fu
     except ValueError as e:
         raise HTTPException(400, str(e))
     return {"ok": True, "theme": req.theme}
-
-
-# ---------------------------------------------------------------------------
-# web push
-# ---------------------------------------------------------------------------
-
-@app.get("/api/push/key")
-async def push_public_key(user: User = Depends(require_full_auth)):
-    """The VAPID public key the browser needs to subscribe, plus how many
-    endpoints this account already has -- the Settings toggle needs both to
-    decide what to render, and two round trips for one panel is a slower
-    settings page for no reason."""
-    from agent import push  # noqa: PLC0415
-    try:
-        key = push.public_key()
-    except push.PushError as e:
-        raise HTTPException(500, str(e))
-    return {"public_key": key,
-            "subscriptions": await auth.count_push_subscriptions(app.state.auth_pool, user.id)}
-
-
-@app.post("/api/push/subscribe")
-async def push_subscribe(req: PushSubscribeRequest, user: User = Depends(require_full_auth)):
-    """Register THIS browser for push. Bound to the calling account, never to
-    an id in the body: a subscription is permission to receive that account's
-    alerts, and accepting a user id from the client would let any signed-in
-    account subscribe itself to another's feed."""
-    await auth.save_push_subscription(app.state.auth_pool, user.id, req.endpoint,
-                                      req.p256dh, req.auth, req.label)
-    return {"ok": True, "subscriptions": await auth.count_push_subscriptions(
-        app.state.auth_pool, user.id)}
-
-
-@app.post("/api/push/unsubscribe")
-async def push_unsubscribe(req: PushUnsubscribeRequest, user: User = Depends(require_full_auth)):
-    """Drop one endpoint. Deliberately not scoped to the caller's own rows: an
-    endpoint is issued by a push service to one browser, so whoever is holding
-    it IS that browser, and a device signing out must be able to stop its own
-    notifications even if the account it was bound to has since changed."""
-    await auth.delete_push_subscription(app.state.auth_pool, req.endpoint)
-    return {"ok": True, "subscriptions": await auth.count_push_subscriptions(
-        app.state.auth_pool, user.id)}
-
-
-@app.post("/api/push/test")
-async def push_test(user: User = Depends(require_full_auth)):
-    """Send this account's own devices a test notification.
-
-    The same reason the Telegram panel has one: a push that silently fails --
-    permission revoked in the OS, an endpoint expired, the app uninstalled --
-    is indistinguishable from a quiet night, and the first time that matters
-    is the escalation nobody saw.
-    """
-    from agent import push  # noqa: PLC0415
-    targets = await auth.get_push_targets(app.state.auth_pool, user_id=user.id)
-    if not targets:
-        raise HTTPException(400, "no device is subscribed for this account")
-    sent = 0
-    for t in targets:
-        ok, status = await push.send_one(
-            t, "Tektonix", "Push is working. This is a test from Settings.",
-            url="/", tag="tektonix-test")
-        if ok:
-            sent += 1
-            await auth.mark_push_ok(app.state.auth_pool, t["endpoint"])
-        elif status in (404, 410):
-            await auth.delete_push_subscription(app.state.auth_pool, t["endpoint"])
-    return {"ok": sent > 0, "sent": sent, "devices": len(targets)}
 
 
 @app.post("/api/auth/me/auto-approve")

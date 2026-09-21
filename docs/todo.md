@@ -73,7 +73,23 @@ what proves the injection reached it.
 
 ## Split `agent/server.py` along the seams that already exist
 
-**Status:** not built. Do not flatten it in one pass.
+**Status:** started, 2026-09-21. One seam out (`agent/routers/push.py`), the
+pattern proven, the rest still to go. Do not flatten it in one pass.
+
+**What the first extraction found, and it matters for every later seam:**
+this FastAPI does not flatten `include_router` into `app.routes` -- it
+appends one opaque wrapper. `tests/test_route_inventory.py` iterated
+`app.routes` directly, so a seam moved into a router counted as ZERO routes:
+the snapshot shrank by exactly what moved, and the obvious fix (update
+EXPECTED) would have put every extracted route outside the only test that
+checks a route still has a guard. `_walk()` now follows included routers and
+a test asserts it still does.
+
+Also moved: `require_full_auth` and `forced_screen_block` now live in
+`agent/auth.py`, because a module under `agent/routers/` cannot import them
+from `server.py` without a cycle. `server.py` re-exports them rather than
+redefining, so they stay the SAME objects -- the inventory identifies a guard
+by `__name__` and every test overriding auth is keyed on identity.
 
 ### What breaks
 
@@ -105,7 +121,13 @@ extract `provisioning.py` or `history_index.py` in the same change.
 
 ## Virtualize the task log
 
-**Status:** not built.
+**Status:** done, 2026-09-21. `TaskView` mounts a window anchored to the end
+of the log, with a "Show earlier" control that grows it and holds the reading
+position. Anchored rather than spacer-based because these rows are chat
+bubbles: a one-line status and a rendered diff are two orders of magnitude
+apart, and a spacer sized from the average of those is a scrollbar that lies.
+`tests/TaskView.window.test.tsx` renders 3,000 entries and asserts the DOM
+stays under 400 rows; removing the window fails three of its four tests.
 
 ### What breaks
 
@@ -130,8 +152,13 @@ log must not mount 3,000 nodes.
 
 ## A CI job that actually starts the compose stack
 
-**Status:** partial. `docker compose config` is now in the shell job so a
-broken interpolate fails offline. The stack itself is still never started.
+**Status:** done, 2026-09-21. The `bundle` job (workflow_dispatch) runs
+`docker compose up -d --wait`, polls `/api/health` until 200, asserts every
+declared service is still running -- `--wait` returns on healthchecks, so a
+service that crashes just after would otherwise look like success -- dumps
+logs on failure and always `down -v`s. A placeholder key proves the stack
+comes up without reaching an upstream: compose waits on the router's
+LIVENESS probe, which needs no key.
 
 ### What breaks
 

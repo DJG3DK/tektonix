@@ -41,7 +41,7 @@ import pyotp
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from fastapi import Cookie, HTTPException, Request
+from fastapi import Cookie, Depends, HTTPException, Request
 from psycopg_pool import AsyncConnectionPool
 
 from agent.config import Config
@@ -906,3 +906,49 @@ async def get_user_from_ws_cookie(pool: AsyncConnectionPool, cookies: dict) -> U
     if not token:
         return None
     return await resolve_session(pool, token)
+
+
+# ---------------------------------------------------------------------------
+# the two forced screens
+# ---------------------------------------------------------------------------
+#
+# These lived in agent/server.py until the router split started. They are pure
+# policy over a User and nothing about them is server-specific -- but a route
+# module under agent/routers/ cannot import them from server.py, because
+# server.py includes those routers and the import is a cycle. Here they are
+# reachable from both sides.
+#
+# server.py re-exports require_full_auth rather than redefining it, so it
+# stays the SAME function object: tests/test_route_inventory.py identifies a
+# route's guard by that object's __name__, and dozens of tests override it
+# through app.dependency_overrides, which is keyed by identity.
+
+
+def forced_screen_block(user: User) -> str | None:
+    """Return a reason string if `user` is parked behind a forced screen, else
+    None. Factored out (audit H-1) so the WebSocket handlers enforce the exact
+    same two gates as require_full_auth -- previously they authenticated only
+    the session and let a must-change-password / no-2FA account open the live
+    task and planning streams and watch tool-call arguments and results.
+    """
+    if user.must_change_password:
+        return "password change required before using this"
+    if user.role == "admin" and not user.totp_enabled:
+        return "2FA setup required before using this"
+    return None
+
+
+async def require_full_auth(user: User = Depends(get_current_user)) -> User:
+    # Both forced-screen flags are enforced server-side here, not only via
+    # the frontend routing app.tsx does for the
+    # same two flags -- a session cookie alone would otherwise be enough to
+    # reach every real endpoint directly, skipping both forced screens
+    # entirely (the same "nginx allows all IPs" reasoning that makes
+    # frontend-only gating unsafe applies here too). 2FA is admin-only
+    # (never mandatory for a role="user" account, see this module's own
+    # docstring); a temporary/generated password must always be replaced
+    # before anything else, regardless of role.
+    blocked = forced_screen_block(user)
+    if blocked:
+        raise HTTPException(403, blocked)
+    return user

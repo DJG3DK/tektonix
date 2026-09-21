@@ -74,10 +74,32 @@ def _auth_dependency(endpoint) -> str | None:
 _STATIC_PATHS = {"/", "/{full_path:path}"}
 
 
+def _walk(routes):
+    """Every APIRoute/APIWebSocketRoute reachable from `routes`, following
+    included routers.
+
+    This version of FastAPI does not flatten `include_router` into
+    `app.routes`: it appends one opaque wrapper holding the router it was
+    given. Iterating `app.routes` alone therefore sees a seam extracted into
+    agent/routers/ as ZERO routes -- the snapshot would shrink by exactly the
+    routes that moved, and once someone updated EXPECTED to match, every
+    route in that module would be outside the only test that checks any route
+    still has a guard. That is the failure this file exists to prevent,
+    arriving through the refactor it exists to make safe.
+    """
+    for r in routes:
+        if isinstance(r, (APIRoute, APIWebSocketRoute)):
+            yield r
+            continue
+        inner = getattr(r, "original_router", None) or getattr(r, "router", None)
+        if inner is not None and getattr(inner, "routes", None) is not None:
+            yield from _walk(inner.routes)
+
+
 def _inventory():
     """The API surface: every data route with its path, method and guard."""
     rows = []
-    for r in srv.app.routes:
+    for r in _walk(srv.app.routes):
         if getattr(r, "path", None) in _STATIC_PATHS:
             continue
         if isinstance(r, APIRoute):
@@ -86,6 +108,17 @@ def _inventory():
         elif isinstance(r, APIWebSocketRoute):
             rows.append(("WS", r.path, _auth_dependency(r.endpoint)))
     return sorted(rows)
+
+
+def test_routes_inside_an_included_router_are_counted():
+    """The guard on the guard. A seam moved into agent/routers/ must still
+    appear here; if this ever passes vacuously the snapshot below stops
+    covering the code that moved."""
+    paths = {path for _m, path, _d in _inventory()}
+    assert any(p.startswith("/api/push/") for p in paths), (
+        "no routes from agent/routers/push.py in the inventory -- _walk no longer "
+        "follows included routers, and every extracted seam is now unguarded by this test"
+    )
 
 
 def test_every_route_is_authenticated_or_explicitly_public():

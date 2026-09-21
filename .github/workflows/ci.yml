@@ -268,6 +268,68 @@ jobs:
       - run: pip install -r requirements.txt
       - run: python3 scripts/verify_stack_checks.py
 
+  bundle:
+    name: Bundle — the stack actually starts (manual)
+    # Builds five images and runs them, so it is not on every push. Run it
+    # from the Actions tab after changing docker-compose.yml, a Dockerfile or
+    # the entrypoint.
+    #
+    # This is the half `docker compose config` cannot see. Both bundle
+    # regressions it exists to catch were found by hand: a healthcheck whose
+    # image has no curl, and a secret file the reviewers read before the
+    # agent's entrypoint writes it. Neither is a YAML error, and both make
+    # `up` hang rather than fail -- which is why every wait here has a
+    # timeout and dumps logs on the way out.
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: An .env with no real credentials
+        # The stack must come up without reaching an upstream. The router's
+        # LIVENESS probe -- the one compose waits on -- answers without a
+        # key; only readiness talks to OpenRouter, and nothing here waits on
+        # readiness. A placeholder key proves that stays true.
+        run: |
+          cp docker/.env.example .env
+          sed -i "s|^OPENROUTER_API_KEY=.*|OPENROUTER_API_KEY=placeholder-not-a-real-key|" .env
+          sed -i "s|^PROJECTS_DIR=.*|PROJECTS_DIR=${{ github.workspace }}/.ci-projects|" .env
+          mkdir -p .ci-projects
+
+      - name: Bring the stack up and wait for healthy
+        # --wait honours the depends_on/service_healthy graph, so this fails
+        # if any healthcheck never goes green instead of racing past it.
+        run: docker compose up -d --wait --wait-timeout 600
+
+      - name: The console answers
+        run: |
+          for i in $(seq 1 60); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8100/api/health || true)
+            [ "$code" = "200" ] && echo "agent healthy after ${i}0s" && exit 0
+            sleep 10
+          done
+          echo "agent never answered 200 on /api/health"
+          exit 1
+
+      - name: Every service is still running
+        # up --wait returns when healthchecks pass; a service that crashed
+        # immediately afterwards (a missing env var read at first use rather
+        # than at boot) still looks like success without this.
+        run: |
+          docker compose ps
+          docker compose ps --status running --format '{{.Service}}' | sort > /tmp/running
+          docker compose config --services | sort > /tmp/declared
+          diff /tmp/declared /tmp/running
+
+      - name: Logs, on failure
+        if: failure()
+        run: docker compose logs --no-color --tail 200
+
+      - name: Down
+        if: always()
+        run: docker compose down -v
+
   shell:
     name: Shell — installer and cron scripts
     runs-on: ubuntu-latest
@@ -311,8 +373,9 @@ jobs:
       - name: Compose file interpolates
         # Does not start the stack -- that needs image builds. It does fail
         # if a ${VAR:?} is missing, a service name is mistyped in
-        # depends_on, or the YAML no longer parses. The full `up --wait`
-        # belongs on a dispatch job (docs/todo.md); this is the offline half.
+        # depends_on, or the YAML no longer parses. The full `up --wait` is
+        # the `bundle` job above, run from the Actions tab; this is the
+        # offline half every push can afford.
         run: docker compose config --quiet
         env:
           PROJECTS_DIR: /tmp

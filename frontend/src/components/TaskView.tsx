@@ -16,6 +16,12 @@ import { DiffPanel } from "./DiffPanel";
 import "./TaskView.css";
 import { idleMessage } from "./activityPhase";
 
+// Rows mounted at once, and how many more a click reveals. 200 covers more
+// than a viewport at any realistic row height, so the common case -- watching
+// a task run -- never sees the control at all.
+const LOG_WINDOW = 200;
+const LOG_WINDOW_STEP = 400;
+
 interface Props {
   task: TaskMeta;
   // Lifted up to AuthenticatedApp (App.tsx) so the WS connection and
@@ -37,6 +43,21 @@ export function TaskView({ task, stream, setGeneration }: Props) {
   const logContainerRef = useRef<HTMLDivElement>(null);
   const [diffOpen, setDiffOpen] = useState(false);
 
+  // How many of the log's entries are actually in the DOM, counted from the
+  // end. useTaskStream caps the array at 3,000 and ChatMessage is memoized
+  // (audit H-16), so appending does not re-render the rows above -- but every
+  // row is still MOUNTED, and a multi-hour task makes the tab slow well
+  // before it reaches that cap. A log is read from its end, so the window is
+  // anchored there and grows upward on request rather than guessing at row
+  // heights: these are chat bubbles, a rendered diff and a wall of build
+  // output are two orders of magnitude apart, and a spacer sized from an
+  // average of those two is a scrollbar that lies.
+  const [windowSize, setWindowSize] = useState(LOG_WINDOW);
+  // Reset when the view moves to another task: the new log is a different
+  // conversation, and inheriting a window someone expanded on the last one
+  // mounts rows nobody asked for.
+  useEffect(() => setWindowSize(LOG_WINDOW), [task.task_id]);
+
   useEffect(() => {
     // audit H-16: only auto-scroll when the user is already near the bottom.
     // Previously every new entry yanked the view down with smooth scroll even
@@ -48,6 +69,10 @@ export function TaskView({ task, stream, setGeneration }: Props) {
     }
     logEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [stream.log.length]);
+
+  const firstShown = Math.max(0, stream.log.length - windowSize);
+  const shownLog = firstShown === 0 ? stream.log : stream.log.slice(firstShown);
+  const hiddenAbove = firstShown;
 
   const status = stream.status === "connecting" ? task.status : stream.status;
   // Store-status "running" is a lie for an orphaned task (backend restarted
@@ -135,9 +160,40 @@ export function TaskView({ task, stream, setGeneration }: Props) {
               <div className="chat-text">{task.goal}</div>
             </div>
           </div>
-          {stream.log.map((entry, i) => (
-            <ChatMessage key={i} entry={entry} prevEntry={i > 0 ? stream.log[i - 1] : undefined} />
-          ))}
+          {hiddenAbove > 0 && (
+            <button
+              type="button"
+              className="chat-show-earlier"
+              onClick={() => {
+                // Revealing rows above pushes the rest down, and the browser
+                // keeps scrollTop rather than what was under it. Hold the
+                // reading position by adding back exactly what grew.
+                const c = logContainerRef.current;
+                const before = c ? c.scrollHeight - c.scrollTop : 0;
+                setWindowSize((n) => n + LOG_WINDOW_STEP);
+                requestAnimationFrame(() => {
+                  if (c) c.scrollTop = c.scrollHeight - before;
+                });
+              }}
+            >
+              Show earlier — {hiddenAbove} more {hiddenAbove === 1 ? "entry" : "entries"}
+            </button>
+          )}
+          {shownLog.map((entry, i) => {
+            // The absolute index, so growing the window does not renumber
+            // every key and remount the rows already on screen -- and so
+            // prevEntry is the real previous entry rather than undefined at
+            // the top of the window, which would break the continuation
+            // styling on the first visible row.
+            const abs = firstShown + i;
+            return (
+              <ChatMessage
+                key={abs}
+                entry={entry}
+                prevEntry={abs > 0 ? stream.log[abs - 1] : undefined}
+              />
+            );
+          })}
           {status === "running" && !stream.orphaned && (
             <div className="chat-typing">
               <span /><span /><span />

@@ -289,3 +289,20 @@
   margin-right: 4px;
   vertical-align: middle;
 }
+
+/* "Show earlier" — the top of a windowed log. Deliberately quiet: on a task
+   short enough to fit the window it never appears at all, and when it does
+   it is a way back rather than something to act on. */
+.chat-show-earlier {
+  display: block;
+  margin: 0 auto var(--s3);
+  padding: 4px 14px;
+  background: none;
+  border: 1px solid var(--border, #3a3a3a);
+  border-radius: 999px;
+  color: var(--text-faint);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.chat-show-earlier:hover { color: var(--text); border-color: var(--border-strong, #555); }
