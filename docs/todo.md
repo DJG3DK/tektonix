@@ -184,7 +184,20 @@ images are the cost.
 
 ## The reviewer runs agent-authored checks on the host
 
-**Status:** not built. This is a decision, then a change.
+**Status:** done, 2026-09-21. Checks, the build, and the composer/mix
+dependency installs go through one `runAgentCode` in
+`services/commit-reviewer/reviewer.js`: the sandbox container on a host
+install, in-process in the bundle (already contained, and deliberately not
+given the docker socket), and a refusal otherwise -- never a fall back to the
+host. The decision is written up in `SECURITY.md`.
+
+Verified against the real projects before wiring: nine checks across three
+projects, eight identical sandboxed vs host. The ninth, `pnpm audit`, needs
+egress, so a check may opt in with `network: "bridge"` -- in `projects.json`,
+which the agent cannot write. Two things would have broken every project and
+did not, because they were tested rather than reasoned about: a symlinked
+`node_modules` dangles inside a container, and a `mount --bind` nested in the
+worktree is not carried in by a plain bind of its parent.
 
 ### What breaks
 

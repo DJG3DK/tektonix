@@ -995,6 +995,29 @@ def _detect_python_checks(live: Path) -> tuple[list[dict], list[Candidate], list
     return checks + tests, risky, []
 
 
+def _stack_image_keys() -> frozenset[str]:
+    """Stacks that have an image of their own, from docker/stack-images.json.
+
+    Read rather than duplicated: the same list is used by
+    services/commit-reviewer/sandbox.js to pick the image and by
+    scripts/verify_stack_checks.py to prove each one can run that stack's
+    checks. Three copies of a list is how the review dashboard ended up
+    labelling live models from an inventory deleted months earlier.
+    """
+    try:
+        root = Path(__file__).resolve().parent.parent
+        raw = (root / "docker" / "stack-images.json").read_text()
+        return frozenset((json.loads(raw).get("stacks") or {}).keys())
+    except (OSError, ValueError):
+        # An installation missing the map stamps nothing, and every check runs
+        # in the default image -- which is what happened before stacks were
+        # selectable at all.
+        return frozenset()
+
+
+_STACK_IMAGE_KEYS = _stack_image_keys()
+
+
 def _add_checks(report: DetectionReport, checks: list[dict], risky: list[Candidate],
                 *, prefix: str) -> None:
     """Merge one stack's findings into the report, renaming on collision.
@@ -1008,6 +1031,20 @@ def _add_checks(report: DetectionReport, checks: list[dict], risky: list[Candida
     renamed with it: validate_choices looks the candidate up by name, so the
     two must never drift.
     """
+    # Which container each of these checks runs in. Stamped HERE, at
+    # detection, because this is the only moment the stack that produced a
+    # check is known: by the time projects.json is written, `go vet` is just
+    # a command. Per CHECK rather than per project -- a Go backend with a
+    # React frontend is an ordinary repository, and its two sets of checks
+    # belong in two different images (docker/stack-images.json).
+    #
+    # The Node/Python stacks are deliberately left unstamped: they run in the
+    # agent's own sandbox image, which is the default, and an explicit label
+    # there would be a second name for the same thing.
+    if prefix in _STACK_IMAGE_KEYS:
+        for c in checks:
+            c.setdefault("stack", prefix)
+
     taken = {c["name"] for c in report.checks} | {c.value for c in report.risky_scripts}
     later = bool(taken)
     rename: dict[str, str] = {}

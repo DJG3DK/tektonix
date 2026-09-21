@@ -30,6 +30,7 @@ const AGENT_HOME = process.env.AGENT_HOME || path.join(__dirname, '..', '..');
 const http = require('http');
 const crypto = require('crypto');
 const { execFile } = require('child_process');
+const sandbox = require('./sandbox');
 
 // REVIEW_STATE_DIR exists for the bundle, where this service is a container
 // and its verdicts have to outlive it -- and be readable by agent-review,
@@ -473,11 +474,19 @@ async function materializeDependencyDirs(
  * composer.json ran its tests against live's vendor/ and passed or failed
  * for reasons that had nothing to do with the diff.
  *
- * Both installs here are the non-executing kind, which is what makes them
- * safe on unvetted code:
+ * Both installs here are the non-executing KIND, which is what made them
+ * defensible on unvetted code before anything was contained:
  *   composer install --no-scripts --no-plugins   (the exact analogue of npm's
  *                                                 --ignore-scripts)
  *   mix deps.get                                 (fetches; compiles nothing)
+ *
+ * "Non-executing" is doing less work than it looks, though, which is why
+ * these now go through runAgentCode like everything else: `mix deps.get`
+ * evaluates mix.exs, and mix.exs is Elixir the agent could have written.
+ * They run with network, because fetching is the entire point -- so on a
+ * host install this is the one place agent-influenced code runs contained
+ * AND online, and containment is the only thing standing between it and the
+ * machine.
  *
  * Returns the directories that were installed fresh, so the caller knows not
  * to mount live's copy over them.
@@ -489,16 +498,17 @@ async function installChangedDependencies(cfg, worktreePath, diffFiles, log = ()
 
   if (declared.includes('vendor') && /composer\.(json|lock)/.test(diffFiles)) {
     log('composer.json/lock changed — installing into the worktree instead of using live\'s vendor');
-    const r = await runSealed('composer',
+    const r = await runAgentCode(cfg, worktreePath, '.', 'composer',
       ['install', '--no-interaction', '--no-progress', '--no-scripts', '--no-plugins'],
-      worktreePath, 600_000);
+      600_000, undefined, 'bridge');
     if (r.ok) installed.push('vendor');
     else issues.push({ name: 'composer install', ok: false, output: r.output.slice(-4000) });
   }
 
   if (declared.includes('deps') && /mix\.(exs|lock)/.test(diffFiles)) {
     log('mix.exs/lock changed — fetching this branch\'s dependencies');
-    const r = await runSealed('mix', ['deps.get'], worktreePath, 600_000);
+    const r = await runAgentCode(cfg, worktreePath, '.', 'mix', ['deps.get'],
+      600_000, undefined, 'bridge');
     if (r.ok) installed.push('deps');
     else issues.push({ name: 'mix deps.get', ok: false, output: r.output.slice(-4000) });
   }
@@ -908,6 +918,41 @@ async function cleanupWorktree(cfg, worktreePath) {
   await run('git', ['worktree', 'remove', worktreePath, '--force'], cfg.live);
 }
 
+// Where agent-authored code runs. Everything below that executes something
+// the agent could have written -- checks, the build -- goes through this
+// rather than calling runSealed directly, so there is ONE answer to "is this
+// contained" instead of one per call site.
+//
+// sealedEnv is still applied inside the container: it stops secrets reaching
+// the command, which containment does not do on its own.
+async function runAgentCode(cfg, worktreePath, relDir, cmd, args, timeoutMs, extraEnv, network, stack) {
+  const mode = await sandbox.probe();
+  if (mode.mode === 'sandbox') {
+    return sandbox.runSandboxed(cfg, worktreePath, relDir, cmd, args, timeoutMs,
+                                sealedEnv(extraEnv), network, stack);
+  }
+  if (mode.mode === 'bundle') {
+    // Already inside a container that is deliberately NOT given the docker
+    // socket (docker-compose.yml gives it to `agent` alone). Starting a
+    // container from here would mean handing this service host-root
+    // equivalent to gain isolation it already has.
+    return runSealed(cmd, args, path.join(worktreePath, relDir || '.'), timeoutMs, extraEnv);
+  }
+  // Fail closed. Running on the host instead would be the escalation this
+  // exists to close, and "fall back when the sandbox is unavailable" is the
+  // path anyone attacking it would engineer. Not a new fragility: the agent's
+  // own bash already requires Docker, so a box without it is not producing
+  // work to review.
+  return {
+    ok: false,
+    code: 1,
+    output: `REFUSED: this check runs code the agent wrote and cannot be contained here -- ${mode.reason}. `
+          + `Build the sandbox image (docker/agent-sandbox) or run the reviewer in the bundle. `
+          + `It was not run on the host.`,
+  };
+}
+
+
 async function runChecks(cfg, worktreePath) {
   const results = [];
   // `|| []`: a brand-new project has no review.checks yet (its first merge is
@@ -915,12 +960,15 @@ async function runChecks(cfg, worktreePath) {
   // of reviewProject -- "review failed with an internal error", no verdict,
   // and the agent's wait_for_review timed out.
   for (const check of cfg.checks || []) {
-    const dir = path.join(worktreePath, check.dir);
     log(`  running ${check.name} (${check.cmd} ${check.args.join(' ')}) in ${check.dir}`);
     // A check may declare its own budget; test:review runs 50 suites and
     // needs more than run()'s 5-minute default.
-    // audit C-2: sealed env -- these run agent-authored code.
-    const r = await runSealed(check.cmd, check.args, dir, check.timeoutMs, check.env);
+    // audit C-2: sealed env -- these run agent-authored code. Since
+    // 2026-09-21 they also run inside the sandbox on a host install; see
+    // runAgentCode and SECURITY.md.
+    const r = await runAgentCode(cfg, worktreePath, check.dir, check.cmd, check.args,
+                                 check.timeoutMs, check.env, check.network,
+                                 check.stack || cfg.stack);
     results.push({ name: check.name, ok: r.ok, output: r.output.slice(-4000) });
   }
   return results;
@@ -994,10 +1042,11 @@ async function runBuildCheck(cfg, worktreePath) {
   const bc = cfg.buildCheck;
   if (!bc) return [];
   const results = [];
-  const dir = path.join(worktreePath, bc.dir);
   log(`  running build (${bc.cmd} ${bc.args.join(' ')}) in ${bc.dir}`);
-  // audit C-2: sealed env -- the build runs agent-authored code.
-  const build = await runSealed(bc.cmd, bc.args, dir, 300_000, bc.env);
+  // audit C-2: sealed env -- the build runs agent-authored code, and is
+  // contained for the same reason the checks are.
+  const build = await runAgentCode(cfg, worktreePath, bc.dir, bc.cmd, bc.args,
+                                   300_000, bc.env, bc.network, bc.stack || cfg.stack);
   results.push({ name: 'build', ok: build.ok, output: build.output.slice(-4000) });
   if (!build.ok) return results; // assertions need the build to have actually produced output
 

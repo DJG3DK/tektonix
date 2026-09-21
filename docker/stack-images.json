@@ -1,0 +1,64 @@
+{
+  "_comment": [
+    "Which container a project's checks run in, per toolchain.",
+    "",
+    "ONE copy, read by three callers that would otherwise each keep their own:",
+    "scripts/verify_stack_checks.py (which is where this list came from, and",
+    "which proves each image can actually run that stack's checks in CI),",
+    "services/commit-reviewer/sandbox.js (which runs them for real), and",
+    "agent/provisioning.py (which picks one when a project is onboarded).",
+    "",
+    "A second inventory of the same thing is how the review dashboard ended up",
+    "labelling live models from a list deleted months earlier. Add a stack here",
+    "and all three see it.",
+    "",
+    "`default` is the agent's own sandbox image and stays the answer for a",
+    "project with no detected stack of its own -- Node and Python live in it,",
+    "which is what most projects here are. env is what that toolchain needs to",
+    "work with a read-only HOME and no network: a cache directory it can",
+    "actually write, mostly.",
+    "",
+    "Images are PULLED, not built, except rust: the official image ships",
+    "rustup's minimal profile with neither rustfmt nor clippy, so `cargo fmt`",
+    "fails asking for `rustup component add` instead of giving a verdict."
+  ],
+
+  "default": "tektonix-sandbox:latest",
+
+  "stacks": {
+    "go": {
+      "image": "golang:1.22-alpine",
+      "env": { "HOME": "/tmp", "GOCACHE": "/tmp/gocache", "GOPATH": "/tmp/gopath", "GOFLAGS": "-mod=mod" }
+    },
+    "rust": {
+      "image": "tektonix-verify-rust:latest",
+      "build": "FROM rust:1\nRUN rustup component add rustfmt clippy\n",
+      "env": { "HOME": "/tmp", "CARGO_HOME": "/tmp/cargo" }
+    },
+    "ruby": {
+      "image": "ruby:3.3-alpine",
+      "env": { "HOME": "/tmp" }
+    },
+    "elixir": {
+      "image": "elixir:1.16-alpine",
+      "_env_comment": "HOME inside the mounted workspace, not /tmp: Hex installs itself under HOME, and a per-check container would throw that away and ask to install it again on the next check.",
+      "env": { "HOME": "/workspace/.verify-home", "MIX_ENV": "test" }
+    },
+    "java": {
+      "image": "maven:3.9-eclipse-temurin-21",
+      "env": { "HOME": "/tmp", "MAVEN_OPTS": "-Dmaven.repo.local=/tmp/m2" }
+    },
+    "gradle": {
+      "image": "gradle:8-jdk21",
+      "env": { "HOME": "/tmp", "GRADLE_USER_HOME": "/tmp/gradle" }
+    },
+    "php": {
+      "image": "composer:2",
+      "env": { "HOME": "/tmp", "COMPOSER_HOME": "/tmp/composer" }
+    },
+    "dotnet": {
+      "image": "mcr.microsoft.com/dotnet/sdk:8.0",
+      "env": { "HOME": "/tmp", "DOTNET_CLI_TELEMETRY_OPTOUT": "1", "DOTNET_NOLOGO": "1", "NUGET_PACKAGES": "/tmp/nuget" }
+    }
+  }
+}

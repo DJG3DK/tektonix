@@ -95,6 +95,8 @@ node tests/test_reviewer_gate_attribution.js
 node tests/test_stale_build_steps.js
 pwsh tests/test_install_ps1.ps1
 node tests/test_reviewer_candidates.js
+node tests/test_reviewer_sandbox.js
+node tests/test_reviewer_sandbox_modes.js
 node tests/test_preflight.js
 node tests/test_service_env.js
 node tests/test_health_projects.js

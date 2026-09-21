@@ -79,6 +79,105 @@ capabilities are intended and which would be real vulnerabilities.
   model declining to follow it.
 - Anything that lets an unauthenticated request reach a code-execution path.
 
+## Where agent-authored code runs
+
+The agent's shell is sandboxed. Its `write`/`edit` tools are not — they put
+files directly in the project's worktree, which is the job. That means a file
+the agent wrote is code, and the question that matters is *where* anything
+runs it.
+
+**The reviewer runs it.** `commit-reviewer` executes each project's configured
+checks — `npm test`, a lint, a build — against that worktree. On a host
+install this service runs as root, so until 2026-09-21 a test file the agent
+wrote was arbitrary code executing as root outside any container: a complete
+path from "model in a container" to "root on the machine". `sealedEnv()`
+already stopped secrets reaching those commands; it did nothing about what
+they could do once running.
+
+**What it does now**, decided per deployment because the right answer differs:
+
+| where | what runs checks | why |
+|---|---|---|
+| host install | the sandbox container | the reviewer is root on the real machine |
+| compose bundle | the reviewer process | it is already in a container, and `docker-compose.yml` deliberately gives the socket to `agent` alone |
+| neither available | **nothing — the review refuses** | see below |
+
+Handing the bundle's reviewer the Docker socket so it could start a sandbox
+would give that container host-root equivalent, which is worse than the
+containment it already has. That is why the bundle is not "not done yet".
+
+**It fails closed.** If Docker or the sandbox image is missing on a host
+install, the check does not run on the host instead — it returns a refusal
+saying so. "Fall back when the sandbox is unavailable" is the path an attacker
+would engineer, and it is also the change someone makes later to stop a red
+build. This costs nothing in practice: the agent's own shell already requires
+Docker, so a box without it is not producing work to review.
+
+**Containment mirrors the agent's own**, deliberately, rather than being a
+second policy: same image, `--cap-drop ALL`, `--security-opt
+no-new-privileges`, memory/CPU/pid limits, `--network none`, argv rather than
+a shell. Two hardening policies drift, and the weaker one is the one that
+decides.
+
+### The network opt-in, and what you are agreeing to
+
+Checks run with no network, because dependencies are installed by the time
+they run. One real check needs egress anyway — `pnpm audit` queries an
+advisory database — so a check may set `network: "bridge"` in `projects.json`.
+
+That file lives outside the worktree, so **the agent cannot grant its own code
+network access**. What an operator is agreeing to, per check, is that this one
+command runs agent-authored code *with* egress. Grant it to a package
+manager's own audit path; think harder before granting it to a test suite.
+
+The dependency installs (`composer install --no-scripts --no-plugins`, `mix
+deps.get`) run with network for the same reason — fetching is the point. They
+were previously argued safe as "the non-executing kind", which does less work
+than it looks: `mix deps.get` evaluates `mix.exs`, and `mix.exs` is Elixir the
+agent could have written. They are contained now too.
+
+### A project that is not Node or Python
+
+The agent's sandbox image carries Node and Python. `agent/provisioning.py`
+detects and configures checks for Go, Rust, Ruby, Elixir, Java, PHP and .NET
+as well, so containing checks in that one image would have turned every
+review red for anyone whose project is not JavaScript.
+
+So the image is chosen per CHECK, from `docker/stack-images.json` -- the same
+list `scripts/verify_stack_checks.py` already proves in CI. Per check rather
+than per project, because a Go backend with a React frontend is an ordinary
+repository and its two sets of checks belong in two different images.
+Detection stamps the stack when a project is onboarded, which is the only
+moment it is known: by the time `projects.json` is written, `go vet` is just
+a command.
+
+A stack with no entry falls back to the default image rather than failing --
+the map can gain entries after a config was written, and refusing a check
+because its label is new is worse than running it where it probably works.
+
+`node scripts/check_sandbox_tools.js` probes every configured check's command
+against its own image and says which are missing, which images are not pulled
+yet, and who needs them. It runs inside `scripts/doctor.py`, so an existing
+install finds out before its next review rather than during it. A missing
+toolchain is reported as a **setup** error naming the tool, never as a failing
+check -- an environment error read as a code failure gets handed back to the
+agent, which then tries to debug an environment it cannot see, and a correct
+commit is rejected round after round.
+
+### What this does not fix
+
+- **The Docker socket in the bundle.** `agent` is given
+  `/var/run/docker.sock` so it can start sibling sandboxes. Anything that can
+  reach that socket can ask for a privileged container, so this is host-root
+  equivalent for that container. `sandbox.py`'s mount allow-list is a guard in
+  the *client*; a socket proxy enforcing it server-side is the fix, and is not
+  built.
+- **Egress from the sandbox itself.** The agent's own shell runs on the
+  default bridge. SSRF is guarded host-side (`agent/tools/url_guard.py`), not
+  at the network layer.
+- **A project with no checks** is reviewed without running anything, so none
+  of this applies to it.
+
 ## Deploying this safely
 
 - **Never expose the dashboard directly to the internet.** It is an operator

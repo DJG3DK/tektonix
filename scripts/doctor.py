@@ -277,9 +277,42 @@ def check_sandbox_image(report: Report) -> None:
         return
     if r.returncode == 0:
         report.ok("sandbox image present")
+        _check_sandbox_tools(report)
     else:
         report.fail("sandbox image tektonix-sandbox:latest missing",
                     "docker build -t tektonix-sandbox:latest docker/agent-sandbox/")
+
+
+def _check_sandbox_tools(report: Report) -> None:
+    """Can every configured check actually RUN in that image?
+
+    The reviewer runs checks inside the sandbox now (SECURITY.md), and the
+    image carries Node and Python. agent/provisioning.py cheerfully detects
+    and configures checks for Go, Rust, Ruby, Java, .NET, PHP and Elixir --
+    none of which are in it. Without this the operator finds out at their
+    first merge, when every check on a perfectly good commit comes back as a
+    setup error.
+
+    A warning, never a failure: a project whose toolchain is missing is a
+    project that needs the image extended, not an installation that is
+    broken. The script says which tool and which checks.
+    """
+    import subprocess  # noqa: PLC0415
+
+    script = ROOT / "scripts" / "check_sandbox_tools.js"
+    if not script.is_file():
+        return
+    try:
+        r = subprocess.run(["node", str(script)], capture_output=True, text=True,
+                           timeout=180, cwd=str(ROOT), check=False)
+    except (OSError, subprocess.SubprocessError):
+        return
+    if r.returncode == 0:
+        report.ok("every configured check can run in the sandbox")
+        return
+    missing = [ln.strip() for ln in (r.stdout or "").splitlines() if "needed by" in ln]
+    report.warn("a configured check needs a tool the sandbox image lacks",
+                "; ".join(missing)[:400] or "run scripts/check_sandbox_tools.js")
 
 
 def check_capabilities(report: Report) -> None:
