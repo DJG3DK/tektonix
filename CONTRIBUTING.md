@@ -111,6 +111,7 @@ bash tests/test_install_prereqs.sh
 python3 scripts/doctor.py --quiet || true
 PG_DSN=postgresql://placeholder@localhost:5432/placeholder \
   OPENROUTER_API_KEY=placeholder ./install.sh --dry-run --yes
+PROJECTS_DIR=/tmp OPENROUTER_API_KEY=placeholder docker compose config --quiet
 ```
 
 `tests/test_repo_hygiene.py` asserts this block and `.github/workflows/ci.yml`

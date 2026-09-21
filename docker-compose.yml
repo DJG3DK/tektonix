@@ -5,8 +5,8 @@
 #   open http://localhost:8100
 #
 # See docs/roadmap-packaging.md for why this exists and what it does not cover
-# yet (remote projects are M2/M3; this bundle runs against projects on the
-# machine it is running on).
+# yet (a GitHub-only project is cloned onto this machine; there is no remote
+# execution).
 
 name: three-d-agent
 
@@ -33,6 +33,15 @@ services:
     environment:
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:?set OPENROUTER_API_KEY in .env}
       MODEL_ROUTER_KEY: ${MODEL_ROUTER_KEY:-sk-local-dev}
+    # Image HEALTHCHECK already probes /health/liveliness. Named here so the
+    # agent's depends_on can wait on it: a first task that starts while the
+    # router is still booting dies mid-call with "peer closed connection".
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:4001/health/liveliness"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 20s
     volumes:
       # The operator's own pins when they have them, the committed example when
       # they do not. This was an unconditional mount of config.yaml, which is
@@ -52,6 +61,8 @@ services:
       dockerfile: docker/agent/Dockerfile
     depends_on:
       postgres:
+        condition: service_healthy
+      router:
         condition: service_healthy
     environment:
       LANGGRAPH_PG_DSN: postgresql://agent:${POSTGRES_PASSWORD:-agent}@postgres:5432/three_d_agent
@@ -111,7 +122,16 @@ services:
       context: .
       dockerfile: docker/reviewer/Dockerfile
     depends_on:
-      - agent
+      agent:
+        condition: service_healthy
+      router:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:4100/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 20s
     environment:
       AGENT_HOME: /app
       AGENT_PROJECTS_JSON: /app/data/projects.json
@@ -135,8 +155,16 @@ services:
       dockerfile: docker/reviewer/Dockerfile
     command: ["node", "services/commit-reviewer/reviewer.js"]
     depends_on:
-      - agent
-      - router
+      agent:
+        condition: service_healthy
+      router:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:4101/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 20s
     environment:
       AGENT_HOME: /app
       AGENT_PROJECTS_JSON: /app/data/projects.json
