@@ -36,10 +36,12 @@ import logging
 import os
 import re
 import secrets
+import time
+from collections import defaultdict
 from contextlib import asynccontextmanager
 
 import psycopg
-from fastapi import FastAPI, Form
+from fastapi import FastAPI, Form, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 from psycopg_pool import AsyncConnectionPool
 
@@ -103,6 +105,47 @@ CREATE TABLE IF NOT EXISTS newsletter_subscribers (
 # to it. This rejects the obviously-not-an-address and lets the rest through.
 _EMAIL = re.compile(r"^[^@\s]+@[^@\s.]+(\.[^@\s.]+)+$")
 
+# A public HTML form with no CAPTCHA. Five signups from one IP in a minute
+# is a person retrying; thirty is a bot filling the table. Same shape as
+# agent/rate_limit.py (sliding window, X-Real-IP first) but local -- this
+# service must not import the agent. Fail-open on its own errors so a
+# limiter bug cannot take the form down. The answer is still a 303: there
+# is no JavaScript to render a 429.
+_SUBSCRIBE_MAX = 5
+_SUBSCRIBE_WINDOW_S = 60
+_subscribe_hits: dict[str, list[float]] = defaultdict(list)
+
+
+def _client_ip(request: Request) -> str:
+    # X-Real-IP only when a proxy we control set it (nginx overwrites the
+    # header from $remote_addr). X-Forwarded-For is not consulted: without
+    # that proxy it is the client's own string, and rotating it would be
+    # the whole limiter. The socket peer is the fallback.
+    real = request.headers.get("x-real-ip")
+    if real:
+        return real.strip()
+    return request.client.host if request.client else "unknown"
+
+
+def _subscribe_allowed(ip: str, now: float | None = None) -> bool:
+    now = time.time() if now is None else now
+    try:
+        recent = [t for t in _subscribe_hits[ip] if now - t < _SUBSCRIBE_WINDOW_S]
+        if len(recent) >= _SUBSCRIBE_MAX:
+            _subscribe_hits[ip] = recent
+            return False
+        recent.append(now)
+        _subscribe_hits[ip] = recent
+        return True
+    except Exception:  # noqa: BLE001 -- a limiter bug must not refuse a person
+        return True
+
+
+def reset_subscribe_limiter() -> None:
+    """Tests only. The window is process-global."""
+    _subscribe_hits.clear()
+
+
 pool: AsyncConnectionPool | None = None
 
 
@@ -140,8 +183,12 @@ async def health():
 
 
 @app.post("/subscribe")
-async def subscribe(name: str = Form(""), email: str = Form("")):
+async def subscribe(request: Request, name: str = Form(""), email: str = Form("")):
     """Take one signup. Always answers with a redirect, never a bare status."""
+    if not _subscribe_allowed(_client_ip(request)):
+        logger.info("newsletter: refused a signup (rate limit)")
+        return RedirectResponse(FAIL_URL, status_code=303)
+
     name = " ".join(name.split())[:120]
     email = email.strip().lower()[:254]
 
