@@ -164,17 +164,6 @@ export interface RouterBalance {
   remaining: number;
 }
 
-export interface ModelStats {
-  backend: string;
-  label: string;
-  tier: string;
-  requests: number;
-  errors: number;
-  cost: number;
-  promptTokens: number;
-  completionTokens: number;
-}
-
 export interface StreamEvent {
   type: "status" | "node_update" | "closed" | "ping";
   node?: string;

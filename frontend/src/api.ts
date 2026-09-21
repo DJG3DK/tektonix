@@ -1,4 +1,4 @@
-import type { ModelStats, RepoStats, RouterBalance, TaskMeta, TaskState, Analytics, AgentModelUsage, ModelPin, ModelCatalogEntry, ToolReliability, TraceSummary, PlanningSessionMeta, PlanningLogEntry, CurrentUser } from "./types";
+import type { RepoStats, RouterBalance, TaskMeta, TaskState, Analytics, AgentModelUsage, ModelPin, ModelCatalogEntry, ToolReliability, TraceSummary, PlanningSessionMeta, PlanningLogEntry, CurrentUser } from "./types";
 
 // import.meta.env.BASE_URL is Vite's own `base` config value ("/" in dev,
 // a subpath in the production build -- see vite.config.ts). Building
@@ -571,12 +571,6 @@ export async function getRepoStats(): Promise<RepoStats> {
 export async function getRouterBalance(): Promise<RouterBalance> {
   const res = await apiFetch(`${API_BASE}/router-balance`);
   if (!res.ok) throw new Error(`getRouterBalance failed: ${res.status}`);
-  return res.json();
-}
-
-export async function getModelStats(): Promise<{ models: ModelStats[] }> {
-  const res = await apiFetch("/_review/api/router/stats");
-  if (!res.ok) throw new Error(`getModelStats failed: ${res.status}`);
   return res.json();
 }
 
