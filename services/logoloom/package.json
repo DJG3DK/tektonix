@@ -5,5 +5,9 @@
   "description": "Pinned install of LogoLoom (MIT, mcpware/logoloom), called directly rather than over MCP -- see bridge.mjs.",
   "dependencies": {
     "@mcpware/logoloom": "1.0.1"
-  }
+  },
+  "overrides": {
+    "sharp": "0.35.4"
+  },
+  "comment": "sharp is pinned ABOVE LogoLoom's own ^0.33.0 range on purpose: 0.33.5 carries two HIGH advisories inherited from libvips and libheif (GHSA-g89c-p67h-r497, GHSA-2jg2-4ch7-h545, CVE-2026-33327/33328/35590/35591), both fixed in 0.35.4. The SVG sharp rasterises here is written by a model and can be influenced by a repo file or a web page it read, so image-parser bugs are reachable. tests/test_logo_tools.py exercises the export end to end against whatever is installed, which is what catches a break from the version jump."
 }
