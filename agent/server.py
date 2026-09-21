@@ -36,15 +36,16 @@ from agent import cartographer
 from agent import paths
 from agent import rate_limit
 from agent.config import PROJECTS, load_config, require_server_config
-from agent import env_config
 from agent.observability import install_langsmith
 from agent.outer_graph import build_outer_graph, initial_state, open_checkpointer, open_store, project_lock
 from agent.graph import read_with_retry
+from agent.routers import env_config as env_config_routes
+from agent.routers import settings as settings_routes
+from agent.routers import model_config as model_config_routes
 from agent.routers import analytics as analytics_routes
 from agent.routers import push as push_routes
 from agent.messages import add_message
 from agent.tools.model_rates import warm_rates
-from agent import model_config
 from agent.classify import classify_task, TaskClassification, TEST_REMINDER_NOTE
 from agent import runtime_settings
 from agent import github_inbox, github_settings
@@ -56,7 +57,6 @@ from agent import episode_vectors, history_index
 from agent import log_stream
 from agent import plan_progress
 from agent import planning_log
-from agent.tools import review_gate
 from agent.middleware.budget_guard import BudgetExceededError
 from agent.frontend_route import RouteDecision, classify_frontend, normalize_override
 from agent.planning_chat import build_planning_agent, classify_planning_difficulty, planning_thread_config, run_planning_turn, _translate_message as _translate_planning_message
@@ -332,6 +332,11 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
+# On state from the moment the app exists, NOT in lifespan: the seams under
+# agent/routers/ read config off the running app, and a TestClient exercises
+# routes without ever entering lifespan. Setting it there would make every
+# such test fail on a missing attribute rather than on anything real.
+app.state.config = config
 # CORS was allow_origins=["*"] with a comment claiming nginx tightened it in
 # production. nginx sets no CORS headers at all, so nothing did -- the comment
 # described a control that did not exist. Real exposure was limited (credentials
@@ -360,6 +365,9 @@ if config.cors_allow_origins:
 # this file, so the order a request passes through is unchanged.
 app.include_router(push_routes.router)
 app.include_router(analytics_routes.router)
+app.include_router(model_config_routes.router)
+app.include_router(settings_routes.router)
+app.include_router(env_config_routes.router)
 
 
 # audit M-9: response security headers (defence-in-depth behind React's escaping,
@@ -750,18 +758,6 @@ async def disable_2fa_endpoint(req: Disable2FARequest,
     return {"ok": True}
 
 
-class RuntimeSettingsRequest(BaseModel):
-    values: dict[str, float]
-
-
-@app.get("/api/settings/runtime")
-async def get_runtime_settings(user: User = Depends(require_full_auth)):
-    """Admin-only: these are deployment-wide, not per-user preferences. Ships
-    the spec alongside the values so the UI renders labels, help, units and
-    bounds from one source instead of duplicating them."""
-    return {"knobs": runtime_settings.KNOBS, "values": runtime_settings.all_values()}
-
-
 def _audit_store():
     """The store, or None before lifespan has attached it. An audit write
     must never be the reason a request 500s -- see agent/audit.py on why the
@@ -769,128 +765,10 @@ def _audit_store():
     return getattr(app.state, "store", None)
 
 
-@app.get("/api/audit")
-async def read_audit_log(limit: int = 100, user: User = Depends(require_full_auth)):
-    """Who moved a control, newest first. Admin-only: it names accounts, and
-    the point of the page is that a second operator's actions are visible to
-    the person responsible for the deployment -- not to everyone with a
-    login. See agent/audit.py for what is recorded and what is not."""
-    auth.require_admin(user)
-    return {"entries": await audit.recent(_audit_store(), limit=min(max(limit, 1), 500)),
-            "actions": audit.ACTIONS}
-
-
-@app.post("/api/settings/runtime")
-async def set_runtime_settings(req: RuntimeSettingsRequest, user: User = Depends(require_full_auth)):
-    """Values are clamped to each knob's bounds rather than rejected, so a
-    fat-fingered zero becomes the minimum instead of an error the operator has
-    to decode. Unknown names ARE rejected -- a typo must not sit in the
-    database looking like configuration."""
-    auth.require_admin(user)
-    try:
-        values = await runtime_settings.save(app.state.store, req.values)
-    except ValueError as e:
-        raise HTTPException(400, str(e)) from e
-    logger.info("runtime settings updated by user %s: %s", user.id, sorted(req.values))
-    return {"ok": True, "values": values}
-
-
 # ---------------------------------------------------------------------------
 # GitHub integration: settings, inbox, approve links, poller
 # (agent/github_settings.py, agent/github_inbox.py)
 # ---------------------------------------------------------------------------
-
-class GitHubSettingsPatch(BaseModel):
-    poll_interval_min: int | None = None
-    public_url: str | None = None
-    notify: dict | None = None
-    add_tokens: dict[str, str] | None = None
-    remove_tokens: list[str] | None = None
-    rename_tokens: dict[str, str] | None = None
-    projects: dict[str, dict] | None = None
-
-
-class GitHubTokenTestRequest(BaseModel):
-    name: str | None = None      # a stored token
-    token: str | None = None     # or a pasted one, before saving
-
-
-@app.get("/api/settings/github")
-async def get_github_settings(user: User = Depends(require_full_auth)):
-    """Admin-only. Tokens come back as name + hint + date, never the value."""
-    auth.require_admin(user)
-    settings = github_settings.current()
-    return {
-        "settings": github_settings.public_view(settings),
-        "sources": github_settings.SOURCES,
-        "modes": list(github_settings.MODES),
-        "author_filters": list(github_settings.AUTHOR_FILTERS),
-        "env_token": bool(getattr(config, "github_token", None)),
-        "projects": [name for name in PROJECTS],
-    }
-
-
-@app.post("/api/settings/github")
-async def set_github_settings(req: GitHubSettingsPatch, user: User = Depends(require_full_auth)):
-    auth.require_admin(user)
-    patch = {k: v for k, v in req.model_dump().items() if v is not None}
-    # Auto on a project whose review gate runs nothing mechanical means a
-    # model's opinion is the only thing between a GitHub alert and a diff.
-    # Refused here so the operator finds out while setting it, rather than
-    # from a reason line on an item three days later. The poller enforces the
-    # same rule independently -- a project's checks can be emptied after the
-    # policy was set (see github_inbox.decide).
-    for repo, project_patch in (patch.get("projects") or {}).items():
-        modes = (project_patch or {}).get("policies") or {}
-        if "auto" not in modes.values():
-            continue
-        has_checks = await review_gate.project_has_checks(repo)
-        if has_checks is False:
-            raise HTTPException(400, (
-                f"{repo} has no checks configured, so its review gate runs nothing mechanical -- "
-                "Auto would start work that nothing verifies. Add checks for the project "
-                "(Settings -> Projects, or projects.json) and try again, or use Propose."))
-        if has_checks is None:
-            raise HTTPException(400, (
-                f"could not confirm {repo}'s checks with the review service, so Auto is refused. "
-                "Start commit-reviewer and try again, or use Propose."))
-    try:
-        saved = await github_settings.save(app.state.store, config, patch)
-    except ValueError as e:
-        raise HTTPException(400, str(e)) from e
-    logger.info("github settings updated by user %s: %s", user.id, sorted(patch))
-    # One record per project whose source policy actually moved. Auto is the
-    # one that matters -- it lets the poller create work without anyone
-    # clicking -- so it is named explicitly rather than folded into "settings
-    # changed".
-    for repo, project_patch in (patch.get("projects") or {}).items():
-        modes = (project_patch or {}).get("policies") or {}
-        if not modes:
-            continue
-        await audit.record(
-            app.state.store, actor=user.email, action="github.source_policy", target=repo,
-            detail=", ".join(f"{name}={mode}" for name, mode in sorted(modes.items())),
-        )
-    _github_poll_wake.set()
-    return {"ok": True, "settings": github_settings.public_view(saved)}
-
-
-@app.post("/api/settings/github/test")
-async def test_github_token(req: GitHubTokenTestRequest, user: User = Depends(require_full_auth)):
-    """Who the token is and which projects it reaches. Works on a pasted
-    token before it is saved, or on a stored one by name."""
-    auth.require_admin(user)
-    raw = (req.token or "").strip()
-    if not raw and req.name:
-        entry = github_settings.current()["tokens"].get(req.name)
-        if not entry:
-            raise HTTPException(404, f"no stored token named {req.name!r}")
-        raw = github_settings.decrypt_token(config, entry["enc"])
-    if not raw and getattr(config, "github_token", None):
-        raw = config.github_token
-    if not raw:
-        raise HTTPException(400, "no token to test")
-    return await github_inbox.probe_token(raw, PROJECTS)
 
 
 @app.get("/api/github/inbox")
@@ -1112,8 +990,18 @@ async def github_approve_submit(request: Request):
     return _approve_html(f"<h1>Dismissed</h1><p class=muted>{_esc(result['item'].get('title'))}</p>")
 
 
+# On app.state, not a module global: the GitHub settings route that sets it
+# lives in agent/routers/settings.py now, and a router cannot import back
+# from this module without making the import a cycle. The poller below still
+# reaches it by the same name.
 _github_poll_wake = asyncio.Event()
+app.state.github_poll_wake = _github_poll_wake
+# On app.state for the same reason as github_poll_wake: the inbox route that
+# reads it lives in agent/routers/github.py now, and a router cannot import
+# back from this module without making the import a cycle. The poller below
+# writes both.
 _github_last_poll: dict | None = None
+app.state.github_last_poll = None
 
 
 async def _github_poll_once() -> list[dict]:
@@ -1123,6 +1011,7 @@ async def _github_poll_once() -> list[dict]:
         create_task=_github_create_task, notify=_github_notify, open_auto_count=_github_open_auto_count,
     )
     _github_last_poll = {"at": time.time(), "results": results}
+    app.state.github_last_poll = _github_last_poll
     return results
 
 
@@ -1533,10 +1422,6 @@ def _check_budget_topup(delta: float) -> None:
 class ApprovalRequest(BaseModel):
     decision: Literal["approve", "reject", "respond"]
     message: str | None = None  # only meaningful for a reject -- explains why to the model
-
-
-class SaveModelPinsRequest(BaseModel):
-    pins: dict[str, str]  # {role: openrouter_model_id}
 
 
 class CreatePlanningSessionRequest(BaseModel):
@@ -2066,7 +1951,6 @@ async def _run_task(
 
 
 _read_with_retry = read_with_retry
-
 
 
 async def _resolve_task_repo(task_id: str) -> str | None:
@@ -3649,91 +3533,6 @@ async def delete_task(task_id: str, repo: str, user: User = Depends(require_full
         return {"ok": True}
 
 
-@app.get("/api/model-config")
-async def get_model_config(user: User = Depends(require_full_auth)):
-    """Current pins for this agent's own roles -- see model_config.MANAGED_ROLES
-    (fifteen of them, including agent-reviewer, which the commit-reviewer
-    service resolves by alias). The remaining entries in model-router/config.yaml
-    are not this agent's to set and are never exposed here: unnamed fallback
-    targets, and any alias another process on the box may have added.
-    """
-    auth.require_admin(user)
-    # Live catalog prices, not the hand-written model_info blocks (which drift).
-    return {"roles": await model_config.get_current_pins_priced()}
-
-
-@app.get("/api/model-config/catalog")
-async def get_model_catalog(refresh: bool = False, user: User = Depends(require_full_auth)):
-    """OpenRouter's live model catalog for the picker's dropdown -- cached
-    for 10 minutes; pass ?refresh=true to force a fresh fetch."""
-    auth.require_admin(user)
-    stats = model_config.forced_tool_call_stats()
-    catalog = await model_config.fetch_model_catalog(force=refresh)
-    return {
-        "models": catalog,
-        # Roles that force a tool call cannot use every model, and OpenRouter's
-        # catalog cannot tell you which -- supported_parameters lists tool_choice
-        # and reasoning separately while some providers refuse the COMBINATION.
-        # These lists come from scripts/probe_forced_tool_call.py making real
-        # requests, so the picker can hide models that would fail.
-        "forced_tool_call": {**stats, "catalog_size": len(catalog)},
-    }
-
-
-@app.post("/api/model-config")
-async def save_model_config(req: SaveModelPinsRequest, user: User = Depends(require_full_auth)):
-    """Writes new pins for one or more of this agent's own roles. Does NOT
-    restart model-router -- the change only takes effect once that's done
-    separately via POST /api/model-config/restart, since that restart
-    affects every consumer of the shared router, not just this agent, and
-    should never be an automatic side effect of a save.
-    """
-    auth.require_admin(user)
-    catalog = await model_config.fetch_model_catalog()
-    try:
-        changed = model_config.set_pins(req.pins, catalog)
-    except model_config.UnknownRoleError as e:
-        raise HTTPException(400, str(e))
-    except model_config.ModelNotInCatalogError as e:
-        raise HTTPException(400, str(e))
-    except model_config.PinBlockNotFoundError as e:
-        raise HTTPException(500, str(e))
-    return {"ok": True, "changed": changed, "roles": await model_config.get_current_pins_priced()}
-
-
-@app.get("/api/model-config/endpoints")
-async def get_model_endpoints(model: str, user: User = Depends(require_full_auth)):
-    """The providers currently serving `model` on OpenRouter -- feeds the
-    dashboard's provider picker. Names returned here are exactly what
-    provider pinning writes into `provider.only`."""
-    auth.require_admin(user)
-    try:
-        return {"model": model, "endpoints": await model_config.fetch_model_endpoints(model)}
-    except Exception as e:  # noqa: BLE001 -- surface upstream failures as a readable 502
-        raise HTTPException(502, f"could not fetch providers for {model!r}: {e}")
-
-
-class SaveProviderPinsRequest(BaseModel):
-    # role -> provider name, or null/"" to clear back to auto-routing
-    pins: dict[str, str | None]
-
-
-@app.post("/api/model-config/providers")
-async def save_provider_pins(req: SaveProviderPinsRequest, user: User = Depends(require_full_auth)):
-    """Pin (or clear) the OpenRouter provider per role. Same contract as the
-    model pin save: writes config.yaml, takes effect at the next router
-    restart, which stays a separate explicit action."""
-    auth.require_admin(user)
-    cleaned = {r: (p or None) for r, p in req.pins.items()}
-    try:
-        model_config.set_provider_pins(cleaned)
-    except model_config.UnknownRoleError as e:
-        raise HTTPException(400, str(e))
-    except model_config.ProviderPinError as e:
-        raise HTTPException(400, str(e))
-    return {"ok": True, "roles": await model_config.get_current_pins_priced()}
-
-
 # ---------------------------------------------------------------------------
 # Project onboarding wizard (agent/provisioning.py)
 #
@@ -4694,67 +4493,6 @@ async def delete_deploy_key(name: str, user: User = Depends(require_full_auth)):
     return st.to_dict()
 
 
-class SaveEnvKeysRequest(BaseModel):
-    updates: dict[str, str]
-
-
-@app.get("/api/env-config")
-async def get_env_config(user: User = Depends(require_full_auth)):
-    """The credentials this deployment runs on, MASKED.
-
-    There is deliberately no endpoint that returns a secret's value. Reads give
-    the last four characters and whether it is set, which is enough to confirm
-    *which* key is installed without being enough to use it.
-    """
-    auth.require_admin(user)
-    return {"keys": env_config.list_keys()}
-
-
-@app.post("/api/env-config")
-async def save_env_config(req: SaveEnvKeysRequest, user: User = Depends(require_full_auth)):
-    """Write new values for allow-listed keys.
-
-    Restarts are reported, not performed: restarting the router interrupts every
-    in-flight model call, and that is the operator's call to make, not a side
-    effect of saving a form.
-    """
-    auth.require_admin(user)
-    try:
-        result = env_config.set_keys(req.updates)
-    except env_config.UnknownKeyError as e:
-        # The key NAME is safe to echo; the value never is.
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:  # noqa: BLE001
-        logger.warning("env-config write failed for %s: %s", sorted(req.updates), type(e).__name__)
-        raise HTTPException(status_code=500, detail="could not write the env file")
-    logger.info("env-config updated by %s: %s", user.email, ", ".join(result["updated"]))
-    return result
-
-
-@app.post("/api/env-config/restart")
-async def restart_services(req: SaveEnvKeysRequest, user: User = Depends(require_full_auth)):
-    """Restart the named services so a key change takes effect."""
-    auth.require_admin(user)
-    import asyncio as _a
-    allowed = {"model-router", "tektonix", "commit-reviewer", "agent-review"}
-    names = [n for n in (req.updates.get("services", "") or "").split(",") if n.strip() in allowed]
-    if not names:
-        raise HTTPException(status_code=400, detail="no known services named")
-    out = {}
-    for n in names:
-        # 3d-agent restarting kills this request mid-flight, which is expected —
-        # the client treats a dropped connection on its own restart as success.
-        proc = await _a.create_subprocess_exec(
-            "pm2", "restart", n, stdout=_a.subprocess.PIPE, stderr=_a.subprocess.STDOUT)
-        try:
-            o, _ = await _a.wait_for(proc.communicate(), timeout=60)
-            out[n] = "ok" if proc.returncode == 0 else (o or b"").decode()[-200:]
-        except TimeoutError:
-            proc.kill()
-            out[n] = "timed out"
-    return {"restarted": out}
-
-
 def _tail_lines(path: Path, count: int, block: int = 64 * 1024) -> str:
     """Last `count` lines without reading the whole file.
 
@@ -4824,70 +4562,6 @@ async def consolidation_status(user: User = Depends(require_full_auth)):
     except Exception:
         pass
     return payload
-
-
-@app.post("/api/model-config/probe-forced-tool-call")
-async def probe_forced_tool_call(user: User = Depends(require_full_auth)):
-    """Re-run the forced-tool-call probe and refresh the picker's allow-list.
-
-    Worth a button because the answer genuinely goes stale: OpenRouter adds and
-    retires models constantly, and compliance is per-provider -- the same model
-    can pass or fail depending on who answers, so a cached verdict decays. This
-    runs the real probe (scripts/probe_forced_tool_call.py) rather than re-reading
-    the catalog, because the catalog cannot express the constraint.
-    """
-    auth.require_admin(user)
-    import asyncio as _asyncio
-
-    script = Path(__file__).resolve().parent.parent / "scripts" / "probe_forced_tool_call.py"
-    venv_py = Path(__file__).resolve().parent.parent / ".venv" / "bin" / "python"
-    proc = await _asyncio.create_subprocess_exec(
-        str(venv_py), str(script), "--all", "--concurrency", "8",
-        stdout=_asyncio.subprocess.PIPE, stderr=_asyncio.subprocess.STDOUT,
-    )
-    try:
-        out, _ = await _asyncio.wait_for(proc.communicate(), timeout=1500)
-    except TimeoutError:
-        proc.kill()
-        raise HTTPException(status_code=504, detail="probe timed out")
-
-    if proc.returncode != 0:
-        # audit H5: this used to return HTTP 200 with the traceback tucked into
-        # `tail`, so a probe that never ran looked to the dashboard exactly
-        # like one that found nothing. A failed probe is an error.
-        tail = (out or b"").decode(errors="replace")[-1200:]
-        logger.error("forced-tool-call probe exited %s: %s", proc.returncode, tail)
-        raise HTTPException(
-            status_code=500,
-            detail=f"probe failed (exit {proc.returncode}). Last output:\n{tail}")
-
-    stats = model_config.forced_tool_call_stats()
-    return {
-        "ok": True,
-        **stats,
-        "catalog_size": len(await model_config.fetch_model_catalog()),
-        "tail": (out or b"").decode(errors="replace")[-1200:],
-    }
-
-
-@app.post("/api/model-config/restart-router")
-def restart_model_router(user: User = Depends(require_full_auth)):
-    """Restarts the model router so a saved pin change actually takes effect.
-    Shared-impact action: this restarts the same router the
-    review service depend on, not just this agent -- the frontend must
-    surface that plainly rather than bundling this into save.
-    """
-    auth.require_admin(user)
-    result = model_config.restart_llm_router(config.router_base_url)
-    if not result["ok"]:
-        # The message is what the dialog shows, so it has to say which half
-        # failed: a router that never came back is a different problem from a
-        # restart command pm2 refused.
-        detail = ("the router did not answer its liveness route within "
-                  f"{result['waited_s']:.0f}s after the restart"
-                  if result.get("restarted") else "pm2 could not restart model-router")
-        raise HTTPException(500, f"{detail}\n\n{result['output']}".strip())
-    return result
 
 
 @app.websocket("/api/tasks/{task_id}/stream")

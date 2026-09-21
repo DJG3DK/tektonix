@@ -73,17 +73,29 @@ what proves the injection reached it.
 
 ## Split `agent/server.py` along the seams that already exist
 
-**Status:** started, 2026-09-21. Two seams out (`agent/routers/push.py`,
-`agent/routers/analytics.py`), 5,659 -> 5,174 lines. Do not flatten it in one
-pass.
+**Status:** started, 2026-09-21. Five seams out, 5,659 -> 4,843 lines:
+`push`, `analytics`, `env_config`, `settings` (with the audit log it is
+interleaved with), `model_config`. Do not flatten the rest in one pass.
 
-**Why the next one is harder than these two, and what to do about it.** Push
-and analytics were contiguous blocks. The named seams are not: `/api/audit`
-sits in the middle of the five `/api/settings/*` routes, and `_audit_store`
-that it uses is called by routes throughout the file. So the next extraction
-is not "cut lines 757-930" -- it is moving five discrete blocks and leaving a
-shared helper behind. Do that as its own change with the inventory run after
-each block, not as a tail-end of something else.
+**The remaining seams are not mechanical, and that is the finding.** Each of
+the five above came out cleanly. The next one, `github`, does not, and the
+reason generalises: `_github_poll_once` mutates a module global with
+`global`, and is called by BOTH the `/api/github/poll` route and the
+background poll loop. Lifting it into a router breaks the loop; leaving it
+means the router cannot reach it. The fix is its own module that both import
+-- real refactoring of a background task, not a cut.
+
+Expect the same in `tasks` (`_running_tasks`, `_task_recorders`, the SSE
+bus), `planning` (`_running_planning_turns`) and `auth` (session cookie
+helpers used by the WebSocket handlers). Do those one at a time, each as its
+own change, moving the shared state to `app.state` or to a module of its own
+FIRST and the routes after.
+
+**A pattern worth reusing:** state a route needs and a background task
+mutates goes on `app.state` (`github_poll_wake`, `github_last_poll`, and
+`config` itself now live there). `config` is set the moment the app is
+created rather than in lifespan, because a TestClient exercises routes
+without ever entering lifespan.
 
 **Shared helpers now have homes**, which is most of what the first two seams
 were for: `require_full_auth` and `forced_screen_block` in `agent/auth.py`,
@@ -246,7 +258,33 @@ that needs a registry becomes a false `NEEDS_FIXES`.
 
 ## The sandbox is filesystem isolation, not network isolation
 
-**Status:** not built. Same decision as the reviewer item.
+**Status:** ACCEPTED, 2026-09-21. Not planned. Closed as "it is what it is",
+which is a decision rather than a backlog item, so it should stop appearing
+as work.
+
+The Docker socket is mounted into the agent so it can start sibling sandbox
+containers. Anything that can reach that socket can ask for a privileged
+container, so within the bundle that container is host-root equivalent, and
+`agent/tools/sandbox.py`'s mount allow-list is a guard in the CLIENT -- a
+socket proxy enforcing it server-side is the only real fix.
+
+Why it is accepted rather than fixed:
+
+* On a host install it changes nothing. The agent already runs as root on
+  that machine, so the socket grants it nothing it does not have. The
+  exposure is specific to the compose bundle.
+* The proxy would be real work -- an allow-list of API calls and of mount
+  sources, kept in step with what `sandbox.py` legitimately needs -- to
+  harden a boundary that, in the deployment where it matters, sits between an
+  operator and their own machine.
+* The thing that WAS a genuine escalation on a host install -- the reviewer
+  running agent-authored code as root outside any container -- is closed
+  (SECURITY.md). That was the one worth the work.
+
+`SECURITY.md` lists it under "what this does not fix", which is where it
+should be read: a known, stated property of the design, not an oversight.
+Revisit it if the bundle is ever run somewhere the operator is not also the
+machine's owner -- a shared host, or a hosted edition.
 
 ### What already exists
 

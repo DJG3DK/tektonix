@@ -9,6 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import agent.server as srv
+from agent.tools import review_gate
 from agent import config as agent_config
 from agent import github_inbox as gi
 from agent import github_settings as gs
@@ -39,7 +40,12 @@ def wired(monkeypatch):
     store = FakeStore()
     key = base64.urlsafe_b64encode(secrets.token_bytes(32)).decode()
     # Config is a frozen dataclass: swap the module's instance, not its fields.
-    monkeypatch.setattr(srv, "config", dataclasses.replace(srv.config, auth_secret_key=key, github_token=None))
+    fake = dataclasses.replace(srv.config, auth_secret_key=key, github_token=None)
+    monkeypatch.setattr(srv, "config", fake)
+    # And on app.state, which is where the extracted seams read it from
+    # (agent/routers/). Patching only the module global stopped reaching the
+    # settings routes the moment they moved out of server.py.
+    monkeypatch.setattr(srv.app.state, "config", fake)
     monkeypatch.setattr(agent_config, "PROJECTS", {"proj": {"live": "/nowhere", "sandbox": "/nowhere"}}, raising=False)
     monkeypatch.setattr(srv, "PROJECTS", agent_config.PROJECTS, raising=False)
     monkeypatch.setattr(srv.app.state, "store", store, raising=False)
@@ -150,7 +156,10 @@ def test_dismiss_link_dismisses(wired):
 def _checks(monkeypatch, value):
     async def _has_checks(repo):
         return value
-    monkeypatch.setattr(srv.review_gate, "project_has_checks", _has_checks)
+    # Patched on the module itself rather than through agent.server: the
+    # settings routes moved into agent/routers/settings.py when server.py
+    # started being split, and server.py no longer imports review_gate at all.
+    monkeypatch.setattr(review_gate, "project_has_checks", _has_checks)
 
 
 def test_setting_auto_is_refused_when_the_project_has_no_checks(wired, monkeypatch):
