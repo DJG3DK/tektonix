@@ -664,6 +664,12 @@ else
         warn "logo tools unavailable — the agent runs without them; to enable: cd services/logoloom && npm ci"
     fi
 fi
+# Tracing a raster logo needs a vectorizer, which is a 3MB binary from another
+# project. Not fetched here: four of the five logo tools work without it, and
+# a separate download is the operator's call, not a side effect of installing.
+if [ -f services/logoloom/fetch-vtracer.sh ] && [ ! -x services/logoloom/vendor/vtracer ]; then
+    note "to also trace existing raster logos: ./services/logoloom/fetch-vtracer.sh"
+fi
 
 # --- 8. remote access -------------------------------------------------------
 step "Remote access"

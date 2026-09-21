@@ -11,9 +11,10 @@ what it produces is everything that happens after a concept exists.
 It ships as an MCP server. Tektonix has no MCP client, and the server's four
 tools are thin wrappers over four local Node modules, so this calls the
 modules through services/logoloom/bridge.mjs rather than adding a protocol to
-reach functions already on disk. bridge.mjs also holds the two things
-upstream gets wrong for a caller whose arguments come from a model -- see its
-header.
+reach functions already on disk. Three of the four are used as they are; the
+tracer is re-implemented there, because upstream's shells out with the
+caller's path in the command string and passes flag names the current vtracer
+no longer has. See that file's header.
 
 `logo_render` is not upstream's. A model writing SVG is working blind in
 exactly the way a model editing CSS was before preview_app: the tests cannot
@@ -231,7 +232,9 @@ def make_logo_tools(root_for_writes=None, *, can_export: bool = True) -> list:
         useless paths; this is for flat marks.
 
         Returns the traced SVG. Expect to clean it up afterwards -- a trace
-        is a starting point, not a finished logo.
+        is a starting point, not a finished logo, and it will have more paths
+        and more colours than anything you would draw by hand. Render it and
+        look before you build on it.
         """
         if root_for_writes is None:
             return "ERROR: this seat has no project to read images from"

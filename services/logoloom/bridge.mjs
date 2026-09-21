@@ -11,66 +11,97 @@
  * One process per call: these are seconds-long operations a handful of times
  * per task, not a hot loop.
  *
- * WHY imagePath IS NOT PASSED THROUGH
- * -----------------------------------
- * image-to-svg.mjs runs `execSync(\`vtracer --input ${imagePath} ...\`)` -- a
- * template string, so it goes through a shell. Our caller is a model, and the
- * path it picks can come from a repo file or a web page it read, which makes
- * that a live command-injection path rather than a theoretical one. So the
- * path handed to that function is never the model's: the file is copied to a
- * temp name this script generates, and the generated name is what upstream
- * interpolates. The same copy also stops a symlink pointing somewhere else.
- *
- * And vtracer is checked for up front. Without it that function falls back to
- * `npx -y vtracer-cli`, which is a network fetch and an unpinned package,
- * mid-task. Better to say plainly that colour tracing is not installed.
+ * Three of the four are used as they are. The fourth, image-to-svg.mjs, is
+ * not -- see imageToSvgSafely below. Short version: it shells out with the
+ * caller's path interpolated into the command string, and it passes vtracer
+ * 0.6's flag names to a vtracer that renamed them, so it fails on every input
+ * anyway. Tracing is done here instead, with an argv array and no shell.
  */
 import { execFileSync } from 'node:child_process';
-import { copyFileSync, mkdtempSync, rmSync, statSync } from 'node:fs';
+import { accessSync, constants, copyFileSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { extname, join } from 'node:path';
+import { dirname, extname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const MOD = '@mcpware/logoloom/src/tools/';
 
+// vtracer lives in vendor/ next to this file rather than in /usr/local/bin:
+// it is a dependency of one tool in one service, and putting it on the system
+// PATH would make removing it somebody's archaeology later. Prepending here
+// covers both the check below and upstream's own `execSync('vtracer ...')`,
+// which inherits this process's environment.
+const HERE = dirname(fileURLToPath(import.meta.url));
+process.env.PATH = `${join(HERE, 'vendor')}:${process.env.PATH || ''}`;
+
 function have(binary) {
-  try {
-    execFileSync('command', ['-v', binary], { shell: '/bin/sh', stdio: 'ignore' });
-    return true;
-  } catch {
-    return false;
+  // Walked rather than shelled out to. `command -v` needs a shell, and Node
+  // warns (correctly) that passing args with shell:true concatenates instead
+  // of escaping them -- which is the very habit this file exists to undo.
+  for (const dir of (process.env.PATH || '').split(':')) {
+    if (!dir) continue;
+    try {
+      accessSync(join(dir, binary), constants.X_OK);
+      return true;
+    } catch {
+      // not here; keep looking
+    }
   }
+  return false;
 }
 
 async function imageToSvgSafely({ imagePath, colorMode, precision }) {
   const mode = colorMode === 'binary' ? 'binary' : 'color';
-  if (mode === 'color' && !have('vtracer')) {
+  if (!have('vtracer')) {
     return {
       success: false,
       error:
-        'colour tracing needs vtracer, which is not installed on this host ' +
-        '(cargo install vtracer). Binary mode works -- it uses potrace.',
+        'no vectorizer installed. vtracer lives in services/logoloom/vendor/ -- ' +
+        'reinstall it there, or `cargo install vtracer`.',
     };
-  }
-  if (mode === 'binary' && !have('vtracer') && !have('potrace')) {
-    return { success: false, error: 'no vectorizer installed (vtracer or potrace)' };
   }
 
   const st = statSync(imagePath);        // throws for a missing file; caught by the caller
   if (!st.isFile()) throw new Error(`${imagePath} is not a file`);
 
-  // The name upstream interpolates into a shell string is generated here, so
-  // it holds no metacharacters whatever the model asked for.
+  // Upstream's own imageToSvg is not used for this. It invokes vtracer through
+  // `execSync` with a template string -- a shell, and a model-chosen path
+  // interpolated into it -- and it passes vtracer 0.6's flag names
+  // (--colormode, --filter_speckle), which 1.0 renamed, so every call fails
+  // whatever the path. Calling vtracer here with an argv array fixes the
+  // flags and removes the shell, which is a stronger guarantee than escaping
+  // one: with no shell there is nothing for a filename to be interpreted as.
+  //
+  // The copy stays anyway. It costs three lines and it means no string the
+  // model chose reaches the subprocess at all, whatever anyone changes
+  // downstream, plus it resolves a symlink before the tracer follows it.
   const dir = mkdtempSync(join(tmpdir(), 'logoloom-in-'));
   const ext = /^\.[a-z0-9]{1,5}$/i.test(extname(imagePath)) ? extname(imagePath).toLowerCase() : '.png';
-  const safe = join(dir, `input${ext}`);
+  const src = join(dir, `input${ext}`);
+  const out = join(dir, 'out.svg');
   try {
-    copyFileSync(imagePath, safe);
-    const { imageToSvg } = await import(MOD + 'image-to-svg.mjs');
-    return JSON.parse(await imageToSvg(safe, mode, precision));
+    copyFileSync(imagePath, src);
+    const args = [
+      '--input', src,
+      '--output', out,
+      '--clustering', mode === 'binary' ? 'bw' : 'color-cluster',
+      '--filter-speckle', '4',
+      '--color-precision', '6',
+      '--path-precision', String(Math.min(10, Math.max(1, precision || 6))),
+    ];
+    try {
+      execFileSync('vtracer', args, { timeout: 60000, stdio: 'pipe' });
+    } catch (e) {
+      const why = (e.stderr && e.stderr.toString().trim()) || e.message;
+      return { success: false, error: `vtracer failed: ${why.slice(0, 300)}` };
+    }
+    if (!existsSync(out)) return { success: false, error: 'vectorization produced no output' };
+    const svg = readFileSync(out, 'utf-8');
+    return { success: true, fileSize: Buffer.byteLength(svg, 'utf8'), svg };
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
 }
+
 
 async function run(op, args) {
   switch (op) {
