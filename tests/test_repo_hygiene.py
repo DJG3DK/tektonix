@@ -232,6 +232,42 @@ def test_no_private_project_names_anywhere_in_the_public_tree():
     )
 
 
+# --- one answer to "which database is this" -------------------------------
+
+# The scheme tests that mean "postgres" or "sqlite". Written split so this
+# file's own rule does not trip over the strings it is looking for.
+_DSN_SCHEME_TESTS = [s + t for s, t in (
+    ('.startswith("sql', 'ite'), ('.startswith("post', 'gres'),
+    (".startswith('sql", "ite"), (".startswith('post", "gres"),
+)]
+
+# agent/backends.py IS the classifier. tests/ is allowed to assert on it.
+_DSN_CLASSIFIER = "agent/backends.py"
+
+
+def test_only_one_module_decides_which_database_a_dsn_names():
+    """Three copies of this two-line check is how a local installation ends
+    up with half its subsystems believing they are talking to Postgres.
+
+    The failure is not a crash. It is a deployment where the store opens,
+    the search index does not, the embedding probe thinks it is fine, and
+    nothing anywhere says why. agent/backends.py exists so there is one
+    answer; this is what stops a second one being written in the module
+    that happens to need it next.
+    """
+    hits = []
+    for rel, text in _tracked_text_files():
+        if not rel.startswith("agent/") or rel == _DSN_CLASSIFIER:
+            continue
+        for n, line in enumerate(text.splitlines(), 1):
+            if any(test in line for test in _DSN_SCHEME_TESTS):
+                hits.append(f"{rel}:{n}: {line.strip()[:90]}")
+    assert not hits, (
+        "a DSN is classified by agent.backends.backend_for_dsn and nowhere else; also here:\n  "
+        + "\n  ".join(hits)
+    )
+
+
 # --- what may enter a docker build context --------------------------------
 
 def _dockerignore_matcher():

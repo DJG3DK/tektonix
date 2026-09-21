@@ -40,16 +40,12 @@ existing commit instead of stranding a real, unreviewed change.
 """
 
 import re
-import json
 import time
-import uuid
 
 from langgraph.store.base import BaseStore
 
-from deepagents.backends import StoreBackend
-
 from agent.config import Config, PROJECTS
-from agent.deep_agent import EPISODES_ROUTE, episodes_namespace
+from agent.episodes import write_episode
 from agent.tools.checks import run_all_checks
 from agent.tools.git import (
     current_sha,
@@ -176,11 +172,19 @@ def _done_no_changes(state: AgentState) -> dict:
     }
 
 
-async def _write_episode(store: BaseStore, state: AgentState, result: dict) -> None:
-    """Append-only: each episode gets its own timestamped key, never
-    overwritten. namespace is (episodes, repo) -- shared across every task
-    for this project, so the consolidation agent can list and read them all
-    with one backend call.
+async def _write_episode(store: BaseStore, state: AgentState, result: dict,
+                         config: Config) -> None:
+    """Work out how this task ended, and hand the record to the one writer.
+
+    The inference is here because it is about THIS node's four outcomes; the
+    writing is in agent/episodes.py because several other things are about
+    to want a say in it (see that module).
+
+    `config` has no default on purpose. It is unused downstream today and a
+    default would have let the three existing callers stay untouched -- and
+    then the one wire this refactor exists to lay would be the one thing
+    nothing asserts, until an embedding or an index hook needed it and found
+    it None.
     """
     if result.get("escalated"):
         outcome = "escalated"
@@ -200,9 +204,7 @@ async def _write_episode(store: BaseStore, state: AgentState, result: dict) -> N
         "iteration_count": state["iteration_count"],
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
-    backend = StoreBackend(namespace=episodes_namespace(state["repo"]), store=store)
-    path = f"{EPISODES_ROUTE}{record['timestamp']}-{uuid.uuid4().hex[:8]}.json"
-    await backend.awrite(path, json.dumps(record, indent=2))
+    await write_episode(store, config, state["repo"], record)
 
 
 def _is_terminal(result: dict) -> bool:
@@ -220,7 +222,7 @@ async def verify_and_ship_node(state: AgentState, app_config: Config, pg_store: 
     # auto-injection.
     result = await _verify_and_ship(state, app_config, pg_store)
     if _is_terminal(result):
-        await _write_episode(pg_store, state, result)
+        await _write_episode(pg_store, state, result, app_config)
     return result
 
 

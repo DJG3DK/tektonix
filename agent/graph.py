@@ -15,6 +15,7 @@ from langgraph.store.postgres.aio import AsyncPostgresStore
 from psycopg import AsyncConnection
 from psycopg_pool import AsyncConnectionPool
 
+from agent.backends import backend_for_dsn
 from agent.config import Config
 
 logger = logging.getLogger("tektonix")
@@ -107,6 +108,17 @@ async def project_lock(repo: str, dsn: str | None = None):
         if not dsn:
             yield
             return
+        if backend_for_dsn(dsn) == "sqlite":
+            # A local installation has no advisory lock to take, and the
+            # honest equivalent is an OS file lock beside the database --
+            # which keys on a state directory rather than on a project name
+            # every process sharing a database can see. That difference is
+            # worth writing down rather than papering over, so it lands with
+            # the rest of the SQLite backend instead of here.
+            raise NotImplementedError(
+                "locking a project on SQLite is not built yet -- this installation is pointed at "
+                f"{dsn!r}, and only Postgres can hold a project today"
+            )
         key = advisory_key(repo)
         conn = await _connect(dsn, autocommit=True)
         try:
@@ -134,8 +146,37 @@ async def project_lock(repo: str, dsn: str | None = None):
             await conn.close()
 
 
+# The message both SQLite branches carry until the backend exists. One
+# string because an operator who reaches one of them is going to reach the
+# other, and two different sentences for one missing backend reads as two
+# different problems.
+_SQLITE_NOT_BUILT = (
+    "the SQLite backend is not built yet -- this installation is pointed at {dsn!r}, and only "
+    "Postgres is implemented today"
+)
+
+
 @asynccontextmanager
 async def open_checkpointer(config: Config):
+    # A dispatch and nothing else. Both halves of the real work live in the
+    # _open_* functions below so that adding a backend adds a function,
+    # rather than growing this one an `if` per database.
+    if backend_for_dsn(config.dsn) == "sqlite":
+        raise NotImplementedError(_SQLITE_NOT_BUILT.format(dsn=config.dsn))
+    async with _open_postgres_checkpointer(config) as saver:
+        yield saver
+
+
+@asynccontextmanager
+async def open_store(config: Config):
+    if backend_for_dsn(config.dsn) == "sqlite":
+        raise NotImplementedError(_SQLITE_NOT_BUILT.format(dsn=config.dsn))
+    async with _open_postgres_store(config) as store:
+        yield store
+
+
+@asynccontextmanager
+async def _open_postgres_checkpointer(config: Config):
     pool = _make_pool(config)
     await pool.open(wait=True)
     try:
@@ -153,7 +194,7 @@ async def open_checkpointer(config: Config):
 
 
 @asynccontextmanager
-async def open_store(config: Config):
+async def _open_postgres_store(config: Config):
     pool_config = {
         "min_size": _POOL_MIN_SIZE,
         "max_size": _POOL_MAX_SIZE,

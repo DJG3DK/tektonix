@@ -282,6 +282,24 @@ def check_sandbox_image(report: Report) -> None:
                     "docker build -t tektonix-sandbox:latest docker/agent-sandbox/")
 
 
+def check_capabilities(report: Report) -> None:
+    """The optional halves of this installation, and whether each one is
+    here. Never a failure: every one of these is absent on a perfectly
+    healthy box, and a doctor that fails over an unused feature is a doctor
+    people stop running. It is here because "the feature did nothing" and
+    "the feature is not installed" look identical from the dashboard."""
+    import sys  # noqa: PLC0415
+
+    sys.path.insert(0, str(ROOT))
+    from agent.capabilities import CAPABILITIES  # noqa: PLC0415
+
+    for cap in CAPABILITIES:
+        if cap.available():
+            report.ok(f"{cap.name} available", cap.provides)
+        else:
+            report.warn(f"{cap.name} not available", f"{cap.provides} -- {cap.hint}" if cap.hint else cap.provides)
+
+
 CHECKS = (
     check_file_modes,
     check_agent_env,
@@ -291,6 +309,7 @@ CHECKS = (
     check_dashboard,
     check_sandbox_image,
     check_pm2,
+    check_capabilities,
 )
 
 

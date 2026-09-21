@@ -225,3 +225,49 @@ def test_a_store_without_offset_support_still_works():
     for i in range(4):
         asyncio.run(audit.record(store, actor=f"u{i}@x", action="command.approve", detail=str(i)))
     assert len(asyncio.run(audit.recent(store))) == 4
+
+
+class LimitRecordingStore(FakeStore):
+    """No `offset`, and it honours `limit` exactly -- which is the whole
+    point: the fallback read is the only read there will be, so whatever it
+    asks for is all the trim will ever get to see."""
+
+    def __init__(self):
+        super().__init__()
+        self.limits: list[int] = []
+
+    async def asearch(self, ns, limit=100):
+        self.limits.append(limit)
+        items = [type("Item", (), {"key": k, "value": v})() for k, v in sorted(self.rows.items())]
+        return items[:limit]
+
+
+def test_trimming_still_happens_on_a_store_that_has_no_offset():
+    """The trim spots an overflowing log by reading PAST the cap.
+
+    Lifting the paging loop out of this module nearly cost that: the
+    fallback read for a store with no `offset` became a constant that
+    happened to equal MAX_RECORDS, so the trim would have been handed
+    exactly MAX_RECORDS rows for ever, concluded the log was not over its
+    cap, and never deleted another row.
+    """
+    store = LimitRecordingStore()
+    for i in range(audit.MAX_RECORDS + 50):
+        store.rows[audit._key(1_700_000_000.0 + i)] = {
+            "ts": 1_700_000_000.0 + i, "actor": "u@x", "action": "command.approve", "detail": str(i),
+        }
+
+    import agent.audit as mod
+    old_every = mod._TRIM_EVERY
+    try:
+        mod._TRIM_EVERY, mod._writes_since_trim = 1, 0
+        asyncio.run(audit.record(store, actor="last@x", action="command.approve", detail="new"))
+    finally:
+        mod._TRIM_EVERY = old_every
+
+    assert store.limits, "the trim never read the log"
+    assert min(store.limits) > audit.MAX_RECORDS, (
+        "the fallback read has to clear the cap it is being compared against, "
+        f"asked for {min(store.limits)} with a cap of {audit.MAX_RECORDS}"
+    )
+    assert len(store.rows) == audit.MAX_RECORDS

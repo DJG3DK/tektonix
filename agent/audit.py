@@ -32,6 +32,8 @@ import time
 import uuid
 from typing import Any
 
+from agent.store_paging import all_items
+
 logger = logging.getLogger(__name__)
 
 NAMESPACE = ("audit",)
@@ -148,7 +150,11 @@ async def _maybe_trim(store) -> None:
         return
     _writes_since_trim = 0
     try:
-        items = await _all(store)
+        # MAX_RECORDS * 4, not the helper's own default: overflow is
+        # detected by reading past the cap, so a read that stopped AT the
+        # cap would report "not over it yet" on every call and the log would
+        # grow for ever. Only a store with no `offset` ever sees this number.
+        items = await all_items(store, NAMESPACE, no_offset_limit=MAX_RECORDS * 4)
         if len(items) <= MAX_RECORDS:
             return
         for key in sorted(i.key for i in items)[:len(items) - MAX_RECORDS]:
@@ -157,51 +163,13 @@ async def _maybe_trim(store) -> None:
         logger.warning("audit: trim failed: %s", e)
 
 
-# One page of a store read. Deliberately larger than MAX_RECORDS so the whole
-# log is normally one call, with paging as the safety net rather than the
-# common path.
-_PAGE = 500
-
-
-# A page that returns nothing new ends the read. Deliberately NOT "a page
-# shorter than the limit ends the read": a store is free to cap a page below
-# whatever was asked for, and treating a short page as the last one made the
-# whole log look two rows long.
-_MAX_PAGES = 64
-
-
-async def _all(store) -> list:
-    """Every record, however many pages that takes."""
-    seen: dict[str, object] = {}
-    offset = 0
-    for _ in range(_MAX_PAGES):
-        try:
-            page = await store.asearch(NAMESPACE, limit=_PAGE, offset=offset)
-        except TypeError:
-            # A store without offset support: one call is all there is.
-            page = await store.asearch(NAMESPACE, limit=MAX_RECORDS * 4)
-            for item in page:
-                seen.setdefault(item.key, item)
-            break
-        fresh = [i for i in page if i.key not in seen]
-        for item in fresh:
-            seen[item.key] = item
-        # No page at all, or nothing this read had not already seen: done.
-        # The second condition is also what stops a store that ignores
-        # `offset` from spinning here forever.
-        if not page or not fresh:
-            break
-        offset += len(page)
-    return list(seen.values())
-
-
 async def recent(store, limit: int = 100) -> list[dict]:
     """Newest first. Anything unreadable is skipped rather than raising: a
     single malformed row must not blank the whole page."""
     if store is None:
         return []
     try:
-        items = await _all(store)
+        items = await all_items(store, NAMESPACE, no_offset_limit=MAX_RECORDS * 4)
     except Exception as e:  # noqa: BLE001
         logger.warning("audit: could not read the log: %s", e)
         return []

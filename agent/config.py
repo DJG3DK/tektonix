@@ -5,51 +5,139 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from agent.backends import backend_for_dsn
+
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+
+# The variables the HTTP server needs and a local run does not. They used to
+# be os.environ[...] in load_config, which gave the server its fail-fast boot
+# for free -- and gave everything else a KeyError for a mail server it was
+# never going to use. They are optional on the dataclass and re-required by
+# require_server_config(), which the server calls on the line after
+# load_config(); see that function for why one call site matters.
+_SERVER_ONLY_VARS = ("AUTH_SECRET_KEY", "SMTP_HOST", "SMTP_PORT", "SMTP_USER", "SMTP_PASS", "SMTP_FROM")
+
+# The escape hatch for pointing a server at something other than Postgres.
+# It exists so the refusal below can be overridden deliberately, in a
+# sentence an operator has to type, rather than by editing this file.
+ALLOW_SQLITE_SERVER_VAR = "AGENT_ALLOW_SQLITE_SERVER"
 
 
 @dataclass(frozen=True)
 class Config:
-    pg_dsn: str
+    # Which database this installation talks to, and therefore which backend
+    # agent/graph.py opens. AGENT_DSN if it is set, otherwise the Postgres
+    # DSN this has always read -- so a box that has never heard of AGENT_DSN
+    # gets exactly the string it got before.
+    dsn: str
     router_base_url: str
     router_api_key: str
     default_budget_usd: float
     api_port: int
     langsmith_tracing: bool
-    auth_secret_key: str
+    auth_secret_key: str | None
     cors_allow_origins: list[str]
-    smtp_host: str
-    smtp_port: int
-    smtp_user: str
-    smtp_pass: str
-    smtp_from: str
+    smtp_host: str | None
+    smtp_port: int | None
+    smtp_user: str | None
+    smtp_pass: str | None
+    smtp_from: str | None
     admin_email: str
     # Optional: fine-grained, read-only, selected repos. Enables the GitHub
     # pull-request tools (agent/tools/github_tools.py); absent = tools absent.
     github_token: str | None = None
+    # Semantic search over episodes. Off unless an operator turns it on:
+    # it needs a pgvector extension on the database and an embedding model
+    # on the router, and neither is present by default. The alias is the
+    # router's own name for that model.
+    embeddings_enabled: bool = False
+    embedding_alias: str = "embedder"
+    embedding_dims: int = 1536
+
+    @property
+    def pg_dsn(self) -> str:
+        """The DSN, for the components that can only be Postgres.
+
+        A property rather than a field so that raw-SQL callers -- the auth
+        schema, the advisory lock, the seed scripts -- say what they need in
+        the act of reading it. On a Postgres installation this returns the
+        same string `dsn` holds, to the same call sites, and nothing about
+        the running server changes. On any other backend it fails with a
+        sentence instead of handing over a connection string that will be
+        parsed by a driver that cannot use it.
+        """
+        if backend_for_dsn(self.dsn) != "postgres":
+            raise RuntimeError(
+                f"this component requires Postgres, and this installation runs on {self.dsn!r}"
+            )
+        return self.dsn
 
 
-def load_config() -> Config:
+def load_config(dsn: str | None = None) -> Config:
+    """Read the environment. `dsn` overrides it, for a caller that carries
+    its own database (the local CLI) and must not depend on what happens to
+    be in a .env file next to the checkout."""
+    smtp_port = os.environ.get("SMTP_PORT")
     return Config(
-        pg_dsn=os.environ["LANGGRAPH_PG_DSN"],
+        dsn=dsn or os.environ.get("AGENT_DSN") or os.environ["LANGGRAPH_PG_DSN"],
         router_base_url=os.environ["MODEL_ROUTER_URL"],
         router_api_key=os.environ["MODEL_ROUTER_KEY"],
         default_budget_usd=float(os.environ.get("DEFAULT_BUDGET_USD", "2.00")),
         api_port=int(os.environ.get("API_PORT", "8100")),
         langsmith_tracing=os.environ.get("LANGSMITH_TRACING", "").lower() == "true",
-        auth_secret_key=os.environ["AUTH_SECRET_KEY"],
+        auth_secret_key=os.environ.get("AUTH_SECRET_KEY"),
         # Same-origin by default -- server.py serves the frontend itself, so
         # production needs no CORS at all. Set CORS_ALLOW_ORIGINS (comma-
         # separated) only for a split dev setup with Vite on its own port.
         cors_allow_origins=[o.strip() for o in os.getenv("CORS_ALLOW_ORIGINS", "").split(",") if o.strip()],
-        smtp_host=os.environ["SMTP_HOST"],
-        smtp_port=int(os.environ["SMTP_PORT"]),
-        smtp_user=os.environ["SMTP_USER"],
-        smtp_pass=os.environ["SMTP_PASS"],
-        smtp_from=os.environ["SMTP_FROM"],
+        smtp_host=os.environ.get("SMTP_HOST"),
+        smtp_port=int(smtp_port) if smtp_port else None,
+        smtp_user=os.environ.get("SMTP_USER"),
+        smtp_pass=os.environ.get("SMTP_PASS"),
+        smtp_from=os.environ.get("SMTP_FROM"),
         admin_email=os.environ.get("ADMIN_EMAIL", "admin@example.com"),
         github_token=os.environ.get("GITHUB_TOKEN") or None,
+        embeddings_enabled=os.environ.get("EMBEDDINGS_ENABLED", "").lower() in ("1", "true", "yes"),
+        embedding_alias=os.environ.get("EMBEDDING_ALIAS") or "embedder",
+        embedding_dims=int(os.environ.get("EMBEDDING_DIMS") or "1536"),
     )
+
+
+def require_server_config(config: Config) -> None:
+    """Everything the HTTP server must have before it serves a request.
+
+    Two jobs, both of them about failing at boot instead of failing later.
+
+    The first is the fail-fast the server lost when these variables became
+    optional. It reports EVERY missing one at once: os.environ[] raised on
+    whichever happened to be read first, so an operator with three gaps
+    fixed them one restart at a time, and the third restart was the one that
+    told them about the third gap.
+
+    The second is the DSN. A stray AGENT_DSN pointing the server at a local
+    file would not crash anything -- the server would come up, open an empty
+    database, and show zero tasks for every project. That reads as data
+    loss, and the operator's next move after seeing it is not a calm one. So
+    the server refuses a non-Postgres DSN outright unless someone has
+    deliberately set AGENT_ALLOW_SQLITE_SERVER=1.
+    """
+    # Present, not truthy. This is exactly what os.environ[NAME] used to
+    # demand, and an operator who has deliberately set SMTP_USER= empty for
+    # a relay that wants no credentials has configured it, not forgotten it.
+    missing = [name for name in _SERVER_ONLY_VARS if name not in os.environ]
+    problems = []
+    if missing:
+        problems.append(
+            "these variables are not set in the environment or in .env: " + ", ".join(missing)
+        )
+    if backend_for_dsn(config.dsn) != "postgres" and os.environ.get(ALLOW_SQLITE_SERVER_VAR) != "1":
+        problems.append(
+            f"the server is pointed at {config.dsn!r}, which is not Postgres -- it would start "
+            "against an empty database and every project would read as having no tasks. Unset "
+            f"AGENT_DSN, or set {ALLOW_SQLITE_SERVER_VAR}=1 if this is really what you want."
+        )
+    if problems:
+        raise RuntimeError("this installation cannot start a server:\n  " + "\n  ".join(problems))
 
 
 # Deployment-specific: which repos this agent can target, and each one's

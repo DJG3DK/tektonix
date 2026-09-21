@@ -96,6 +96,35 @@ def test_no_token_means_no_tools():
     assert make_github_tools(None) == [] and make_github_tools("") == []
 
 
+def test_availability_counts_a_token_stored_from_the_dashboard(monkeypatch):
+    """There are two places a token can live and the enablement rule has to
+    know both. agent/capabilities.py briefly kept its own copy that checked
+    the environment variable alone, so `doctor` reported the tools missing
+    on a box where a per-project token from Settings -> GitHub had them
+    live. One rule, read from here."""
+    from agent import github_settings
+
+    config = type("C", (), {"github_token": None})()
+    monkeypatch.setattr(github_settings, "_cache", github_settings.normalize(None))
+    assert gh.available(config) is False
+
+    with_token = github_settings.normalize(None)
+    with_token["tokens"]["work"] = {"enc": "ciphertext"}
+    monkeypatch.setattr(github_settings, "_cache", with_token)
+    assert gh.available(config) is True
+
+
+def test_the_capability_line_asks_the_tools_rather_than_re_deciding(monkeypatch):
+    """A second copy of "are the GitHub tools on" is how an operator gets
+    told the wrong thing about a subsystem that is working."""
+    import agent.capabilities as caps
+
+    monkeypatch.setattr(gh, "available", lambda config: True)
+    assert caps._github_tools() is True
+    monkeypatch.setattr(gh, "available", lambda config: False)
+    assert caps._github_tools() is False
+
+
 def test_tools_resolve_repo_via_remote_and_report_errors_as_text(monkeypatch):
     monkeypatch.setattr(gh, "PROJECTS", {"demo": {"sandbox": "/nowhere"}})
     monkeypatch.setattr(gh, "_slug_cache", {})

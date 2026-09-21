@@ -36,7 +36,7 @@ FRONTEND_DIST = Path(__file__).resolve().parent.parent / "frontend" / "dist"
 from agent import cartographer
 from agent import paths
 from agent import rate_limit
-from agent.config import PROJECTS, load_config
+from agent.config import PROJECTS, load_config, require_server_config
 from agent import env_config
 from agent.observability import install_langsmith
 from agent.outer_graph import build_outer_graph, initial_state, open_checkpointer, open_store, project_lock
@@ -47,6 +47,7 @@ from agent.classify import classify_task, TaskClassification, TEST_REMINDER_NOTE
 from agent import runtime_settings
 from agent import github_inbox, github_settings
 from agent import audit
+from agent.store_paging import recent_items
 from agent import health as health_checks
 from agent import log_stream
 from agent import metrics
@@ -62,6 +63,11 @@ from agent.notify import notify_operators, notify_operators_bg, send_telegram, t
 from agent.mailer import send_plain_email
 
 config = load_config()
+# On the line after load_config, deliberately: the server-only variables are
+# optional on Config so a local run does not need a mail server, and this is
+# what puts the fail-fast boot back. It also refuses a DSN that is not
+# Postgres -- see the function.
+require_server_config(config)
 install_langsmith(config)  # no-ops cleanly if LANGSMITH_TRACING isn't set -- see observability.py
 
 # task_id -> list of subscriber queues, for fanning live updates out to every
@@ -116,7 +122,7 @@ async def _auto_resume_orphaned_tasks(startup_delay: float = 5.0) -> None:
     graph = app.state.graph
     for repo in PROJECTS:
         try:
-            items = await app.state.store.asearch(("tasks", repo), limit=50)
+            items = await recent_items(app.state.store, ("tasks", repo), 50)
         except Exception:  # noqa: BLE001 -- one repo's failure must not strand the others
             logger.exception("auto-resume: task scan failed for %s", repo)
             continue
@@ -880,7 +886,7 @@ class InboxActionRequest(BaseModel):
 async def _github_open_auto_count(repo: str) -> int:
     """Auto-created tasks that are still running or parked on a human."""
     n = 0
-    for it in await app.state.store.asearch(("tasks", repo), limit=100):
+    for it in await recent_items(app.state.store, ("tasks", repo), 100):
         v = it.value
         if v.get("origin") == "github" and v.get("status") in ("running", "escalated", "awaiting_approval", "awaiting_merge"):
             n += 1
@@ -1851,10 +1857,12 @@ async def _stream_graph(task_id: str, repo: str, goal: str, budget_usd: float, g
     last_meta_cost = starting_cost
 
     try:
-        # The DSN makes this a Postgres advisory lock rather than an object in
-        # this process, so a second worker or an overlapping restart cannot run
-        # two tasks on one worktree (agent/graph.py).
-        async with project_lock(repo, config.pg_dsn):
+        # The DSN, not pg_dsn: it is what project_lock dispatches on, and on
+        # this deployment it is the same Postgres string it always was. So
+        # this is still a Postgres advisory lock rather than an object in
+        # this process, and a second worker or an overlapping restart still
+        # cannot run two tasks on one worktree (agent/graph.py).
+        async with project_lock(repo, config.dsn):
             # stream_mode=["updates", "custom"] (not just "updates") -- the
             # graph's own "work" node is a single StateGraph node that
             # manually drives a whole inner deep-agent run inside itself

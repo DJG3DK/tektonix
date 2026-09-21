@@ -48,6 +48,7 @@ from agent.deep_agent import (
     route_local_path,
     episodes_namespace,
 )
+from agent.store_paging import all_items
 from agent.tools.agent_tools import make_agent_tools
 
 # Stripped (route-local) keys, not the agent-visible /memories/... paths --
@@ -123,20 +124,10 @@ async def _list_recent_episode_paths(store: BaseStore, repo: str, since: str | N
     # nothing is skipped or pruned before it is consolidated.
     ns = episodes_namespace(repo)(None)
     prefix = f"{EPISODES_ROUTE}{since}" if since is not None else None
-    pending: list[str] = []
-    offset = 0
-    _PAGE = 500
-    while True:
-        items = await store.asearch(ns, limit=_PAGE, offset=offset)
-        if not items:
-            break
-        pending.extend(
-            item.key for item in items
-            if prefix is None or item.key > prefix
-        )
-        if len(items) < _PAGE:
-            break
-        offset += _PAGE
+    pending = [
+        item.key for item in await all_items(store, ns)
+        if prefix is None or item.key > prefix
+    ]
     pending.sort()  # ascending == oldest first
     return pending[:MAX_EPISODES_PER_RUN]
 

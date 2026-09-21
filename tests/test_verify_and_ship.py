@@ -60,6 +60,14 @@ def _state(**overrides):
     return s
 
 
+def _config():
+    """A real Config, because _write_episode's is not optional -- see its
+    docstring."""
+    from agent.config import load_config
+
+    return load_config()
+
+
 class FakeStore:
     """Minimal in-memory async store -- just enough for StoreBackend.awrite
     (aget then aput) to work, so _write_episode can be tested without a
@@ -563,7 +571,7 @@ async def test_write_episode_infers_escalated_outcome():
     state = _state()
     result = {"escalated": True, "escalation_reason": "boom"}
 
-    await vs._write_episode(store, state, result)
+    await vs._write_episode(store, state, result, _config())
 
     record = await _only_episode(store, state["repo"])
     assert record["outcome"] == "escalated"
@@ -575,7 +583,7 @@ async def test_write_episode_infers_done_no_changes_outcome():
     state = _state()
     result = {"no_diff_streak": 0}  # _done_no_changes()'s shape -- no review_gate_result, not escalated
 
-    await vs._write_episode(store, state, result)
+    await vs._write_episode(store, state, result, _config())
 
     record = await _only_episode(store, state["repo"])
     assert record["outcome"] == "done_no_changes"
@@ -586,7 +594,7 @@ async def test_write_episode_infers_shipped_outcome():
     state = _state()
     result = {"review_gate_result": {"verdict": "READY"}}
 
-    await vs._write_episode(store, state, result)
+    await vs._write_episode(store, state, result, _config())
 
     record = await _only_episode(store, state["repo"])
     assert record["outcome"] == "shipped"
@@ -929,3 +937,26 @@ async def test_trigger_check_failure_preserves_committed_sha(monkeypatch):
     assert result.get("escalated") is True
     assert result.get("committed_sha") == "deadbeefcafe", \
         "the freshly-committed sha must survive a trigger_check failure"
+
+
+async def test_the_node_hands_its_config_to_the_episode_writer(monkeypatch):
+    """The whole point of agent/episodes.py is that the writer has a config
+    to work from -- the index hook and the embedding digest both need one.
+    Nothing downstream reads it yet, so this is the only thing that would
+    notice if the wire came loose.
+    """
+    seen = {}
+
+    async def record(store, config, repo, record_dict):
+        seen["config"] = config
+        seen["repo"] = repo
+        return "/memories/episodes/x.json"
+
+    monkeypatch.setattr(vs, "write_episode", record)
+    monkeypatch.setattr(vs, "_verify_and_ship", _fake_return({"review_gate_result": {"verdict": "READY"}}))
+
+    app_config = _config()
+    await vs.verify_and_ship_node(_state(), app_config, FakeStore())
+
+    assert seen["config"] is app_config, "the node's app_config must reach write_episode"
+    assert seen["repo"] == "test-repo"

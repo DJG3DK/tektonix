@@ -96,8 +96,8 @@ def test_a_project_held_elsewhere_waits_rather_than_running(fake_connect, caplog
     assert "locked by another process" in caplog.text
 
 
-async def _hold(repo: str):
-    async with graph.project_lock(repo, "postgresql://x/y"):
+async def _hold(repo: str, dsn: str = "postgresql://x/y"):
+    async with graph.project_lock(repo, dsn):
         pass
 
 
@@ -148,3 +148,14 @@ def test_different_projects_do_not_block_each_other(fake_connect):
 
     assert asyncio.run(scenario()) is True
     assert len(FakeConn.opened) == 2
+
+
+def test_a_local_dsn_says_the_backend_is_not_built_yet(fake_connect):
+    """The lock dispatches on the DSN like the store and the checkpointer
+    do, and the SQLite half of it does not exist yet. It has to say so
+    rather than fall through to the in-process lock, which would look like
+    it worked and give a second process its own."""
+    with pytest.raises(NotImplementedError) as e:
+        asyncio.run(_hold("proj", "sqlite:///.state/agent.db"))
+    assert "sqlite:///.state/agent.db" in str(e.value)
+    assert FakeConn.opened == [], "no connection may be opened for a DSN that is not Postgres"

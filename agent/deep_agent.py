@@ -43,6 +43,7 @@ from agent.middleware.sanitize_tool_calls import SanitizeToolCallsMiddleware
 from agent.middleware.budget_guard import BudgetMeterCallback, BudgetGuardMiddleware, BudgetTracker
 from agent.middleware.model_pin import PlanCodeModelMiddleware
 from agent.middleware.todo_nag import StaleTodoMiddleware
+from agent.store_paging import all_items
 from agent.tools.agent_tools import make_agent_tools
 from agent.tools.project_db import make_project_db_tool
 from agent.tools.checks import run_all_checks
@@ -997,18 +998,13 @@ async def unregister_skill(repo: str, store: BaseStore, name: str) -> int:
         await backend.awrite(route_local_path(SKILLS_ROUTE, SKILLS_MANIFEST_PATH), json.dumps(manifest, indent=2))
     prefix = f"/{name}/"
     deleted = 0
-    offset = 0
-    while True:
-        page = await store.asearch(namespace, limit=200, offset=offset)
-        if not page:
-            break
-        for item in page:
-            if item.key.startswith(prefix):
-                await store.adelete(namespace, item.key)
-                deleted += 1
-        if len(page) < 200:
-            break
-        offset += 200
+    # Read the whole namespace first, then delete: deleting while paging
+    # moves every later row up under the offset, so half of a multi-page
+    # skill would survive the sweep that was meant to remove it.
+    for item in await all_items(store, namespace):
+        if item.key.startswith(prefix):
+            await store.adelete(namespace, item.key)
+            deleted += 1
     return deleted
 
 
@@ -1401,6 +1397,14 @@ async def build_deep_agent(
 
     logo_tools = make_logo_tools(lambda: repo_root)
     project_tools = [*project_tools, *logo_tools]
+
+    # What the test-writer seat does NOT get, named once. A list rather than
+    # a set because a langchain tool is a pydantic model and unhashable;
+    # membership here is the same `==` the comprehension below always used.
+    # The point of collecting it is that the next seat-specific tool is one
+    # name added here, not another clause in a comprehension three
+    # subsystems are all editing.
+    test_writer_excluded = [*reference_tools, *logo_tools]
     # Named in the prompt, not just discoverable in the tool list: a model
     # asked to "do it like the other project does" will otherwise say it has
     # no way to see that project, which is what it used to have to say.
@@ -1530,12 +1534,12 @@ async def build_deep_agent(
             "coverage, never source-inspection-only tests."
         ),
         "system_prompt": TEST_WRITER_SYSTEM_PROMPT + absent_files,
-        # Not the reference tools: it writes tests for THIS repo against this
-        # repo's suite, and nothing in its prompt tells it another project
-        # exists. Tools a seat was never told about are how the investigator
-        # ended up with a prompt describing preview_app it did not have.
-        "tools": [*[t for t in project_tools if t not in reference_tools and t not in logo_tools],
-                  run_checks_tool],
+        # test_writer_excluded, not a clause per subsystem: it writes tests
+        # for THIS repo against this repo's suite, and nothing in its prompt
+        # tells it another project exists. Tools a seat was never told about
+        # are how the investigator ended up with a prompt describing
+        # preview_app it did not have.
+        "tools": [*[t for t in project_tools if t not in test_writer_excluded], run_checks_tool],
         "model": test_writer_model,
         "middleware": [
             # Same trap removal as planning_chat (2026-08-27): built-in

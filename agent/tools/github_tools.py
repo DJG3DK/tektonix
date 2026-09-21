@@ -234,6 +234,23 @@ def make_github_tools(token: TokenSource, allowed_repos: list[str] | None = None
     return [github_pull_request, github_pull_requests]
 
 
+def available(config) -> bool:
+    """Whether the GitHub tools exist on this installation.
+
+    The enablement rule lives here, with the tools, and is read from here by
+    anything that needs to report on it -- agent/capabilities.py did briefly
+    keep its own copy, which checked GITHUB_TOKEN alone and therefore told
+    an operator the tools were missing on a box where they were live via a
+    token stored from Settings -> GitHub.
+
+    One caveat the caller has to know: the per-project half of the answer
+    comes from github_settings' in-process cache, which is filled by
+    load(store). A process that has never loaded it -- scripts/doctor.py,
+    say -- sees only the environment variable.
+    """
+    return token_source(config) is not None
+
+
 def token_source(config) -> TokenSource:
     """Per-project resolver: the project's stored token from Settings ->
     GitHub, else GITHUB_TOKEN. Falsy when neither exists, so the tools are
