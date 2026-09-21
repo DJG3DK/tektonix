@@ -127,9 +127,26 @@ def _client_ip(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
 
+# An IP is only pruned when it comes back, so without this the table keeps one
+# entry per address that ever submitted the form -- for the life of the
+# process, on a public page, where rotating the source address is the cheapest
+# thing an abuser does. Swept opportunistically rather than on a timer: this
+# service has no scheduler, and a sweep that runs when the table is already
+# small is work nobody needed.
+_SWEEP_AT = 10_000
+
+
+def _sweep(now: float) -> None:
+    for ip in [ip for ip, hits in _subscribe_hits.items()
+               if not hits or now - hits[-1] >= _SUBSCRIBE_WINDOW_S]:
+        del _subscribe_hits[ip]
+
+
 def _subscribe_allowed(ip: str, now: float | None = None) -> bool:
     now = time.time() if now is None else now
     try:
+        if len(_subscribe_hits) >= _SWEEP_AT:
+            _sweep(now)
         recent = [t for t in _subscribe_hits[ip] if now - t < _SUBSCRIBE_WINDOW_S]
         if len(recent) >= _SUBSCRIBE_MAX:
             _subscribe_hits[ip] = recent

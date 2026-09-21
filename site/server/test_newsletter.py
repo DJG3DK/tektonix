@@ -221,3 +221,44 @@ def test_x_real_ip_is_the_rate_limit_key(monkeypatch):
     )
     assert r.headers["location"] == newsletter.FAIL_URL
     assert "forged@example.com" not in pool.store
+
+
+# --- the limiter's own memory -----------------------------------------------
+
+def test_the_limiter_does_not_grow_one_entry_per_address_forever():
+    """A public form with no CAPTCHA, on a process that runs for weeks. An IP
+    is only pruned when it comes back, so without a sweep the table keeps one
+    entry for every address that ever submitted -- and rotating the source
+    address is the cheapest thing an abuser does."""
+    from newsletter import _SWEEP_AT, _SUBSCRIBE_WINDOW_S, _subscribe_allowed, _subscribe_hits, reset_subscribe_limiter
+
+    reset_subscribe_limiter()
+    now = 1_000_000.0
+    for i in range(_SWEEP_AT + 5):
+        _subscribe_allowed(f"10.0.{i // 256}.{i % 256}", now=now)
+
+    assert len(_subscribe_hits) > _SWEEP_AT, "nothing to sweep yet; the test is not exercising it"
+    # One more, a full window later: everything above is now stale.
+    _subscribe_allowed("10.9.9.9", now=now + _SUBSCRIBE_WINDOW_S + 1)
+    assert len(_subscribe_hits) == 1, f"the sweep left {len(_subscribe_hits)} entries"
+    reset_subscribe_limiter()
+
+
+def test_a_sweep_never_drops_an_address_still_inside_its_window():
+    """The sweep must not hand someone a fresh allowance by forgetting them
+    mid-window -- that would make the limiter bypassable by waiting for a
+    busy moment rather than by waiting out the window."""
+    from newsletter import _SUBSCRIBE_MAX, _SUBSCRIBE_WINDOW_S, _subscribe_allowed, _sweep, reset_subscribe_limiter
+
+    reset_subscribe_limiter()
+    now = 2_000_000.0
+    for _ in range(_SUBSCRIBE_MAX):
+        assert _subscribe_allowed("198.51.100.7", now=now) is True
+    assert _subscribe_allowed("198.51.100.7", now=now) is False
+
+    _sweep(now + _SUBSCRIBE_WINDOW_S - 1)
+    assert _subscribe_allowed("198.51.100.7", now=now) is False, "the sweep reset a live window"
+
+    _sweep(now + _SUBSCRIBE_WINDOW_S + 1)
+    assert _subscribe_allowed("198.51.100.7", now=now + _SUBSCRIBE_WINDOW_S + 1) is True
+    reset_subscribe_limiter()
