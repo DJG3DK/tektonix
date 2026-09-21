@@ -50,6 +50,28 @@ _READ_HARD_CAP_CHARS = 2_000_000
 _READ_MIN_WINDOW = 500
 
 
+def check_readable(repo: str, readable: list[str]) -> None:
+    """Refuse a project this caller may not read, in the words it expects.
+
+    Lifted out of _root so it is ONE rule rather than one per subsystem
+    that grows a cross-project reach. agent/tools/history_tools.py searches
+    other projects' history through this same check: the list is resolved
+    at task creation from the creator's own access (server.py
+    _readable_repos) and carried on the task, and two places deciding
+    separately what that list means is how one of them ends up laxer.
+
+    What is NOT shared is the own-repo rule. Here reading your own project
+    through a second set of path semantics is a way to edit the wrong copy,
+    so it is refused; history search inverts that and defaults to your own
+    project, because there is no file to confuse and "have we hit this
+    before" almost always means "here".
+    """
+    if repo not in PROJECTS:
+        raise ValueError(f"unknown project {repo!r} -- must be one of {sorted(readable)}")
+    if repo not in readable:
+        raise ValueError(f"this task may not read {repo!r} -- it may read {sorted(readable)}")
+
+
 def _root(repo: str, own_repo: str, readable: list[str]) -> str:
     """The worktree to read `repo` from, or a refusal explaining itself."""
     if repo == own_repo:
@@ -57,10 +79,7 @@ def _root(repo: str, own_repo: str, readable: list[str]) -> str:
             f"{repo!r} is the project this task is working on -- use read, bash and the "
             "built-in search for it, not the reference tools"
         )
-    if repo not in PROJECTS:
-        raise ValueError(f"unknown project {repo!r} -- must be one of {sorted(readable)}")
-    if repo not in readable:
-        raise ValueError(f"this task may not read {repo!r} -- it may read {sorted(readable)}")
+    check_readable(repo, readable)
     root = (PROJECTS[repo] or {}).get("sandbox")
     if not root:
         raise ValueError(f"{repo!r} has no workspace to read")

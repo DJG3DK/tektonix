@@ -43,13 +43,21 @@ logger = logging.getLogger("agent.project_removal")
 
 ARCHIVE_DIR: Path = Path(os.environ.get("AGENT_ARCHIVE_DIR") or (paths.REPO_ROOT / "archives"))
 
-# Every namespace a project owns. Keyed by a label that survives into the
-# archive file, so a restore does not depend on this tuple's order.
+# Every STORE namespace a project owns. Keyed by a label that survives into
+# the archive file, so a restore does not depend on this tuple's order.
 #
 # (repo,) is the agent's memory for the project; the rest are named. If a new
 # per-project namespace is ever added, it belongs here too -- tests/
 # test_project_removal.py pins the list against a real provisioned project so
 # a forgotten one shows up as leftovers rather than as a mystery months later.
+#
+# STORE namespaces only, and that word is load-bearing. A project also owns
+# state that is not a store row at all, and this dict cannot reach it: rows
+# in agent_history_fts (agent/history_index.py), the worktree, the deploy
+# key, the reviewer's state file, its projects.json entry. Each of those has
+# its own step in the removal path below or in the route that calls it. A
+# future per-project TABLE will hit this same gap, so add it beside the
+# history index rather than trying to express it here.
 def namespaces(repo: str) -> dict[str, tuple[str, ...]]:
     return {
         "memory": (repo,),
@@ -57,8 +65,18 @@ def namespaces(repo: str) -> dict[str, tuple[str, ...]]:
         "skills": ("skills", repo),
         "planning": ("planning", repo),
         "planning_log": ("planning_log", repo),
+        # agent/planning_log.py writes a build task's whole transcript here
+        # and this list did not name it, so every removal since left the
+        # transcripts behind -- 1.4 MB of them across four projects, rows
+        # nothing could reach and nothing would ever clean up.
+        "task_log": ("task_log", repo),
         "tasks": ("tasks", repo),
     }
+
+# The key the history index's rows ride under in an archive document. Not a
+# namespace label: those are store namespaces, and these rows are not in the
+# store.
+HISTORY_FTS_KEY = "history_fts"
 
 
 class RemovalError(Exception):
@@ -100,8 +118,14 @@ def archive_path(repo: str, when: float | None = None) -> Path:
     return ARCHIVE_DIR / name
 
 
-async def collect(store, repo: str) -> dict[str, Any]:
-    """Read every namespace this project owns into one document."""
+async def collect(store, repo: str, index=None) -> dict[str, Any]:
+    """Read every namespace this project owns into one document.
+
+    `index` is agent/history_index.py's, when there is one. Its rows are the
+    only copy of an episode the pruner has already deleted from the store,
+    so an archive without them is an archive of less history than the
+    project actually had.
+    """
     out: dict[str, Any] = {
         "project": repo,
         "archived_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -117,6 +141,17 @@ async def collect(store, repo: str) -> dict[str, Any]:
             logger.exception("archive: could not read %s for %s", label, repo)
         out["namespaces"][label] = rows
     out["item_count"] = sum(len(v) for v in out["namespaces"].values())
+    out[HISTORY_FTS_KEY] = []
+    if index is not None:
+        # Deliberately NOT swallowed, unlike a namespace that will not read,
+        # and the difference is which copy is the last one. A store
+        # namespace still exists after this; these rows are the ONLY copy of
+        # every episode the pruner already deleted, and purge() -- which
+        # runs next -- DELETEs them. Swallowing it here wrote an archive
+        # that said it was fine, reported the step ok, and walked straight
+        # past the caller's refuse-to-continue guard, the one whose comment
+        # says deleting it anyway is the one mistake with no undo.
+        out[HISTORY_FTS_KEY] = await index.dump_project(repo)
     return out
 
 
@@ -173,7 +208,7 @@ def delete_archive(filename: str) -> None:
     target.unlink()
 
 
-async def restore(store, repo: str, doc: dict[str, Any]) -> int:
+async def restore(store, repo: str, doc: dict[str, Any], index=None) -> int:
     """Write an archive's rows back, under `repo`.
 
     Restores under the CURRENT project name rather than the archived one, so
@@ -189,10 +224,15 @@ async def restore(store, repo: str, doc: dict[str, Any]) -> int:
                 continue
             await store.aput(ns, key, value)
             written += 1
+    if index is not None and doc.get(HISTORY_FTS_KEY):
+        try:
+            written += await index.restore_project(repo, doc[HISTORY_FTS_KEY])
+        except Exception:  # noqa: BLE001 -- a project that comes back without its search index is still back
+            logger.exception("restore: could not restore the history index for %s", repo)
     return written
 
 
-async def purge(store, repo: str) -> int:
+async def purge(store, repo: str, index=None) -> int:
     """Remove every row this project owns."""
     removed = 0
     for ns in namespaces(repo).values():
@@ -202,6 +242,11 @@ async def purge(store, repo: str) -> int:
                 removed += 1
         except Exception:  # noqa: BLE001 -- keep going; a stuck namespace must not strand the rest
             logger.exception("purge: could not clear %s for %s", ns, repo)
+    if index is not None:
+        try:
+            removed += await index.forget_project(repo)
+        except Exception:  # noqa: BLE001 -- same rule as a stuck namespace
+            logger.exception("purge: could not clear the history index for %s", repo)
     return removed
 
 

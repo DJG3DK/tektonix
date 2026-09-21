@@ -2,6 +2,95 @@
 
 ## Unreleased
 
+### Past tasks are on their way to being searchable, and stop being deleted
+
+Every task writes an episode saying how it ended and, when it went wrong,
+why. Nothing could query one, and the nightly consolidation deletes them
+past a retention window once it has distilled the recurring patterns into
+memory -- so a one-off from three months ago was both unreachable and on a
+path to being destroyed.
+
+`agent_history_fts` is a table of ours beside langgraph's, holding the text
+of every episode, task and build transcript with a weighted `tsvector` and a
+GIN index over it. It is created by a versioned migration that runs on every
+start and applies nothing on the second, and it touches none of langgraph's
+own tables. An episode is indexed as it is written; the rest are reconciled
+by the nightly job, which now indexes BEFORE it prunes -- an episode deleted
+before it is indexed is gone, and a test asserts the observed call order
+rather than the source order, because a refactor that moves one call into a
+helper would pass the latter. When the pruner does take a store row, the
+index row is demoted rather than deleted and keeps the text.
+
+The order alone was not the guarantee, though: the prune ran whether or not
+the copy had worked, so a night when the index was unreachable deleted store
+rows anyway -- and an installation that never opened an index at all looked
+identical, from the result, to one that has none by design. The prune is now
+conditional on the copy having actually happened, the nightly run says so in
+its summary and exits non-zero, and the pruner reads the whole namespace
+rather than the first page of it. Deleting a task from the dashboard indexes
+its row and its transcript first, for the same reason; removing a project
+refuses outright rather than archiving a subset when the index it would have
+copied from is not open.
+
+`scripts/backfill_history_index.py` fills it from what is already there; it
+is dry-run by default, writes only rows whose text actually changed, and
+never writes to or locks the store, so it is safe against a live server and
+a second run is a genuine no-op.
+
+Removing a project used to leave its build transcripts behind -- the
+namespace agent/planning_log.py writes to was missing from the canonical
+list of what a project owns. It is in the list now, and the history index,
+which is a table rather than a namespace, gets its own archive and removal
+step beside it.
+
+### Asking what past tasks ran into, from inside a task
+
+`search_history(query)` searches that index and `read_history(ref)` opens
+one record. The split is the economy of it: an episode runs to thousands of
+tokens, so eight returned whole would be ~25,000 tokens spent before the
+model has decided any of them is relevant. A digest of eight measures ~770
+tokens against the real corpus.
+
+Ranking is a two-stage ladder, because one query shape cannot serve both
+things this gets asked. An AND of every term is right for a phrase and wrong
+for a pasted traceback, where one token that has since moved -- a line
+number, a sha, a renamed path -- takes recall to zero; an unbounded OR of
+the same words returned 86 of 146 episodes. So the precise stage runs first,
+and only if it came back nearly empty does a widened one run beside it, with
+its terms filtered by how much of the corpus they appear in and its tail cut
+at a fraction of the top score. The precise hits keep the top of the page.
+
+A page of eight is eight pieces of work. One record occupies one slot
+whatever it matched in -- decided by a window function in SQL, because
+collapsing an over-fetch afterwards let a single long transcript eat the
+page and hand back five records out of the ninety-five that matched -- and
+the episode, the near-duplicate episode and the task row of one task fold
+into one entry naming the others.
+
+A question this system has never seen comes back as a miss rather than as a
+confident page: the widened stage will not run on a query that has collapsed
+to one ordinary word, and the hits it does return are marked as widened in
+the digest. A path is searchable the way a reader types it, relative or bare
+filename, not only byte-identically to the absolute one in the corpus. And a
+query is capped and every statement runs under a deadline, because the text
+is model-authored, the cost is superlinear in its length, and in the server
+these run on the same pool that answers logins.
+
+Neither tool queries the index. Both ask agent/episode_recall.py, where this
+index is registered as one retrieval leg -- so a second way of looking things
+up can arrive later without touching a tool, a seat or a prompt.
+
+The build coordinator, the investigator, the general-purpose seat and the
+planner have both tools; the test-writer has neither. Which projects a seat
+may search is the same allow-list the reference tools use, through the same
+check, with one deliberate inversion: those refuse your own project and
+these default to it. A ref is re-checked on the way back in, because it is a
+name and not a capability.
+
+Every search records what it offered and every read records what was taken,
+so the question of whether this earns its place is answerable in a month
+with a number rather than an argument.
+
 ### The public tree is this product, not the box it grew on
 
 The example router config that `install.sh` copies onto a fresh install still

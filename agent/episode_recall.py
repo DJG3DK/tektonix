@@ -125,12 +125,19 @@ def fuse(rankings: list[list[EpisodeHit]], limit: int | None = None) -> list[Epi
     return fused[:limit] if limit else fused
 
 
-async def recall_episodes(store, repo: str, query: str, *, limit: int = 20, **kwargs) -> list[EpisodeHit]:
+async def recall_episodes(store, repo: str, query: str, *, limit: int = 20,
+                          errors: list[str] | None = None, **kwargs) -> list[EpisodeHit]:
     """Ask every registered leg, fuse what comes back.
 
     A leg that raises is dropped rather than allowed to fail the search: a
     broken index must degrade retrieval, never break the task that was
     merely curious.
+
+    `errors`, when a caller passes a list, collects what those dropped legs
+    said. Without it every failure arrived at the caller as an empty result,
+    which is indistinguishable from a corpus that genuinely holds nothing --
+    and "the search timed out" printed as "no history matched" is the one
+    symptom of this subsystem nobody would ever report.
     """
     rankings: list[list[EpisodeHit]] = []
     for name, leg in sorted(_LEGS.items()):
@@ -138,6 +145,8 @@ async def recall_episodes(store, repo: str, query: str, *, limit: int = 20, **kw
             rankings.append(await leg(store, repo, query, limit=limit, **kwargs))
         except Exception as e:  # noqa: BLE001 -- see the docstring
             logger.warning("episode recall: leg %s failed: %s", name, e)
+            if errors is not None:
+                errors.append(f"{name}: {e}")
     return fuse(rankings, limit=limit)
 
 

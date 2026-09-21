@@ -67,7 +67,20 @@ def _sqlite_backend() -> bool:
 
 
 def _episode_recall() -> bool:
+    from agent import history_index  # noqa: PLC0415
     from agent.episode_recall import available  # noqa: PLC0415
+
+    # Two ways to be true, because the answer depends on who is asking. In
+    # the server a leg is registered when an index is installed, so the
+    # registry is the live answer. doctor.py is its own short-lived process
+    # that installs nothing, so for it the question is whether there is an
+    # index for a leg to register against -- which is what the server will
+    # find at its next start.
+    return available() or history_index.available()
+
+
+def _history_index() -> bool:
+    from agent.history_index import available  # noqa: PLC0415
 
     return available()
 
@@ -92,6 +105,18 @@ CAPABILITIES: tuple[Capability, ...] = (
     ),
     Capability(
         "episode recall", "searching what past tasks ran into", _episode_recall,
-        "no retrieval leg is registered yet",
+        # Absent means the seats that would search history are built without
+        # search_history at all, which is the intended state on an
+        # installation with no index -- not an error to chase.
+        "needs the history index below; a second (vector) leg is not built yet",
+    ),
+    Capability(
+        "history index", "keeping past episodes, tasks and build transcripts searchable",
+        _history_index,
+        # Two states are both "not available" and only one of them is a
+        # problem: the table is created at the first server start, so on a
+        # box that has never run the server there is nothing to fix.
+        "the table is created when the server starts; fill it with "
+        ".venv/bin/python scripts/backfill_history_index.py --apply",
     ),
 )

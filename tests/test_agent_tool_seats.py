@@ -286,3 +286,127 @@ async def test_a_box_without_logoloom_gets_no_logo_tools_and_no_prompt(two_proje
     await da.build_deep_agent(cfg, repo, 5.0, cp, store)
     assert not (_names(captured["tools"]) & {"logo_render", "logo_export_brand_kit"})
     assert "MAKING A LOGO OR A BRAND KIT" not in captured["system_prompt"]
+
+
+# --- what past tasks ran into ---------------------------------------------
+#
+# One table rather than a test per seat, because the next subsystem that adds
+# a tool adds rows here instead of another block of near-identical tests --
+# and because the interesting assertion is the shape of the whole column, not
+# any one cell. The two that matter: the test-writer has neither (it writes
+# tests for this repo against this repo's suite, and what some other task
+# escalated over in June changes nothing about that), and the planner has
+# both (it is the seat where "we tried that in June and it escalated" still
+# changes something).
+
+import agent.history_index as _hi  # noqa: E402
+from agent.tools import history_tools as _ht  # noqa: E402
+
+
+class _StubIndex:
+    """Enough of an index for the tools to be built over. No seat test
+    searches anything; what is under test is which seat is handed what."""
+
+    async def search(self, query, **kw):
+        return []
+
+    async def fetch(self, *a):
+        return None
+
+
+@pytest.fixture
+def with_history_index(monkeypatch):
+    """An installation that HAS a history index, which CI otherwise is not.
+
+    Installed rather than stubbed past, so the leg registry -- the thing that
+    decides whether the tools exist at all -- is the same one the server uses.
+    """
+    _hi.install(_StubIndex())
+    yield
+    _hi.install(None)
+
+
+_HISTORY_TOOLS = {"search_history", "read_history"}
+
+
+@pytest.mark.parametrize("seat,expected", [
+    ("coordinator", True),
+    ("investigator", True),
+    ("general-purpose", True),
+    ("test-writer", False),
+])
+async def test_which_seats_can_search_history(two_projects, monkeypatch,
+                                              with_history_index, seat, expected):
+    cfg, repo, cp, store = two_projects
+    captured = _capture(monkeypatch, da)
+    await da.build_deep_agent(cfg, repo, 5.0, cp, store)
+    names = _names(captured["tools"] if seat == "coordinator" else _seat(captured, seat)["tools"])
+    assert (_HISTORY_TOOLS <= names) is expected
+
+
+async def test_the_planner_can_search_history(two_projects, monkeypatch, with_history_index):
+    """The seat most likely to ask "have we tried this" -- and the one where
+    the answer still changes the outcome rather than only the damage."""
+    cfg, repo, cp, store = two_projects
+    captured = _capture(monkeypatch, pc)
+    await pc.build_planning_agent(cfg, repo, cp, store)
+    assert _HISTORY_TOOLS <= _names(captured["tools"])
+
+
+async def test_the_seats_that_have_it_are_told_when_to_use_it(two_projects, monkeypatch,
+                                                              with_history_index):
+    """Described but not given is one bug; given but not described is the
+    other -- a model that is not told a capability exists says it cannot do
+    the thing and works around it."""
+    cfg, repo, cp, store = two_projects
+    captured = _capture(monkeypatch, da)
+    await da.build_deep_agent(cfg, repo, 5.0, cp, store)
+    assert "WHAT PAST TASKS RAN INTO" in captured["system_prompt"]
+    assert "WHAT PAST TASKS RAN INTO" in _seat(captured, "investigator")["system_prompt"]
+    # The general-purpose seat is handed both tools via *project_tools and
+    # was the one seat never told they exist -- which is the half of the bug
+    # this test's own docstring names.
+    assert "WHAT PAST TASKS RAN INTO" in _seat(captured, "general-purpose")["system_prompt"]
+
+    captured = _capture(monkeypatch, pc)
+    await pc.build_planning_agent(cfg, repo, cp, store)
+    assert "WHAT PAST TASKS RAN INTO" in captured["system_prompt"]
+
+
+async def test_searching_history_is_read_only(two_projects, monkeypatch, with_history_index):
+    """It reads a table of its own and writes nothing, which is why the
+    investigator can have it."""
+    cfg, repo, cp, store = two_projects
+    captured = _capture(monkeypatch, da)
+    await da.build_deep_agent(cfg, repo, 5.0, cp, store)
+    inv = _names(_seat(captured, "investigator")["tools"])
+    assert _HISTORY_TOOLS <= inv
+    assert not (inv & {"write", "edit", "write_file", "edit_file"})
+
+
+async def test_a_task_scoped_to_one_project_can_still_search_its_own_history(
+        two_projects, monkeypatch, with_history_index):
+    """The inversion from the reference tools, which appear only when there
+    is ANOTHER project to read: history search is for your own project
+    first, so it is there with no reference scope at all."""
+    cfg, repo, cp, store = two_projects
+    captured = _capture(monkeypatch, da)
+    await da.build_deep_agent(cfg, repo, 5.0, cp, store)
+    assert _HISTORY_TOOLS <= _names(captured["tools"])
+    assert not (_names(captured["tools"]) & {"read_project_file"})
+
+
+async def test_a_box_with_no_history_index_gets_no_tools_and_no_prompt(two_projects, monkeypatch):
+    """The normal state of a fresh install, and of every CI run -- not an
+    error case. No seat carries a tool that could only report that search is
+    unavailable."""
+    _hi.install(None)
+    cfg, repo, cp, store = two_projects
+    captured = _capture(monkeypatch, da)
+    await da.build_deep_agent(cfg, repo, 5.0, cp, store)
+    assert not (_names(captured["tools"]) & _HISTORY_TOOLS)
+    assert "WHAT PAST TASKS RAN INTO" not in captured["system_prompt"]
+
+    captured = _capture(monkeypatch, pc)
+    await pc.build_planning_agent(cfg, repo, cp, store)
+    assert not (_names(captured["tools"]) & _HISTORY_TOOLS)

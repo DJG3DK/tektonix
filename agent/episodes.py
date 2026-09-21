@@ -32,6 +32,7 @@ import uuid
 from deepagents.backends import StoreBackend
 from langgraph.store.base import BaseStore
 
+from agent import history_index
 from agent.config import Config
 from agent.deep_agent import EPISODES_ROUTE, episodes_namespace
 
@@ -45,12 +46,18 @@ async def write_episode(store: BaseStore, config: Config, repo: str, record: dic
     Returns the key it wrote, which is what a caller needs to refer to this
     episode later without guessing at the key shape.
 
-    `config` is unused today and is in the signature on purpose: the index
-    hook and the embedding digest both need it, and agreeing the signature
-    once is the entire point of this module. A later commit fills it in
-    without touching a single call site.
+    The store write comes first and the index second, in that order and
+    never the other way: a stored episode that is not searchable is a gap a
+    later sync closes, and a searchable episode that was never stored is a
+    hit pointing at nothing.
     """
     backend = StoreBackend(namespace=episodes_namespace(repo), store=store)
     path = f"{EPISODES_ROUTE}{record['timestamp']}-{uuid.uuid4().hex[:8]}.json"
     await backend.awrite(path, json.dumps(record, indent=2))
+    # Best-effort by contract, not by accident: index_episode swallows its
+    # own failures. A task that has shipped must not be failed at the very
+    # last step because a search index was unreachable -- and the nightly
+    # sync picks this episode up anyway. `config` is what tells it whether
+    # an installation with no index is a normal one or a misconfigured one.
+    await history_index.index_episode(config, repo, path, record)
     return path

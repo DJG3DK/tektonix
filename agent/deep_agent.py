@@ -1677,13 +1677,29 @@ async def build_deep_agent(
     logo_tools = make_logo_tools(lambda: repo_root)
     project_tools = [*project_tools, *logo_tools]
 
+    # What past tasks ran into (agent/tools/history_tools.py). Empty when the
+    # installation has no history index, so no seat carries a pair of tools
+    # that could only report that search is unavailable. The gate is the
+    # task's own reference_repos -- the same list the reference tools use,
+    # through the same check -- except that this task's OWN project is always
+    # in it and is the default.
+    from agent.tools.history_tools import guidance as history_guidance  # noqa: PLC0415
+    from agent.tools.history_tools import make_history_tools  # noqa: PLC0415
+
+    history_tools = make_history_tools(repo, reference_repos, store, task_id=task_id)
+    project_tools = [*project_tools, *history_tools]
+    history_note = history_guidance(repo, reference_repos)
+
     # What the test-writer seat does NOT get, named once. A list rather than
     # a set because a langchain tool is a pydantic model and unhashable;
     # membership here is the same `==` the comprehension below always used.
     # The point of collecting it is that the next seat-specific tool is one
     # name added here, not another clause in a comprehension three
     # subsystems are all editing.
-    test_writer_excluded = [*reference_tools, *logo_tools]
+    # history_tools is here for the same reason the other two are: the
+    # test-writer writes tests for this repo against this repo's suite, and
+    # what some other task escalated over in June changes nothing about that.
+    test_writer_excluded = [*reference_tools, *logo_tools, *history_tools]
     # Named in the prompt, not just discoverable in the tool list: a model
     # asked to "do it like the other project does" will otherwise say it has
     # no way to see that project, which is what it used to have to say.
@@ -1713,8 +1729,11 @@ async def build_deep_agent(
     # what a page currently does. preview_app is also the tidier way to do it:
     # bash leaves a dev server running, this tears the container down in a
     # finally.
+    # history_tools reads a table and writes nothing, and the investigator is
+    # the seat that gets sent to find things out -- history is another place
+    # to look.
     read_only_tools = [tool_by_name["read"], tool_by_name["bash"], tool_by_name["describe_image"],
-                       *github_tools, *visual_tools, *reference_tools]
+                       *github_tools, *visual_tools, *reference_tools, *history_tools]
     if db_tool is not None:
         read_only_tools.append(db_tool)
     run_checks_tool = _make_run_checks_tool(repo_root, repo)
@@ -1778,7 +1797,7 @@ async def build_deep_agent(
             "multiple files, finding every call site of something, or answering a question that "
             "needs digging before any change can be made. Cannot write or edit files."
         ),
-        "system_prompt": INVESTIGATOR_SYSTEM_PROMPT + absent_files + reference_note,
+        "system_prompt": INVESTIGATOR_SYSTEM_PROMPT + absent_files + reference_note + history_note,
         "tools": read_only_tools,
         "model": investigator_model,
         "middleware": [
@@ -1862,7 +1881,16 @@ async def build_deep_agent(
     # this keeps the capability and closes the enforcement hole.
     general_purpose = {
         **GENERAL_PURPOSE_SUBAGENT,  # canonical name/description/system_prompt from the lib
-        "system_prompt": GENERAL_PURPOSE_SUBAGENT["system_prompt"] + "\n\n" + _FILESYSTEM_GUIDANCE + absent_files,
+        # history_note as well, because this seat is handed search_history
+        # and read_history by *project_tools below. Given but not described
+        # is the half of the bug the feature's own comment argues against: a
+        # model not told a capability exists says it cannot do the thing and
+        # works around it. (reference_note is deliberately NOT here -- that
+        # tool set refuses this task's own repo, and a delegated sub-task
+        # reaching for another project is a scope decision the coordinator
+        # makes, not this seat.)
+        "system_prompt": (GENERAL_PURPOSE_SUBAGENT["system_prompt"] + "\n\n"
+                          + _FILESYSTEM_GUIDANCE + absent_files + history_note),
         "tools": [*project_tools, run_checks_tool],
         "model": coordinator_model,
         "middleware": [
@@ -1900,7 +1928,7 @@ async def build_deep_agent(
             project_memory_content=project_memory_content,
             org_memory_content=org_memory_content,
             skills_summary=skills_summary,
-        ) + absent_files + reference_note + ("\n\n" + _LOGO_GUIDANCE if logo_tools else ""),
+        ) + absent_files + reference_note + history_note + ("\n\n" + _LOGO_GUIDANCE if logo_tools else ""),
         middleware=[
             SanitizeToolCallsMiddleware(),  # a malformed tool call in history never reaches a provider (2026-09-09)
             HiddenToolsMiddleware("glob", "grep", "execute", "delete"),

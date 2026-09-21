@@ -39,6 +39,7 @@ from agent.middleware.budget_guard import BudgetGuardMiddleware, BudgetTracker
 from deepagents import create_deep_agent
 from deepagents.backends import StoreBackend
 
+from agent import history_index
 from agent.config import Config, PROJECTS
 from agent.deep_agent import (
     EPISODES_ROUTE,
@@ -161,9 +162,30 @@ async def run_consolidation(config: Config, repo: str, checkpointer, store: Base
 
         since = file_data_to_string(marker.file_data).strip() or None
 
+    # ORDER IS LOAD-BEARING: this is step (1) of (1) index, (2) write
+    # memory, (3) advance the marker, (4) prune. _prune_consolidated_episodes
+    # at the bottom of this function permanently DELETEs store rows, and an
+    # episode deleted before it is indexed is gone -- there is no second
+    # copy anywhere. Moving this call below the prune destroys history
+    # silently; tests/test_history_index_ordering.py fails if it moves.
+    #
+    # The order alone was never the guarantee, though, and that was the
+    # hole: the prune ran unconditionally, so a night when the index was
+    # unreachable reported a failed sync and then deleted the rows anyway.
+    # `indexed.copied` below is the actual guard -- the ordering only makes
+    # it possible to ask.
+    #
+    # Before the early return below as well, and not only before the prune:
+    # the other two corpora (a project's task rows and its build
+    # transcripts) keep changing on a day when no task produced an episode,
+    # and this nightly pass is the only thing that reconciles them.
+    indexed = await history_index.sync_project(config, repo, store)
+
     episode_paths = await _list_recent_episode_paths(store, repo, since)
     if not episode_paths:
-        return {"episodes_reviewed": 0, "memory_changed": False, "reasoning": "no new episodes since last run"}
+        return {"episodes_reviewed": 0, "memory_changed": False,
+                **_history_summary(indexed),
+                "reasoning": "no new episodes since last run"}
 
     episodes = []
     for path in episode_paths:
@@ -262,14 +284,43 @@ async def run_consolidation(config: Config, repo: str, checkpointer, store: Base
     new_marker = last_path[len(EPISODES_ROUTE):]
     await project_backend.awrite(CONSOLIDATION_MARKER_PATH, new_marker)
 
-    pruned = await _prune_consolidated_episodes(store, repo, new_marker)
+    # THE GUARD, not the ordering above it. _prune_consolidated_episodes
+    # permanently DELETEs store rows whose only other copy is the row
+    # sync_project was supposed to have written, so it may run only when
+    # that copy actually happened. Skipping a prune costs one night of extra
+    # rows in a table that already holds thousands; running it when the copy
+    # did not happen costs history that exists nowhere else.
+    pruned = 0
+    if indexed.copied:
+        pruned = await _prune_consolidated_episodes(store, repo, new_marker)
 
     return {
         "episodes_reviewed": len(episodes),
         "memory_changed": memory_changed,
         "episodes_pruned": pruned,
+        **_history_summary(indexed),
         "reasoning": structured.reasoning,
     }
+
+
+def _history_summary(indexed) -> dict:
+    """What the nightly pass did to the search index, for the operator.
+
+    Printed wholesale by scripts/run_consolidation.py, which is the only
+    place anybody sees this job at all. `history_rows_written: 0` alone was
+    not enough to tell anyone anything -- it is also exactly what a healthy
+    night with nothing new prints -- so a failure is named here rather than
+    left to a logger.warning that reaches the log only through Python's
+    lastResort handler, no module in this tree having called basicConfig.
+    """
+    summary = {
+        "history_rows_written": indexed.written,
+        "history_rows_demoted": indexed.demoted,
+    }
+    if not indexed.copied:
+        summary["history_failed"] = list(indexed.failed) or [indexed.skipped]
+        summary["episodes_not_pruned"] = indexed.why_not_copied
+    return summary
 
 
 async def _prune_consolidated_episodes(store: BaseStore, repo: str, marker: str) -> int:
@@ -289,7 +340,12 @@ async def _prune_consolidated_episodes(store: BaseStore, repo: str, marker: str)
         still a recent trail to read by hand when something goes wrong.
     """
     ns = episodes_namespace(repo)(None)
-    items = await store.asearch(ns, limit=1000)
+    # all_items, not a bare asearch(limit=1000): a limit on an updated_at
+    # ordering is a PAGE, and past 1000 episodes both tests below -- "are
+    # there more than the retention window" and "which are the newest
+    # EPISODE_RETENTION" -- were being computed against an arbitrary window
+    # of the namespace by the most destructive function in the repository.
+    items = await all_items(store, ns)
     keys = sorted(item.key for item in items)
     if len(keys) <= EPISODE_RETENTION:
         return 0

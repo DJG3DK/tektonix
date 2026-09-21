@@ -47,8 +47,10 @@ from agent.classify import classify_task, TaskClassification, TEST_REMINDER_NOTE
 from agent import runtime_settings
 from agent import github_inbox, github_settings
 from agent import audit
+from agent.backends import backend_for_dsn
 from agent.store_paging import recent_items
 from agent import health as health_checks
+from agent import history_index
 from agent import log_stream
 from agent import metrics
 from agent import plan_progress
@@ -258,6 +260,12 @@ async def lifespan(app: FastAPI):
                             scoped, len(PROJECTS))
         except Exception as e:  # noqa: BLE001 -- never block startup on a migration
             logger.error("auto-approve backfill failed (accounts stay unscoped): %s", e)
+
+        # The keyword index over past tasks, on the auth pool rather than a
+        # fourth pool against the same database. It migrates itself, and a
+        # failure here costs history search and nothing else -- install_for
+        # never raises.
+        app.state.history_index = await history_index.install_for(config, pool=auth_pool)
 
         # Stored runtime limits, before anything can build an agent with them.
         await runtime_settings.load(app.state.store)
@@ -4073,6 +4081,20 @@ async def delete_task(task_id: str, repo: str, user: User = Depends(require_full
         meta = await store.aget(("tasks", repo), task_id)
         if not meta:
             raise HTTPException(404, "task not found")
+        # BEFORE the two deletes below, and for the same reason
+        # agent/consolidation.py indexes before it prunes. A task row and
+        # its build transcript are corpora of the history index with NO
+        # write-time hook -- unlike an episode, they are indexed only by the
+        # nightly sync_project -- so a task deleted from the dashboard
+        # before the next nightly run was never indexed at all, and
+        # demote_missing cannot rescue it because there is no row to demote.
+        # Best-effort, exactly like episodes.write_episode's own call: a
+        # stored record that is not searchable is a gap the next sync
+        # closes; a deleted record that was never indexed is gone.
+        log_item = await store.aget((planning_log.TASK_NAMESPACE, repo), task_id)
+        await history_index.index_task(
+            config, repo, task_id, meta.value,
+            log_item.value if log_item is not None else None)
         await store.adelete(("tasks", repo), task_id)
         # Nothing will ever stream for this task again.
         _live_task_log.pop(task_id, None)
@@ -4341,9 +4363,22 @@ async def remove_project_endpoint(name: str, req: RemoveProjectRequest,
     # here leaves it whole rather than half-removed and unreachable.
     store = getattr(app.state, "store", None)
     if store is not None:
+        # Before anything is archived or purged. On Postgres the index is
+        # where every already-pruned episode lives, so with no index object
+        # in this process the archive would quietly omit those rows AND the
+        # purge would leave every one of the project's rows behind in
+        # agent_history_fts -- the project's own goal text surviving its
+        # removal, which is exactly the leftover the removal tests exist to
+        # catch. Refusing costs a restart; continuing costs both halves.
+        if (backend_for_dsn(config.dsn) == "postgres"
+                and history_index.default_index() is None):
+            raise HTTPException(503, (
+                f"the history index is not open in this process, so {name}'s searchable "
+                "history could be neither archived nor removed -- nothing was removed; "
+                "restart the server and try again"))
         if req.memory == "archive":
             try:
-                doc = await project_removal.collect(store, name)
+                doc = await project_removal.collect(store, name, history_index.default_index())
                 path = await asyncio.to_thread(project_removal.write_archive, doc)
                 archived = path.name
                 steps.append({"step": "archive", "ok": True,
@@ -4358,7 +4393,7 @@ async def remove_project_endpoint(name: str, req: RemoveProjectRequest,
                 raise HTTPException(500, (
                     f"could not archive {name}'s memory, so nothing was removed "
                     "-- see the server log"))
-        removed = await project_removal.purge(store, name)
+        removed = await project_removal.purge(store, name, history_index.default_index())
         steps.append({"step": "memory", "ok": True,
                       "detail": f"{removed} item(s) {'archived and removed' if archived else 'deleted'}"})
 
@@ -4727,7 +4762,8 @@ async def provision_project_endpoint(req: ProvisionProjectRequest, user: User = 
         from agent import project_removal  # noqa: PLC0415
         try:
             doc = project_removal.read_archive(req.restore_archive)
-            written = await project_removal.restore(app.state.store, name, doc)
+            written = await project_removal.restore(app.state.store, name, doc,
+                                                    history_index.default_index())
             steps.append({"step": "restore", "ok": True,
                           "detail": f"{written} item(s) restored from {req.restore_archive}"})
         except Exception as e:  # noqa: BLE001 -- the project is already live; this is additive

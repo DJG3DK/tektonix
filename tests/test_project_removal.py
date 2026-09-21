@@ -231,8 +231,33 @@ def test_an_invalid_project_name_is_refused_before_any_path_is_built(bad):
 
 import agent.server as srv  # noqa: E402
 from agent import config as agent_config  # noqa: E402
+from agent import history_index  # noqa: E402
 from agent.auth import User  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
+
+
+class _HistoryIndex:
+    """The three calls the removal path makes of an index."""
+
+    def __init__(self, rows=None, dump_raises=False):
+        self.rows = list(rows or [])
+        self.dump_raises = dump_raises
+        self.forgotten: list[str] = []
+
+    async def dump_project(self, repo):
+        if self.dump_raises:
+            raise RuntimeError("no database")
+        return [r for r in self.rows if r.get("repo") == repo]
+
+    async def forget_project(self, repo):
+        before = len(self.rows)
+        self.rows = [r for r in self.rows if r.get("repo") != repo]
+        self.forgotten.append(repo)
+        return before - len(self.rows)
+
+    async def restore_project(self, repo, rows):
+        self.rows.extend({**r, "repo": repo} for r in rows)
+        return len(rows)
 
 _ADMIN = User(id=1, email="admin@example.com", role="admin", allowed_repos=None,
               totp_enabled=True, must_change_password=False,
@@ -272,7 +297,17 @@ def wired(tmp_path, monkeypatch, store, archives):
     monkeypatch.setattr(srv.app.state, "store", store, raising=False)
     monkeypatch.setattr(srv.app.state, "auth_pool", object(), raising=False)
     monkeypatch.setattr(srv.paths, "REPO_ROOT", tmp_path, raising=False)
-    return {"live": live, "sandbox": sandbox, "projects_file": projects_file}
+    # A server that booted properly HAS a history index -- the lifespan
+    # installs one -- and the removal route now refuses to archive-and-purge
+    # a Postgres installation without it, because the index rows are the only
+    # copy of every already-pruned episode and purge() deletes them. Installed
+    # here so the rest of this file exercises the normal path; the refusal has
+    # its own test below.
+    history_index.install(_HistoryIndex())
+    try:
+        yield {"live": live, "sandbox": sandbox, "projects_file": projects_file}
+    finally:
+        history_index.install(None)
 
 
 def test_remove_is_admin_only(wired, monkeypatch):
@@ -449,3 +484,51 @@ def test_a_checkout_this_box_serves_is_refused_even_when_fully_pushed(wired, tmp
     assert res.status_code == 409
     assert "demo-api" in res.json()["detail"]
     assert wired["live"].is_dir()
+
+
+# ---------------------------------------------------------------------------
+# the index is where the only copy of a pruned episode lives
+# ---------------------------------------------------------------------------
+
+def test_a_removal_is_refused_when_the_history_index_is_not_open(wired, store):
+    """Both halves fail silently without it, and in opposite directions.
+
+    With no index object in this process the archive omits every row -- and
+    those rows are the only copy of each episode the pruner already deleted
+    -- while the purge leaves every one of the project's rows behind in
+    agent_history_fts, which is the project's own goal text surviving its
+    own removal. Refusing costs a restart. Continuing costs both.
+    """
+    history_index.install(None)
+
+    res = TestClient(srv.app).request("DELETE", "/api/projects/demo", json={"memory": "archive"})
+
+    assert res.status_code == 503
+    assert "demo" in agent_config.PROJECTS, "a project was removed with no index open"
+    assert store.data[("episodes", "demo")], "memory was purged anyway"
+    assert wired["sandbox"].is_dir()
+
+
+def test_an_archive_that_cannot_read_the_index_removes_nothing(wired, store, monkeypatch):
+    """collect() used to swallow this one level down, so the archive was
+    written, the step reported ok, and the guard below it never fired."""
+    history_index.install(_HistoryIndex(dump_raises=True))
+
+    res = TestClient(srv.app).request("DELETE", "/api/projects/demo", json={"memory": "archive"})
+
+    assert res.status_code == 500
+    assert "nothing was removed" in res.json()["detail"]
+    assert "demo" in agent_config.PROJECTS
+    assert store.data[("episodes", "demo")], "memory was purged after the archive failed"
+
+
+def test_a_removal_takes_the_project_s_index_rows_with_it(wired):
+    index = _HistoryIndex([{"repo": "demo", "corpus": "episode", "item_key": "/e.json"},
+                           {"repo": "keeper", "corpus": "episode", "item_key": "/e.json"}])
+    history_index.install(index)
+
+    res = TestClient(srv.app).request("DELETE", "/api/projects/demo", json={"memory": "delete"})
+
+    assert res.status_code == 200, res.text
+    assert index.forgotten == ["demo"]
+    assert [r["repo"] for r in index.rows] == ["keeper"]

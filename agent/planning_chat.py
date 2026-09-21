@@ -365,6 +365,21 @@ async def build_planning_agent(
         lambda: (PROJECTS.get(repo) or {}).get("sandbox") or "", can_export=False,
     )
 
+    # What past tasks ran into (agent/tools/history_tools.py). The planner is
+    # the seat this is worth most to: "we tried that in June and it
+    # escalated" changes a plan, while the same fact discovered mid-build
+    # only changes the damage. The gate is `allowed_repos`, where None means
+    # an admin and therefore every project -- not the build task's rule, so
+    # it is passed with none_means_all rather than silently widened.
+    from agent.tools.history_tools import guidance as history_guidance  # noqa: PLC0415
+    from agent.tools.history_tools import make_history_tools  # noqa: PLC0415
+
+    history_tools = make_history_tools(
+        repo, allowed_repos, store, none_means_all=True,
+        task_id=f"planning:{session_id}" if session_id else None,
+    )
+    history_note = history_guidance(repo, allowed_repos, none_means_all=True)
+
     # The same loader the build coordinator uses, not a second copy of it:
     # the planner is where a durable fact gets written down and the
     # coordinator is where it has to be obeyed, so the two seats seeing
@@ -418,14 +433,15 @@ async def build_planning_agent(
         planning_model_role = "agent-planning-chat-hard" if difficulty == "HARD" else "agent-planning-chat"
     agent = create_deep_agent(
         model=llm_for_role(config, planning_model_role, reasoning_effort="high", timeout=_rs.as_int("planning_model_call_timeout_s")),
-        tools=[tool_by_name["describe_image"], *planning_tools, *github_tools, *logo_tools, *memory_tools],
+        tools=[tool_by_name["describe_image"], *planning_tools, *github_tools, *logo_tools,
+               *history_tools, *memory_tools],
         system_prompt=PLANNING_SYSTEM_PROMPT.format(
             repo=repo,
             other_repos=other_repos,
             project_memory_content=project_memory_content,
             org_memory_content=org_memory_content,
             skills_summary=skills_summary,
-        ),
+        ) + history_note,
         middleware=[
             # create_deep_agent adds a general-purpose subagent (and therefore
             # a `task` tool) unconditionally -- `subagents=None` does NOT mean
