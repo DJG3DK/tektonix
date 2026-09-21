@@ -63,7 +63,7 @@ describe("ChatMessage", () => {
     const btn = screen.getByRole("button", { name: "Show tool output" });
     btn.focus();
     await user.keyboard(" ");
-    expect(screen.getByText(/README.md/)).toBeTruthy();
     expect(btn).toHaveAttribute("aria-expanded", "true");
+    expect(document.querySelector(".chat-tool-result-body")?.textContent).toContain("README.md");
   });
 });
