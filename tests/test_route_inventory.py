@@ -1,10 +1,11 @@
 """A snapshot of every route and the guard protecting it.
 
-agent/server.py is 3,700 lines with 60+ routes in one namespace, and the
-intended fix is to extract it into per-domain routers. The danger in that
-refactor is not that it breaks loudly -- it is that a route quietly loses its
-authentication, or disappears, and the existing tests (which mostly exercise
-the modules underneath rather than the HTTP surface) stay green.
+agent/server.py is past 5,600 lines with 90+ routes in one namespace, and the
+intended fix is to extract it into per-domain routers (docs/todo.md). The
+danger in that refactor is not that it breaks loudly -- it is that a route
+quietly loses its authentication, or disappears, and the existing tests
+(which mostly exercise the modules underneath rather than the HTTP surface)
+stay green.
 
 This is the safety net for that work: it pins the full inventory. Moving a
 route between modules leaves this untouched; dropping one, changing its path

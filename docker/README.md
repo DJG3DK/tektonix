@@ -90,6 +90,11 @@ They share the agent's data volume read-only, so the control secret the agent
 generates on first run already matches, and they read the same `projects.json`
 a project onboarded from the dashboard writes.
 
+The agent does not become ready until the router answers, and the reviewers
+do not become ready until the agent does. A first task that used to start
+while the router was still booting died mid-call with "peer closed
+connection". `depends_on: service_healthy` is what closes that.
+
 ## What is not in the bundle yet
 
 * **Deploying after a merge.** The review services can merge, but not restart
@@ -97,8 +102,9 @@ a project onboarded from the dashboard writes.
   reports itself unavailable rather than failing, so a task ends at a real
   merge. Restart it yourself, or use the host install if you want that
   automated.
-* **Remote projects.** This bundle runs against projects on the machine it runs
-  on. Driving a project on another box is M2/M3 in the roadmap.
+* **A project that lives only on GitHub.** The dashboard clones it here and
+  ships as a pull request (M2). The clone is still on this machine; there is
+  no remote execution.
 * **The logo tools.** `logo_render`, `logo_export_brand_kit` and the rest call
   LogoLoom's Node modules, and the agent image is Python-only — no Node, and
   60MB of image libraries for a feature most installs never touch. The agent

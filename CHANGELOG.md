@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+### The bundle waits for the router, and a few leftover review items closed
+
+A first task that started while the router was still booting died mid-call
+with "peer closed connection". Compose now waits on health: the agent on
+the router, the reviewers on the agent (so the control secret is already
+on the shared volume). The file itself is validated in CI with
+`docker compose config`; bringing the stack up is still a dispatch job,
+written down in `docs/todo.md` with the larger leftovers (split
+`server.py`, virtualize the task log, isolate reviewer checks).
+
+The unused `getModelStats` helper is gone. Chat expanders are buttons
+(Enter/Space, `aria-expanded`). Newsletter signups are rate-limited per
+IP, still as a 303 because the form has no JavaScript. The review
+dashboard labels models from the ledger rather than a hardcoded list
+that drifted from `config.yaml`.
+
 ### Past tasks are on their way to being searchable, and stop being deleted
 
 Every task writes an episode saying how it ended and, when it went wrong,
