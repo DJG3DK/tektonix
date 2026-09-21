@@ -16,3 +16,14 @@ prove the pattern against the inventory, not to move the most code. The named
 seams in docs/todo.md (auth, tasks, planning, github, settings, uploads)
 follow once the shape here has survived a few changes.
 """
+
+
+def audit_store(request):
+    """The store, or None before lifespan has attached it.
+
+    Every seam needs it and none of them can reach `app` directly, so it lives
+    here rather than being re-derived per module. None is a real answer: an
+    audit write must never be the reason a request 500s -- see agent/audit.py
+    on why the log yields to the action it records.
+    """
+    return getattr(request.app.state, "store", None)

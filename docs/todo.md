@@ -73,8 +73,23 @@ what proves the injection reached it.
 
 ## Split `agent/server.py` along the seams that already exist
 
-**Status:** started, 2026-09-21. One seam out (`agent/routers/push.py`), the
-pattern proven, the rest still to go. Do not flatten it in one pass.
+**Status:** started, 2026-09-21. Two seams out (`agent/routers/push.py`,
+`agent/routers/analytics.py`), 5,659 -> 5,174 lines. Do not flatten it in one
+pass.
+
+**Why the next one is harder than these two, and what to do about it.** Push
+and analytics were contiguous blocks. The named seams are not: `/api/audit`
+sits in the middle of the five `/api/settings/*` routes, and `_audit_store`
+that it uses is called by routes throughout the file. So the next extraction
+is not "cut lines 757-930" -- it is moving five discrete blocks and leaving a
+shared helper behind. Do that as its own change with the inventory run after
+each block, not as a tail-end of something else.
+
+**Shared helpers now have homes**, which is most of what the first two seams
+were for: `require_full_auth` and `forced_screen_block` in `agent/auth.py`,
+`read_with_retry` in `agent/graph.py`, `audit_store(request)` in
+`agent/routers/__init__.py`. A seam that needs one of those no longer has to
+choose between a cycle and a copy.
 
 **What the first extraction found, and it matters for every later seam:**
 this FastAPI does not flatten `include_router` into `app.routes` -- it

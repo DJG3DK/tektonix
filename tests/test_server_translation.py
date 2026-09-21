@@ -6,7 +6,12 @@ LangGraph/deepagents docs audit, which found zero automated coverage
 anywhere in this system.
 """
 
-from agent.server import _classify_model_usage_role, _state_snapshot_for_frontend, _todos_to_plan
+from agent.server import _state_snapshot_for_frontend, _todos_to_plan
+
+# Moved with its only caller when the analytics seam came out of server.py
+# (agent/routers/). It is the Analytics model-usage scan's own classifier and
+# has never been used anywhere else.
+from agent.routers.analytics import _classify_model_usage_role
 
 
 def test_todos_to_plan_returns_none_for_none():

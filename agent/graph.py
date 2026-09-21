@@ -13,6 +13,7 @@ from contextlib import asynccontextmanager
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.store.postgres.aio import AsyncPostgresStore
 from psycopg import AsyncConnection
+from psycopg import OperationalError as PgOperationalError
 from psycopg_pool import AsyncConnectionPool
 
 from agent import episode_vectors, file_lock
@@ -273,3 +274,32 @@ async def _open_sqlite_store(config: Config):
         yield store
     finally:
         await conn.close()
+
+
+async def read_with_retry(fn):
+    """One retry for the read-only store/checkpointer lookups the frontend
+    polls constantly (task list, stats, analytics, single-task fetch).
+
+    The connection pool (agent/graph.py's open_checkpointer/open_store) is
+    the actual fix for the class of failure this guards against: it
+    validates a connection's health at checkout
+    (`check=AsyncConnectionPool.check_connection`) before handing it to any
+    caller, which is what a Postgres restart used to break silently -- with
+    a single long-lived raw connection and no reconnect logic, every request
+    touching it would 500 until the process was restarted.
+
+    This retry is defense in depth on top of that, not a replacement for it:
+    it covers the residual window where a connection dies after the pool's
+    own checkout check but before/during the call itself (a real race, just
+    a narrow one). Deliberately scoped to read-only calls only -- retrying a
+    write here would mean thinking hard about idempotency per call site, and
+    the writes in _stream_graph/_run_task (the live task-execution path)
+    don't need it: they go through the exact same pool and get the same
+    checkout validation for free.
+    """
+    try:
+        return await fn()
+    except PgOperationalError:
+        await asyncio.sleep(0.25)
+        return await fn()
+
