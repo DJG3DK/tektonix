@@ -196,6 +196,44 @@ def record_use(ref: str, repo: str, *, task_id: str | None = None, path: Path | 
     }, path)
 
 
+# The same two questions, asked of project memory instead of episodes: which
+# sections did the prompt offer, and which of them did the task actually open.
+# Memory sections and episode recall are the same wager made twice -- that an
+# index is a cheaper way to carry knowledge than the knowledge itself -- and
+# the wager is only settleable with a record of what was offered against what
+# was used. An index entry that is offered a hundred times and never read is
+# either a section nobody needs or, far more likely, an entry that does not
+# say what it is for; both are fixes, and neither is visible without this.
+
+
+def record_sections_offered(repo: str, offered: list[str], *, always: list[str] | None = None,
+                            task_id: str | None = None, path: Path | None = None) -> None:
+    """A prompt was built carrying this project's memory index. Never raises."""
+    _append({
+        "ts": time.time(),
+        "event": "memory_offered",
+        "repo": repo,
+        "task_id": task_id,
+        "sections": list(offered),
+        # Recorded separately because a pinned section cannot be "missed":
+        # it was already in the prompt, so it never needed a read and its
+        # absence from the read events means nothing.
+        "always": list(always or []),
+    }, path)
+
+
+def record_section_read(slug: str, repo: str, *, task_id: str | None = None,
+                        path: Path | None = None) -> None:
+    """A section the index advertised was actually read. Never raises."""
+    _append({
+        "ts": time.time(),
+        "event": "memory_read",
+        "repo": repo,
+        "task_id": task_id,
+        "section": slug,
+    }, path)
+
+
 def _append(entry: dict, path: Path | None) -> None:
     target = path or LOG_PATH
     try:

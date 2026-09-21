@@ -2421,7 +2421,8 @@ async def get_planning_session(session_id: str, user: User = Depends(require_ful
         raise HTTPException(404, "planning session not found")
     check_repo_access(user, repo)
     agent, _plan_ref, _tracker = await build_planning_agent(
-        config, repo, app.state.checkpointer, app.state.store, starting_cost=meta.get("cost_usd", 0.0)
+        config, repo, app.state.checkpointer, app.state.store, starting_cost=meta.get("cost_usd", 0.0),
+        session_id=session_id,
     )
     thread_config = planning_thread_config(session_id, repo)
     checkpoint = await agent.aget_state(thread_config)
@@ -2646,6 +2647,7 @@ async def _run_planning_turn_bg(session_id: str, repo: str, text: str, attachmen
             route=route,
             is_admin=is_admin,  # gates create_project; not derivable from allowed_repos
             actor=actor,
+            session_id=session_id,  # joins this seat's retrieval events to the conversation
         )
         thread_config = planning_thread_config(session_id, repo)
         # Circuit breaker: llm_for_role's own per-call timeout (plus

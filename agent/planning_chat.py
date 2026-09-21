@@ -70,19 +70,17 @@ from agent.classify import classify_task
 from agent.message_text import content_text
 from agent.config import Config, PROJECTS
 from agent.frontend_route import PLANNING_ROLE
-from agent.memory_freshness import memory_with_freshness
 from agent.deep_agent import (
-    MEMORY_PATH,
     ORG_MEMORY_PATH,
     PLANNING_SUMMARIZATION_KEEP,
     PLANNING_SUMMARIZATION_TRIGGER,
     SUMMARIZATION_TRIM_TOKENS,
     build_memory_backend,
+    load_project_memory,
     llm_for_role,
     load_skills_manifest,
     load_skills_summary,
     org_namespace,
-    project_namespace,
     read_memory_or_empty,
     route_local_path,
 )
@@ -311,6 +309,7 @@ async def build_planning_agent(
     route: str = "general",
     is_admin: bool = False,
     actor: str | None = None,
+    session_id: str | None = None,
 ):
     """Returns (agent, plan_ref, tracker).
 
@@ -366,13 +365,26 @@ async def build_planning_agent(
         lambda: (PROJECTS.get(repo) or {}).get("sandbox") or "", can_export=False,
     )
 
-    project_memory_backend = StoreBackend(namespace=project_namespace(repo), store=store)
-    org_memory_backend = StoreBackend(namespace=org_namespace, store=store)
-    project_memory_content = await memory_with_freshness(
-        project_memory_backend,
-        await read_memory_or_empty(project_memory_backend, route_local_path("/memories/", MEMORY_PATH)),
+    # The same loader the build coordinator uses, not a second copy of it:
+    # the planner is where a durable fact gets written down and the
+    # coordinator is where it has to be obeyed, so the two seats seeing
+    # different memory is a plan written against rules the build cannot read.
+    # The planner's own thread id, so a memory_offered event can be joined to
+    # the conversation that caused it. Without it every planning event lands
+    # with task_id=None and the retrieval log cannot answer the question it
+    # exists for -- which sections get offered and never read, and in which
+    # seat. The prefix is planning_thread_config's, so the two agree.
+    project_memory = await load_project_memory(
+        repo, store, task_id=f"planning:{session_id}" if session_id else None,
     )
+    project_memory_content = project_memory.content
+    org_memory_backend = StoreBackend(namespace=org_namespace, store=store)
     org_memory_content = await read_memory_or_empty(org_memory_backend, route_local_path("/org-memory/", ORG_MEMORY_PATH))
+
+    from agent.tools.memory_tools import make_memory_tools  # noqa: PLC0415
+
+    memory_tools = make_memory_tools(repo, store, project_memory.entries)
+
     # audit H-2: render only repos this session's user may actually read, not
     # every configured project -- the prompt used to advertise "you can read any
     # of them" across all of PROJECTS regardless of the caller's allow-list.
@@ -406,7 +418,7 @@ async def build_planning_agent(
         planning_model_role = "agent-planning-chat-hard" if difficulty == "HARD" else "agent-planning-chat"
     agent = create_deep_agent(
         model=llm_for_role(config, planning_model_role, reasoning_effort="high", timeout=_rs.as_int("planning_model_call_timeout_s")),
-        tools=[tool_by_name["describe_image"], *planning_tools, *github_tools, *logo_tools],
+        tools=[tool_by_name["describe_image"], *planning_tools, *github_tools, *logo_tools, *memory_tools],
         system_prompt=PLANNING_SYSTEM_PROMPT.format(
             repo=repo,
             other_repos=other_repos,

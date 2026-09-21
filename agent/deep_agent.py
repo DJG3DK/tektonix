@@ -5,8 +5,10 @@ keys) by the outer "work" node.
 """
 
 import json
+import logging
 import subprocess
 import warnings
+from dataclasses import dataclass, field
 
 from langchain.agents.middleware import (
     ModelCallLimitMiddleware,
@@ -27,6 +29,8 @@ from agent.config import Config, PROJECTS
 from agent.frontend_route import CODER_ROLE
 from agent.tools.github_tools import make_github_inbox_tool, make_github_tools, token_source
 from agent.memory_freshness import memory_with_freshness
+from agent import episode_recall
+from agent import memory_sections
 from agent import new_files
 
 # langchain-openai cannot attach response headers on the structured-output
@@ -88,6 +92,18 @@ EPISODES_ROUTE = "/episodes/"
 # agent's own mid-task edits.
 SKILLS_ROUTE = "/skills/"
 SKILLS_MANIFEST_PATH = "/skills/_manifest.json"
+
+# Memory, once it is too big to carry whole: the same progressive disclosure,
+# one level down. /memories/sections/_index.json + /memories/sections/<slug>.md
+# hold what /memories/AGENTS.md used to hold alone, and agent/memory_sections.py
+# decides which of them stay resident. Nothing here exists until a project's
+# memory has actually been split -- with no index present every read below
+# falls back to the whole file, which is what this system did before and what
+# it keeps doing for a project small enough not to need any of this.
+SECTIONS_INDEX_PATH = memory_sections.SECTIONS_INDEX_PATH
+SECTIONS_CORE_PATH = memory_sections.SECTIONS_CORE_PATH
+
+logger = logging.getLogger("tektonix")
 
 # Real per-call cost via BudgetGuardMiddleware makes SummarizationMiddleware's
 # own trigger about context quality, not cost -- the budget ceiling already
@@ -1298,6 +1314,219 @@ async def read_memory_or_empty(backend: StoreBackend, path: str) -> str:
     return file_data_to_string(result.file_data)
 
 
+@dataclass(frozen=True)
+class ProjectMemory:
+    """One project's memory as a seat's prompt carries it.
+
+    `entries` is empty for a project that has never been split -- the content
+    is then the whole file, exactly as it always was. When it is not empty,
+    the content is the preamble plus the pinned sections plus the index, and
+    `entries` is what the seat's read_memory_section tool is allowed to fetch.
+    """
+
+    content: str
+    entries: list[memory_sections.IndexEntry] = field(default_factory=list)
+
+
+async def _read_text(backend: StoreBackend, key: str) -> str | None:
+    """The file's text, or None when it is not there. Distinct from
+    read_memory_or_empty, which answers with a sentence for a system prompt --
+    here the difference between "empty" and "absent" decides whether a whole
+    code path applies."""
+    result = await backend.aread(key)
+    if result.error is not None or not result.file_data:
+        return None
+    return file_data_to_string(result.file_data)
+
+
+async def load_memory_index(backend: StoreBackend) -> memory_sections.MemoryIndex:
+    """This project's section index, with no entries for a project whose
+    memory has never been split -- which is every project until the migration
+    runs, and permanently for one small enough that splitting it would cost
+    more than it saves (memory_sections.SPLIT_FLOOR_CHARS)."""
+    raw = await _read_text(backend, route_local_path("/memories/", SECTIONS_INDEX_PATH))
+    return memory_sections.parse_index_document(raw) if raw is not None else memory_sections.MemoryIndex(entries=[])
+
+
+async def gather_memory_sections(
+    backend: StoreBackend, entries: list[memory_sections.IndexEntry],
+) -> tuple[list[str], list[str]]:
+    """(the core and every section body in index order, the slugs whose file
+    was not there).
+
+    With nothing missing, joining the parts is the original file byte for
+    byte: a section body is a slice of it and the index preserves the order
+    the cuts were made in. Shared by the rollback path here and by
+    read_memory_section("all"), because a second copy of this loop is a second
+    place for "in index order" to stop being true.
+    """
+    parts: list[str] = []
+    missing: list[str] = []
+    core = await _read_text(backend, route_local_path("/memories/", SECTIONS_CORE_PATH))
+    if core is None:
+        missing.append(SECTIONS_CORE_PATH)
+    else:
+        parts.append(core)
+    for entry in entries:
+        body = await _read_text(backend, route_local_path("/memories/", memory_sections.section_path(entry.slug)))
+        if body is None:
+            missing.append(entry.slug)
+        else:
+            parts.append(body)
+    return parts, missing
+
+
+async def _render_sectioned_memory(backend: StoreBackend, entries: list[memory_sections.IndexEntry]) -> str | None:
+    """The prompt block for a split memory, or None if the index turns out to
+    describe files that are not there.
+
+    None matters more than it looks. An index without its sections is the one
+    way this subsystem could silently amputate a project's memory -- the
+    prompt would carry a confident list of sections and nothing behind it --
+    so it degrades to the whole-file read instead, which is the behaviour of
+    every version of this system before today.
+
+    Which is why "all or nothing" is the rule here rather than "as much as we
+    can find". A PARTIALLY present split is worse than an absent one, and the
+    worst case of all is the one that reads as healthy: a pinned section whose
+    file is gone renders as a prompt with the body missing and an index line
+    next to it reading "already above, do not re-read" -- the content removed
+    AND the model told not to go looking. The sections that get pinned are the
+    ones the operator's policy pins BECAUSE they fail silently (test wiring,
+    sandbox constraints, collision traps), so that is a silent failure about
+    silent failures, and the only evidence would be work that quietly breaks a
+    rule nobody can see any more. A whole-file read costs tokens; this costs a
+    rule.
+
+    Reachable without a bad migration, which writes the index last precisely
+    so that an interruption leaves no index at all: a restore that replays
+    some of a namespace, an operator deleting a section by hand to force a
+    re-split, a later consolidator edit that writes an index entry whose
+    section write did not land.
+
+    An EMPTY /sections/_core.md is a real state -- a memory file that opens
+    straight into `## ` has no preamble -- and is not the same as a missing
+    one. The store distinguishes them (an empty file reads back as file_data
+    with content ""), so _read_text's None genuinely means absent.
+    """
+    core = await _read_text(backend, route_local_path("/memories/", SECTIONS_CORE_PATH))
+    if core is None:
+        logger.warning("memory index exists but /sections/_core.md does not; reading the whole file")
+        return None
+    bodies: dict[str, str] = {}
+    for entry in entries:
+        if not entry.always:
+            continue
+        body = await _read_text(backend, route_local_path("/memories/", memory_sections.section_path(entry.slug)))
+        if body is None:
+            logger.warning("pinned memory section %s is indexed but missing; reading the whole file", entry.slug)
+            return None
+        bodies[entry.slug] = body
+    # The budget is spent here and not only in the migration that set the
+    # `always` flags, so an operator who lowers it sees the next task's prompt
+    # shrink instead of having to re-run a migration to find out whether the
+    # dial does anything. A section that no longer fits is demoted to an
+    # ordinary index line, not dropped.
+    return memory_sections.render_prompt_block(
+        core, entries, bodies, budget_tokens=_rs.as_int("memory_inline_token_budget"),
+    )
+
+
+async def _sections_match_source(backend: StoreBackend, index: memory_sections.MemoryIndex) -> bool:
+    """Whether the sections are still a faithful copy of /memories/AGENTS.md.
+
+    They are cut from it, and it stays the authoritative copy until the
+    pointer-stub commit -- while the nightly consolidator rewrites the whole
+    file and the coordinator's prompt still tells the agent to record facts
+    there. Both of those writes land somewhere no prompt reads the moment an
+    index exists, and nothing about that is visible: the prompt still renders,
+    the sections are still valid, they are just a snapshot of a file that has
+    moved on. That is the memory subsystem losing memory, which is the one
+    failure it cannot be allowed to have.
+
+    So the index records what it was cut from, and a source that no longer
+    matches turns this back into a whole-file read until the next migration
+    run re-splits it -- self-healing rather than silent. An index with no
+    recorded digest (hand-written, or from before this check) makes no claim
+    about the source and is taken at its word.
+
+    A note for whoever writes the pointer stub: rewriting /AGENTS.md must
+    rewrite the index's source_sha256 with it, or every project falls back
+    here -- loudly, to a prompt containing the stub, which is the failure
+    being visible rather than quiet.
+    """
+    if not index.source_sha256:
+        return True
+    whole = await _read_text(backend, route_local_path("/memories/", MEMORY_PATH))
+    if whole is None:
+        return True
+    if memory_sections.source_digest(whole) == index.source_sha256:
+        return True
+    logger.warning("/memories/AGENTS.md has changed since the split; reading it whole instead of the sections")
+    return False
+
+
+async def _whole_memory(backend: StoreBackend, entries: list[memory_sections.IndexEntry]) -> str:
+    """The whole memory, for every path that is not a rendered split: the
+    disclosure toggle turned off, an index that does not resolve, a project
+    that was never split at all.
+
+    Reassembled from the sections when there are any, because /AGENTS.md
+    becomes a pointer stub one commit after the migration and the documented
+    rollback ("the toggle restores the whole-file behaviour, without touching
+    data") would otherwise hand the agent the stub. Reassembly IS the whole
+    file -- byte for byte, asserted in tests -- so this is the same answer by
+    a route that survives the stub. With no sections, or with one of them
+    missing, it is the read this function has always been.
+    """
+    if entries:
+        parts, missing = await gather_memory_sections(backend, entries)
+        if not missing:
+            return "".join(parts)
+        logger.warning("cannot reassemble memory from sections (missing %s); reading /AGENTS.md", ", ".join(missing))
+    return await read_memory_or_empty(backend, route_local_path("/memories/", MEMORY_PATH))
+
+
+async def load_project_memory(repo: str, store: BaseStore, *, task_id: str | None = None) -> ProjectMemory:
+    """The project memory block, for any seat that has one.
+
+    ONE function, called by both the build coordinator and the planning chat.
+    They had two copies of the same four lines, and the two seats drifting is
+    not a hypothetical: the planner is where a fact gets recorded and the
+    coordinator is where it has to be obeyed, so a section pinned in one seat
+    and indexed in the other is a plan written against rules the build cannot
+    see.
+
+    With no index present this is byte for byte what it always did -- read
+    /memories/AGENTS.md whole, attach the stale-flags block -- which is what
+    makes deploying the reader before the data migration a no-op rather than a
+    change to be verified in production.
+    """
+    backend = StoreBackend(namespace=project_namespace(repo), store=store)
+    index = await load_memory_index(backend)
+    entries = index.entries
+    current = await _sections_match_source(backend, index)
+    content: str | None = None
+    # A dial rather than a redeploy, because the thing being rolled back is a
+    # prompt: if progressive disclosure turns out to lose work, the operator
+    # needs the old prompt on the next task, not after a deploy.
+    if entries and current and _rs.value("memory_progressive_disclosure") >= 1:
+        content = await _render_sectioned_memory(backend, entries)
+    if content is None:
+        # Reassembled from the sections when they are the good copy, and only
+        # then -- if /AGENTS.md has moved on since the split it holds facts
+        # the sections do not, and serving a stale reassembly instead would be
+        # this subsystem losing exactly what it exists to keep.
+        content = await _whole_memory(backend, entries if current else [])
+        entries = []
+    else:
+        episode_recall.record_sections_offered(
+            repo, [e.slug for e in entries],
+            always=[e.slug for e in entries if e.always], task_id=task_id,
+        )
+    return ProjectMemory(content=await memory_with_freshness(backend, content), entries=entries)
+
+
 async def build_deep_agent(
     config: Config,
     repo: str,
@@ -1461,18 +1690,23 @@ async def build_deep_agent(
                                      task_id=task_id)
     test_writer_model = llm_for_role(config, "agent-test-writer", task_id=task_id)
 
+    project_memory = await load_project_memory(repo, store, task_id=task_id)
+    project_memory_content = project_memory.content
     # Stripped keys (route_local_path), not the full agent-visible paths --
     # this read must land on the same key the agent's own file tools write
     # to (via the composite's route stripping), or agent-written memory
     # updates are invisible to every future task's prompt.
-    project_memory_backend = StoreBackend(namespace=project_namespace(repo), store=store)
     org_memory_backend = StoreBackend(namespace=org_namespace, store=store)
-    project_memory_content = await memory_with_freshness(
-        project_memory_backend,
-        await read_memory_or_empty(project_memory_backend, route_local_path("/memories/", MEMORY_PATH)),
-    )
     org_memory_content = await read_memory_or_empty(org_memory_backend, route_local_path("/org-memory/", ORG_MEMORY_PATH))
     skills_summary = await load_skills_summary(repo, store)
+
+    # Bound to this seat, and to the planning chat, and to nothing else: they
+    # are the two whose prompt carries the memory index, and a tool no prompt
+    # mentions is how the investigator came to describe a preview_app it did
+    # not have. Empty for a project whose memory was never split.
+    from agent.tools.memory_tools import make_memory_tools  # noqa: PLC0415
+
+    memory_tools = make_memory_tools(repo, store, project_memory.entries, task_id=task_id)
 
     # skills=[SKILLS_ROUTE] on each subagent: per deepagents' own docs, only
     # the general-purpose subagent automatically inherits main-agent skills
@@ -1604,7 +1838,7 @@ async def build_deep_agent(
 
     agent = create_deep_agent(
         model=coordinator_model,
-        tools=[*project_tools, run_checks_tool, _make_ask_user_tool()],
+        tools=[*project_tools, run_checks_tool, _make_ask_user_tool(), *memory_tools],
         system_prompt=COORDINATOR_SYSTEM_PROMPT_TEMPLATE.format(
             # No repo_root here -- the prompt says "/workspace" literally
             # (see _FILESYSTEM_GUIDANCE): the real host repo_root path is

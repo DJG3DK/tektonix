@@ -250,6 +250,52 @@ KNOBS: dict[str, dict] = {
         "env": None,
         "group": "Context",
     },
+    "memory_progressive_disclosure": {
+        "label": "Split project memory into sections",
+        "help": (
+            "Whether a project whose memory has been split carries the small always-on "
+            "part plus an index of the rest (1), or the whole file the way it always did "
+            "(0). The largest project's memory is ~10,400 tokens on every one of a median "
+            "108 model calls per task, and most of it is irrelevant to any given task -- "
+            "but a rule the agent never reads is a rule it breaks, so this is the switch "
+            "back. It changes nothing for a project small enough that its memory was never "
+            "split, and nothing is deleted either way: turning it off restores the old "
+            "prompt on the next task, with no migration."
+        ),
+        "unit": "1 = on, 0 = off",
+        "default": 1.0,
+        "min": 0.0,
+        "max": 1.0,
+        "env": None,
+        "group": "Context",
+    },
+    "memory_inline_token_budget": {
+        "label": "Memory kept in every prompt",
+        "help": (
+            "How much of a split project's memory stays resident: the preamble, the "
+            "sections pinned as fails-silently rules, and the index of everything else, "
+            "all inside this number. Raising it pins more rules and saves fewer tokens; "
+            "lowering it pins fewer, and a rule the agent never reads is a rule it "
+            "breaks. Lowering it takes effect on the next prompt -- a section that no "
+            "longer fits goes back to being an indexed line the agent can fetch, not "
+            "something deleted. Raising it only admits more sections once "
+            "scripts/migrate_memory_sections.py runs again, whose dry run prints the "
+            "resulting floor per project: the number to adjust this from."
+        ),
+        "unit": "tokens",
+        # 3,000 rather than 2,500 because of what 2,500 actually did on the
+        # largest real project: it demoted the testing section to an indexed
+        # line, and "a suite that never ran still passes" is the headline
+        # example of the fails-silently rule this whole split exists to keep
+        # resident. Buying back 400 tokens by indexing away the one rule the
+        # policy was written to protect is the wrong trade -- 75% off instead
+        # of 78% off, and the rule stays in front of the model.
+        "default": 3_000.0,
+        "min": 500.0,
+        "max": 20_000.0,
+        "env": None,
+        "group": "Context",
+    },
     "review_wait_timeout_s": {
         "label": "Review wait timeout",
         "help": (
