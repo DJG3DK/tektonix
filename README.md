@@ -127,7 +127,9 @@ START → work → verify_and_ship ──(findings / unfinished plan)──→ w
   the rest, which produced inverted diffs whenever live moved ahead: a branch's additions read as
   deletions of everything live had gained since, and that manufactured two `blocking` findings
   against a commit that had in fact *added* the settings it was accused of removing.
-  From there:
+  Those checks are agent-authored code, so on a host install they run **inside a container** rather
+  than on the machine — in the image their toolchain needs, with no network, and with a refusal
+  rather than a fall-back if the sandbox is unavailable (`SECURITY.md`). From there:
   `NEEDS_FIXES` loops back to `work` with the findings; `READY` merges and deploys (after the
   operator's merge approval, unless that switch is off). Merge and deploy live **inside this
   node**, not as a third graph node — a deploy preflight can fail as its own stage (a live URL
@@ -445,8 +447,23 @@ store as the LangGraph checkpointer. The agent can read and write it directly du
 and it's shared across every task and planning session for that project. A second file,
 `/org-memory/AGENTS.md`, is shared read-only across all projects.
 
+- **Progressive disclosure.** Once a project's memory passes 8,000 characters it is split into
+  sections (`agent/memory_sections.py`). What stays in every prompt is the preamble plus the rules
+  that fail *silently* — sandbox constraints, test wiring, name-collision traps — because those are
+  the ones an agent never finds out it needed. A build gotcha fails loudly, so it is indexed and
+  fetched with `read_memory_section` when relevant. Measured on real projects, that is 10,424 → 2,635
+  tokens and 6,671 → 1,655, on every model call of every task, with nothing put out of reach:
+  `read_memory_section("all")` returns the whole file. Below the floor a project is not split, since
+  the index and the round trip would cost more than they save.
+
 - **Episodic memory** — `verify_and_ship` records a short summary (goal, outcome, cost, review
   verdict) at the end of every task. Not loaded into context by default; it feeds consolidation.
+- **Searchable history** — episodes, task records and build transcripts are indexed for full-text
+  search (`agent/history_index.py`), so `search_history` can answer "have we hit this error before"
+  across months of work rather than only what consolidation happened to generalise. Records are
+  demoted rather than deleted when the pruner removes them, so the index is the archive. A semantic
+  leg exists alongside it and is off by default — on this corpus, which is error strings, paths and
+  commands, keyword search wins and the vector leg had to be measured before it could be trusted.
 - **Consolidation** (`agent/consolidation.py`, run nightly via
   `scripts/consolidation-cron.sh`) reads a project's recent episodes plus its current memory and
   distills durable patterns into an updated memory file, skipping one-off noise.

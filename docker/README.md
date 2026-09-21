@@ -105,6 +105,13 @@ connection". `depends_on: service_healthy` is what closes that.
 * **A project that lives only on GitHub.** The dashboard clones it here and
   ships as a pull request (M2). The clone is still on this machine; there is
   no remote execution.
+* **Checks run in the reviewer process, not a sandbox.** On a host install the
+  reviewer puts each project's checks in a container, because it is otherwise
+  root on the real machine running code the agent wrote. Here it does not: this
+  service is already inside a container, and it is deliberately NOT given
+  `/var/run/docker.sock` — handing it the socket so it could start a sandbox
+  would give it host-root equivalent, which is worse than the containment it
+  already has. See `SECURITY.md`.
 * **The logo tools.** `logo_render`, `logo_export_brand_kit` and the rest call
   LogoLoom's Node modules, and the agent image is Python-only — no Node, and
   60MB of image libraries for a feature most installs never touch. The agent

@@ -35,8 +35,13 @@ superuser_sql() {   # one statement, as the local postgres superuser
     su -s /bin/bash postgres -c "psql -qtAc $(printf '%q' "$1")"
 }
 
+superuser_sql_on() {   # ... against a named database
+    su -s /bin/bash postgres -c "psql -qtAd $(printf '%q' "$1") -c $(printf '%q' "$2")"
+}
+
 cleanup() {
     superuser_sql "DROP DATABASE IF EXISTS \"$SCRATCH\"" >/dev/null 2>&1 || true
+    rm -f "${LIST:-}"
 }
 trap cleanup EXIT
 
@@ -48,8 +53,29 @@ if ! superuser_sql "CREATE DATABASE \"$SCRATCH\" OWNER \"$DB_USER\"" >/dev/null;
     exit 1
 fi
 
+# Extensions first, as the superuser, because the dump contains
+# `CREATE EXTENSION vector` and the application role is not a superuser --
+# pgvector is not a trusted extension. --exit-on-error means that one
+# statement fails the whole restore, so a real recovery would stop here too.
+# This is the same command a restore onto a fresh host has to run first, and
+# it is in docs/backup.md for that reason.
+for ext in $(pg_restore -l "$DUMP" | sed -n 's/.*EXTENSION - \([a-z_]*\) .*/\1/p' | sort -u); do
+    [ "$ext" = "plpgsql" ] && continue
+    superuser_sql_on "$SCRATCH" "CREATE EXTENSION IF NOT EXISTS \"$ext\"" >/dev/null 2>&1 \
+        || echo "  note: could not pre-create extension $ext; the restore may fail on it"
+done
+
+# Extension objects are dropped from the restore LIST, not from the dump: an
+# extension has to be created by a superuser (pgvector is not a trusted
+# extension), and its COMMENT then belongs to that superuser, so restoring
+# either of them as the application role fails -- and --exit-on-error means
+# failing on one of them fails the whole restore. Pre-created above, skipped
+# here. A real recovery does the same thing; docs/backup.md says so.
+LIST="$(mktemp)"
+pg_restore -l "$DUMP" | grep -v -E '(^|; )[0-9]+ [0-9]+ (EXTENSION|COMMENT - EXTENSION)' > "$LIST"
+
 # --no-owner: whoever runs this owns the restored objects.
-pg_restore --dbname="$SCRATCH_DSN" --no-owner --exit-on-error "$DUMP"
+pg_restore --dbname="$SCRATCH_DSN" --no-owner --exit-on-error -L "$LIST" "$DUMP"
 
 fail=0
 check() {   # label, sql, minimum

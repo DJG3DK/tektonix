@@ -611,6 +611,30 @@ Each returns 503 and names the failing dependency. For a specific symptom, see
 **The first tool call of the first task fails.** The sandbox image isn't
 built: `docker build -t tektonix-sandbox:latest docker/agent-sandbox/`
 
+**Every check in a review comes back as `SETUP:`.** The reviewer runs a
+project's checks inside a container now rather than on this host, and the
+image does not have that project's toolchain. The sandbox image carries Node
+and Python; Go, Rust, Ruby, Elixir, Java, PHP and .NET each run in their own
+image (`docker/stack-images.json`), pulled on first use. Run
+`node scripts/check_sandbox_tools.js` — it names the tool, the image and the
+checks that need it, and `scripts/doctor.py` runs it for you. The reviewer
+will not fall back to running them on the host; see `SECURITY.md` for why.
+
+**Semantic episode search stays off after you enable it.** Three things in
+this order, and the order matters because the probe is cached per process:
+add an `embedder` deployment to the router's `config.yaml` and restart the
+router; set `EMBEDDINGS_ENABLED=1` (Settings or `.env`) and restart the agent;
+and give the database somewhere to put a vector — on Postgres that is one
+command as the superuser, `sudo -u postgres psql -d <db> -c 'CREATE EXTENSION
+vector'`, because pgvector is not a trusted extension and the app role cannot
+create it. `scripts/doctor.py` prints whichever step is outstanding.
+
+**Running against a SQLite file instead of a Postgres server.** That backend
+is real but is not what a server install uses: its dependencies live in
+`requirements-cli.txt`, not `requirements.txt`, and it is selected by pointing
+`AGENT_DSN` at a `sqlite://` path. A file lock replaces the Postgres advisory
+lock, and it protects less — `SECURITY.md` and `agent/file_lock.py` say what.
+
 **Every model call 401s.** `MODEL_ROUTER_KEY` in `.env` doesn't match
 `MODEL_ROUTER_KEY` in `services/model-router/.env`.
 

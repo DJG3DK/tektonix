@@ -3,6 +3,12 @@
 One Postgres database holds everything that cannot be rebuilt from this repo:
 
 - every task and its checkpoints, which is what makes a task resumable
+- `agent_history_fts`, the searchable index of episodes, tasks and build
+  transcripts. Worth knowing that it is not only an index: records are
+  DEMOTED rather than deleted when the nightly pruner removes them from the
+  store, so it is the only remaining copy of what was pruned. It can be
+  rebuilt from whatever the store still holds
+  (`scripts/backfill_history_index.py`) — which is not the same thing
 - planning sessions and their plans
 - project memory, org memory and the episodes consolidation feeds on
 - runtime limits, the GitHub inbox and its **encrypted** tokens
@@ -102,8 +108,21 @@ pm2 stop tektonix commit-reviewer agent-review
 
 # 2. restore into a fresh database, then point .env at it
 sudo -u postgres psql -c 'CREATE DATABASE langgraph_agent_restored OWNER langgraph_agent'
+
+#    Extensions first, as the superuser. The dump contains
+#    `CREATE EXTENSION vector` (pgvector, for semantic episode search) and
+#    pgvector is not a "trusted" extension, so the application role cannot
+#    create it -- with --exit-on-error that one statement fails the entire
+#    restore. Skip this step on a database that never had the extension.
+sudo -u postgres psql -d langgraph_agent_restored -c 'CREATE EXTENSION IF NOT EXISTS vector'
+
+#    Then restore everything EXCEPT the extension objects, which now exist and
+#    belong to the superuser -- restoring them as the application role fails on
+#    `COMMENT ON EXTENSION`. scripts/verify_backup_restore.sh does exactly this.
+pg_restore -l backups/agent-<stamp>.dump \
+  | grep -v -E '(^|; )[0-9]+ [0-9]+ (EXTENSION|COMMENT - EXTENSION)' > /tmp/restore.list
 pg_restore --dbname="postgresql://langgraph_agent:...@localhost:5432/langgraph_agent_restored" \
-           --no-owner --exit-on-error backups/agent-<stamp>.dump
+           --no-owner --exit-on-error -L /tmp/restore.list backups/agent-<stamp>.dump
 
 # 3. edit .env: LANGGRAPH_PG_DSN -> ...langgraph_agent_restored
 #    and make sure AUTH_SECRET_KEY is the one that went with this dump

@@ -2,6 +2,106 @@
 
 ## Unreleased
 
+### Agent-authored code stops running on the host
+
+`commit-reviewer` ran each project's configured checks against the agent's
+worktree with `execFile`, as root, outside any container. The agent's shell is
+sandboxed but its write/edit tools are not — that is the job — so a test file
+it wrote was arbitrary code running as root: a complete path from "model in a
+container" to "root on the machine". `sealedEnv()` stopped secrets reaching
+those commands and did nothing about what they could do once running.
+
+Checks, the build, and the `composer`/`mix` dependency installs now go through
+one `runAgentCode`. On a host install it is the sandbox container; in the
+bundle it stays in-process, because that service is already contained and
+`docker-compose.yml` gives the Docker socket to `agent` alone — handing it the
+socket so it could start a sandbox would give that container host-root
+equivalent. When neither applies the review **refuses** rather than falling
+back to the host.
+
+Nine checks across three real projects were run both ways before any of this
+was wired in, and two things would otherwise have broken every project: a
+symlinked `node_modules` dangles inside a container, and a `mount --bind`
+nested in the worktree is not carried in by a plain bind of its parent. The
+ninth check, `pnpm audit`, needs egress — so a check may declare
+`network: "bridge"` in `projects.json`, a file outside the worktree that the
+agent cannot write.
+
+**Checks run in the image their toolchain needs.** The sandbox image carries
+Node and Python; detection configures checks for Go, Rust, Ruby, Elixir, Java,
+PHP and .NET too, so one image would have turned every review red for anyone
+whose project is not JavaScript. `docker/stack-images.json` is a single copy
+of the map `scripts/verify_stack_checks.py` already proved in CI, and the
+stack is stamped per CHECK at onboarding — a Go backend with a React frontend
+is an ordinary repository. `scripts/check_sandbox_tools.js` (also run by
+`scripts/doctor.py`) says which tools are missing from which image before a
+project's first review, and a missing toolchain is reported as a setup error
+naming the tool rather than as a failing check.
+
+See `SECURITY.md` for the threat model and what it deliberately does not fix.
+
+### Project memory is read in sections
+
+A project's `AGENTS.md` was injected whole into every model call and only
+grew. It is now split: the preamble plus the rules that fail *silently* stay
+resident, everything else is indexed and read on demand with
+`read_memory_section`. A build gotcha fails loudly and can be fetched; a
+test-wiring rule fails silently, so it stays in front of the model.
+
+Measured on real projects: **10,424 → 2,635 tokens** and **6,671 → 1,655**,
+on every model call of every task. Memory under 8,000 characters is not split
+at all — below that the index and the round trip cost more than they save.
+`read_memory_section("all")` returns the whole file, so a model that cannot
+tell from the index has one call that definitely contains the answer.
+
+The nightly consolidator re-splits what it writes. Without that it would have
+gone on succeeding every night and quietly stopped reaching any agent, which
+is the failure the split exists to prevent arriving from the other side.
+
+### Searching what past tasks ran into
+
+~458,000 tokens of episodes and task history that nothing could query. The
+consolidator distils recurring patterns into memory; a one-off from three
+months ago was unreachable. `agent_history_fts` holds a weighted tsvector —
+error text first — behind a GIN index, with `search_history` and
+`read_history` on the coordinator, investigator and planner.
+
+The index is populated **before** the pruner deletes anything, and the prune
+runs only if that copy succeeded — the ordering was never the guarantee.
+Records are demoted, never deleted, so the index is the archive of what the
+pruner removes.
+
+### A SQLite backend, an embedder, and a vector leg that is off
+
+`agent/backends.py` selects the backend by DSN; the SQLite branches are real,
+with a parity suite that asserts the **differences** rather than hiding them
+(naive vs aware timestamps, tie ordering). Postgres remains the server's
+default and is unchanged. `requirements-cli.txt` keeps the dependency out of
+the server's own requirements.
+
+The router serves `/v1/embeddings`, billed to `routing.jsonl` like every other
+call. Vector search is built, tested on both backends, and **off by default**:
+measured across 11 real queries it was actively harmful before a similarity
+floor — a nearest-neighbour search cannot say "nothing matched", so it filled
+every page and let "least far away" outvote an exact identifier. It is one
+switch in Settings, and `doctor.py` prints the three steps to turn it on.
+
+### Smaller things
+
+- The task log mounts a window anchored to its end instead of every row; a
+  3,000-entry log no longer mounts 3,000 nodes.
+- A `bundle` CI job (manual) actually starts the compose stack, waits for
+  `/api/health`, and asserts every service is still running afterwards.
+- `agent/routers/push.py` is the first seam out of `server.py`. The route
+  inventory now follows included routers — without that, an extracted seam
+  counted as zero routes and would have fallen outside the only test that
+  checks a route still has a guard.
+- Removing a project can delete its checkout, when nothing would be lost and
+  nothing this box serves runs from it.
+- The planner and the task investigator can run a project and look at it.
+- LogoLoom: design a mark, render it, and export a brand kit.
+
+
 ### The bundle waits for the router, and a few leftover review items closed
 
 A first task that started while the router was still booting died mid-call

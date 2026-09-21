@@ -154,12 +154,23 @@ crash releases the claim when its connection closes.
 
 ```
 agent/
-  server.py            the API: auth, tasks, planning, github, settings, uploads
+  server.py            the API: auth, tasks, planning, github, settings, uploads.
+                       Being split one seam at a time into routers/ -- never in
+                       one pass; tests/test_route_inventory.py is the net
   outer_graph.py       the two-node graph and its routing
   nodes/               work.py, verify_and_ship.py
   deep_agent.py        the build agent: seats, tools, the approval gate
   planning_chat.py     the planning agent: three seats, brief-first, draft gate
-  graph.py             Postgres pools, the project advisory lock
+  graph.py             the pools and the project lock, dispatched per backend
+  backends.py          the ONLY place a DSN decides postgres vs sqlite
+  store_paging.py      one pager; four hand-rolled loops used to disagree
+  episodes.py          the single episode writer
+  memory_sections.py   splitting a project's memory; what stays in the prompt
+  history_index.py     full-text over episodes, tasks and build transcripts
+  episode_recall.py    the retrieval legs and their fusion, plus telemetry
+  embeddings.py        one embedding call, skipped when the digest is unchanged
+  capabilities.py      one shape for every optional subsystem: available()
+  routers/             per-seam route modules, included by server.py
   health.py            what "up" means (section 1)
   github_settings.py   tokens (encrypted) and per-project inbox policy
   github_inbox.py      the poller, the items, the signed approve links
