@@ -67,26 +67,20 @@ function currentProjects() {
     return loadProjects(BUILTIN_PROJECTS, { section: 'deploy' });
 }
 
-// Mirrors config.yaml's model_list — the raw backend model strings the router's
-// `return_raw_model_name` puts in response.model / routing_decision.routed_model
-// (provider prefix like "openrouter/" is stripped by the router before this point).
-// All 4 tiers are real destinations (2026-08-15) — session_affinity is off,
-// so every message is classified fresh instead of inheriting turn 1's tier.
+// The ledger already has the model id and the tier the classifier picked.
+// A hardcoded list here was a second inventory of the same pins, and it
+// went stale the moment an operator changed config.yaml: stats then
+// labelled a live model as its own raw id, or showed zeros for a pin
+// nobody uses anymore. The label is the last path segment — the same
+// shortening the console already does — and unused models simply do not
+// appear.
 const ROUTING_LOG = path.join(AGENT_HOME, 'services/model-router/logs/routing.jsonl');
-const ROUTER_MODELS = [
-    { backend: 'amazon/nova-micro-v1',            label: 'Nova Micro',            tier: 'SIMPLE' },
-    { backend: 'openai/gpt-4o-mini',              label: 'GPT-4o mini',           tier: 'SIMPLE' },
-    { backend: 'amazon/nova-lite-v1',             label: 'Nova Lite',             tier: 'SIMPLE' },
-    { backend: 'z-ai/glm-5.2',                    label: 'GLM-5.2',               tier: 'MEDIUM' },
-    { backend: 'qwen/qwen3.7-max',                label: 'Qwen3.7 Max',           tier: 'MEDIUM' },
-    { backend: 'anthropic/claude-haiku-4.5',      label: 'Claude Haiku 4.5',      tier: 'MEDIUM' },
-    { backend: 'deepseek/deepseek-v4-pro',        label: 'DeepSeek V4 Pro',       tier: 'COMPLEX' },
-    { backend: 'x-ai/grok-4.3',                   label: 'Grok 4.3',              tier: 'COMPLEX' },
-    { backend: 'qwen/qwen3-coder-plus',           label: 'Qwen3-Coder-Plus',      tier: 'COMPLEX' },
-    { backend: 'moonshotai/kimi-k3',              label: 'Kimi K3',               tier: 'REASONING' },
-    { backend: 'google/gemini-3.1-pro-preview',   label: 'Gemini 3.1 Pro Preview', tier: 'REASONING' },
-    { backend: 'openai/gpt-5.3-codex',            label: 'GPT-5.3 Codex',         tier: 'REASONING' },
-];
+
+function labelForModel(id) {
+    const raw = String(id || '');
+    const slash = raw.lastIndexOf('/');
+    return (slash === -1 ? raw : raw.slice(slash + 1)) || raw;
+}
 
 function run(cmd, args, cwd) {
     return new Promise((resolve, reject) => {
@@ -488,11 +482,10 @@ app.get('/api/router/current', async (req, res) => {
             let e;
             try { e = JSON.parse(lines[i]); } catch { continue; }
             if (e.error || !e.routed_model || !e.tier) continue;
-            const known = ROUTER_MODELS.find(m => m.backend === e.routed_model);
             return res.json({
                 model: e.routed_model,
-                label: known ? known.label : e.routed_model,
-                tier: known ? known.tier : e.tier,
+                label: labelForModel(e.routed_model),
+                tier: e.tier,
                 ts: e.ts,
             });
         }
@@ -525,13 +518,16 @@ app.get('/api/router/stats', async (req, res) => {
         const overheadEntries = allEntries.filter(e => !e.error && !e.tier);
 
         const byModel = {};
-        for (const m of ROUTER_MODELS) {
-            byModel[m.backend] = { ...m, requests: 0, errors: 0, cost: 0, promptTokens: 0, completionTokens: 0 };
-        }
         for (const e of entries) {
             const key = e.routed_model || e.requested_model;
             if (!key) continue;
-            if (!byModel[key]) byModel[key] = { backend: key, label: key, tier: null, requests: 0, errors: 0, cost: 0, promptTokens: 0, completionTokens: 0 };
+            if (!byModel[key]) {
+                byModel[key] = {
+                    backend: key, label: labelForModel(key),
+                    tier: e.tier || null,
+                    requests: 0, errors: 0, cost: 0, promptTokens: 0, completionTokens: 0,
+                };
+            }
             const b = byModel[key];
             if (e.error) { b.errors++; continue; }
             b.requests++;
