@@ -181,6 +181,45 @@ export function ModelBadge({ model }: { model?: string | null }) {
   );
 }
 
+/** Click-and-keyboard toggle for a collapsed log row.
+
+A `<div onClick>` is what these used to be. That is a mouse-only control:
+no role, no tab stop, no aria-expanded, and Space/Enter do nothing. The
+rows that have nothing to expand stay a plain div, so a screen reader is
+not offered a button that cannot open. */
+function ExpandToggle({
+  open,
+  onToggle,
+  className,
+  label,
+  children,
+}: {
+  open: boolean;
+  onToggle: () => void;
+  className: string;
+  label: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div
+      className={className}
+      role="button"
+      tabIndex={0}
+      aria-expanded={open}
+      aria-label={label}
+      onClick={onToggle}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onToggle();
+        }
+      }}
+    >
+      {children}
+    </div>
+  );
+}
+
 export const TOOL_ICONS: Record<string, string> = {
   bash: "❯_",
   read: "📄",
@@ -219,15 +258,29 @@ function ChatMessageImpl({ entry, prevEntry }: { entry: LogEntry; prevEntry?: Lo
   if (kind === "system") {
     const tone = verdictTone(entry.summary);
     const detail = cleanText(entry.detail || "");
+    const line = (
+      <>
+        <span className="chat-system-icon">
+          {tone === "good" ? "✓" : tone === "bad" ? "✕" : tone === "warn" ? "!" : "•"}
+        </span>
+        <span className="chat-system-text">{entry.summary}</span>
+        {detail && <span className={`chat-chevron ${open ? "open" : ""}`}>▸</span>}
+      </>
+    );
     return (
       <div className={`chat-system chat-system--${tone}`}>
-        <div className="chat-system-line" onClick={() => detail && setOpen((o) => !o)}>
-          <span className="chat-system-icon">
-            {tone === "good" ? "✓" : tone === "bad" ? "✕" : tone === "warn" ? "!" : "•"}
-          </span>
-          <span className="chat-system-text">{entry.summary}</span>
-          {detail && <span className={`chat-chevron ${open ? "open" : ""}`}>▸</span>}
-        </div>
+        {detail ? (
+          <ExpandToggle
+            className="chat-system-line"
+            open={open}
+            onToggle={() => setOpen((o) => !o)}
+            label={open ? "Hide gate detail" : "Show gate detail"}
+          >
+            {line}
+          </ExpandToggle>
+        ) : (
+          <div className="chat-system-line">{line}</div>
+        )}
         {open && detail && <div className="chat-system-detail">{detail}</div>}
       </div>
     );
@@ -258,12 +311,17 @@ function ChatMessageImpl({ entry, prevEntry }: { entry: LogEntry; prevEntry?: Lo
     const failed = !noMatches && /exit_code=[1-9]|ERROR|TIMED OUT/.test(body.slice(0, 120));
     return (
       <div className={`chat-tool-result ${failed ? "chat-tool-result--failed" : ""}`}>
-        <div className="chat-tool-result-head" onClick={() => setOpen((o) => !o)}>
+        <ExpandToggle
+          className="chat-tool-result-head"
+          open={open}
+          onToggle={() => setOpen((o) => !o)}
+          label={open ? "Hide tool output" : "Show tool output"}
+        >
           <span className={`chat-chevron ${open ? "open" : ""}`}>▸</span>
           <span>{failed ? "output — error" : "output"}</span>
           <span className="chat-time">{relativeTime(entry.timestamp)}</span>
           <code className="chat-tool-result-preview">{body.replace(/\s+/g, " ").slice(0, 90)}</code>
-        </div>
+        </ExpandToggle>
         {open && <pre className="chat-tool-result-body">{body}</pre>}
       </div>
     );
