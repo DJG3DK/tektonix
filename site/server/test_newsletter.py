@@ -63,6 +63,15 @@ class FakePool:
         return FakeConn(self.store, self.fail)
 
 
+@pytest.fixture(autouse=True)
+def _fresh_limiter():
+    # The limiter is process-global. Without a reset, a test that posts
+    # five times poisons every later test that shares the TestClient IP.
+    newsletter.reset_subscribe_limiter()
+    yield
+    newsletter.reset_subscribe_limiter()
+
+
 def _post(client, **form):
     # follow_redirects off: the redirect IS the behaviour under test.
     return client.post("/subscribe", data=form, follow_redirects=False)
@@ -166,3 +175,49 @@ def test_oversized_input_is_truncated_rather_than_rejected(monkeypatch):
     monkeypatch.setattr(newsletter, "pool", pool)
     _post(TestClient(newsletter.app), name="A" * 500, email="ada@example.com")
     assert len(pool.store["ada@example.com"]["name"]) == 120
+
+
+def test_a_sixth_signup_from_one_ip_is_a_page_not_a_store(monkeypatch):
+    """The landing page is a public form with no CAPTCHA. The sixth POST
+    in a minute is refused the same way a bad address is -- a 303 to the
+    failure page -- so a browser still has somewhere to go."""
+    pool = FakePool()
+    monkeypatch.setattr(newsletter, "pool", pool)
+    client = TestClient(newsletter.app)
+    for i in range(newsletter._SUBSCRIBE_MAX):
+        r = _post(client, name="Ada", email=f"ada{i}@example.com")
+        assert r.headers["location"] == newsletter.OK_URL
+    assert len(pool.store) == newsletter._SUBSCRIBE_MAX
+    r = _post(client, name="Ada", email="one-more@example.com")
+    assert r.status_code == 303
+    assert r.headers["location"] == newsletter.FAIL_URL
+    assert "one-more@example.com" not in pool.store
+
+
+def test_x_real_ip_is_the_rate_limit_key(monkeypatch):
+    """nginx sets X-Real-IP from $remote_addr and overwrites anything the
+    client sent. Two people behind the same TestClient socket are not one
+    person, and a client that forges X-Forwarded-For is not a new bucket."""
+    pool = FakePool()
+    monkeypatch.setattr(newsletter, "pool", pool)
+    client = TestClient(newsletter.app)
+    for i in range(newsletter._SUBSCRIBE_MAX):
+        _post(client, name="Ada", email=f"a{i}@example.com")
+    # Same socket, different real IP: a new window.
+    r = client.post(
+        "/subscribe",
+        data={"name": "Ada", "email": "other@example.com"},
+        headers={"X-Real-IP": "203.0.113.9"},
+        follow_redirects=False,
+    )
+    assert r.headers["location"] == newsletter.OK_URL
+    assert "other@example.com" in pool.store
+    # Forged XFF must not open a new window on the TestClient IP.
+    r = client.post(
+        "/subscribe",
+        data={"name": "Ada", "email": "forged@example.com"},
+        headers={"X-Forwarded-For": "198.51.100.1"},
+        follow_redirects=False,
+    )
+    assert r.headers["location"] == newsletter.FAIL_URL
+    assert "forged@example.com" not in pool.store
