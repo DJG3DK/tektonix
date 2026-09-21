@@ -1394,7 +1394,16 @@ async def resplit_memory_sections(
 
     await backend.awrite(
         route_local_path("/memories/", SECTIONS_INDEX_PATH),
-        memory_sections.index_to_json(entries, source_digest=memory_sections.source_digest(text)))
+        # source_sha256, NOT source_digest: the reader (_sections_match_source)
+        # looks for that exact key, and a mismatch does not fail -- an index
+        # with no recorded digest is taken at its word, so the drift check
+        # that protects against an agent writing the whole file just stops
+        # running. Silently. This wrote the wrong key once and disabled that
+        # protection on live data until someone compared the two spellings.
+        memory_sections.index_to_json(
+            entries,
+            source_sha256=memory_sections.source_digest(text),
+        ))
     return [s.slug for s in sections]
 
 

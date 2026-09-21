@@ -124,6 +124,30 @@ def stale_flags(ledger: dict, changed: dict[str, str]) -> list[dict]:
     return flags
 
 
+def section_of(memory_text: str, line: str) -> str:
+    """The `##` section a memory line sits in, as its slug, or "".
+
+    A flag quotes the fact and names the repo file, which was enough while
+    the whole memory was in every prompt. Once a project's memory is split
+    (agent/memory_sections.py) the fact may live in a section the prompt is
+    not carrying, so the agent is told a fact it cannot see is stale and has
+    nothing to act on. Naming the section turns that into one tool call.
+
+    Falls back to "" rather than guessing: an unsplit project has no sections
+    and a line that matches none of them is better left unattributed than
+    attributed wrongly.
+    """
+    if not line.strip():
+        return ""
+    from agent import memory_sections  # noqa: PLC0415 -- avoids an import cycle at module load
+
+    preamble, sections = memory_sections.split_sections(memory_text)
+    for section in sections:
+        if line in section.body:
+            return section.slug
+    return ""
+
+
 def render_flags(flags: list[dict], repo: str) -> str:
     if not flags:
         return ""
@@ -132,7 +156,11 @@ def render_flags(flags: list[dict], repo: str) -> str:
         "the fact was recorded. Verify against the current file before relying on them:",
     ]
     for f in flags[:MAX_FLAGS]:
-        lines.append(f"- [{f['path']} changed {f['changed']}, fact recorded {f['first_seen']}] {f['line'][:140]}")
+        where = f.get("section") or ""
+        cite = f"{f['path']} changed {f['changed']}, fact recorded {f['first_seen']}"
+        if where:
+            cite += f", in section {where}"
+        lines.append(f"- [{cite}] {f['line'][:140]}")
     if len(flags) > MAX_FLAGS:
         lines.append(f"- ... and {len(flags) - MAX_FLAGS} more")
     return "\n".join(lines)
@@ -155,6 +183,10 @@ async def refresh_memory_freshness(repo: str, repo_root: str, project_backend, m
     ledger = update_ledger(ledger, mentions, today)
     changed = last_change_dates(repo_root, {e["path"] for e in ledger.values()})
     flags = stale_flags(ledger, changed)
+    # Which section each flagged fact lives in, so a flag about a fact the
+    # prompt is not carrying says where to read it.
+    for f in flags:
+        f["section"] = section_of(memory_text, f.get("line", ""))
     await project_backend.awrite(LEDGER_PATH, json.dumps(ledger, indent=2, sort_keys=True))
     await project_backend.awrite(STALE_PATH, render_flags(flags, repo))
     return {"cited_paths": len(ledger), "stale": len(flags)}

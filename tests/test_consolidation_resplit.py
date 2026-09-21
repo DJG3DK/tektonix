@@ -17,6 +17,7 @@ import pytest
 
 from agent import memory_sections as ms
 from agent.deep_agent import (
+    MEMORY_PATH,
     SECTIONS_CORE_PATH,
     SECTIONS_INDEX_PATH,
     load_memory_index,
@@ -171,3 +172,45 @@ async def test_a_smaller_resident_budget_pins_less_on_a_resplit():
     pinned_large = [e for e in (await load_memory_index(large)).entries if e.always]
     assert len(pinned_small) < len(pinned_large)
     assert pinned_large, "an unbounded budget must pin every qualifying section"
+
+
+async def test_the_resplit_records_the_digest_under_the_key_the_reader_reads():
+    """Writer and reader must agree on the spelling, and nothing fails when
+    they do not.
+
+    `index_to_json(**meta)` accepts any keyword, and `parse_index_document`
+    takes an index with no recorded digest at its word. So writing
+    `source_digest=` where the reader looks for `source_sha256` does not
+    raise, does not warn, and does not fail a test that checks the sections
+    are correct -- it silently switches off the drift check that catches an
+    agent writing the whole memory file behind the sections' back. That is
+    the one failure this subsystem is not allowed to have, and it shipped
+    once, so it is asserted here against the reader rather than against a
+    string.
+    """
+    backend = _Backend()
+    await _split(backend, ORIGINAL)
+    await resplit_memory_sections(backend, ORIGINAL)
+
+    index = await load_memory_index(backend)
+    assert index.source_sha256, "no digest recorded -- the drift check is now inert"
+    assert index.source_sha256 == ms.source_digest(ORIGINAL)
+
+
+async def test_a_whole_file_written_behind_the_sections_is_noticed():
+    """The reason the digest exists. An agent recording a fact writes
+    /memories/AGENTS.md, which for a split project is a key no prompt reads:
+    the sections stay valid and become a snapshot of a file that moved on."""
+    from agent.deep_agent import _sections_match_source
+
+    backend = _Backend()
+    await _split(backend, ORIGINAL)
+    await resplit_memory_sections(backend, ORIGINAL)
+    backend.files[key(MEMORY_PATH)] = ORIGINAL
+
+    index = await load_memory_index(backend)
+    assert await _sections_match_source(backend, index) is True
+
+    backend.files[key(MEMORY_PATH)] = ORIGINAL + "\n## Recorded by an agent\n\nA fact.\n"
+    assert await _sections_match_source(backend, index) is False, \
+        "a whole-file write went unnoticed; the prompt would serve a stale snapshot"

@@ -84,3 +84,63 @@ async def test_refresh_writes_ledger_and_rendered_flags(tmp_path):
     assert summary == {"cited_paths": 1, "stale": 1}
     assert json.loads(backend.files[LEDGER_PATH])
     assert "POSSIBLY STALE" in backend.files[STALE_PATH]
+
+
+# --- which section a stale fact lives in ------------------------------------
+#
+# A flag quotes the fact and names the repo file, which was enough while the
+# whole memory sat in every prompt. Split (agent/memory_sections.py), the fact
+# may be in a section the prompt is not carrying -- so the agent is told
+# something it cannot see is stale, with nowhere to go.
+
+_SPLIT_MEMORY = """# a project
+
+Preamble.
+
+## Build wiring
+
+The build reads config/build.json before anything else.
+
+## Deployment
+
+Deploys run from scripts/deploy.sh on the host.
+"""
+
+
+def test_a_flagged_fact_names_the_section_it_lives_in():
+    from agent.memory_freshness import section_of
+
+    assert section_of(_SPLIT_MEMORY, "Deploys run from scripts/deploy.sh on the host.") == "deployment"
+    assert section_of(_SPLIT_MEMORY, "The build reads config/build.json before anything else.") == "build-wiring"
+
+
+def test_a_fact_in_no_section_is_left_unattributed():
+    """Better unattributed than attributed wrongly -- the preamble is always
+    in the prompt, so there is nothing to point at."""
+    from agent.memory_freshness import section_of
+
+    assert section_of(_SPLIT_MEMORY, "Preamble.") == ""
+    assert section_of(_SPLIT_MEMORY, "a line that is not in this memory at all") == ""
+    assert section_of("", "anything") == ""
+    assert section_of(_SPLIT_MEMORY, "   ") == ""
+
+
+def test_the_rendered_flag_carries_the_section_when_there_is_one():
+    from agent.memory_freshness import render_flags
+
+    out = render_flags([{
+        "path": "scripts/deploy.sh", "changed": "2026-09-01", "first_seen": "2026-08-01",
+        "line": "Deploys run from scripts/deploy.sh on the host.", "section": "deployment",
+    }], "proj")
+    assert "in section deployment" in out
+    assert "Deploys run from scripts/deploy.sh" in out
+
+
+def test_the_rendered_flag_is_unchanged_for_an_unsplit_project():
+    """Most projects are under the split floor and have no sections; their
+    flags must read exactly as they always did."""
+    from agent.memory_freshness import render_flags
+
+    flag = {"path": "a.py", "changed": "2026-09-01", "first_seen": "2026-08-01", "line": "A fact."}
+    assert render_flags([flag], "proj") == render_flags([{**flag, "section": ""}], "proj")
+    assert "in section" not in render_flags([flag], "proj")
