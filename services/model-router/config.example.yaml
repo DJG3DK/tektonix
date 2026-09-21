@@ -6,6 +6,11 @@
 # (deepseek-v4-pro, claude-haiku-4.5, gpt-4o-mini) that those roles may fail
 # over to. Do not delete a fallback without checking router_settings.fallbacks.
 #
+# One alias is not a chat seat: `embedder`, which agent/embeddings.py asks for
+# when semantic episode recall is switched on. It is here so that a fresh
+# install can turn that on by setting one variable rather than by editing a
+# config file it has never opened.
+#
 # The adaptive SIMPLE/MEDIUM/COMPLEX/REASONING tier system, smart-router,
 # reasoning-tier and their nine pool models were REMOVED on 2026-09-13. They
 # were built for OpenHands, which was archived 2026-08-24, and the ledger held
@@ -556,6 +561,36 @@ model_list:
     model_info:
       input_cost_per_token: 0.00000005
       output_cost_per_token: 0.00000016
+
+  # Episode recall's embedding model (agent/embeddings.py). Deliberately NOT
+  # an `agent-` name: every agent-* alias has to be a MANAGED_ROLE, which
+  # tests/test_managed_roles_complete.py enforces, and managed roles are what
+  # the dashboard's Models page offers as chat seats. An embedding model in
+  # that picker is a pin an operator can only get wrong. It is named after
+  # the consumer that asks for it, which is how this router's other non-seat
+  # aliases are named.
+  #
+  # Swapping the model is this entry and nothing else, like every other role.
+  # `dimensions` is what keeps that swap safe: openai/text-embedding-3-large
+  # answers 3072 by default, and the store's vector column was created at the
+  # width below -- agent/embeddings.py refuses a width it did not ask for
+  # rather than writing a vector the index cannot use.
+  #
+  # No output_cost_per_token on purpose: an embedding has no completions, and
+  # a 0 there would read to the rate table as a rate rather than as "does not
+  # apply". Spend for this alias comes from the ledger's billed usage.cost
+  # like everything else.
+  - model_name: embedder
+    params:
+      model: openrouter/openai/text-embedding-3-small
+      api_key: os.environ/OPENROUTER_API_KEY
+      # 30s: a task has already spent minutes by the time its episode is
+      # written, and an embedding that hangs should fail and be picked up by
+      # the backfill rather than hold a finished task open.
+      timeout: 30
+      extra_body: {"dimensions": 1536}
+    model_info:
+      input_cost_per_token: 0.00000002
 
 router_settings:
   # A single 4xx used to end that project's consolidation for the night --

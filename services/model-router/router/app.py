@@ -1,8 +1,9 @@
 """The router's HTTP surface.
 
-Deliberately small. Three routes are all anything in this deployment calls:
+Deliberately small. Four routes are all anything in this deployment calls:
 
   POST /v1/chat/completions   every model call, from four services
+  POST /v1/embeddings         episode embeddings, so they are billed here too
   GET  /health/liveliness     agent/health.py, unauthenticated by design
   GET  /v1/model/info         the deployment table, for tooling
 
@@ -172,6 +173,45 @@ async def models(authorization: str | None = Header(default=None)):
 async def chat_completions(request: Request, authorization: str | None = Header(default=None)):
     caller = _authorise(authorization)
     body = await request.json()
+    table, alias, call_id, task_id, session_id = _resolve(body)
+    client: httpx.AsyncClient = request.app.state.http
+
+    if body.get("stream"):
+        return await _streamed(client, table, alias, body, call_id, task_id, session_id, caller)
+
+    return await _buffered(client, table, alias, body, upstream.call_once,
+                           call_id, task_id, session_id, caller)
+
+
+@app.post("/v1/embeddings")
+async def embeddings(request: Request, authorization: str | None = Header(default=None)):
+    """Vectors for episode recall, routed exactly like a chat call.
+
+    It is here rather than in the agent talking to OpenRouter directly for one
+    reason: spend in this system is whatever routing.jsonl says was billed,
+    never a rate table, so a model call that bypassed the router would be
+    money the operator's totals cannot see. Everything else -- the alias, the
+    fallback chain, the retries, the ledger line -- is shared code with the
+    chat path, not a parallel copy of it.
+
+    There is no streaming branch because the endpoint has no streaming form.
+    """
+    caller = _authorise(authorization)
+    body = await request.json()
+    table, alias, call_id, task_id, session_id = _resolve(body)
+    client: httpx.AsyncClient = request.app.state.http
+
+    return await _buffered(client, table, alias, body, upstream.embed_once,
+                           call_id, task_id, session_id, caller)
+
+
+def _resolve(body: dict):
+    """The alias and the call's identity, before anything is spent.
+
+    An unknown alias is a 404 rather than an attempt: the old proxy reported
+    a missing deployment at the moment of failure, after the latency and
+    sometimes after the money.
+    """
     alias = body.get("model")
     if not alias:
         raise HTTPException(400, "no model given")
@@ -181,18 +221,20 @@ async def chat_completions(request: Request, authorization: str | None = Header(
         raise HTTPException(404, f"unknown model {alias!r}")
 
     meta = body.get("metadata") or {}
-    task_id = meta.get("agent_task_id")
-    session_id = meta.get("agent_session_id")
-    call_id = str(uuid.uuid4())
-    client: httpx.AsyncClient = request.app.state.http
+    return table, alias, str(uuid.uuid4()), meta.get("agent_task_id"), meta.get("agent_session_id")
 
-    if body.get("stream"):
-        return await _streamed(client, table, alias, body, call_id, task_id, session_id, caller)
 
-    # Buffered: walk the fallback chain, retrying TRANSIENT failures on each
-    # deployment before moving on. Moving to a fallback on the first 429 throws
-    # away the model the operator pinned because a provider asked us to wait a
-    # moment -- and the fallback is, by definition, not their first choice.
+async def _buffered(client, table, alias, body, send, call_id, task_id, session_id, caller):
+    """Walk the fallback chain, retrying TRANSIENT failures on each deployment
+    before moving on. Moving to a fallback on the first 429 throws away the
+    model the operator pinned because a provider asked us to wait a moment --
+    and the fallback is, by definition, not their first choice.
+
+    `send` is the upstream call: chat completions or embeddings. The chain,
+    the retry rule and the ledger line are the same for both by construction,
+    because an embedding that was not billed here is a hole in the one spend
+    figure the operator trusts.
+    """
     chain = table.chain(alias)
     last: upstream.Attempt | None = None
     attempt_no = 0
@@ -200,8 +242,8 @@ async def chat_completions(request: Request, authorization: str | None = Header(
         dep = table.deployments[name]
         for retry in range(RETRIES_PER_DEPLOYMENT + 1):
             attempt_no += 1
-            att = await upstream.call_once(client, OPENROUTER_KEY, body, dep.model,
-                                           dep.extra_body, dep.timeout_s)
+            att = await send(client, OPENROUTER_KEY, body, dep.model,
+                             dep.extra_body, dep.timeout_s)
             att.alias = name
             last = att
             ledger.record(

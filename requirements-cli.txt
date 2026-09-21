@@ -1,0 +1,45 @@
+# The local backend: everything an installation needs to run against a
+# SQLite file instead of a Postgres server.
+#
+# SEPARATE FROM requirements.txt ON PURPOSE. The server selects Postgres by
+# DSN and never reaches a line of this code, so nothing here is a dependency
+# of the running service and nothing here may become one.
+#
+#     pip install -r requirements-cli.txt
+#
+# THE LIVE VENV DOES CARRY THESE THREE, deliberately, and that is not the
+# contradiction it first looks like. An earlier version of this comment said
+# they "must not enter the venv the live process runs from"; they were
+# installed there anyway, because tests/test_sqlite_store_parity.py skips
+# itself without them and a parity suite that cannot run on the box that
+# runs the deployment is not a gate. The rule that replaces it is the one
+# that was actually worth having:
+#
+#   * these pins MOVE NO OTHER PIN. Verified after installing: every `==` in
+#     requirements.txt still matches what is installed (langgraph-checkpoint
+#     stayed at 4.2.0) and `pip check` reports no broken requirements.
+#     If a future bump here would move a requirements.txt pin, it does not
+#     go in -- run the suite from a separate venv instead.
+#   * the server imports none of them, so what they can break is an
+#     UPGRADE, not a request. Re-run `pip check` after touching either file.
+#
+# It pulls requirements.txt too, so it is the one install line for a local
+# checkout. Nothing here needs apt, cargo or a compiler -- sqlite-vec ships
+# as a wheel with the extension already built -- which is why the local
+# backend is the one that can be proven end to end on any machine.
+
+-r requirements.txt
+
+# Ships BOTH halves: langgraph/checkpoint/sqlite (AsyncSqliteSaver) and
+# langgraph/store/sqlite (AsyncSqliteStore). Requires
+# langgraph-checkpoint>=4.1.0,<5.0.0 and the pinned stack has 4.2.0, so it
+# moves no existing pin.
+langgraph-checkpoint-sqlite==3.1.1
+
+# Its two dependencies, pinned here rather than left to the resolver for the
+# same reason every other line in requirements.txt is pinned.
+aiosqlite==0.22.1
+# Not imported by anything here, and not optional either:
+# langgraph/store/sqlite/base.py imports it at module top, so the store
+# cannot be imported without it even when no vector index is configured.
+sqlite-vec==0.1.9

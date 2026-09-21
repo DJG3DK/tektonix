@@ -17,7 +17,7 @@ from contextlib import asynccontextmanager
 
 import pytest
 
-from agent import graph
+from agent import backends, graph
 from agent.config import load_config
 
 LIVE_SHAPE = "postgresql://agent:pw@127.0.0.1:5432/agent"
@@ -81,9 +81,36 @@ async def test_the_postgres_store_still_opens_with_the_pooled_connection_string(
     assert seen["setup"] is True
 
 
+@pytest.mark.parametrize("opener,branch", [
+    ("open_store", "_open_sqlite_store"),
+    ("open_checkpointer", "_open_sqlite_checkpointer"),
+])
+async def test_a_local_dsn_reaches_the_sqlite_branch(opener, branch, monkeypatch):
+    """The other half of the dispatch. The branch itself is exercised
+    against a real file by tests/test_sqlite_store_parity.py; this asserts
+    only that a local DSN gets there, with the config handed through
+    unaltered."""
+    reached = []
+
+    @asynccontextmanager
+    async def fake(config):
+        reached.append(config.dsn)
+        yield "the sqlite half"
+
+    monkeypatch.setattr(graph, branch, fake)
+    async with getattr(graph, opener)(_config(LOCAL_SHAPE)) as opened:
+        assert opened == "the sqlite half"
+    assert reached == [LOCAL_SHAPE]
+
+
 @pytest.mark.parametrize("opener", ["open_store", "open_checkpointer"])
-async def test_a_local_dsn_says_the_backend_is_not_built_yet(opener):
-    with pytest.raises(NotImplementedError) as e:
+async def test_a_local_dsn_without_the_package_names_the_install_line(opener, monkeypatch):
+    """The degradation shape the rest of the tree uses: a predicate, and a
+    refusal carrying the exact command. A server never installs
+    requirements-cli.txt, so this is what an AGENT_DSN typo on a server
+    would produce -- a sentence, not an ImportError three layers down."""
+    monkeypatch.setattr(backends, "sqlite_available", lambda: False)
+    with pytest.raises(RuntimeError) as e:
         async with getattr(graph, opener)(_config(LOCAL_SHAPE)):
             pass
-    assert LOCAL_SHAPE in str(e.value)
+    assert backends.SQLITE_INSTALL_HINT in str(e.value)

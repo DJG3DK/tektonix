@@ -20,12 +20,13 @@ depends on: a leg that is not registered contributes nothing, so with one
 leg the fused ranking IS that leg's ranking, unchanged. Adding the second
 leg is additive, and removing it again is a revert rather than a migration.
 
-Today there are no legs, and recall returns nothing. That is the skeleton:
-the shape is agreed before anything is built against it.
+Two legs today: agent/history_index.py's full text and
+agent/episode_vectors.py's embeddings.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -97,32 +98,128 @@ def available() -> bool:
 def fuse(rankings: list[list[EpisodeHit]], limit: int | None = None) -> list[EpisodeHit]:
     """Reciprocal-rank fusion of several legs' rankings into one.
 
-    An episode found by two legs beats one found by either alone; an episode
-    found by one leg keeps that leg's ordering relative to its own results.
-    With a single ranking in, the order out is that ranking's order.
+    The rule, in full, because a reviewer has to be able to check it:
+
+        score(d) = sum over legs of 1 / (60 + rank of d in that leg)
+
+    where `d` is a piece of WORK, not a row -- see _group_key. An episode
+    found by two legs beats one found by either alone; an episode found by
+    one leg keeps that leg's ordering relative to its own results. Ties go
+    to the better single-leg rank, then to the ref, so the order never
+    depends on dict iteration.
+
+    The property the whole build order rests on: with ONE ranking in, the
+    order out is that ranking's order, unchanged. 1/(60+rank) is strictly
+    decreasing in rank, no group can score twice from one leg, and the tie
+    break is that same rank -- so removing the vector leg leaves full
+    text's ordering exactly as it was. tests/test_episode_vectors.py
+    asserts it rather than leaving it to be believed.
+
+    Position, never score. A cosine similarity and a ts_rank_cd are not on
+    the same scale and nothing sensible calibrates them; their ORDERINGS
+    are directly comparable, and that is all this uses.
     """
     scores: dict[str, float] = {}
     best: dict[str, EpisodeHit] = {}
+    legs: dict[str, set[str]] = {}
+    rolled_up = _rolled_up_tasks(rankings)
     for ranking in rankings:
+        # A leg that returns two hits for one task means two things worth
+        # showing by that leg's own reckoning, and folding them here would
+        # silently shorten its page -- which is how "with one leg the fused
+        # order is that leg's order" stops being true.
+        taken: set[str] = set()
         for hit in ranking:
-            scores[hit.ref] = scores.get(hit.ref, 0.0) + 1.0 / (_RRF_K + hit.rank)
+            key = _group_key(hit, rolled_up)
+            if key in taken:
+                # Only reachable now for two ROLLUP hits at one task inside
+                # one leg. Made unique per leg and rank rather than falling
+                # back to the ref, which was a key another leg could arrive
+                # at independently: that is how a fused page came to show
+                # one episode at rank 1 and again at rank 3.
+                key = f"{hit.leg}#{hit.rank}:{hit.ref}"
+            taken.add(key)
+            scores[key] = scores.get(key, 0.0) + 1.0 / (_RRF_K + hit.rank)
+            legs.setdefault(key, set()).add(hit.leg)
             # Keep the hit that ranked highest anywhere: its snippet is the
             # one most likely to show the reader why this came back.
-            if hit.ref not in best or hit.rank < best[hit.ref].rank:
-                best[hit.ref] = hit
-    order = sorted(scores, key=lambda ref: (-scores[ref], best[ref].rank, ref))
+            if key not in best or hit.rank < best[key].rank:
+                best[key] = hit
+    order = sorted(scores, key=lambda key: (-scores[key], best[key].rank, best[key].ref))
     fused = [
         EpisodeHit(
-            ref=best[ref].ref,
-            repo=best[ref].repo,
+            ref=best[key].ref,
+            repo=best[key].repo,
             rank=n,
-            snippet=best[ref].snippet,
-            leg=best[ref].leg,
-            extra=best[ref].extra,
+            snippet=best[key].snippet,
+            leg=best[key].leg,
+            # Which legs actually found it, on the hit rather than in a
+            # side table: it is what the digest uses to say "semantic
+            # match" about a hit sharing no word with the query, and what
+            # the telemetry writes down to answer, in a month, whether the
+            # second leg earned its place.
+            extra={**best[key].extra, "found_by": sorted(legs[key])},
         )
-        for n, ref in enumerate(order, 1)
+        for n, key in enumerate(order, 1)
     ]
     return fused[:limit] if limit else fused
+
+
+# The corpora whose ref names ONE record. Anything else -- a `task:` or a
+# `task_log:` ref -- is a rollup: full text folds an episode, its
+# near-duplicate and the task row into whichever chunk ranked best, and the
+# ref it returns stands for the whole task rather than for a document.
+_RECORD_CORPORA = ("episode",)
+
+
+def _corpus(hit: EpisodeHit) -> str:
+    """Which corpus a hit's ref names. The legs put it in `extra`; the
+    prefix of the ref (corpus:repo:item_key) is the fallback, because a
+    grouping rule that silently treats an unlabelled hit as a rollup would
+    fold two real episodes into one slot and never say so."""
+    corpus = (hit.extra or {}).get("corpus")
+    if corpus:
+        return str(corpus)
+    return hit.ref.split(":", 1)[0] if ":" in hit.ref else ""
+
+
+def _rolled_up_tasks(rankings: list[list[EpisodeHit]]) -> set[str]:
+    """The tasks some leg answered with a rollup rather than with a record.
+
+    Computed over every ranking before any of them is scored, so the
+    grouping does not depend on which leg happened to be asked first.
+    """
+    return {
+        f"task={hit.repo}/{(hit.extra or {}).get('task_id')}"
+        for ranking in rankings
+        for hit in ranking
+        if (hit.extra or {}).get("task_id") and _corpus(hit) not in _RECORD_CORPORA
+    }
+
+
+def _group_key(hit: EpisodeHit, rolled_up: set[str] = frozenset()) -> str:
+    """What counts as the same thing found twice.
+
+    A hit that names a RECORD is that record, and its ref is the key. A hit
+    that names a TASK stands for all of them, so it takes a task key -- and
+    record hits for that same task join it, because otherwise one task would
+    take two slots of a page saying the same thing.
+
+    The earlier rule keyed EVERY hit with a task id on the task, and that
+    was wrong on this corpus in the normal case: one task writes several
+    episodes, so two genuinely different episodes collapsed into one slot
+    whenever either leg found both -- and, interacting with the per-leg
+    guard in fuse, produced a page showing one episode twice and dropping
+    the other. Two episodes of one task are two records; only a rollup ref
+    claims to be the task itself.
+    """
+    task_id = (hit.extra or {}).get("task_id")
+    if not task_id:
+        return hit.ref
+    key = f"task={hit.repo}/{task_id}"
+    if _corpus(hit) not in _RECORD_CORPORA:
+        return key
+    return key if key in rolled_up else hit.ref
 
 
 async def recall_episodes(store, repo: str, query: str, *, limit: int = 20,
@@ -139,14 +236,32 @@ async def recall_episodes(store, repo: str, query: str, *, limit: int = 20,
     and "the search timed out" printed as "no history matched" is the one
     symptom of this subsystem nobody would ever report.
     """
+    # Concurrently, because the legs cost different things and neither
+    # waits on the other: full text is one database query, and the vector
+    # leg spends a network round trip embedding the query before it can ask
+    # anything. Run in sequence the search would cost the sum, on a tool a
+    # seat is meant to be able to reach for on a hunch. Order is fixed so
+    # the fused result does not depend on which leg answered first.
+    names = sorted(_LEGS)
+    answers = await asyncio.gather(
+        *(_LEGS[name](store, repo, query, limit=limit, **kwargs) for name in names),
+        return_exceptions=True,
+    )
     rankings: list[list[EpisodeHit]] = []
-    for name, leg in sorted(_LEGS.items()):
-        try:
-            rankings.append(await leg(store, repo, query, limit=limit, **kwargs))
-        except Exception as e:  # noqa: BLE001 -- see the docstring
-            logger.warning("episode recall: leg %s failed: %s", name, e)
+    for name, answer in zip(names, answers, strict=True):
+        if isinstance(answer, BaseException) and not isinstance(answer, Exception):
+            # CancelledError (and KeyboardInterrupt, and SystemExit) is not
+            # a leg failing, it is this task being torn down. gather's
+            # return_exceptions hands it back like any other result, and
+            # logging it as a warning would swallow a cancellation and let
+            # the search return a page to a caller that no longer exists.
+            raise answer
+        if isinstance(answer, Exception):
+            logger.warning("episode recall: leg %s failed: %s", name, answer)
             if errors is not None:
-                errors.append(f"{name}: {e}")
+                errors.append(f"{name}: {answer}")
+            continue
+        rankings.append(answer)
     return fuse(rankings, limit=limit)
 
 
@@ -177,7 +292,8 @@ TOP_N = 5
 
 
 def record_query(query: str, repo: str, refs: list[str], *, task_id: str | None = None,
-                 legs: tuple[str, ...] | None = None, path: Path | None = None) -> None:
+                 legs: tuple[str, ...] | None = None, found_by: dict[str, list[str]] | None = None,
+                 path: Path | None = None) -> None:
     """One search happened, and these are the refs it put in front of the
     model. Never raises."""
     _append({
@@ -190,6 +306,13 @@ def record_query(query: str, repo: str, refs: list[str], *, task_id: str | None 
         "query": (query or "")[:300],
         "legs": list(legs) if legs is not None else list(registered_legs()),
         "refs": list(refs)[:TOP_N],
+        # Which leg put each of those refs there. `legs` alone says what was
+        # running; this says what each one CONTRIBUTED, and the difference
+        # is the whole question about the second leg: a vector leg whose
+        # every hit full text also found has earned nothing, however many
+        # searches it ran in.
+        "found_by": {ref: list(found_by.get(ref, ())) for ref in list(refs)[:TOP_N]}
+                    if found_by else {},
         "n_hits": len(refs),
     }, path)
 

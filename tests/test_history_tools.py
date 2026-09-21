@@ -376,6 +376,20 @@ async def test_a_search_records_what_it_offered(tools, tmp_path):
     assert events[0]["refs"] == [_hit().ref]
 
 
+async def test_a_search_records_which_leg_found_each_hit(tools, tmp_path):
+    """`legs` says what was running; this says what each one CONTRIBUTED.
+    The difference is the whole question about the second leg -- a vector
+    leg whose every hit full text also found has earned nothing, however
+    many searches it ran in."""
+    _, t = tools([_hit()])
+
+    await _search(t["search_history"], query="fast-forward merge failed")
+
+    import json
+    events = [json.loads(ln) for ln in (tmp_path / "retrieval_events.jsonl").read_text().splitlines()]
+    assert events[0]["found_by"] == {_hit().ref: ["fts"]}
+
+
 async def test_a_search_that_found_nothing_is_still_recorded(tools, tmp_path):
     """A search that returns nothing IS the measurement -- recording only
     the successful ones answers the opposite question."""

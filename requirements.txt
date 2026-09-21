@@ -39,6 +39,8 @@ langchain-protocol==0.0.18
 langgraph==1.2.11
 langgraph-checkpoint==4.2.0
 langgraph-checkpoint-postgres==3.1.2
+# The SQLite half of that pair lives in requirements-cli.txt, and belongs
+# there: the server selects its backend by DSN and never imports it.
 langgraph-prebuilt==1.1.0
 langgraph-sdk==0.4.2
 langsmith==0.11.0

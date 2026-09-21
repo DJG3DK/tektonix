@@ -73,6 +73,13 @@ def test_the_example_covers_every_managed_role():
 
 _FALLBACK_TARGETS = {"deepseek-v4-pro", "claude-haiku-4.5", "gpt-4o-mini"}
 
+# Aliases this product asks for that are not chat seats, so they are neither
+# agent-* nor a fallback target. `embedder` is the only one: agent/embeddings.py
+# resolves it for episode recall, and naming it agent-embedder would have put a
+# model with no chat, tool or structured-output behaviour into the Models
+# page's seat picker.
+_NON_SEAT_ALIASES = {"embedder"}
+
 
 def test_the_example_does_not_ship_another_product_s_aliases():
     """install.sh copies this file onto every fresh box. Other applications
@@ -84,7 +91,9 @@ def test_the_example_does_not_ship_another_product_s_aliases():
     aliases = {e["model_name"] for e in parsed["model_list"]}
     leftovers = sorted(
         name for name in aliases
-        if not str(name).startswith("agent-") and name not in _FALLBACK_TARGETS
+        if not str(name).startswith("agent-")
+        and name not in _FALLBACK_TARGETS
+        and name not in _NON_SEAT_ALIASES
     )
     assert not leftovers, f"example config ships aliases that are not this product: {leftovers}"
 

@@ -84,6 +84,19 @@ MANAGED_KEYS: tuple[ManagedKey, ...] = (
     ManagedKey("SMTP_USER", AGENT_ENV, "SMTP user", "Usually the sending address.", "Email", ("tektonix",), secret=False),
     ManagedKey("SMTP_PASS", AGENT_ENV, "SMTP password", "App password, not the account password.", "Email", ("tektonix",)),
     ManagedKey("SMTP_FROM", AGENT_ENV, "From address", "What recipients see.", "Email", ("tektonix",), secret=False),
+    # The one switch that decides whether episode recall has a semantic leg
+    # at all. Managed here rather than left to a hand-edited .env because
+    # that leg costs money on every episode write and its value on this
+    # corpus is still being measured -- an operator who wants it off must be
+    # able to turn it off from the page they are already looking at, without
+    # a shell. Off is the default and stays the default; see docs/todo.md.
+    ManagedKey(
+        "EMBEDDINGS_ENABLED", AGENT_ENV, "Semantic episode recall",
+        "1 or empty. On means episode recall also searches by meaning, not only by words, and "
+        "every episode written pays for one embedding. Needs an `embedder` deployment in the "
+        "router's config.yaml and pgvector on the database; run scripts/doctor.py to check.",
+        "Models", ("tektonix",), secret=False,
+    ),
 )
 
 _BY_KEY = {k.key: k for k in MANAGED_KEYS}

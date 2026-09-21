@@ -136,6 +136,13 @@ def _digest_entry(n: int, hit) -> str:
             hit.repo]
     if extra.get("outcome"):
         bits.append(str(extra["outcome"]))
+    if extra.get("found_by") == ["vector"]:
+        # Said out loud because a correct semantic hit is the one result
+        # that looks like a broken search: it is here precisely BECAUSE it
+        # shares no word with the query, and unlabelled it reads as noise
+        # the model should ignore -- which is the one case this leg exists
+        # for.
+        bits.append("semantic match, no shared words")
     if extra.get("stage") == "widened":
         # Hit.stage was computed, carried through the leg and into this
         # dict, and then never shown to anybody. It is the difference
@@ -233,7 +240,10 @@ def make_history_tools(own_repo: str, readable: list[str] | None, store, *,
         # measurement that decides whether a second retrieval leg is worth
         # building, and it is the one the index never sees a reason to write
         # down. `own_repo` is who asked; each ref carries where it came from.
-        episode_recall.record_query(query, own_repo, [h.ref for h in hits], task_id=task_id)
+        episode_recall.record_query(
+            query, own_repo, [h.ref for h in hits], task_id=task_id,
+            found_by={h.ref: (h.extra or {}).get("found_by") or [] for h in hits},
+        )
 
         where = repos[0] if len(repos) == 1 else f"{len(repos)} projects"
         if not hits:

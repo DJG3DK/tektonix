@@ -23,9 +23,13 @@ resolves it.
 
 from __future__ import annotations
 
+import asyncio
 import importlib.util
+import logging
 from pathlib import Path
 from typing import Literal
+
+logger = logging.getLogger("tektonix")
 
 Backend = Literal["postgres", "sqlite"]
 
@@ -154,6 +158,12 @@ async def open_sqlite_conn(path: Path | str, *, autocommit: bool = True):
     ON DELETE CASCADE back to the store table, and SQLite silently ignores
     that clause unless the pragma is on, which would leave a deleted item's
     embeddings behind to match on text that no longer exists.
+
+    A pragma that fails closes the connection before raising. aiosqlite runs
+    each connection on a NON-DAEMON thread, so an abandoned connection keeps
+    the interpreter alive past the end of main() -- a clear startup error
+    turning into a process that never exits is a much worse failure than the
+    one it started as.
     """
     if not sqlite_available():
         raise RuntimeError(
@@ -167,11 +177,57 @@ async def open_sqlite_conn(path: Path | str, *, autocommit: bool = True):
     # isolation_level=None is what the store's own code assumes; the
     # checkpointer wants a transactional connection instead.
     conn = await aiosqlite.connect(str(path), isolation_level=None if autocommit else "")
-    for pragma in (
-        "journal_mode=WAL",       # a reader and a writer at once, and it is persistent per file
-        "busy_timeout=10000",     # wait for a lock rather than failing the call outright
-        "synchronous=NORMAL",     # WAL's safe pairing: durable to a crash, not to power loss
-        "foreign_keys=ON",        # see the docstring -- off by default, and the cascade needs it
-    ):
-        await conn.execute(f"PRAGMA {pragma}")
+    try:
+        # busy_timeout first, so every pragma after it waits for a lock
+        # rather than failing outright. It does NOT cover the WAL
+        # conversion; see _enable_wal.
+        for pragma in (
+            "busy_timeout=10000",     # wait for a lock rather than failing the call outright
+            "synchronous=NORMAL",     # WAL's safe pairing: durable to a crash, not to power loss
+            "foreign_keys=ON",        # see the docstring -- off by default, the cascade needs it
+        ):
+            await conn.execute(f"PRAGMA {pragma}")
+        await _enable_wal(conn, path)
+    except BaseException as e:
+        # See the docstring: aiosqlite's worker thread is non-daemon, so
+        # leaving this connection open turns a startup error into a hang.
+        await conn.close()
+        if isinstance(e, Exception):
+            raise RuntimeError(f"could not open the SQLite database at {path}: {e}") from e
+        raise
     return conn
+
+
+# Converting a database to WAL takes an exclusive lock on it, and that one
+# statement is the one busy_timeout does not protect: measured against a
+# competing BEGIN IMMEDIATE, `PRAGMA journal_mode=WAL` on a not-yet-WAL file
+# fails immediately with "database is locked" whichever order the pragmas
+# run in. An already-WAL file is unaffected, so this is the first open of a
+# new database racing another first open -- retry, then carry on without it.
+_WAL_ATTEMPTS = 5
+_WAL_RETRY_S = 0.2
+
+
+async def _enable_wal(conn, path: Path) -> None:
+    """Put the database in WAL mode, or say why it is not.
+
+    Not fatal. WAL is what lets a reader and a writer work at once, and
+    without it they serialise -- slower, and still correct. Failing the open
+    over it would take an installation down for a condition that clears
+    itself in milliseconds.
+    """
+    reason = ""
+    for attempt in range(_WAL_ATTEMPTS):
+        try:
+            cursor = await conn.execute("PRAGMA journal_mode=WAL")
+            row = await cursor.fetchone()
+            mode = str(row[0]).lower() if row else ""
+            if mode == "wal":
+                return
+            reason = f"the database stayed in {mode or 'unknown'} mode"
+        except Exception as e:  # noqa: BLE001 -- reported below, never raised
+            reason = f"{type(e).__name__}: {e}"
+        if attempt < _WAL_ATTEMPTS - 1:
+            await asyncio.sleep(_WAL_RETRY_S)
+    logger.warning(
+        "could not put %s in WAL mode (%s); a reader and a writer will serialise", path, reason)

@@ -6,9 +6,15 @@ name: CI
 # failing to collect on a clean checkout (H4), and a script that died with
 # ModuleNotFoundError on every invocation (H5).
 #
-# Everything here runs offline. No Postgres service, no model calls, no
-# network: the suite is designed to need none of them, and CI that needs
-# secrets is CI that contributors cannot run.
+# Everything here runs offline: no model calls, no network, no secrets --
+# CI that needs secrets is CI that contributors cannot run.
+#
+# The one service is a throwaway Postgres for the python job, and it is
+# there for exactly one suite: tests/test_sqlite_store_parity.py compares
+# the two backends, and without a DSN its Postgres half skipped everywhere
+# -- so "parity" was asserted against one backend only, which is the thing
+# it exists to rule out. The suite creates its tables in a scratch schema it
+# drops afterwards, so this costs a container and nothing else.
 
 on:
   push:
@@ -28,6 +34,21 @@ jobs:
     name: Python — tests
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    services:
+      postgres:
+        # 16 because that is what the deployment runs; a parity comparison
+        # against a different major version would prove the wrong thing.
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: parity
+          POSTGRES_DB: parity
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v4
 
@@ -40,6 +61,12 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+          # The local (SQLite) backend's dependencies, which the SERVER does
+          # not install -- they are here because the parity suite skips
+          # itself when they are absent, and a suite that only ever runs on
+          # one developer's machine is not a gate. They need no system
+          # package, which is the whole reason that is affordable.
+          pip install -r requirements-cli.txt
           # The planner's repo search (agent/tools/planning_tools.py) shells
           # out to ripgrep; its tests run the real binary.
           sudo apt-get update -qq && sudo apt-get install -y -qq ripgrep
@@ -57,6 +84,11 @@ jobs:
       # — the exact thing that was broken (H4).
       - name: pytest (no .env — a fresh-clone run)
         run: python -m pytest -q
+        env:
+          # The parity suite's reference leg. Only that suite reads it, and
+          # it isolates itself in a per-run scratch schema -- see the file's
+          # docstring. Every other test stays offline.
+          AGENT_TEST_PG_DSN: postgresql://postgres:parity@localhost:5432/parity
 
       # The model router is its own service with its own venv in production,
       # but its tests import only fastapi/httpx/pyyaml, which this environment

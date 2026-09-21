@@ -13,28 +13,34 @@ function in three commits is three chances to lose one of them in a merge,
 and the thing being merged is the only durable record of what this system
 has done.
 
-A word of warning for whoever adds the first of those, because it is not
-visible from here. The write goes through StoreBackend.awrite, which stores
-a FileData document -- content, encoding, and two timestamps -- and rebuilds
-that document from scratch on the way in. Any key added to the record that
-is not part of that shape is dropped silently on write, and the readers on
-the other side (consolidation.py's _read_episode) parse the content field
-back out again. So an extra top-level key is not a one-line change: it
-changes the stored value's shape, and the reader has to move in the same
-commit as the writer.
+The warning that made this module necessary, now acted on. The write used
+to go through deepagents' StoreBackend.awrite, which stores a FileData
+document -- content, encoding, and two timestamps -- and REBUILDS that
+document from scratch on the way in, dropping every key it does not know.
+The embed_text key the vector leg needs is exactly such a key, so it would
+have been written and silently discarded. Worse than discarded: langgraph
+emits no delete against store_vectors on an update, so an episode stripped
+of its embed_text keeps the vector it had and goes on matching text it no
+longer contains. So the value dict is composed here, in full, and written
+with one store.aput. The FileData shape is reproduced exactly, because
+consolidation.py's _read_episode and every other reader go back through
+StoreBackend to read it.
 """
 
 from __future__ import annotations
 
 import json
+import logging
 import uuid
 
-from deepagents.backends import StoreBackend
+from deepagents.backends.utils import create_file_data
 from langgraph.store.base import BaseStore
 
-from agent import history_index
+from agent import embeddings, episode_vectors, history_index
 from agent.config import Config
 from agent.deep_agent import EPISODES_ROUTE, episodes_namespace
+
+logger = logging.getLogger("tektonix")
 
 
 async def write_episode(store: BaseStore, config: Config, repo: str, record: dict) -> str:
@@ -51,9 +57,48 @@ async def write_episode(store: BaseStore, config: Config, repo: str, record: dic
     later sync closes, and a searchable episode that was never stored is a
     hit pointing at nothing.
     """
-    backend = StoreBackend(namespace=episodes_namespace(repo), store=store)
+    namespace = episodes_namespace(repo)(None)
     path = f"{EPISODES_ROUTE}{record['timestamp']}-{uuid.uuid4().hex[:8]}.json"
-    await backend.awrite(path, json.dumps(record, indent=2))
+    # The FileData half comes from deepagents' own helper, so the stored
+    # timestamps keep the exact format every reader already parses; only the
+    # embedding keys are ours.
+    value = {
+        **create_file_data(json.dumps(record, indent=2)),
+        # `embed_text` is written on every installation, vector leg or not.
+        # It costs nothing where there is no index -- langgraph only embeds
+        # the keys an index config names, so every other writer in this
+        # system, none of which carries this key, pays nothing either -- and
+        # it is the text scripts/backfill_episode_embeddings.py embeds later
+        # for episodes written before the feature was switched on.
+        **episode_vectors.embed_fields(record),
+    }
+    if getattr(store, "index_config", None) is None:
+        # The digest is a CLAIM THAT A VECTOR EXISTS for this text, and the
+        # backfill trusts it: an episode whose digest matches is reported as
+        # "already current" and never embedded. A store with no index
+        # embeds nothing, so writing the digest here would mark every
+        # episode written before the operator turned the leg on as done and
+        # the backfill -- the one thing that would ever have given them a
+        # vector -- would skip them forever. Silent and permanent, which is
+        # why it is gated on the store rather than on the config.
+        value.pop(episode_vectors.DIGEST_FIELD, None)
+    try:
+        await store.aput(namespace, path, value)
+    except embeddings.EmbeddingError as e:
+        # The embedding is made INSIDE aput, so an unreachable embedder
+        # fails the write of a task that has already finished and spent its
+        # money. That trade is never worth taking: store it with no vector
+        # and let scripts/backfill_episode_embeddings.py pick it up, which
+        # is exactly the case that script is written to be re-run for.
+        #
+        # Only EmbeddingError. A Postgres blip is not an embedder problem,
+        # and catching everything here made the retry log name the wrong
+        # cause on the one path an operator would be reading it -- while
+        # hiding a store failure behind a second write that would fail too.
+        logger.warning("episode %s stored without a vector, retrying without one: %s", path, e)
+        value.pop(episode_vectors.EMBED_FIELD, None)
+        value.pop(episode_vectors.DIGEST_FIELD, None)
+        await store.aput(namespace, path, value, index=False)
     # Best-effort by contract, not by accident: index_episode swallows its
     # own failures. A task that has shipped must not be failed at the very
     # last step because a search index was unreachable -- and the nightly

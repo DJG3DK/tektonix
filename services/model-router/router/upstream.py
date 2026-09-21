@@ -3,7 +3,8 @@
 Two paths, because the agent uses both: a buffered call for anything carrying
 tools (deep_agent sets disable_streaming="tool_calling", after measuring that
 re-merging tool-call chunks cost ~25 CPU-seconds per call), and a streamed one
-for plain text.
+for plain text. Embeddings take the buffered path against a second URL and
+differ in nothing else.
 
 Both must end up with the same ledger line, which is the whole difficulty of
 the streaming path: the usage block arrives in the LAST chunk, after the body
@@ -28,6 +29,10 @@ import httpx
 logger = logging.getLogger("model-router")
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+# The embedding path, added 2026-09-21. Same host, same key, same
+# response envelope -- which is the only reason episode embeddings could
+# be billed out of routing.jsonl rather than estimated from a rate table.
+EMBEDDINGS_URL = "https://openrouter.ai/api/v1/embeddings"
 
 
 @dataclass
@@ -117,11 +122,41 @@ def build_body(body: dict, model: str, extra_body: dict) -> dict:
 async def call_once(client: httpx.AsyncClient, api_key: str, body: dict,
                     model: str, extra_body: dict, timeout_s: float) -> Attempt:
     """Buffered request. Used for tool-calling and any non-streaming call."""
+    return await _post_once(client, OPENROUTER_URL, api_key, body, model, extra_body, timeout_s)
+
+
+async def embed_once(client: httpx.AsyncClient, api_key: str, body: dict,
+                     model: str, extra_body: dict, timeout_s: float) -> Attempt:
+    """The same buffered request, against the embeddings endpoint.
+
+    Deliberately the same body builder and the same Attempt, because the
+    caller in app.py walks one fallback chain and writes one ledger line for
+    both. An embedding whose failures or whose cost were shaped differently
+    would be an embedding missing from the only spend figure anyone trusts.
+
+    Measured against the live endpoint on 2026-09-21: it accepts the
+    `usage: {"include": true}` build_body adds and answers with the billed
+    `usage.cost` either way (1.4e-07 for 7 tokens on
+    openai/text-embedding-3-small). It reports no completion tokens, so the
+    ledger records null there rather than a zero it was never told.
+    """
+    return await _post_once(client, EMBEDDINGS_URL, api_key, body, model, extra_body, timeout_s)
+
+
+async def _post_once(client: httpx.AsyncClient, url: str, api_key: str, body: dict,
+                     model: str, extra_body: dict, timeout_s: float) -> Attempt:
+    """One buffered POST, shared by every non-streaming path.
+
+    Shared rather than copied: what counts as a failure here decides whether
+    app.py retries the pinned deployment or falls through to a second one,
+    and two copies of that judgement are two chances for one endpoint to
+    quietly stop retrying a 429.
+    """
     started = time.monotonic()
     payload = build_body(body, model, extra_body)
     try:
         r = await client.post(
-            OPENROUTER_URL,
+            url,
             headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
             json=payload,
             timeout=timeout_s,

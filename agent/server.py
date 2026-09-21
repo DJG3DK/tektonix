@@ -50,7 +50,7 @@ from agent import audit
 from agent.backends import backend_for_dsn
 from agent.store_paging import recent_items
 from agent import health as health_checks
-from agent import history_index
+from agent import episode_vectors, history_index
 from agent import log_stream
 from agent import metrics
 from agent import plan_progress
@@ -266,6 +266,14 @@ async def lifespan(app: FastAPI):
         # failure here costs history search and nothing else -- install_for
         # never raises.
         app.state.history_index = await history_index.install_for(config, pool=auth_pool)
+
+        # The second retrieval leg, registered against the store that was
+        # actually opened rather than against the config: a store opened
+        # before an operator turned embeddings on carries no vector index,
+        # and a leg registered over it would answer every query with the
+        # most recently updated episodes while looking exactly like semantic
+        # search. Nothing else changes -- search_history asks the registry.
+        app.state.vector_leg = episode_vectors.install(store)
 
         # Stored runtime limits, before anything can build an agent with them.
         await runtime_settings.load(app.state.store)

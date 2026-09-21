@@ -150,12 +150,16 @@ def test_different_projects_do_not_block_each_other(fake_connect):
     assert len(FakeConn.opened) == 2
 
 
-def test_a_local_dsn_says_the_backend_is_not_built_yet(fake_connect):
+def test_a_local_dsn_takes_a_file_lock_and_opens_no_connection(fake_connect, tmp_path):
     """The lock dispatches on the DSN like the store and the checkpointer
-    do, and the SQLite half of it does not exist yet. It has to say so
-    rather than fall through to the in-process lock, which would look like
-    it worked and give a second process its own."""
-    with pytest.raises(NotImplementedError) as e:
-        asyncio.run(_hold("proj", "sqlite:///.state/agent.db"))
-    assert "sqlite:///.state/agent.db" in str(e.value)
+    do. What the SQLite half then guarantees, and what it does not, is
+    tested in tests/test_project_lock_sqlite.py with real subprocesses; what
+    matters here is that the Postgres path is not reached at all -- a local
+    installation has no database to connect to, and an attempt would hang on
+    a DSN that names no server."""
+    from agent import file_lock
+
+    dsn = f"sqlite:///{tmp_path}/state.db"
+    asyncio.run(_hold("proj", dsn))
     assert FakeConn.opened == [], "no connection may be opened for a DSN that is not Postgres"
+    assert file_lock.lock_path(dsn, "proj", graph.advisory_key("proj")).exists()

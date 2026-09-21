@@ -79,6 +79,18 @@ def _episode_recall() -> bool:
     return available() or history_index.available()
 
 
+def _embeddings() -> bool:
+    from agent import episode_vectors  # noqa: PLC0415
+    from agent.config import load_config  # noqa: PLC0415
+    from agent.embeddings import available  # noqa: PLC0415
+
+    # Two ways to be true, for the same reason episode recall has two: in
+    # the server the leg is registered against the store that was opened,
+    # which is the live answer; doctor.py opens nothing, so for it the
+    # question is whether the prerequisites are there for the next start.
+    return episode_vectors.available() or available(load_config())
+
+
 def _history_index() -> bool:
     from agent.history_index import available  # noqa: PLC0415
 
@@ -108,7 +120,29 @@ CAPABILITIES: tuple[Capability, ...] = (
         # Absent means the seats that would search history are built without
         # search_history at all, which is the intended state on an
         # installation with no index -- not an error to chase.
-        "needs the history index below; a second (vector) leg is not built yet",
+        "needs the history index below; the semantic leg is the separate "
+        "capability under it and search works without it",
+    ),
+    Capability(
+        "episode embeddings", "the semantic half of episode recall -- finding a past task "
+        "that describes the same problem in different words", _embeddings,
+        # The prerequisites, in the order they are checked, because the
+        # operator can only be missing one at a time. The router restart is
+        # named because config.yaml alone is not enough and the symptom is
+        # invisible: a process that predates the endpoint still lists the
+        # `embedder` alias on /v1/models and answers 404 to a call. The
+        # extension command is spelled out because the person reading this
+        # line is the person who has to run it, and the app role cannot run
+        # it for them: it is not superuser and `vector` is not trusted.
+        "in this order: add an `embedder` deployment to the router's config.yaml and restart "
+        "the router so it serves /v1/embeddings (the order matters -- this probe is cached per "
+        "process, so a tektonix that starts before the router serves the endpoint stays off "
+        "until it restarts again); then set EMBEDDINGS_ENABLED=1, on the Settings page or in "
+        ".env, and restart tektonix; "
+        "and give the database somewhere to put a vector -- on SQLite that is "
+        "pip install -r requirements-cli.txt and nothing else, on Postgres it is one "
+        "command run once as the postgres role: "
+        "sudo -u postgres psql -d langgraph_agent -c 'CREATE EXTENSION vector'",
     ),
     Capability(
         "history index", "keeping past episodes, tasks and build transcripts searchable",

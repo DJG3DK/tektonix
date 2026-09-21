@@ -15,7 +15,8 @@ from langgraph.store.postgres.aio import AsyncPostgresStore
 from psycopg import AsyncConnection
 from psycopg_pool import AsyncConnectionPool
 
-from agent.backends import backend_for_dsn
+from agent import episode_vectors, file_lock
+from agent.backends import backend_for_dsn, open_sqlite_conn, sqlite_path_from_dsn
 from agent.config import Config
 
 logger = logging.getLogger("tektonix")
@@ -101,8 +102,11 @@ async def project_lock(repo: str, dsn: str | None = None):
     """Hold this project for the duration of the block.
 
     Without `dsn` this is the old in-process lock, which is what callers that
-    have no database (tests, scripts) get. With one, the claim is visible to
-    every process pointed at the same database.
+    have no database (tests, scripts) get. With a Postgres one, the claim is
+    visible to every process pointed at the same database. With a sqlite one
+    there is no database to ask, and the claim covers every process using
+    that state directory -- a narrower promise, spelled out in
+    agent/file_lock.py.
     """
     async with _in_process_lock(repo):
         if not dsn:
@@ -112,13 +116,12 @@ async def project_lock(repo: str, dsn: str | None = None):
             # A local installation has no advisory lock to take, and the
             # honest equivalent is an OS file lock beside the database --
             # which keys on a state directory rather than on a project name
-            # every process sharing a database can see. That difference is
-            # worth writing down rather than papering over, so it lands with
-            # the rest of the SQLite backend instead of here.
-            raise NotImplementedError(
-                "locking a project on SQLite is not built yet -- this installation is pointed at "
-                f"{dsn!r}, and only Postgres can hold a project today"
-            )
+            # every process sharing a database can see. agent/file_lock.py
+            # is where that difference, and the rest of what a file lock
+            # does not cover, is written down.
+            async with file_lock.hold(dsn, repo, advisory_key(repo)):
+                yield
+            return
         key = advisory_key(repo)
         conn = await _connect(dsn, autocommit=True)
         try:
@@ -146,23 +149,15 @@ async def project_lock(repo: str, dsn: str | None = None):
             await conn.close()
 
 
-# The message both SQLite branches carry until the backend exists. One
-# string because an operator who reaches one of them is going to reach the
-# other, and two different sentences for one missing backend reads as two
-# different problems.
-_SQLITE_NOT_BUILT = (
-    "the SQLite backend is not built yet -- this installation is pointed at {dsn!r}, and only "
-    "Postgres is implemented today"
-)
-
-
 @asynccontextmanager
 async def open_checkpointer(config: Config):
     # A dispatch and nothing else. Both halves of the real work live in the
     # _open_* functions below so that adding a backend adds a function,
     # rather than growing this one an `if` per database.
     if backend_for_dsn(config.dsn) == "sqlite":
-        raise NotImplementedError(_SQLITE_NOT_BUILT.format(dsn=config.dsn))
+        async with _open_sqlite_checkpointer(config) as saver:
+            yield saver
+        return
     async with _open_postgres_checkpointer(config) as saver:
         yield saver
 
@@ -170,7 +165,9 @@ async def open_checkpointer(config: Config):
 @asynccontextmanager
 async def open_store(config: Config):
     if backend_for_dsn(config.dsn) == "sqlite":
-        raise NotImplementedError(_SQLITE_NOT_BUILT.format(dsn=config.dsn))
+        async with _open_sqlite_store(config) as store:
+            yield store
+        return
     async with _open_postgres_store(config) as store:
         yield store
 
@@ -203,10 +200,76 @@ async def _open_postgres_store(config: Config):
         "check": AsyncConnectionPool.check_connection,
         "kwargs": _POOL_KWARGS,
     }
+    # index= is None on an installation with no embedder, and None is
+    # byte-for-byte today's behaviour: setup() runs the ordinary migrations
+    # only, no store_vectors table is created, and no write embeds anything.
+    # With one, setup() additionally applies VECTOR_MIGRATIONS -- which
+    # touch no row of the existing store table, and which is the whole
+    # reason this is safe to switch on against live data.
     async with AsyncPostgresStore.from_conn_string(
-        config.pg_dsn, pool_config=pool_config
+        config.pg_dsn, pool_config=pool_config, index=episode_vectors.index_config(config)
     ) as store:
         # AsyncPostgresStore's async setup method is also just named
         # `setup()`, not `asetup()`. Same reasoning as open_checkpointer above.
         await store.setup()
         yield store
+
+
+# One file, two connections -- the store's autocommit and the saver's
+# transactional -- rather than one shared between them. The two classes each
+# hold their connection behind their own asyncio.Lock and neither knows the
+# other exists, so sharing would put the store's statements inside the
+# saver's open transaction. SQLite itself is happy with two connections to
+# one file: that is what WAL and busy_timeout, set in open_sqlite_conn, are
+# for.
+#
+# Neither class is built with from_conn_string, which sets no pragmas at all
+# on either half -- in particular no busy_timeout, so the second connection
+# to touch a locked file fails immediately instead of waiting out a write
+# that takes milliseconds.
+
+
+@asynccontextmanager
+async def _open_sqlite_checkpointer(config: Config):
+    # Imported inside the branch, never at module top: this package is in
+    # requirements-cli.txt, which a server deliberately does not install,
+    # and langgraph.checkpoint.sqlite's sibling store module imports
+    # sqlite_vec at ITS top level. open_sqlite_conn has already refused with
+    # the install line by the time this runs.
+    from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver  # noqa: PLC0415
+
+    # autocommit=False: the saver calls conn.commit() itself around each
+    # write, which is a no-op on a connection that has already committed.
+    conn = await open_sqlite_conn(sqlite_path_from_dsn(config.dsn), autocommit=False)
+    try:
+        saver = AsyncSqliteSaver(conn)
+        # Same contract as the Postgres branch: CREATE TABLE IF NOT EXISTS,
+        # cheap and safe to call at every start.
+        await saver.setup()
+        yield saver
+    finally:
+        await conn.close()
+
+
+@asynccontextmanager
+async def _open_sqlite_store(config: Config):
+    from langgraph.store.sqlite.aio import AsyncSqliteStore  # noqa: PLC0415
+
+    # autocommit=True (isolation_level=None) is what the store's own code
+    # assumes: it issues no commit of its own anywhere.
+    conn = await open_sqlite_conn(sqlite_path_from_dsn(config.dsn), autocommit=True)
+    try:
+        # sqlite-vec needs no system package and no extension anybody has to
+        # create: it is a wheel that arrives with langgraph-checkpoint-sqlite
+        # and setup() loads it into this connection. The store is the one
+        # place the pragmas matter -- foreign_keys=ON in open_sqlite_conn is
+        # what makes store_vectors' ON DELETE CASCADE real, and without it a
+        # deleted episode leaves its vector behind to match on text that is
+        # gone.
+        store = AsyncSqliteStore(conn, index=episode_vectors.index_config(config))
+        # A versioned store_migrations table, like the Postgres store's, so
+        # this replays only what is new.
+        await store.setup()
+        yield store
+    finally:
+        await conn.close()
