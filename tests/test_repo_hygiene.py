@@ -75,6 +75,7 @@ _MUST_MIRROR = [
     "node --check",
     "scripts/doctor.py --quiet",
     "install.sh --dry-run --yes",
+    "docker compose config --quiet",
     "scripts/verify_stack_checks.py --no-docker",
     "REQUIRE_MOUNT_TESTS=1 node tests/test_reviewer_dependency_dirs.js",
 ]
@@ -405,6 +406,45 @@ def test_the_bundle_never_bind_mounts_a_path_a_fresh_install_lacks():
         "these mount a source that a fresh checkout does not have, so the "
         "container dies on a type mismatch:\n  " + "\n  ".join(offenders)
     )
+
+
+def test_the_bundle_waits_for_the_router_before_the_agent_is_ready():
+    """A first task that starts while the router is still booting escalates
+    with 'peer closed connection'. The image HEALTHCHECK already probes the
+    router; compose also has to refuse to mark the agent started until that
+    probe can succeed, and the reviewers until the agent has written the
+    control secret.
+    """
+    compose = yaml.safe_load((REPO / "docker-compose.yml").read_text())
+    services = compose["services"]
+
+    def _healthy_dep(svc: str, dep: str) -> None:
+        raw = services[svc].get("depends_on") or {}
+        assert isinstance(raw, dict), (
+            f"{svc}.depends_on must be the long form so it can wait on health, "
+            f"not a list of names"
+        )
+        assert dep in raw, f"{svc} does not wait for {dep}"
+        assert raw[dep].get("condition") == "service_healthy", (
+            f"{svc} waits for {dep} to start, not to be healthy"
+        )
+
+    _healthy_dep("agent", "postgres")
+    _healthy_dep("agent", "router")
+    _healthy_dep("agent-review", "agent")
+    _healthy_dep("agent-review", "router")
+    _healthy_dep("commit-reviewer", "agent")
+    _healthy_dep("commit-reviewer", "router")
+
+    for name, port_path in (
+        ("router", "http://127.0.0.1:4001/health/liveliness"),
+        ("agent-review", "http://127.0.0.1:4100/health"),
+        ("commit-reviewer", "http://127.0.0.1:4101/health"),
+    ):
+        check = services[name].get("healthcheck") or {}
+        test = check.get("test") or []
+        joined = " ".join(test) if isinstance(test, list) else str(test)
+        assert port_path in joined, f"{name} healthcheck does not probe {port_path}"
 
 
 def test_the_bundle_sets_variable_names_the_code_actually_reads():

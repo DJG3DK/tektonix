@@ -307,3 +307,13 @@ jobs:
         env:
           PG_DSN: postgresql://placeholder@localhost:5432/placeholder
           OPENROUTER_API_KEY: placeholder
+
+      - name: Compose file interpolates
+        # Does not start the stack -- that needs image builds. It does fail
+        # if a ${VAR:?} is missing, a service name is mistyped in
+        # depends_on, or the YAML no longer parses. The full `up --wait`
+        # belongs on a dispatch job (docs/todo.md); this is the offline half.
+        run: docker compose config --quiet
+        env:
+          PROJECTS_DIR: /tmp
+          OPENROUTER_API_KEY: placeholder
