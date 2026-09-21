@@ -644,6 +644,27 @@ else
     fi
 fi
 
+# The logo tools (agent/tools/logo_tools.py) call LogoLoom's own Node modules,
+# which need its dependencies present. Optional on purpose: the agent works
+# fine without them and simply has no logo tools, which is a better outcome
+# than an install that fails over a feature most people will never use. sharp
+# ships prebuilt binaries, so --ignore-scripts is safe here and keeps a
+# postinstall script out of the install path.
+if [ ! -f services/logoloom/package.json ]; then
+    :
+elif [ -d services/logoloom/node_modules ]; then
+    ok "logo tools ready"
+elif [ "$DRY_RUN" = "1" ]; then
+    note "would run npm ci in services/logoloom/ (logo and brand-kit tools)"
+else
+    say "  installing the logo tools…"
+    if (cd services/logoloom && npm ci --silent --ignore-scripts --no-audit --no-fund >/dev/null 2>&1); then
+        ok "logo tools ready"
+    else
+        warn "logo tools unavailable — the agent runs without them; to enable: cd services/logoloom && npm ci"
+    fi
+fi
+
 # --- 8. remote access -------------------------------------------------------
 step "Remote access"
 

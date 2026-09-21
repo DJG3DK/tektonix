@@ -99,6 +99,12 @@ a project onboarded from the dashboard writes.
   automated.
 * **Remote projects.** This bundle runs against projects on the machine it runs
   on. Driving a project on another box is M2/M3 in the roadmap.
+* **The logo tools.** `logo_render`, `logo_export_brand_kit` and the rest call
+  LogoLoom's Node modules, and the agent image is Python-only — no Node, and
+  60MB of image libraries for a feature most installs never touch. The agent
+  detects their absence and simply has no logo tools, which is the intended
+  outcome rather than a failure. The host install picks them up from
+  `services/logoloom` (see `install.sh`).
 
 ## Data
 

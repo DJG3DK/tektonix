@@ -223,3 +223,66 @@ def test_the_work_node_passes_the_scope_through():
 
     src = inspect.getsource(work)
     assert 'reference_repos=state.get("reference_repos")' in src
+
+
+# --- logo tools -----------------------------------------------------------
+#
+# The build coordinator designs and exports; the planner designs and does not
+# export, because the planning chat mutates nothing by contract and a brand
+# kit is two dozen binary files with nowhere to go in a conversation.
+
+import agent.tools.logo_tools as _lt  # noqa: E402
+
+_needs_logoloom = pytest.mark.skipif(not _lt.installed(), reason="LogoLoom not installed")
+
+
+@_needs_logoloom
+async def test_the_coordinator_can_design_and_export(two_projects, monkeypatch):
+    cfg, repo, cp, store = two_projects
+    captured = _capture(monkeypatch, da)
+    await da.build_deep_agent(cfg, repo, 5.0, cp, store)
+    names = _names(captured["tools"])
+    assert {"logo_render", "logo_text_to_path", "logo_optimize_svg",
+            "logo_export_brand_kit"} <= names
+
+
+@_needs_logoloom
+async def test_the_coordinator_is_told_the_order_to_use_them_in(two_projects, monkeypatch):
+    """Exporting before rendering makes two dozen copies of a bad logo."""
+    cfg, repo, cp, store = two_projects
+    captured = _capture(monkeypatch, da)
+    await da.build_deep_agent(cfg, repo, 5.0, cp, store)
+    prompt = captured["system_prompt"]
+    assert "MAKING A LOGO OR A BRAND KIT" in prompt
+    assert prompt.index("logo_render") < prompt.index("logo_export_brand_kit")
+    assert "nothing here designs one for you" in prompt
+
+
+@_needs_logoloom
+async def test_the_planner_can_design_but_not_export(two_projects, monkeypatch):
+    cfg, repo, cp, store = two_projects
+    captured = _capture(monkeypatch, pc)
+    await pc.build_planning_agent(cfg, repo, cp, store)
+    names = _names(captured["tools"])
+    assert "logo_render" in names, "designing blind is guessing"
+    assert "logo_export_brand_kit" not in names, "the planning chat writes to no repo"
+
+
+@_needs_logoloom
+async def test_the_test_writer_gets_no_logo_tools(two_projects, monkeypatch):
+    cfg, repo, cp, store = two_projects
+    captured = _capture(monkeypatch, da)
+    await da.build_deep_agent(cfg, repo, 5.0, cp, store)
+    assert not (_names(_seat(captured, "test-writer")["tools"]) & {"logo_render",
+                                                                  "logo_export_brand_kit"})
+
+
+async def test_a_box_without_logoloom_gets_no_logo_tools_and_no_prompt(two_projects, monkeypatch):
+    """install.sh makes the npm install optional, so this is the normal state
+    of a fresh box -- not an error case."""
+    monkeypatch.setattr(_lt, "BRIDGE", _lt.BRIDGE.parent / "definitely-not-here.mjs")
+    cfg, repo, cp, store = two_projects
+    captured = _capture(monkeypatch, da)
+    await da.build_deep_agent(cfg, repo, 5.0, cp, store)
+    assert not (_names(captured["tools"]) & {"logo_render", "logo_export_brand_kit"})
+    assert "MAKING A LOGO OR A BRAND KIT" not in captured["system_prompt"]

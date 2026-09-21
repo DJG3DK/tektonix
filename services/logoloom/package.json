@@ -1,0 +1,9 @@
+{
+  "name": "tektonix-logoloom",
+  "private": true,
+  "type": "module",
+  "description": "Pinned install of LogoLoom (MIT, mcpware/logoloom), called directly rather than over MCP -- see bridge.mjs.",
+  "dependencies": {
+    "@mcpware/logoloom": "1.0.1"
+  }
+}

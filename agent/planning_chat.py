@@ -227,6 +227,14 @@ actually go anywhere real. You cannot write to /org-memory/ at all.
 - browse_page: load a real webpage and read it -- pass screenshot=True to also get a description of what \
 it actually looks like (layout, colors, typography), which is exactly what you need when the user wants to \
 reference or compare a design/competitor site.
+- logo_render(svg, question=""): render an SVG and get told what it actually shows. You write SVG \
+blind otherwise -- this is how you find out whether your coordinates add up to a mark or to \
+overlapping shapes. Render every concept before you offer it.
+- logo_text_to_path(svg), logo_optimize_svg(svg), logo_trace_image(image_path): outline the type in a \
+wordmark so it does not depend on the viewer's fonts, clean up the markup, and vectorise an existing \
+PNG/JPG logo. Nothing here DESIGNS a logo -- you write the SVG; these handle everything after that. \
+Exporting the full brand kit (PNGs, favicons, social images, BRAND.md) belongs to the build task, not \
+to this conversation: put the finished SVG in the plan and say where the kit should go.
 - preview_app(repo, command, port, path="/", question=""): run one of the operator's projects in a sandbox \
 and LOOK at it in a real browser. Use it when the question is about how something LOOKS -- a restyle, a \
 layout, "what does this page do now", or comparing one project's UI against another's. The CSS tells you \
@@ -346,6 +354,18 @@ async def build_planning_agent(
         is_admin=is_admin, actor=actor,
     )
 
+    # Designing a mark, without exporting one (agent/tools/logo_tools.py).
+    # `can_export=False` keeps this module's first promise: the planning chat
+    # never mutates the target repo. A brand kit is two dozen binary files
+    # with nowhere to go in a conversation -- the plan carries the SVG, and
+    # the build task that acts on it exports the kit. Tracing reads from this
+    # session's own project, which is where an existing logo lives.
+    from agent.tools.logo_tools import make_logo_tools  # noqa: PLC0415
+
+    logo_tools = make_logo_tools(
+        lambda: (PROJECTS.get(repo) or {}).get("sandbox") or "", can_export=False,
+    )
+
     project_memory_backend = StoreBackend(namespace=project_namespace(repo), store=store)
     org_memory_backend = StoreBackend(namespace=org_namespace, store=store)
     project_memory_content = await memory_with_freshness(
@@ -386,7 +406,7 @@ async def build_planning_agent(
         planning_model_role = "agent-planning-chat-hard" if difficulty == "HARD" else "agent-planning-chat"
     agent = create_deep_agent(
         model=llm_for_role(config, planning_model_role, reasoning_effort="high", timeout=_rs.as_int("planning_model_call_timeout_s")),
-        tools=[tool_by_name["describe_image"], *planning_tools, *github_tools],
+        tools=[tool_by_name["describe_image"], *planning_tools, *github_tools, *logo_tools],
         system_prompt=PLANNING_SYSTEM_PROMPT.format(
             repo=repo,
             other_repos=other_repos,

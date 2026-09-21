@@ -1065,6 +1065,34 @@ def _make_run_checks_tool(repo_root: str, repo: str):
 # distinction the hard way: `ls`/`read_file`/`grep` fail with "No files
 # found"/"not found" against real repo paths (they structurally cannot see
 # the repo) before it stumbles onto /workspace via bash trial-and-error.
+_LOGO_GUIDANCE = """MAKING A LOGO OR A BRAND KIT:
+
+You write the SVG yourself -- nothing here designs one for you. The logo \
+tools do the parts after that, and the order matters:
+
+1. Write two or three concepts as plain SVG. Simple shapes, a real viewBox, \
+   no filters or gradients you cannot justify at 16 pixels.
+2. `logo_render` each one and READ what comes back. You are writing \
+   coordinates, and this is the only way to find out whether they add up to \
+   a mark rather than to overlapping shapes or clipped strokes. Render on a \
+   dark background too if it has to work on both.
+3. `logo_text_to_path` on the one you keep. A <text> element renders in \
+   whatever font the viewer has, so a wordmark that looks right here looks \
+   wrong everywhere else, including in every PNG exported from it.
+4. `logo_optimize_svg`.
+5. `logo_export_brand_kit` LAST, once the mark is right. It writes about two \
+   dozen files -- PNGs, favicon, social images, BRAND.md -- and they are all \
+   the same logo, so exporting a bad one just makes two dozen copies of the \
+   problem.
+
+`logo_trace_image` turns an existing PNG or JPG logo into paths, for a \
+rebrand where the mark already exists. A trace is a starting point, not a \
+finished logo.
+
+The exported files are binary assets in the repo: commit them with the \
+change that uses them, and say in your final summary that they are there.
+"""
+
 _VISUAL_GUIDANCE = """LOOKING AT WHAT YOU CHANGED:
 
 If you change anything a person SEES -- layout, colour, spacing, a component, \
@@ -1365,6 +1393,14 @@ async def build_deep_agent(
 
     reference_tools = make_reference_tools(repo, reference_repos)
     project_tools = [*project_tools, *reference_tools]
+
+    # Designing a mark and exporting a brand kit (agent/tools/logo_tools.py).
+    # The coordinator only: it is the seat that writes files, and an export
+    # puts two dozen binary assets in the repo.
+    from agent.tools.logo_tools import make_logo_tools  # noqa: PLC0415
+
+    logo_tools = make_logo_tools(lambda: repo_root)
+    project_tools = [*project_tools, *logo_tools]
     # Named in the prompt, not just discoverable in the tool list: a model
     # asked to "do it like the other project does" will otherwise say it has
     # no way to see that project, which is what it used to have to say.
@@ -1498,7 +1534,8 @@ async def build_deep_agent(
         # repo's suite, and nothing in its prompt tells it another project
         # exists. Tools a seat was never told about are how the investigator
         # ended up with a prompt describing preview_app it did not have.
-        "tools": [*[t for t in project_tools if t not in reference_tools], run_checks_tool],
+        "tools": [*[t for t in project_tools if t not in reference_tools and t not in logo_tools],
+                  run_checks_tool],
         "model": test_writer_model,
         "middleware": [
             # Same trap removal as planning_chat (2026-08-27): built-in
@@ -1575,7 +1612,7 @@ async def build_deep_agent(
             project_memory_content=project_memory_content,
             org_memory_content=org_memory_content,
             skills_summary=skills_summary,
-        ) + absent_files + reference_note,
+        ) + absent_files + reference_note + ("\n\n" + _LOGO_GUIDANCE if logo_tools else ""),
         middleware=[
             SanitizeToolCallsMiddleware(),  # a malformed tool call in history never reaches a provider (2026-09-09)
             HiddenToolsMiddleware("glob", "grep", "execute", "delete"),
