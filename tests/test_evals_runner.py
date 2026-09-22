@@ -426,3 +426,53 @@ def test_a_blocked_task_is_kept_out_of_the_aggregate():
     assert report["benchmarks"]["tasks"] == 1
     assert report["benchmarks"]["escalated"] == 0
     assert any(t["outcome"] == "blocked" for t in report["tasks"])
+
+
+# --- keeping the diff of a failing task ------------------------------------
+
+def test_changed_diff_reads_the_committed_branch(demo_spec, tmp_path):
+    mf = fx.materialize(demo_spec, tmp_path / "work")
+    branch = fx.task_branch_name("abc-123")
+    fx._git(["checkout", "-q", "-b", branch], mf.sandbox)
+    (mf.sandbox / "src" / "a.py").write_text("x = 2\n")
+    fx._git(["add", "-A"], mf.sandbox)
+    fx._git(["commit", "-q", "-m", "change"], mf.sandbox)
+    diff = fx.changed_diff(mf, branch)
+    assert "-x = 1" in diff and "+x = 2" in diff
+
+
+def test_changed_diff_falls_back_to_uncommitted_work(demo_spec, tmp_path):
+    """An escalated task never commits, and its diff is the thing most worth
+    reading."""
+    mf = fx.materialize(demo_spec, tmp_path / "work")
+    (mf.sandbox / "src" / "a.py").write_text("broken\n")
+    assert "+broken" in fx.changed_diff(mf, fx.task_branch_name("never-committed"))
+
+
+def test_a_huge_diff_is_truncated_rather_than_swallowing_the_report(demo_spec, tmp_path):
+    mf = fx.materialize(demo_spec, tmp_path / "work")
+    (mf.sandbox / "src" / "a.py").write_text("line\n" * 20_000)
+    assert len(fx.changed_diff(mf, None)) <= fx.MAX_DIFF_CHARS
+
+
+@pytest.mark.asyncio
+async def test_a_failing_task_keeps_its_diff_and_a_passing_one_does_not(run_kwargs):
+    """The first full run is why. py-top-n-heap failed a guard saying the test
+    file must not change; the report recorded only that it was among the
+    changed paths, so there was no telling whether the agent had ADDED a test
+    or WEAKENED one -- opposite findings -- and the fixture was already gone."""
+    failing = task(assertions=[Assertion("file_matches", {"path": "src/a.py", "pattern": "never"})])
+    run = await runner.run_task(failing, graph=FakeGraph(SHIPPED), **run_kwargs)
+    assert not run.passed
+    assert isinstance(run.diff, str)          # captured, even when empty
+
+    passing = task()
+    ok = await runner.run_task(passing, graph=FakeGraph(SHIPPED), **run_kwargs)
+    assert ok.passed and ok.diff == "", "a passing task's diff is noise"
+
+
+def test_the_report_carries_the_diff_of_a_failing_task():
+    r = make_run("b", False)
+    r.diff = "--- a/tests/x.py\n+++ b/tests/x.py\n-    assert total == 60\n"
+    row = ev_report.task_row(r)
+    assert "assert total == 60" in row["diff"]

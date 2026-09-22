@@ -113,18 +113,39 @@ different state files, each unaware of the other's worktree.
 
 `tests/test_evals_isolation.py` pins every row of that table.
 
-## Cost
+## Cost and wall-clock — measured, not estimated
 
-Every task is a real agent run spending real money. The suite tracks
-cumulative spend and **stops before** starting a task that could cross the
-ceiling (default `$25`), reporting what it has rather than continuing quietly.
-The bound is actual spend so far plus the next task's cap — a true hard bound,
-and one that uses the budget rather than reserving caps tasks never reach.
+First full run, 2026-09-22: **11/12 passed, $0.28, 67 minutes.**
+
+| | measured |
+| --- | --- |
+| cost per task | $0.01 – $0.05 (median ~$0.02) |
+| cost for all twelve | **$0.28** against a $25 ceiling |
+| wall-clock per task | 64s – 1482s (median ~140s) |
+| wall-clock for all twelve | **67 minutes** |
+
+**Money is not the constraint; time is.** The fixtures are small, so a full
+run costs pennies — but it takes over an hour, and one task (`node-chunk-zero`)
+took 25 minutes on its own. That makes this an overnight or CI tool rather
+than something to run between two edits. Use `--only` while iterating.
+
+The ceiling still exists and still matters: it bounds a suite that grows, or a
+task that loops. The suite tracks cumulative spend and **stops before**
+starting a task that could cross it, reporting what it has rather than
+continuing quietly. The bound is actual spend so far plus the next task's cap
+— a true hard bound, and one that uses the budget rather than reserving caps
+tasks never reach.
 
 ## Reports
 
 `logs/evals/<timestamp>.json`, plus a table on stdout and a diff against the
-previous run naming what regressed. The aggregate half is the **same six
+previous run naming what regressed. A **failing** task also carries its actual
+git diff; a passing one does not. The first full run is why: a task failed a
+guard saying the test file must not change, the report recorded only that the
+file was among the changed paths, and there was no telling whether the agent
+had *added* a test or *weakened* one — opposite findings — with the fixture
+already torn down. A path list says a rule was broken; the diff says what the
+agent did. The aggregate half is the **same six
 numbers** `agent/benchmarks.py` computes for production, so a run is directly
 comparable to the fortnight it was run in — an eval scoring itself on private
 metrics would answer a question the dashboard cannot be compared against.

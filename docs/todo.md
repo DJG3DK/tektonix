@@ -382,6 +382,16 @@ built-in-only project appears regardless, so the eval instance came up polling
 real repositories. `REVIEW_ONLY_PROJECTS_JSON=1` closes it, and
 `tests/test_evals_isolation.py` pins it.
 
+**First full run, 2026-09-22:** 11/12 passed, $0.28, 67 minutes, 100%
+first-pass reviews, 0 escalations. The one failure is the suite doing its job:
+`py-top-n-heap` shipped, passed its checks and earned a READY verdict, and
+still changed the test file a guard said must not change — a violation every
+gate in the system is blind to.
+
+**Money is not the constraint; time is.** A full run costs pennies and takes
+over an hour, so this is an overnight or CI tool, not something to run between
+two edits.
+
 **Not built, and deliberately:** no model judges the output. A rubric would
 catch more and would make the benchmark's own verdict drift run to run, which
 defeats the point of a fixed suite. The remaining gap is breadth — twelve

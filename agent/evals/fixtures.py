@@ -155,6 +155,39 @@ def changed_paths(mf: MaterializedFixture, task_branch: str | None) -> tuple[str
     return tuple(sorted(set(paths)))
 
 
+# How much of a failing task's diff to keep. Enough to read what it actually
+# did; not so much that a report full of failures becomes a tarball.
+MAX_DIFF_CHARS = 20_000
+
+
+def changed_diff(mf: MaterializedFixture, task_branch: str | None) -> str:
+    """The actual diff, for a task whose assertions failed.
+
+    The first full run is why this exists. py-top-n-heap failed a guard that
+    said the test file must not change, and the report recorded only that
+    `tests/test_report.py` was among the changed paths -- so there was no way
+    to tell whether the agent had ADDED a test or WEAKENED one, which are
+    opposite findings. By then the fixture had been torn down and there was
+    nothing left to look at.
+
+    A path list says a rule was broken. The diff says what the agent did, and
+    that is the whole reason anybody reads a failing golden task.
+    """
+    try:
+        if task_branch:
+            try:
+                out = _git(["diff", f"{BASE_BRANCH}...{task_branch}"], mf.live)
+                if out.strip():
+                    return out[:MAX_DIFF_CHARS]
+            except FixtureError:
+                pass
+        # Uncommitted work, for a task that escalated before committing.
+        out = _git(["diff", "HEAD"], mf.sandbox)
+        return out[:MAX_DIFF_CHARS]
+    except FixtureError:
+        return ""
+
+
 def task_branch_name(task_id: str) -> str:
     """What verify_and_ship will name the branch for this task.
 

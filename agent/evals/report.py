@@ -53,6 +53,7 @@ def task_row(run: TaskRun) -> dict:
         "cost_usd": round(run.cost_usd, 4),
         "duration_s": round(run.duration_s, 1),
         "changed_paths": list(run.changed_paths),
+        "diff": run.diff,
         "assertions": _assertion_rows(run),
         "error": run.error,
     }

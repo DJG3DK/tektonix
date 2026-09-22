@@ -63,6 +63,9 @@ class TaskRun:
     duration_s: float = 0.0
     changed_paths: tuple[str, ...] = ()
     assertions: TaskAssertionReport = field(default_factory=TaskAssertionReport)
+    # Kept only when the task FAILED. A passing task's diff is noise; a
+    # failing one's is the entire reason to read the report.
+    diff: str = ""
     error: str = ""
 
     @property
@@ -226,6 +229,8 @@ async def run_task(task: TaskSpec, *, graph, config, eval_root: Path,
         run_command=run_command,
         project=spec.name,
     ))
+    if not run.passed:
+        run.diff = fx.changed_diff(mf, fx.task_branch_name(task_id))
     run.duration_s = time.monotonic() - started
     return run
 
