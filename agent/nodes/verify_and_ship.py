@@ -891,12 +891,26 @@ async def _review_and_deploy(state: AgentState, repo: str, sha: str) -> dict:
                 "execution_log": [log_entry, deploy_entry],
                 "stale_pending_review_streak": 0,
             }
+        # The MESSAGE, not the repr of the dict carrying it. Escalation text is
+        # the last thing an operator reads before deciding what to do, and
+        # until 2026-09-22 this printed the whole result object:
+        #
+        #   merge/deploy failed: {'ok': False, 'stage': 'ship', 'error': 'could
+        #   not push agent/7991...: To https://github.com/...\n ! [remote
+        #   rejected] ...'}
+        #
+        # -- a stringified dict with the actual sentence buried inside it and
+        # its newlines escaped. review_gate now writes a real explanation into
+        # `error` for the cases it can recognise, and that has to survive the
+        # trip out rather than being re-wrapped in punctuation.
+        why = str(deployed.get("error") or "").strip() or str(deployed)
+        stage = deployed.get("stage") or "merge/deploy"
         return {
             "committed_sha": sha,
             "merge_approved_sha": None,  # same reasoning as the build branch above
             "review_gate_result": review,
             "execution_log": [log_entry, deploy_entry],
-            **_escalate(f"merge/deploy failed: {deployed}"),
+            **_escalate(f"{stage} failed: {why}"),
         }
 
     # The merge is live, so this is the first moment a brand-new project has

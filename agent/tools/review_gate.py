@@ -294,6 +294,10 @@ async def _push_https_origin_if_needed(project: str) -> dict | None:
     r = await _git(f"push https://x-access-token:{token}@github.com/{slug}.git {base}",
                    live, timeout=300)
     if not r["ok"]:
+        # Same refusal, different push: a merge that brings a workflow file
+        # onto the base branch is rejected for the same reason.
+        if _WORKFLOW_SCOPE_REFUSAL in r["output"]:
+            return {"ok": False, "reason": _workflow_scope_hint(token, slug, base)}
         return {"ok": False, "reason": r["output"].replace(token, "***")[:200]}
     return {"ok": True, "pushed": base}
 
@@ -318,6 +322,50 @@ def _refresh_codebase_map(project: str) -> None:
         logger.info("kicked codebase-map refresh for %s after merge+deploy", project)
     except Exception:  # noqa: BLE001 -- best-effort by design
         logger.exception("could not start post-ship cartographer for %s", project)
+
+
+# GitHub refuses ANY token push that creates or updates a file under
+# .github/workflows/ unless the token carries workflow permission -- a
+# deliberate guardrail, so a leaked token cannot silently install CI that runs
+# arbitrary code on every push. The refusal is correct and the message it
+# produces is not actionable: it names a "workflow scope" that does not exist
+# under that name on a fine-grained token, and it says nothing about where to
+# go.
+#
+# Hit live 2026-09-22: a task wrote a perfectly good .github/workflows/ci.yml,
+# the review gate passed, and the ship step reported a raw git error. Nothing
+# in it said the fix was one checkbox, or which of the two token types the
+# operator actually had.
+_WORKFLOW_SCOPE_REFUSAL = "without `workflow` scope"
+
+
+def _workflow_scope_hint(token: str | None, slug: str, branch: str) -> str:
+    """What to actually do about it, for the token type in play.
+
+    The two PAT kinds spell the same permission differently, and telling an
+    operator with a fine-grained token to tick a classic token's `workflow`
+    scope sends them looking for a checkbox that is not on their screen.
+    """
+    fine_grained = bool(token and token.startswith("github_pat_"))
+    where = (
+        "GitHub -> Settings -> Developer settings -> Personal access tokens -> "
+        "Fine-grained tokens -> the token for this repo -> Repository permissions "
+        "-> Workflows -> Read and write"
+        if fine_grained else
+        "GitHub -> Settings -> Developer settings -> Personal access tokens -> "
+        "Tokens (classic) -> the token for this repo -> tick the `workflow` scope"
+    )
+    kind = "fine-grained" if fine_grained else "classic"
+    return (
+        f"GitHub refused the push because this repo's token may not write "
+        f".github/workflows/. The branch `{branch}` is committed locally and the review "
+        f"already passed -- nothing is lost, and resuming the task retries the push.\n\n"
+        f"To fix it ({kind} token): {where}.\n"
+        f"If {slug.split('/')[0]} is an organisation, the permission change may also need "
+        f"org approval before it takes effect.\n\n"
+        f"Alternative: give this project an SSH deploy key instead -- a deploy-key push is "
+        f"not subject to this restriction at all."
+    )
 
 
 async def ship_as_pull_request(project: str, branch: str, sha: str, title: str) -> dict:
@@ -386,6 +434,11 @@ async def ship_as_pull_request(project: str, branch: str, sha: str, title: str) 
     if not push["ok"]:
         # git echoes the URL it was given, token and all.
         detail = push["output"].replace(token, "***")[:300]
+        if _WORKFLOW_SCOPE_REFUSAL in push["output"]:
+            return {"ok": False, "stage": "ship",
+                    "reason": "workflow_scope",
+                    "error": _workflow_scope_hint(token, slug, branch),
+                    "git": detail}
         return {"ok": False, "stage": "ship",
                 "error": f"could not push {branch}: {detail}"}
 
