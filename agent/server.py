@@ -812,6 +812,30 @@ async def _github_open_auto_count(repo: str) -> int:
     return n
 
 
+# The statuses that mean a task is genuinely on an item. Escalated counts:
+# it is in the operator's list with a Resume button, and re-proposing the
+# alert underneath it would queue the same work twice. Everything else --
+# stopped, error, done-without-fixing-it, or an id that no longer exists --
+# means nobody is on it.
+_LIVE_TASK_STATUSES = ("running", "queued", "awaiting_approval", "awaiting_merge", "escalated")
+
+
+async def _github_live_tasks(repo: str) -> set[str]:
+    """Which of this project's tasks are still in flight.
+
+    github_inbox.decide uses it to decide whether a `task_created` item is
+    still being worked on. Returning an empty set is a real answer ("nothing
+    is running"); the inbox only keeps items stuck when it is handed None,
+    which is why a failure here re-raises rather than pretending.
+    """
+    live = set()
+    for it in await recent_items(app.state.store, ("tasks", repo), 100):
+        v = it.value
+        if v.get("status") in _LIVE_TASK_STATUSES:
+            live.add(v.get("task_id") or it.key)
+    return live
+
+
 async def _github_create_task(repo: str, goal: str, budget: float, route: str) -> str:
     """A task GitHub asked for, not a person.
 
@@ -1024,6 +1048,7 @@ async def _github_poll_once() -> list[dict]:
     results = await github_inbox.poll_all(
         app.state.store, config,
         create_task=_github_create_task, notify=_github_notify, open_auto_count=_github_open_auto_count,
+        live_tasks=_github_live_tasks,
     )
     _github_last_poll = {"at": time.time(), "results": results}
     app.state.github_last_poll = _github_last_poll

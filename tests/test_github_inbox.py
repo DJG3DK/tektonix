@@ -496,3 +496,105 @@ def test_every_source_can_become_a_task_and_a_notification(source):
     assert source in gi._KIND_LABEL, "the proposal notification would name nothing"
     goal = gi.build_goal(_item(f"{source}:1", kind=source))
     assert "review gate" in goal, "every inbox goal states that the gate still applies"
+
+
+# ---------------------------------------------------------------------------
+# an item whose task is no longer running comes back to the queue
+# ---------------------------------------------------------------------------
+#
+# `task_created` was a one-way door. Whatever became of the task -- stopped,
+# errored, finished without fixing anything -- the item kept that state, and
+# the dashboard offers no action on it (actionable is proposed/snoozed/seen).
+# So the alert sat in the list with no button while it was still open on
+# GitHub, and the only way back was editing the store by hand.
+#
+# Observed 2026-09-22: a task on a js/sql-injection alert went down a rabbit
+# hole, was stopped, and took its alert out of reach with it. With 59 open
+# alerts on one project that is not an edge case, it is a Tuesday.
+
+def _created(key, task_id="t1", fp="a"):
+    return {"key": key, "fingerprint": fp, "state": "task_created",
+            "task_id": task_id, "created_at": 1}
+
+
+def test_an_item_whose_task_was_stopped_is_proposed_again():
+    """The stranded case: the ALERT did not change, the TASK died -- so this
+    is the unchanged-fingerprint branch, not the changed one."""
+    proj = _proj(dependabot_prs="propose")
+    decisions, _ = gi.decide({"pr:1": _created("pr:1")}, [_item("pr:1")], proj,
+                             open_auto=0, live_tasks=set())
+    assert [(d.action, d.item.state) for d in decisions] == [("propose", "proposed")]
+    assert "no longer running" in decisions[0].reason
+
+
+def test_an_item_whose_task_is_still_running_is_left_alone():
+    proj = _proj(dependabot_prs="propose")
+    decisions, _ = gi.decide({"pr:1": _created("pr:1")}, [_item("pr:1")], proj,
+                             open_auto=0, live_tasks={"t1"})
+    assert decisions == []
+
+
+def test_a_changed_item_whose_task_died_goes_through_policy_again():
+    """The other branch: the alert moved on AND nobody is working it."""
+    proj = _proj(dependabot_prs="auto") | {"max_open_auto": 2}
+    decisions, _ = gi.decide({"pr:1": _created("pr:1", fp="old")}, [_item("pr:1", fp="new")],
+                             proj, open_auto=0, live_tasks=set(), has_checks=True)
+    assert [(d.action, d.item.state) for d in decisions] == [("create", "task_created")]
+
+
+def test_a_changed_item_whose_task_lives_still_does_not_stack_a_second():
+    proj = _proj(dependabot_prs="auto") | {"max_open_auto": 2}
+    decisions, _ = gi.decide({"pr:1": _created("pr:1", fp="old")}, [_item("pr:1", fp="new")],
+                             proj, open_auto=0, live_tasks={"t1"}, has_checks=True)
+    assert [(d.action, d.item.state) for d in decisions] == [("none", "task_created")]
+
+
+def test_without_a_lookup_nothing_changes():
+    """live_tasks=None means "we could not ask". Re-proposing on a guess
+    would duplicate work; the old behaviour is the safe default."""
+    proj = _proj(dependabot_prs="propose")
+    assert gi.decide({"pr:1": _created("pr:1")}, [_item("pr:1")], proj, open_auto=0)[0] == []
+
+
+def test_an_empty_set_is_a_real_answer_and_not_the_same_as_none():
+    """The distinction the whole fix rests on: nothing running is a fact,
+    could-not-ask is not."""
+    proj = _proj(dependabot_prs="propose")
+    none_says = gi.decide({"pr:1": _created("pr:1")}, [_item("pr:1")], proj, open_auto=0,
+                          live_tasks=None)[0]
+    empty_says = gi.decide({"pr:1": _created("pr:1")}, [_item("pr:1")], proj, open_auto=0,
+                           live_tasks=set())[0]
+    assert none_says == [] and len(empty_says) == 1
+
+
+def test_an_off_policy_item_is_not_dragged_back_into_the_queue():
+    """A source the operator turned off stays off, however its task ended."""
+    proj = _proj(dependabot_prs="off")
+    assert gi.decide({"pr:1": _created("pr:1")}, [_item("pr:1")], proj, open_auto=0,
+                     live_tasks=set())[0] == []
+
+
+def test_a_dismissed_item_is_not_resurrected():
+    """Only task_created comes back. Dismissed was a decision."""
+    proj = _proj(dependabot_prs="propose")
+    existing = {"pr:1": {"key": "pr:1", "fingerprint": "a", "state": "dismissed", "created_at": 1}}
+    assert gi.decide(existing, [_item("pr:1")], proj, open_auto=0, live_tasks=set())[0] == []
+
+
+def test_the_original_creation_time_survives_the_round_trip():
+    """The list sorts on it; resetting it would shuffle an old alert to the
+    top as though it were new."""
+    proj = _proj(dependabot_prs="propose")
+    decisions, _ = gi.decide({"pr:1": _created("pr:1")}, [_item("pr:1")], proj,
+                             open_auto=0, live_tasks=set())
+    assert decisions[0].item.created_at == 1
+
+
+def test_the_live_statuses_are_the_ones_that_mean_someone_is_on_it():
+    """Escalated counts as live: it sits in the operator's list with a Resume
+    button, and re-proposing underneath it would queue the same work twice."""
+    from agent.server import _LIVE_TASK_STATUSES
+    assert set(_LIVE_TASK_STATUSES) == {"running", "queued", "awaiting_approval",
+                                        "awaiting_merge", "escalated"}
+    for dead in ("stopped", "error", "done"):
+        assert dead not in _LIVE_TASK_STATUSES

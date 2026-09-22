@@ -377,7 +377,8 @@ class Decision:
 
 
 def decide(existing: dict[str, dict], found: list[Item], proj: dict, open_auto: int,
-           now: float | None = None, has_checks: bool | None = True) -> tuple[list[Decision], list[str]]:
+           now: float | None = None, has_checks: bool | None = True,
+           live_tasks: set | None = None) -> tuple[list[Decision], list[str]]:
     """Compare what was found with what the store holds.
 
     Returns the decisions for items that are new or changed, and the keys of
@@ -394,6 +395,30 @@ def decide(existing: dict[str, dict], found: list[Item], proj: dict, open_auto: 
     The operator loses one click and keeps the review that click is for.
     """
     now = now or time.time()
+    # None means "we could not ask", which must behave exactly as before:
+    # never re-propose on a guess. An empty SET, by contrast, is a real
+    # answer -- nothing is in flight.
+    live = live_tasks
+
+    def _still_being_worked(prev: dict) -> bool:
+        """Is a task genuinely on this item right now?
+
+        `task_created` used to be a one-way door: whatever became of the task,
+        the item kept the state and the UI offered no action on it, so the
+        alert sat in the list with no button while it was still open on
+        GitHub. Observed 2026-09-22 -- a task was stopped after going down a
+        rabbit hole, and its alert became unreachable.
+
+        In flight means running, queued, or parked on a decision about THAT
+        task (an approval, a merge, an escalation the operator can resume).
+        Stopped, errored, finished-without-fixing-it, or a task id that no
+        longer exists are all "nobody is on this", and the honest state for
+        those is back in the queue.
+        """
+        if live is None:
+            return True            # could not ask; keep the old behaviour
+        return prev.get("task_id") in live
+
     decisions: list[Decision] = []
     found_keys = {i.key for i in found}
     budget = max(0, int(proj.get("max_open_auto", 2)) - open_auto)
@@ -403,22 +428,36 @@ def decide(existing: dict[str, dict], found: list[Item], proj: dict, open_auto: 
         mode = proj["policies"].get(item.kind, "off")
         item.mode = mode
         if prev and prev.get("fingerprint") == item.fingerprint:
-            # Unchanged. A snooze that expired is re-proposed; anything else
-            # keeps its state.
+            # Unchanged. A snooze that expired is re-proposed, an item whose
+            # task is no longer running comes back to the queue, and anything
+            # else keeps its state.
             if prev.get("state") == "snoozed" and (prev.get("snoozed_until") or 0) <= now and mode != "off":
                 item.state = "proposed"
                 item.created_at = prev.get("created_at", now)
                 decisions.append(Decision(item, "propose", "snooze expired"))
+                continue
+            # This is the branch a stranded item is actually in: the alert did
+            # not change, the TASK died. Checking only the changed-fingerprint
+            # path below would have left the common case stuck.
+            if (prev.get("state") == "task_created" and mode != "off"
+                    and not _still_being_worked(prev)):
+                item.state = "proposed"
+                item.created_at = prev.get("created_at", now)
+                decisions.append(Decision(item, "propose", "its task is no longer running"))
+                continue
             continue
         if prev:
             item.created_at = prev.get("created_at", now)
-            if prev.get("state") == "task_created" and prev.get("task_id"):
+            if (prev.get("state") == "task_created" and prev.get("task_id")
+                    and _still_being_worked(prev)):
                 # The thing changed while a task is on it (the task itself
                 # pushed, most likely). Keep the link; do not stack a second.
                 item.state = "task_created"
                 item.task_id = prev["task_id"]
                 decisions.append(Decision(item, "none", "changed while a task is open"))
                 continue
+            # ...and if that task is gone, fall through to the normal policy
+            # decision below, which proposes or creates as the project says.
         if mode == "off":
             item.state = "seen"
             decisions.append(Decision(item, "none", "source is off"))
@@ -591,6 +630,7 @@ def created_text(item: Item | dict, task_id: str, budget_usd: float) -> str:
 CreateTask = Callable[[str, str, float, str], Awaitable[str]]        # (repo, goal, budget, route) -> task_id
 Notify = Callable[[str, str], Awaitable[None]]                        # (text, repo)
 OpenAutoCount = Callable[[str], Awaitable[int]]                       # repo -> open auto tasks
+LiveTasks = Callable[[str], Awaitable[set]]                           # repo -> task ids still in flight
 
 
 async def list_items(store, repo: str) -> dict[str, dict]:
@@ -621,7 +661,7 @@ async def create_task_for_item(item: dict, settings: dict, config: Config, creat
 async def poll_project(
     store, config: Config, settings: dict, repo: str, *,
     create_task: CreateTask, notify: Notify, open_auto_count: OpenAutoCount,
-    client: GitHubClient | None = None,
+    client: GitHubClient | None = None, live_tasks: LiveTasks | None = None,
 ) -> dict:
     """One project, one pass. Returns a small summary for the dashboard/log."""
     proj = github_settings.project_settings(settings, repo)
@@ -638,7 +678,11 @@ async def poll_project(
     # starts work.
     from agent.tools.review_gate import project_has_checks
     has_checks = await project_has_checks(repo)
-    decisions, gone = decide(existing, found, proj, open_auto, has_checks=has_checks)
+    # None when the caller did not supply a lookup: decide() then keeps every
+    # task_created item exactly as it was, which is what it did before this.
+    in_flight = await live_tasks(repo) if live_tasks else None
+    decisions, gone = decide(existing, found, proj, open_auto, has_checks=has_checks,
+                             live_tasks=in_flight)
     summary = {"repo": repo, "found": len(found), "proposed": 0, "created": 0, "resolved": 0}
     for d in decisions:
         item = d.item
@@ -683,12 +727,15 @@ async def poll_project(
     return summary
 
 
-async def poll_all(store, config: Config, *, create_task: CreateTask, notify: Notify, open_auto_count: OpenAutoCount) -> list[dict]:
+async def poll_all(store, config: Config, *, create_task: CreateTask, notify: Notify,
+                   open_auto_count: OpenAutoCount, live_tasks: LiveTasks | None = None) -> list[dict]:
     settings = github_settings.current()
     out = []
     for repo in github_settings.enabled_projects(settings):
         try:
-            out.append(await poll_project(store, config, settings, repo, create_task=create_task, notify=notify, open_auto_count=open_auto_count))
+            out.append(await poll_project(store, config, settings, repo, create_task=create_task,
+                                          notify=notify, open_auto_count=open_auto_count,
+                                          live_tasks=live_tasks))
         except Exception as e:  # noqa: BLE001 -- one project's failure must not strand the others
             logger.exception("github inbox: poll failed for %s", repo)
             out.append({"repo": repo, "error": str(e)[:200]})
