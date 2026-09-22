@@ -1,0 +1,26 @@
+/* The badge. One rule per state; the state names match src/badge.js's STATES. */
+
+.badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 18px;
+  white-space: nowrap;
+}
+
+.badge--ok {
+  background: #14301d;
+  color: #3fb950;
+}
+
+.badge--warn {
+  background: #322612;
+  color: #e3a72e;
+}
+
+.badge--error {
+  background: #3a1518;
+  color: #f85149;
+}

@@ -1,0 +1,28 @@
+id: node-chunk-zero
+fixture: nodelib
+category: bug-fix
+budget_usd: 2.0
+goal: |
+  `chunk(items, size)` in src/retry.js loops forever when `size` is 0 or
+  negative — `i += size` never advances, so the function hangs and takes the
+  caller with it.
+
+  Make it reject a size that is not a positive integer, throwing a RangeError
+  with a message naming the bad value. Add tests for 0, a negative, and a
+  non-integer.
+
+  Do not change what it does for a valid size.
+assert:
+  - checks_pass: true
+  # --max-old-space-size caps the heap at 64MB so the UNFIXED code, which
+  # loops forever building an array, dies in a second instead of grinding a
+  # container up to its memory limit. The assertion fails either way; this is
+  # about how long --verify takes to say so.
+  - command: ["node", "--max-old-space-size=64", "-e", "const {chunk}=require('./src/retry');let threw=false;try{chunk([1,2],0)}catch(e){threw=e instanceof RangeError};if(!threw)process.exit(1);if(JSON.stringify(chunk([1,2,3],2))!=='[[1,2],[3]]')process.exit(2)"]
+    why: it must throw rather than hang, and valid sizes must be untouched
+  - diff_touches: ["src/retry.js", "test/**"]
+  - file_matches:
+      path: test/retry.test.js
+      pattern: "chunk splits evenly"
+    guard: true
+    why: the original tests survive

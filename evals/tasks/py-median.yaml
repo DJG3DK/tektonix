@@ -1,0 +1,20 @@
+id: py-median
+fixture: pylib
+category: feature
+budget_usd: 2.0
+goal: |
+  Add a `median(rows)` function to src/report.py, alongside `average()`.
+
+  It returns the median `amount` across the rows: the middle value for an odd
+  count, the mean of the two middle values for an even count, and 0.0 for an
+  empty list — matching how `average()` should behave on empty input.
+
+  Include it in `summarise()`'s output as `… , <median> median`, and test it.
+assert:
+  - checks_pass: true
+  - command: ["python3", "-c", "import sys; sys.path.insert(0,'.'); from src import report; r=lambda *a:[{'amount':x} for x in a]; assert report.median(r(1,3,2))==2; assert report.median(r(1,2,3,4))==2.5; assert report.median([])==0.0"]
+  - file_matches:
+      path: src/report.py
+      pattern: "def median"
+  - diff_touches: ["src/report.py", "tests/**"]
+    why: a new function with no test is not a finished feature

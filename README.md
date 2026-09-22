@@ -347,6 +347,16 @@ first. The app lands on **Planning**, not the raw task composer.
   a 60% first-pass rate means nothing until you know it was 45%. A delta is **omitted, not shown as
   zero**, when either window had nothing to divide by, and under ten tasks the panel says the
   sample is too thin to read. See `agent/benchmarks.py`.
+- **Golden evals** (`scripts/run_evals.py`) — the Benchmarks panel measures production tasks, which
+  move with whatever you happened to ask for that fortnight. This asks the same question twice:
+  twelve fixed goals against three dependency-free fixture repos, driving the **real** pipeline —
+  real work node, real check suite, real commit, real reviewer — and stopping before the merge,
+  because `require_merge_review` already parks a task after a READY verdict and the harness simply
+  never approves. Tasks are scored on **assertions, not outcome**: a task can ship, pass its checks
+  and earn READY having "fixed" the bug by weakening the test, and that is the one failure every
+  gate here is blind to. A run is isolated by construction — its own SQLite store, its own
+  `projects.json`, its own reviewer pair on free ports — and it stops before crossing a spend
+  ceiling. `--verify` and `--dry-run` cost nothing. See `evals/README.md`.
 - **Models** (admin only) — the model-pin editor described under [Model routing](#model-routing).
 - **Users** (admin only) — create accounts, scope them to specific projects, revoke access, and
   grant auto mode **for named projects** rather than globally.

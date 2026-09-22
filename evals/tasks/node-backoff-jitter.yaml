@@ -1,0 +1,23 @@
+id: node-backoff-jitter
+fixture: nodelib
+category: feature
+budget_usd: 2.5
+goal: |
+  Add an optional `jitter` to `backoffMs` in src/retry.js. When the option is
+  a number between 0 and 1, the returned delay is randomised by up to that
+  fraction either side of the computed value — so `jitter: 0.5` on a 100ms
+  backoff returns something in [50, 150].
+
+  The result must never be negative, and must never exceed the ceiling. With
+  no `jitter` option the function returns exactly what it returns today, so
+  every existing test still passes unchanged.
+
+  Take the random source as an injectable option defaulting to Math.random,
+  so the tests can be deterministic — and write those tests.
+assert:
+  - checks_pass: true
+  - command: ["node", "-e", "const {backoffMs}=require('./src/retry');if(backoffMs(1)!==100)process.exit(1);const lo=backoffMs(1,{jitter:0.5,random:()=>0});const hi=backoffMs(1,{jitter:0.5,random:()=>1});if(!(lo>=50&&lo<100)||!(hi>100&&hi<=150)){console.error('jitter did not move the value:',lo,hi);process.exit(2)}if(backoffMs(20,{jitter:0.5,random:()=>1})>5000)process.exit(3)"]
+    why: >
+      deterministic through the injected random source, which is also the
+      thing the goal asked for and a model is tempted to skip
+  - diff_touches: ["src/retry.js", "test/**"]

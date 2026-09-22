@@ -17,12 +17,36 @@ from agent import paths
 
 logger = logging.getLogger("tektonix")
 
-# audit M-5: these are fixed localhost ports, not derived from config. The
+# audit M-5: these were fixed localhost ports, not derived from config. The
 # former REVIEW_GATE_BASE_URL env var was mandatory at startup yet read
-# nowhere (it can't express both the 4100 status port and the 4101 control
-# port anyway), so it was dropped rather than left as a misleading dead knob.
-REVIEW_CONTROL_PORT = 4101  # localhost-only on a host install
-REVIEW_SERVICE_PORT = 4100
+# nowhere -- and it could not express both the 4100 status port and the 4101
+# control port anyway, which is why it was dropped rather than left as a
+# misleading dead knob.
+#
+# Two variables, one per port, is what that single one could not be. The
+# defaults are the old constants, so a host install is unchanged and the
+# control port keeps its localhost-only property. What they are FOR is
+# agent/evals: an eval run starts its own reviewer pair on free ports against
+# its own projects.json, so that a benchmark cannot review -- or be reviewed
+# against -- a real project. A knob with one honest caller, rather than none.
+import os as _os_ports
+
+
+def _port(var: str, default: int) -> int:
+    raw = _os_ports.environ.get(var)
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        raise RuntimeError(f"{var}={raw!r} is not a port number") from None
+    if not 1 <= value <= 65535:
+        raise RuntimeError(f"{var}={value} is not a valid port")
+    return value
+
+
+REVIEW_CONTROL_PORT = _port("REVIEW_CONTROL_PORT", 4101)  # localhost-only on a host install
+REVIEW_SERVICE_PORT = _port("REVIEW_SERVICE_PORT", 4100)
 
 # The host half, which is 127.0.0.1 everywhere except the container bundle:
 # there the review services are sibling containers with their own names, and

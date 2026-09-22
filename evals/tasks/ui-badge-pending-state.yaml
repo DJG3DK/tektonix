@@ -1,0 +1,25 @@
+id: ui-badge-pending-state
+fixture: webui
+category: ui-styling
+budget_usd: 2.5
+goal: |
+  The badge in src/badge.js has three states: ok, warn and error. Add a
+  fourth, `pending`, labelled "In progress".
+
+  Style it in src/badge.css the way the others are styled — a dark tinted
+  background with a matching foreground — using a blue in the same family as
+  the existing green, amber and red. Keep the rules in the same shape and
+  order as its siblings.
+
+  Unknown states must still fall back to ok. Add a test for the new state.
+assert:
+  - checks_pass: true
+  - command: ["node", "-e", "const {renderBadge,STATES}=require('./src/badge');if(STATES.pending!=='In progress')process.exit(1);const h=renderBadge('pending');if(!/badge--pending/.test(h)||!/In progress/.test(h)){console.error(h);process.exit(2)}if(!/badge--ok/.test(renderBadge('nonsense')))process.exit(3)"]
+  - file_matches:
+      path: src/badge.css
+      pattern: "\\.badge--pending\\s*\\{[^}]*color:"
+    why: >
+      the markup and the stylesheet are meant to stay in step — a state added
+      to one and not the other is the actual failure mode here, and it is
+      invisible to a test that only renders markup
+  - diff_touches: ["src/badge.js", "src/badge.css", "test/**"]

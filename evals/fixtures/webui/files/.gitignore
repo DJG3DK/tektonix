@@ -1,0 +1,9 @@
+# What running the checks leaves behind. Every real project gets one of these
+# from provisioning (_NEW_REPO_GITIGNORE); a fixture without one fails its
+# task at the commit gate, which refuses build artifacts -- and the report
+# then blames the agent for the fixture.
+__pycache__/
+*.pyc
+node_modules/
+.venv/
+dist/

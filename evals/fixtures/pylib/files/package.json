@@ -1,0 +1,9 @@
+{
+  "name": "pylib",
+  "private": true,
+  "description": "Eval fixture. package.json exists because agent/tools/checks.py reads the gate's scripts from it; the code itself is Python.",
+  "scripts": {
+    "test": "python3 -m unittest discover -s tests -q",
+    "lint": "python3 -m compileall -q src tests"
+  }
+}

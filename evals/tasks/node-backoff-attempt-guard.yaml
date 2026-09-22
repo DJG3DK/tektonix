@@ -1,0 +1,18 @@
+id: node-backoff-attempt-guard
+fixture: nodelib
+category: bug-fix
+budget_usd: 2.0
+goal: |
+  `backoffMs(attempt)` in src/retry.js is documented as taking a 1-based
+  attempt number, but nothing enforces it: `backoffMs(0)` returns 50ms and
+  `backoffMs(-1)` returns 25ms, so an off-by-one at a call site turns into a
+  retry storm rather than an error.
+
+  Make an attempt below 1 throw a RangeError. Keep every valid attempt
+  exactly as it is, ceiling included. Add tests.
+assert:
+  - checks_pass: true
+  - command: ["node", "-e", "const {backoffMs}=require('./src/retry');let t=false;try{backoffMs(0)}catch(e){t=e instanceof RangeError};if(!t)process.exit(1);if(backoffMs(1)!==100||backoffMs(3)!==400||backoffMs(20)!==5000)process.exit(2)"]
+  - diff_touches: ["src/retry.js"]
+  - diff_excludes: ["package.json"]
+    guard: true

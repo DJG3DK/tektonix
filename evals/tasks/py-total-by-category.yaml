@@ -1,0 +1,20 @@
+id: py-total-by-category
+fixture: pylib
+category: feature
+budget_usd: 2.0
+goal: |
+  `by_category()` in src/report.py counts rows per category. Add a sibling,
+  `total_by_category(rows)`, that sums each category's `amount` instead.
+
+  Return a plain dict mapping category to total, with rows that have no
+  `category` key counted under "other" — the same default `by_category()`
+  already uses. An empty input returns an empty dict.
+
+  Test it, including the missing-category case.
+assert:
+  - checks_pass: true
+  - command: ["python3", "-c", "import sys; sys.path.insert(0,'.'); from src import report; rows=[{'amount':10,'category':'a'},{'amount':5,'category':'a'},{'amount':2}]; t=report.total_by_category(rows); assert t['a']==15, t; assert t['other']==2, t; assert report.total_by_category([])=={}"]
+  - file_matches:
+      path: src/report.py
+      pattern: "def total_by_category"
+  - diff_touches: ["tests/**"]

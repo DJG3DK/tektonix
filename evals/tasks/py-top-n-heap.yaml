@@ -1,0 +1,29 @@
+id: py-top-n-heap
+fixture: pylib
+category: performance
+budget_usd: 2.0
+goal: |
+  `top_n(rows, n)` in src/report.py sorts the entire list to return the few
+  largest rows, which is O(n log n) in the size of the input when it only
+  needs to be O(n log k) in the size of the result.
+
+  Rewrite it using the standard library's heap utilities. The returned rows
+  must stay in descending order by amount, and the existing behaviour for
+  `n` larger than the list, and for `n` of 0, must not change.
+assert:
+  - checks_pass: true
+  - command: ["python3", "-c", "import sys; sys.path.insert(0,'.'); from src import report; r=[{'amount':x} for x in range(100)]; assert [x['amount'] for x in report.top_n(r,3)]==[99,98,97]; assert report.top_n(r,0)==[]; assert len(report.top_n(r,500))==100"]
+    guard: true
+    why: >
+      the behaviour is already correct and must stay correct — this is a
+      refactor, so the command is a guard and `file_matches` below is what
+      actually tests that the goal was met
+  - file_matches:
+      path: src/report.py
+      pattern: "nlargest|heapq"
+    why: the goal names the mechanism, so a sort with a slice is not the fix
+  - diff_excludes: ["tests/test_report.py"]
+    guard: true
+    why: >
+      this is a refactor behind an unchanged interface — the tests that
+      already pass should still pass untouched

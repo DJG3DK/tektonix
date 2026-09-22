@@ -1,0 +1,20 @@
+name: nodelib
+description: >
+  A small dependency-free Node library with a `node --test` suite. Stands in
+  for the service half of a real project: request shaping, retry logic,
+  formatting — and it is where a task can plausibly be "fixed" by loosening a
+  test, which is what the diff assertions are there to catch.
+stack: node
+
+review:
+  checks:
+    - name: test
+      dir: "."
+      cmd: node
+      args: ["--test", "test/retry.test.js"]
+      timeoutMs: 120000
+    - name: syntax
+      dir: "."
+      cmd: node
+      args: ["scripts/check-syntax.js"]
+      timeoutMs: 60000

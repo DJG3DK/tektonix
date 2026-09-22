@@ -1,0 +1,20 @@
+id: py-summarise-precision
+fixture: pylib
+category: bug-fix
+budget_usd: 2.0
+goal: |
+  `summarise()` in src/report.py formats the average to two decimal places but
+  prints the total raw, so a float total renders as `60.000000000000014`.
+
+  Format the total the same way the average is formatted, and keep integer
+  totals looking like integers rather than `60.00`.
+
+  Cover it with a test.
+assert:
+  - checks_pass: true
+  - command: ["python3", "-c", "import sys; sys.path.insert(0,'.'); from src import report; rows=[{'amount':0.1},{'amount':0.2}]; s=report.summarise(rows); assert '0.30' in s, s; assert '30000000' not in s, s"]
+  - diff_touches: ["src/report.py"]
+  - file_matches:
+      path: tests/test_report.py
+      pattern: "def test_summarise"
+    guard: true

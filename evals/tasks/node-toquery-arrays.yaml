@@ -1,0 +1,20 @@
+id: node-toquery-arrays
+fixture: nodelib
+category: feature
+budget_usd: 2.0
+goal: |
+  `toQuery(params)` in src/retry.js renders an array value as its
+  comma-joined string, because that is what `encodeURIComponent` does to an
+  array. It should instead repeat the key once per element, which is what
+  every server-side parser expects: `{tag: ['a','b']}` becomes `tag=a&tag=b`.
+
+  Keys stay in sorted order, and elements keep their own order within a key.
+  Scalar values behave exactly as they do now. Add tests.
+assert:
+  - checks_pass: true
+  - command: ["node", "-e", "const {toQuery}=require('./src/retry');const got=toQuery({tag:['a','b'],z:'1'});if(got!=='tag=a&tag=b&z=1'){console.error(got);process.exit(1)}if(toQuery({b:'2',a:'x y'})!=='a=x%20y&b=2')process.exit(2)"]
+  - diff_touches: ["src/retry.js", "test/**"]
+  - file_matches:
+      path: test/retry.test.js
+      pattern: "toQuery sorts keys"
+    guard: true

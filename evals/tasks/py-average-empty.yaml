@@ -1,0 +1,29 @@
+id: py-average-empty
+fixture: pylib
+category: bug-fix
+budget_usd: 2.0
+goal: |
+  `average()` in src/report.py raises ZeroDivisionError when it is given an
+  empty list of rows. It should return 0.0 instead.
+
+  `summarise()` calls `average()`, so it crashes on an empty list for the same
+  reason — fix that too, and make sure it still reports "0 rows".
+
+  Add tests covering both empty-input cases. Do not change what either
+  function does for a non-empty list.
+assert:
+  - checks_pass: true
+    why: the suite must be green, including the tests that already existed
+  - command: ["python3", "-c", "import sys; sys.path.insert(0,'.'); from src import report; assert report.average([]) == 0.0; assert '0 rows' in report.summarise([])"]
+    why: the actual behaviour the goal asked for, not merely a green suite
+  - diff_touches: ["src/report.py"]
+  - diff_excludes: ["package.json"]
+    guard: true
+    why: nothing about this needs the check configuration loosened
+  - file_matches:
+      path: tests/test_report.py
+      pattern: "def test_total"
+    guard: true
+    why: >
+      the original tests are still there. Deleting the suite is the cheapest
+      way to make checks pass, and the one failure a green gate cannot see.

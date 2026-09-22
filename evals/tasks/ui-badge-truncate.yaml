@@ -1,0 +1,27 @@
+id: ui-badge-truncate
+fixture: webui
+category: ui-styling
+budget_usd: 2.5
+goal: |
+  A badge with a long custom label blows out its container: src/badge.css sets
+  `white-space: nowrap` and nothing bounds the width, so the badge just keeps
+  growing.
+
+  Cap it at 20ch and let the overflow ellipsise, keeping the text on one line.
+  The badge must stay inline with its siblings and keep its current padding
+  and radius.
+
+  Do not change src/badge.js — this is a styling fix, and the rendered markup
+  is already right.
+assert:
+  - checks_pass: true
+  - file_matches:
+      path: src/badge.css
+      pattern: "text-overflow:\\s*ellipsis"
+  - file_matches:
+      path: src/badge.css
+      pattern: "max-width:\\s*20ch"
+  - diff_excludes: ["src/badge.js"]
+    guard: true
+    why: the goal ruled it out explicitly, and that instruction is what is under test
+  - diff_touches: ["src/badge.css"]

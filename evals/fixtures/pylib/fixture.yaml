@@ -1,0 +1,22 @@
+name: pylib
+description: >
+  A small pure-Python library with a stdlib-only test suite. Stands in for the
+  back-end half of a real project: parsing, aggregation, a bit of date
+  handling — the places where off-by-one and empty-input bugs actually live.
+stack: python
+
+# Dependency-free on purpose. `python3 -m unittest` is in the sandbox image
+# already, so a run needs no pip install, no package index and no network. A
+# golden suite whose result depends on whether PyPI was up is not a benchmark.
+review:
+  checks:
+    - name: test
+      dir: "."
+      cmd: python3
+      args: ["-m", "unittest", "discover", "-s", "tests", "-q"]
+      timeoutMs: 120000
+    - name: compile
+      dir: "."
+      cmd: python3
+      args: ["-m", "compileall", "-q", "src", "tests"]
+      timeoutMs: 60000

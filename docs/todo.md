@@ -351,18 +351,42 @@ passes — `verify_and_ship.py` only increments it in `_loop_back` — so a task
 written once and passed records `0`. A first-pass threshold of 1 silently
 folds every one-redo task into the headline number.
 
-### What is still missing — the eval suite
+### The eval suite — **built, 2026-09-22**
 
 These measure *production* tasks, so they move with whatever the operator
 happened to ask for that fortnight. That is the right measure for "is it
 getting better in practice" and the wrong one for "did this prompt change
 help", which needs the same inputs both times.
 
-The gap is a set of golden tasks — a dozen fixed goals against a fixed repo
-state, run on demand, scored by the same six metrics. That is a bigger piece
-of work (it needs a reset-to-known-state harness) and it is the natural next
-step here, not a prerequisite: the production numbers are what tell you
-whether it is worth building.
+`evals/` is the same question asked twice: twelve fixed goals against three
+fixed fixture repos, run on demand by `scripts/run_evals.py`, scored by
+per-task assertions AND by the same six metrics above. `evals/README.md` has
+the full shape; the three decisions worth repeating here:
+
+* **It runs the real pipeline, and stops before the merge without a special
+  mode.** `require_merge_review` already parks a task after a READY verdict;
+  the harness is an operator who never approves. A second "run but don't ship"
+  code path would be one production never takes, and it would drift.
+* **A task is scored on assertions, never on its outcome.** A task can ship,
+  pass its checks and earn READY having "fixed" the bug by weakening the test.
+  Assertions also split into goals (must *become* true) and guards (must
+  *stay* true), and `--verify` refuses a suite whose goals already pass on the
+  pristine fixture — an assertion true before the agent runs tests nothing.
+* **Isolation is structural, not a convention.** Own SQLite store, own
+  projects.json, own reviewer pair on free ports, own verdict state, own usage
+  log. The live `projects.json` is never written.
+
+**Found while building it:** pointing `AGENT_PROJECTS_JSON` at the fixtures is
+not enough — the reviewer merges in `builtin-projects.local.js` and a
+built-in-only project appears regardless, so the eval instance came up polling
+real repositories. `REVIEW_ONLY_PROJECTS_JSON=1` closes it, and
+`tests/test_evals_isolation.py` pins it.
+
+**Not built, and deliberately:** no model judges the output. A rubric would
+catch more and would make the benchmark's own verdict drift run to run, which
+defeats the point of a fixed suite. The remaining gap is breadth — twelve
+tasks over three synthetic fixtures is thin, and the honest next step is more
+tasks rather than more machinery.
 
 ---
 

@@ -1,0 +1,10 @@
+{
+  "name": "webui",
+  "private": true,
+  "type": "commonjs",
+  "description": "Eval fixture. A render function and a stylesheet, no build step and no dependencies.",
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "lint": "node scripts/check-syntax.js"
+  }
+}

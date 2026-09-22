@@ -1,0 +1,10 @@
+{
+  "name": "nodelib",
+  "private": true,
+  "type": "commonjs",
+  "description": "Eval fixture. No dependencies on purpose: node --test ships with the runtime, so a run needs no registry.",
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "lint": "node scripts/check-syntax.js"
+  }
+}

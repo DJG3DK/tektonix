@@ -87,7 +87,11 @@ function classifyInfrastructureFailures(checkResults) {
 // regardless of whether the verdicts in between were READY.
 const CHURN_WINDOW_MS = 6 * 60 * 60 * 1000; // 6h — long enough to span a bad afternoon, short enough that old churn doesn't haunt a file forever
 const CHURN_THRESHOLD = 3; // same file in findings across this many rounds -> escalate
-const DASHBOARD_URL = 'http://127.0.0.1:4100';
+// Env-overridable for agent/evals, which starts its own reviewer pair on free
+// ports so a benchmark can never review a real project. Defaults are the
+// host-install ports, so nothing changes without the variable.
+const DASHBOARD_URL = process.env.REVIEW_SERVICE_URL
+    || `http://127.0.0.1:${process.env.REVIEW_SERVICE_PORT || 4100}`;
 const ROUTER_ENV_PATH = path.join(AGENT_HOME, 'services/model-router/.env');
 
 // audit C-4: the control port (4101) was unauthenticated on the same "localhost
@@ -124,8 +128,17 @@ const ROUTER_URL = process.env.MODEL_ROUTER_URL || 'http://127.0.0.1:4001/v1';
 // upstream key; anything else is treated as an alias and goes through the router.
 const REVIEW_MODEL = process.env.REVIEW_MODEL_OVERRIDE || 'agent-reviewer';
 const REVIEW_DIRECT = REVIEW_MODEL.includes('/');
-const WORKTREE_ROOT = path.join(AGENT_HOME, 'services/commit-reviewer/worktrees');
-const USAGE_LOG = path.join(AGENT_HOME, 'services/commit-reviewer/usage.jsonl');
+// Both overridable for the same reason REVIEW_STATE_DIR is: agent/evals runs
+// a second reviewer instance, and two of these are not merely untidy when
+// shared. usage.jsonl is what the dashboard's reviewer-spend figure is summed
+// from, so an eval run writing into the live one silently inflates the very
+// number the eval exists to explain. The worktrees are a disk-space and
+// stale-checkout concern rather than a correctness one, but they are the same
+// kind of shared mutable state and belong on the same switch.
+const WORKTREE_ROOT = process.env.REVIEW_WORKTREE_ROOT
+    || path.join(AGENT_HOME, 'services/commit-reviewer/worktrees');
+const USAGE_LOG = process.env.REVIEW_USAGE_LOG
+    || path.join(AGENT_HOME, 'services/commit-reviewer/usage.jsonl');
 
 // Each project's real check commands — verified directly against each
 // package.json's actual scripts, not assumed. `dir` is relative to the
@@ -137,11 +150,22 @@ const USAGE_LOG = path.join(AGENT_HOME, 'services/commit-reviewer/usage.jsonl');
 // so a public checkout ships no one's infrastructure. See
 // builtin-projects.local.js.example. Anything defined there wins over
 // projects.json (see services/shared/projects-config.js).
+//
+// REVIEW_ONLY_PROJECTS_JSON=1 skips them entirely, and agent/evals sets it.
+// Built-ins are merged in on top of projects.json AND a built-in-only project
+// still appears, which is right for the live reviewer and wrong for a second
+// instance: without this an eval run polls the operator's real projects, and
+// the moment one of them has a live task branch two reviewers are racing on
+// the same repository -- writing verdicts into different state files, each
+// unaware of the other's worktree. Observed on the first smoke run of the
+// eval reviewer, which polled a real project and logged its branch.
 let BUILTIN_PROJECTS = {};
-try {
-    BUILTIN_PROJECTS = require('./builtin-projects.local');
-} catch (err) {
-    if (err.code !== 'MODULE_NOT_FOUND') throw err;
+if (process.env.REVIEW_ONLY_PROJECTS_JSON !== '1') {
+    try {
+        BUILTIN_PROJECTS = require('./builtin-projects.local');
+    } catch (err) {
+        if (err.code !== 'MODULE_NOT_FOUND') throw err;
+    }
 }
 
 // Merged with projects.json so a wizard-onboarded project is reviewed without
@@ -1892,7 +1916,7 @@ async function reviewProject(project, cfg, routerKey) {
 // the rest of a 2-min poll window — same "Check now" idea as manually
 // refreshing, just without waiting. Never exposed outside 127.0.0.1; nginx
 // doesn't proxy to it, only agent-review's server.js does (server-side).
-const CONTROL_PORT = 4101;
+const CONTROL_PORT = Number(process.env.REVIEW_CONTROL_PORT) || 4101;
 function startControlServer(routerKey) {
   const server = http.createServer((req, res) => {
     // Liveness, unauthenticated on purpose: this port is 127.0.0.1-only and

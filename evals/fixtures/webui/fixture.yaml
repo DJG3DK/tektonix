@@ -1,0 +1,21 @@
+name: webui
+description: >
+  A dependency-free vanilla component: a render function that returns markup,
+  and the stylesheet that dresses it. Small, but it is the only fixture where
+  a ui-styling task means anything — and styling is a category the classifier
+  routes to its own coder seat, so a suite without it measures five sixths of
+  the agent.
+stack: node
+
+review:
+  checks:
+    - name: test
+      dir: "."
+      cmd: node
+      args: ["--test", "test/badge.test.js"]
+      timeoutMs: 120000
+    - name: syntax
+      dir: "."
+      cmd: node
+      args: ["scripts/check-syntax.js"]
+      timeoutMs: 60000

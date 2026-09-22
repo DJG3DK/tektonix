@@ -1,0 +1,23 @@
+id: py-empty-input-audit
+fixture: pylib
+category: investigation
+budget_usd: 2.0
+goal: |
+  Work out which functions in src/report.py misbehave on an empty list of
+  rows, and write up what you find in a new file, docs/empty-input.md.
+
+  For each function, say what currently happens and what should happen
+  instead. Do not change any code in src/ — this is an investigation, and the
+  fixes are a separate piece of work.
+assert:
+  - checks_pass: true
+  - file_matches:
+      path: docs/empty-input.md
+      pattern: "average"
+    why: average() is the clearest offender; a write-up that misses it missed the point
+  - file_matches:
+      path: docs/empty-input.md
+      pattern: "summarise"
+  - diff_excludes: ["src/**"]
+    guard: true
+    why: the goal explicitly asked for no code changes, and that is the thing being tested

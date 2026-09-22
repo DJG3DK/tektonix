@@ -42,11 +42,17 @@ const fs = require('fs');
 // so a public checkout ships no one's infrastructure. See
 // builtin-projects.local.js.example. Anything defined there wins over
 // projects.json (see services/shared/projects-config.js).
+//
+// REVIEW_ONLY_PROJECTS_JSON=1 skips them, for the same reason the
+// commit-reviewer honours it: a second instance started by agent/evals must
+// see the fixtures and nothing else.
 let BUILTIN_PROJECTS = {};
-try {
-    BUILTIN_PROJECTS = require('./builtin-projects.local');
-} catch (err) {
-    if (err.code !== 'MODULE_NOT_FOUND') throw err;
+if (process.env.REVIEW_ONLY_PROJECTS_JSON !== '1') {
+    try {
+        BUILTIN_PROJECTS = require('./builtin-projects.local');
+    } catch (err) {
+        if (err.code !== 'MODULE_NOT_FOUND') throw err;
+    }
 }
 
 // See services/shared/projects-config.js: projects.json supplies onboarded
@@ -664,7 +670,10 @@ app.post('/api/review/check/:name', requireControlSecret, async (req, res) => {
 
 app.use(express.static(path.join(__dirname, 'public')));
 
-const PORT = 4100;
+// Env-overridable for agent/evals (see the commit-reviewer's own note): an
+// eval run needs a second, isolated reviewer pair, and hardcoding the port is
+// what stopped there being one.
+const PORT = Number(process.env.REVIEW_SERVICE_PORT) || 4100;
 // Loopback by default, because on a host install nginx is what is supposed to
 // reach this and anything else on the box is not. In the bundle the isolation
 // boundary is the compose network instead -- the port is published nowhere --
