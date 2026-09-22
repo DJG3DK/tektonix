@@ -51,6 +51,7 @@ from agent.classify import classify_task, TaskClassification, TEST_REMINDER_NOTE
 from agent import runtime_settings
 from agent import github_inbox, github_settings
 from agent import audit
+from agent import live_state
 from agent.backends import backend_for_dsn
 from agent.store_paging import recent_items
 from agent import health as health_checks
@@ -74,18 +75,15 @@ config = load_config()
 require_server_config(config)
 install_langsmith(config)  # no-ops cleanly if LANGSMITH_TRACING isn't set -- see observability.py
 
-# task_id -> list of subscriber queues, for fanning live updates out to every
-# connected WS client (a reconnect or a second browser tab both just get a
-# new queue and the same event stream from that point forward).
-_subscribers: dict[str, list[tuple[asyncio.Queue, WebSocket]]] = {}
-_running_tasks: dict[str, asyncio.Task] = {}
-
-# Same fan-out pattern, kept in its own dicts (not reusing the task ones
-# above) -- a planning session_id and a task_id are both plain strings with
-# no shared namespace, and keeping them separate avoids ever having to
-# reason about whether an id collision between the two is possible.
-_planning_subscribers: dict[str, list[tuple[asyncio.Queue, WebSocket]]] = {}
-_running_planning_turns: dict[str, asyncio.Task] = {}
+# The live registries live in agent/live_state.py now: the routes that read
+# them are moving into agent/routers/, and a route module cannot import back
+# into this one without making the import a cycle. Aliased rather than
+# re-declared so every existing reference in this file keeps working and --
+# the part that matters -- keeps pointing at the SAME dict the routers hold.
+_subscribers = live_state.subscribers
+_running_tasks = live_state.running_tasks
+_planning_subscribers = live_state.planning_subscribers
+_running_planning_turns = live_state.running_planning_turns
 
 
 def _log_warm_rates_failure(task: "asyncio.Task") -> None:
@@ -590,7 +588,7 @@ require_full_auth = auth.require_full_auth
 # fire-and-forget background refresh could be garbage-collected mid-run and
 # silently never happen. Hold a strong reference until the task finishes, and
 # log any exception it raised (bare create_task also swallows those).
-_background_tasks: set = set()
+_background_tasks = live_state.background_tasks   # see agent/live_state.py
 
 
 def _spawn_background(coro, label: str) -> None:
@@ -1027,6 +1025,17 @@ async def _github_poll_once() -> list[dict]:
     _github_last_poll = {"at": time.time(), "results": results}
     app.state.github_last_poll = _github_last_poll
     return results
+
+
+# The poller stays in this module: it reaches _start_task, the notifier and
+# the auto-count, which is most of the server. What the /api/github/poll
+# route needs is only the ability to TRIGGER it, so the function is put where
+# a router can find it rather than the router pulling the machinery across.
+app.state.github_poll_once = _github_poll_once
+# Same reasoning, narrower interface: approving an inbox item starts a real
+# task, and task creation is _start_task and everything under it. The inbox
+# routes get the one function rather than the machinery.
+app.state.github_create_task = _github_create_task
 
 
 async def _github_poll_loop(startup_delay: float = 20.0) -> None:
@@ -2017,7 +2026,7 @@ _live_task_log: dict[str, list] = {}
 # sessions got this on 2026-09-12 (agent/planning_log.py); build tasks are the
 # ones that run for two hours and delegate seven subagents, so they needed it
 # more.
-_task_recorders: dict[str, planning_log.Recorder] = {}
+_task_recorders = live_state.task_recorders   # see agent/live_state.py
 
 
 def _start_task_recorder(task_id: str, repo: str) -> None:

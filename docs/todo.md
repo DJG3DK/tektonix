@@ -77,19 +77,26 @@ what proves the injection reached it.
 `push`, `analytics`, `env_config`, `settings` (with the audit log it is
 interleaved with), `model_config`. Do not flatten the rest in one pass.
 
-**The remaining seams are not mechanical, and that is the finding.** Each of
-the five above came out cleanly. The next one, `github`, does not, and the
-reason generalises: `_github_poll_once` mutates a module global with
-`global`, and is called by BOTH the `/api/github/poll` route and the
-background poll loop. Lifting it into a router breaks the loop; leaving it
-means the router cannot reach it. The fix is its own module that both import
--- real refactoring of a background task, not a cut.
+**The remaining seams need one more move first, and it is a specific one.**
+The shared state is done: `agent/live_state.py` holds the five live
+registries (`running_tasks`, `task_recorders`, the two subscriber maps, the
+background-task set) as MUTATED dicts, so server.py and any router hold the
+same objects; `github_poll_once` and `github_create_task` are on `app.state`
+so a route can trigger them without importing the machinery.
 
-Expect the same in `tasks` (`_running_tasks`, `_task_recorders`, the SSE
-bus), `planning` (`_running_planning_turns`) and `auth` (session cookie
-helpers used by the WebSocket handlers). Do those one at a time, each as its
-own change, moving the shared state to `app.state` or to a module of its own
-FIRST and the routes after.
+That was not enough for `github`, and the reason names the next piece
+exactly. Approving an inbox item starts a real task, so the route reaches
+`_github_create_task` -> `_start_task` -> classification, routing, the budget
+default, the recorder and the graph stream. Exposing the narrow function on
+`app.state` gets a route past it, but `_github_act` -- the helper the three
+inbox routes share -- reaches it too, and lifting that helper drags the chain
+across.
+
+**So: extract `_start_task` and `_run_task` into `agent/tasks.py` first**,
+the way the registries came out. Then `github`, `tasks` and `planning` are
+ordinary cuts. Do not extract `provisioning.py`. An automated lift that
+follows undefined names WILL follow this chain into most of server.py --
+that is how this was found, and it is why the cut waits for the move.
 
 **A pattern worth reusing:** state a route needs and a background task
 mutates goes on `app.state` (`github_poll_wake`, `github_last_poll`, and
