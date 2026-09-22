@@ -247,3 +247,21 @@ describe("GitHub inbox badge", () => {
       .toContain("awaiting a decision");
   });
 });
+
+describe("a queued task", () => {
+  it("sits in the Running group, not buried in a collapsed category", () => {
+    // It is in-flight from the operator's point of view: started, not
+    // finished, nothing to do but wait. Burying it is how you end up
+    // wondering why the project seems idle.
+    inboxCount.mockReturnValue(null);
+    renderSidebar({ tasks: [task({ task_id: "q1", goal: "waiting one", status: "queued" })] });
+    const group = document.querySelector(".sidebar-running-group")!;
+    expect(within(group as HTMLElement).getByText(/waiting one/)).toBeInTheDocument();
+  });
+
+  it("is not also listed under its category", () => {
+    inboxCount.mockReturnValue(null);
+    renderSidebar({ tasks: [task({ task_id: "q1", goal: "waiting one", status: "queued" })] });
+    expect(screen.getAllByText(/waiting one/).length).toBe(1);
+  });
+});

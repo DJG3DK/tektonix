@@ -131,7 +131,10 @@ async def _auto_resume_orphaned_tasks(startup_delay: float = 5.0) -> None:
         for item in items:
             meta = item.value
             task_id = meta.get("task_id") or item.key
-            if meta.get("status") != "running" or task_id in _running_tasks:
+            # "queued" as well as "running": a task orphaned by a restart
+            # while it was waiting for the project lock has exactly the same
+            # problem -- a status the store believes and no process behind it.
+            if meta.get("status") not in ("running", "queued") or task_id in _running_tasks:
                 continue
             try:
                 thread_config = {"configurable": {"thread_id": task_id}}
@@ -1699,12 +1702,26 @@ async def _stream_graph(task_id: str, repo: str, goal: str, budget_usd: float, g
         if existing and existing.values:
             starting_cost = existing.values.get("cost_so_far", 0.0)
 
-    await write_task_meta(
-        store, repo, task_id, goal=goal, budget_usd=budget_usd, category=category,
-        status="running", created_at=original_created_at or time.time(),
-        cost_so_far=starting_cost, route=route, route_reason=route_reason,
-    )
-    _publish(task_id, {"type": "status", "status": "running"})
+    async def _mark(status: str) -> None:
+        """Write this task's status and tell anyone watching."""
+        await write_task_meta(
+            store, repo, task_id, goal=goal, budget_usd=budget_usd, category=category,
+            status=status, created_at=original_created_at or time.time(),
+            cost_so_far=starting_cost, route=route, route_reason=route_reason,
+        )
+        _publish(task_id, {"type": "status", "status": status})
+
+    # "queued", not "running", while another task holds this project.
+    #
+    # One task per project is a hard constraint -- they share one worktree,
+    # and two of them editing it would interleave their commits (agent/graph.py's
+    # project_lock). But the status was written BEFORE the lock was taken, so
+    # a queued task was indistinguishable from a working one: the sidebar
+    # showed "Running", the log showed nothing, the spend showed nothing, and
+    # the only way to tell was to notice it had been like that for a while.
+    # With 59 open alerts on one project, that is a state an operator now
+    # reaches by doing the obvious thing twice.
+    await _mark("queued")
 
     # Declared here (not just inside the loop below) so the CancelledError
     # handler can always read the latest live-tracked cost, even if
@@ -1717,7 +1734,12 @@ async def _stream_graph(task_id: str, repo: str, goal: str, budget_usd: float, g
         # this is still a Postgres advisory lock rather than an object in
         # this process, and a second worker or an overlapping restart still
         # cannot run two tasks on one worktree (agent/graph.py).
-        async with project_lock(repo, config.dsn):
+        async with project_lock(repo, config.dsn, on_wait=lambda: _mark("queued")):
+            # The project is ours now, so this is the first honest moment to
+            # say "running". A task that never waited passes through both
+            # marks in a millisecond and the dashboard only ever sees the
+            # second one.
+            await _mark("running")
             # stream_mode=["updates", "custom"] (not just "updates") -- the
             # graph's own "work" node is a single StateGraph node that
             # manually drives a whole inner deep-agent run inside itself
@@ -2102,9 +2124,11 @@ def _notify_bg(text: str, repo: str | None = None) -> None:
 
 def _alert_task_status(task_id: str, status: str, repo: str, goal: str, cost: float | None, detail: str | None) -> None:
     """Telegram alert for a task's rest state -- deduped, best-effort."""
-    if status in ("running", "stopped"):
-        # running is noise; stopped is the operator's own Stop button --
-        # alerting someone about the button they just pressed is spam.
+    if status in ("running", "queued", "stopped"):
+        # running is noise; queued is the same noise arriving earlier (it is
+        # a normal step on the way to running, not an event); stopped is the
+        # operator's own Stop button -- alerting someone about the button
+        # they just pressed is spam.
         return
     key = (status, str(detail or "")[:120])
     if _last_task_alert.get(task_id) == key:

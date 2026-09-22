@@ -99,7 +99,7 @@ def _in_process_lock(repo: str) -> asyncio.Lock:
 
 
 @asynccontextmanager
-async def project_lock(repo: str, dsn: str | None = None):
+async def project_lock(repo: str, dsn: str | None = None, on_wait=None):
     """Hold this project for the duration of the block.
 
     Without `dsn` this is the old in-process lock, which is what callers that
@@ -108,8 +108,36 @@ async def project_lock(repo: str, dsn: str | None = None):
     there is no database to ask, and the claim covers every process using
     that state directory -- a narrower promise, spelled out in
     agent/file_lock.py.
+
+    `on_wait` is awaited ONCE, before blocking, if the project is already
+    held. It exists because waiting here is invisible from outside: the
+    caller has already told the dashboard the task is running, and it then
+    sits on this lock doing nothing, looking identical to a task that is
+    working. The log has said so since this lock was written ("the task just
+    sits there is otherwise unexplainable"); nothing else did. A caller that
+    passes this can say "queued" instead of lying.
+
+    Called at most once per acquisition, and never when the lock was free --
+    so the overwhelmingly common path writes nothing and costs nothing.
+    Failures in the callback are swallowed: a status update that cannot be
+    written must not stop the task it describes from running.
     """
-    async with _in_process_lock(repo):
+    async def _announce_wait():
+        if on_wait is None:
+            return
+        try:
+            await on_wait()
+        except Exception:  # noqa: BLE001 -- see the docstring: cosmetic, never fatal
+            logger.exception("project %s: could not announce the wait", repo)
+
+    # Checked BEFORE awaiting. Tasks queued inside one process contend here
+    # rather than on the database, so this is where most waiting actually
+    # happens on a single-process deployment -- and awaiting first would mean
+    # the callback fired only after the wait it was meant to announce.
+    local = _in_process_lock(repo)
+    if local.locked():
+        await _announce_wait()
+    async with local:
         if not dsn:
             yield
             return
@@ -129,9 +157,12 @@ async def project_lock(repo: str, dsn: str | None = None):
             cur = await conn.execute("SELECT pg_try_advisory_lock(%s, %s)", (_LOCK_NAMESPACE, key))
             row = await cur.fetchone()
             if not (row and row[0]):
-                # Someone else has this project. Wait, the way the old
-                # in-process lock made callers wait -- but say so, because
-                # "the task just sits there" is otherwise unexplainable.
+                # Someone else has this project -- another process, since the
+                # in-process lock above already cleared this one. Wait, the
+                # way the old in-process lock made callers wait -- but say
+                # so, because "the task just sits there" is otherwise
+                # unexplainable.
+                await _announce_wait()
                 logger.warning(
                     "project %s is locked by another process; waiting for it to finish "
                     "(advisory lock %s/%s)", repo, _LOCK_NAMESPACE, key)

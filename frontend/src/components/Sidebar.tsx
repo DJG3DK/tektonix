@@ -293,10 +293,14 @@ export function Sidebar({
   // category was auto-expanded (that tracked the *selected* task, which
   // resets too), so a running task could otherwise take real hunting to
   // find again after nothing more than a reload.
+  // Queued tasks sit here too. They are in-flight from the operator's point
+  // of view -- started, not finished, nothing to do but wait -- and burying
+  // one in a collapsed category is how you end up wondering why the project
+  // seems idle.
   const runningTasks = useMemo(() => {
     const q = buildingQuery.trim().toLowerCase();
     return tasks.filter((t) =>
-      t.status === "running" &&
+      (t.status === "running" || t.status === "queued") &&
       (!repoFilter || t.repo === repoFilter) &&
       (!q || t.goal.toLowerCase().includes(q) || t.repo.toLowerCase().includes(q)));
   }, [tasks, buildingQuery, repoFilter]);
@@ -306,7 +310,7 @@ export function Sidebar({
     const groups: Record<string, TaskMeta[]> = {};
     for (const cat of CATEGORY_ORDER) groups[cat] = [];
     for (const t of tasks) {
-      if (t.status === "running") continue; // shown in the Running group instead, never both places
+      if (t.status === "running" || t.status === "queued") continue; // shown in the Running group instead, never both places
       if (repoFilter && t.repo !== repoFilter) continue;
       if (q && !t.goal.toLowerCase().includes(q) && !t.repo.toLowerCase().includes(q)) continue;
       groups[categoryOf(t)].push(t);

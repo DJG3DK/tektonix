@@ -22,6 +22,11 @@ export interface CurrentUser {
 
 export type TaskStatus =
   | "running" | "done" | "escalated" | "error" | "stopped"
+  /** Waiting for another task on the same project to finish. One task per
+   *  project is a hard constraint -- they share one worktree (project_lock in
+   *  agent/graph.py) -- and this is what that wait looks like from outside,
+   *  instead of a task that claims to be running and never moves. */
+  | "queued"
   | "awaiting_approval"
   /** Review READY; merge parked on the operator's final look at the diff. */
   | "awaiting_merge";

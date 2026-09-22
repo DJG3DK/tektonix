@@ -209,3 +209,21 @@ describe("analytics model usage", () => {
     expect(roles).toContain("agent-coder");  // and the raw one: two groups
   });
 });
+
+describe("<StatusBadge status=\"queued\" />", () => {
+  it("says Queued and does not pulse", async () => {
+    // The pulse is what says "something is happening", and the entire point
+    // of this state is that nothing is. Until 2026-09-22 a queued task
+    // rendered as "Running" with a live pulse.
+    const { StatusBadge } = await import("./StatusBadge");
+    const { container } = render(<StatusBadge status="queued" />);
+    expect(container.textContent).toContain("Queued");
+    expect(container.querySelector(".status-dot.pulse")).toBeNull();
+  });
+
+  it("still pulses for a task that is genuinely running", async () => {
+    const { StatusBadge } = await import("./StatusBadge");
+    const { container } = render(<StatusBadge status="running" />);
+    expect(container.querySelector(".status-dot.pulse")).not.toBeNull();
+  });
+});

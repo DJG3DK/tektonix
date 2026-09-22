@@ -3,6 +3,11 @@ import "./StatusBadge.css";
 
 const CONFIG: Record<TaskStatus | "connecting" | "stalled", { label: string; color: string; pulse?: boolean }> = {
   running: { label: "Running", color: "var(--blue)", pulse: true },
+  // Waiting on another task on the same project. Dim and NOT pulsing: the
+  // pulse is what says "something is happening", and the entire point of
+  // this state is that nothing is. Until 2026-09-22 a queued task said
+  // "Running" with a live pulse, which is the lie this replaces.
+  queued: { label: "Queued", color: "var(--text-dim)" },
   connecting: { label: "Connecting", color: "var(--text-faint)", pulse: true },
   done: { label: "Done", color: "var(--green)" },
   escalated: { label: "Escalated", color: "var(--red)" },
