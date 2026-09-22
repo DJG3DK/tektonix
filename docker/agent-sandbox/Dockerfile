@@ -17,8 +17,36 @@ RUN corepack enable && corepack prepare pnpm@10 --activate \
         ripgrep \
         jq \
         ca-certificates \
+        curl \
         python3 \
         python3-pip \
+    && rm -rf /var/lib/apt/lists/*
+
+# The GitHub CLI, from GitHub's own apt repository.
+#
+# It is here because the agent reaches for it: observed 2026-09-22 on a task
+# fixing a code-scanning finding, where the first thing it did was
+# `gh auth status` to find out whether it had one. That was the right
+# instinct and it cost two tool calls to learn "no".
+#
+# IT IS DELIBERATELY UNAUTHENTICATED, and that is not an oversight. No
+# GitHub token is passed into this container and none should be: the bash
+# tool runs LLM-chosen commands, and a token in here is a token a
+# prompt-injected instruction can push with. The server-side tools
+# (github_pull_request, github_inbox_items) hold the token outside the
+# sandbox and are how this deployment's own private repos are reached.
+#
+# So what `gh` buys is the public half -- `gh api` against public endpoints,
+# reading a public repo, fetching a rule definition -- which is most of what
+# it wanted it for. agent/deep_agent.py's prompt says which is which, so the
+# next task does not have to spend calls finding out.
+RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+        -o /usr/share/keyrings/githubcli-archive-keyring.gpg \
+    && chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+        > /etc/apt/sources.list.d/github-cli.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends gh \
     && rm -rf /var/lib/apt/lists/*
 
 # Playwright + headless Chromium, so the agent can SEE the frontends it

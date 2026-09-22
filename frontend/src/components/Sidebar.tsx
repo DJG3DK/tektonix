@@ -8,6 +8,7 @@ import { StatusBadge } from "./StatusBadge";
 import "./Sidebar.css";
 import logoUrl from "../assets/tektonix-logo.png";
 import { Icon } from "./Icon";
+import { useGitHubInboxCount } from "../useGitHubInboxCount";
 
 function relativeTime(ts: number): string {
   const diffMs = Date.now() - ts * 1000;
@@ -176,6 +177,9 @@ export function Sidebar({
   onPlanningDeleted,
   onLogout,
 }: Props) {
+  // Re-read when the view changes: approving an item and going back to the
+  // task list should clear the badge then, not up to 45 seconds later.
+  const inboxCount = useGitHubInboxCount(view);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [planningOpen, setPlanningOpen] = useState(true);
   const [buildingOpen, setBuildingOpen] = useState(true);
@@ -370,6 +374,15 @@ export function Sidebar({
         <button className={`analytics-nav-btn ${view === "github" ? "active" : ""}`} onClick={onGitHub}>
           <Icon name="github" size={15} />
           <span>GitHub</span>
+          {/* Items waiting on a decision, and only those -- see
+              useGitHubInboxCount for why `seen` and `snoozed` are not counted.
+              Rendered only when there is something, so the button looks
+              exactly as it did before on a quiet day. */}
+          {inboxCount != null && inboxCount > 0 && (
+            <span className="nav-badge" aria-label={`${inboxCount} GitHub item(s) awaiting a decision`}>
+              {inboxCount > 99 ? "99+" : inboxCount}
+            </span>
+          )}
         </button>
         {/* Was the same ⚙ glyph as Models — two nav items with identical icons.
             A cpu for the model pins, a cog for settings. */}

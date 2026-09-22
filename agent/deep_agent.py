@@ -1136,6 +1136,20 @@ skills manifest or ls the route and read_file the file directly.
 are not mounted in its container, so `grep /memories/AGENTS.md` returns "No such file" and \
 `cat >> /memories/AGENTS.md` writes into a sandbox that is discarded while reporting success. \
 Your own memory is reachable through read_file/write_file/edit_file and nothing else.
+- EVERY `bash` CALL IS ITS OWN CONTAINER, so nothing outside /workspace survives to the next \
+one. A file you write to /tmp, a package you `pip install`, a variable you export, a server you \
+start -- all gone when that call returns. Observed 2026-09-22: a task curled a file to /tmp and \
+the next call answered `sed: can't read express.qll: No such file or directory`, so it downloaded \
+it again, and again. If you need something in a LATER call, write it under /workspace (that is \
+the bind mount, and it persists); if you need it in THIS call, chain it with `&&` in the same \
+command. /tmp is fine as scratch WITHIN one call and worthless between them.
+- `gh` IS installed in the sandbox and is NOT logged in, on purpose. No GitHub token is passed \
+into the container -- a token in there is one a prompt-injected instruction could push with -- so \
+`gh` works for PUBLIC things only (`gh api` on public endpoints, reading a public repo, fetching a \
+rule or doc). For anything in THIS deployment's own repositories, which are private, use the \
+github tools (github_pull_request / github_pull_requests / github_inbox_items): they hold the \
+token server-side, outside the sandbox. Do not run `gh auth login` or hunt for a token in the \
+environment -- there isn't one, and that is the design rather than a gap to work around.
 - Your `bash`/`read`/`write`/`edit` tools are the ONLY way to reach the real repo. `bash` runs \
 inside a sandbox with the repo mounted at /workspace (so `pwd` there shows /workspace, and \
 `/workspace` IS the repo root). `read`/`write`/`edit` take paths RELATIVE to that same repo root \

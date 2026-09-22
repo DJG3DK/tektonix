@@ -1,5 +1,6 @@
 import { memo, useState } from "react";
 import type { LogEntry } from "../types";
+import { TektonixMark } from "./TektonixMark";
 import "./ChatMessage.css";
 
 /**
@@ -339,8 +340,12 @@ function ChatMessageImpl({ entry, prevEntry }: { entry: LogEntry; prevEntry?: Lo
   return (
     <div className={`chat-row chat-row--agent ${sameSpeaker ? "chat-row--cont" : ""}`}>
       {!sameSpeaker && (
-        <div className={`chat-avatar ${name !== "agent" ? "chat-avatar--sub" : ""}`}>
-          {name === "agent" ? "✦" : name.slice(0, 2)}
+        <div className={`chat-avatar ${name !== "agent" ? "chat-avatar--sub" : "chat-avatar--mark"}`}>
+          {/* The coordinator wears the mark itself, floating -- no plate
+              behind it. Subagents keep the tinted disc with their initials,
+              because two of them in a row have to be told apart at a glance
+              and a repeated logo would not do that. */}
+          {name === "agent" ? <TektonixMark size={26} /> : name.slice(0, 2)}
         </div>
       )}
       <div className="chat-agent-col">

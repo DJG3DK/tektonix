@@ -4,6 +4,12 @@ import { describe, expect, it, vi } from "vitest";
 import { Sidebar } from "./Sidebar";
 import { session, task, user } from "../test/fixtures";
 
+// Mocked so the sidebar's tests do not make a real request for the GitHub
+// badge. Its own behaviour -- which states count, what a failure shows -- is
+// covered in src/useGitHubInboxCount.test.tsx; here it is just a number.
+const inboxCount = vi.fn(() => null as number | null);
+vi.mock("../useGitHubInboxCount", () => ({ useGitHubInboxCount: () => inboxCount() }));
+
 function renderSidebar(over: Partial<Parameters<typeof Sidebar>[0]> = {}) {
   const props = {
     tasks: [],
@@ -199,5 +205,45 @@ describe("Sidebar — empty state", () => {
   it("keeps a category with items", () => {
     renderSidebar({ tasks: [task({ category: "performance" })] });
     expect(within(categoryHead("Performance")).getByText("Performance")).toBeInTheDocument();
+  });
+});
+
+
+describe("GitHub inbox badge", () => {
+  function githubButton() {
+    return screen.getByRole("button", { name: /GitHub/ });
+  }
+
+  it("shows the count on the GitHub button when items are waiting", () => {
+    inboxCount.mockReturnValue(3);
+    renderSidebar();
+    expect(within(githubButton()).getByText("3")).toBeInTheDocument();
+  });
+
+  it("shows nothing when the inbox is clear", () => {
+    // The button has to look exactly as it did before on a quiet day -- a
+    // badge showing "0" is a permanent piece of furniture that says nothing.
+    inboxCount.mockReturnValue(0);
+    renderSidebar();
+    expect(within(githubButton()).queryByText("0")).toBeNull();
+  });
+
+  it("shows nothing when the count could not be read", () => {
+    inboxCount.mockReturnValue(null);
+    renderSidebar();
+    expect(githubButton().querySelector(".nav-badge")).toBeNull();
+  });
+
+  it("caps a large count rather than stretching the button", () => {
+    inboxCount.mockReturnValue(247);
+    renderSidebar();
+    expect(within(githubButton()).getByText("99+")).toBeInTheDocument();
+  });
+
+  it("says what the number means, for a screen reader", () => {
+    inboxCount.mockReturnValue(2);
+    renderSidebar();
+    expect(githubButton().querySelector(".nav-badge")!.getAttribute("aria-label"))
+      .toContain("awaiting a decision");
   });
 });

@@ -464,3 +464,40 @@
 .sidebar-section-head--plain:hover {
   background: none;
 }
+
+/* Unread-style bubble on a nav button.
+ *
+ * Absolutely positioned rather than a flex child: .analytics-nav-btn centres
+ * its label, so a badge in the flow would shove "GitHub" off-centre and the
+ * whole nav column would stop lining up the moment something arrived. The
+ * button already has `position: relative` for its active rail.
+ *
+ * Amber, not red. These are proposals waiting on a decision, not failures --
+ * red here would put the same weight on "a PR wants a look" as on a broken
+ * deploy, and the operator learns to ignore whichever colour cries wolf.
+ */
+.nav-badge {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  min-width: 17px;
+  height: 17px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: var(--amber);
+  color: #1a1408;
+  font-size: 10.5px;
+  font-weight: 700;
+  line-height: 17px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  /* Enough lift to read as "on top of" the button rather than part of it. */
+  box-shadow: 0 0 0 2px var(--bg, #0f1116), 0 1px 4px rgba(0, 0, 0, 0.45);
+}
+
+/* The active button's background changes; keep the ring matching it so the
+   badge never looks like it has a stray dark halo cut out of the highlight. */
+.analytics-nav-btn.active .nav-badge {
+  box-shadow: 0 0 0 2px var(--surface, #181d26), 0 1px 4px rgba(0, 0, 0, 0.45);
+}

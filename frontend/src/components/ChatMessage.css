@@ -26,6 +26,15 @@
   box-shadow: 0 2px 8px rgba(139, 124, 246, 0.35);
   margin-top: 2px;
 }
+/* The coordinator's avatar is the mark alone. No gradient, no disc, no
+   shadow -- the point is that it floats on the surface behind it rather than
+   sitting on a plate. Keeps the 32px box so every row's text still lines up
+   with the subagent rows above and below it. */
+.chat-avatar--mark {
+  background: none;
+  box-shadow: none;
+}
+
 .chat-avatar--sub {
   background: linear-gradient(135deg, #d264c9, #8b7cf6);
   font-size: 11px;
