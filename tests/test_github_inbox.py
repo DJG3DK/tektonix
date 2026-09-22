@@ -524,7 +524,7 @@ def test_an_item_whose_task_was_stopped_is_proposed_again():
     decisions, _ = gi.decide({"pr:1": _created("pr:1")}, [_item("pr:1")], proj,
                              open_auto=0, live_tasks=set())
     assert [(d.action, d.item.state) for d in decisions] == [("propose", "proposed")]
-    assert "no longer running" in decisions[0].reason
+    assert "without fixing it" in decisions[0].reason
 
 
 def test_an_item_whose_task_is_still_running_is_left_alone():
@@ -590,11 +590,149 @@ def test_the_original_creation_time_survives_the_round_trip():
     assert decisions[0].item.created_at == 1
 
 
-def test_the_live_statuses_are_the_ones_that_mean_someone_is_on_it():
-    """Escalated counts as live: it sits in the operator's list with a Resume
-    button, and re-proposing underneath it would queue the same work twice."""
-    from agent.server import _LIVE_TASK_STATUSES
-    assert set(_LIVE_TASK_STATUSES) == {"running", "queued", "awaiting_approval",
-                                        "awaiting_merge", "escalated"}
-    for dead in ("stopped", "error", "done"):
-        assert dead not in _LIVE_TASK_STATUSES
+def test_a_finished_task_does_not_put_its_item_back_in_the_queue():
+    """The bug this rule shipped with, caught live the same evening.
+
+    A task fixed the finding, committed, pushed and opened a pull request --
+    status `done`. The first version of this rule asked "is a task running
+    right now", got no, and re-proposed the item: the operator saw finished
+    work sitting in the inbox asking to be done again, labelled "its task is
+    no longer running".
+
+    `done` means the fix is merged or waiting in a PR. The alert stays open on
+    GitHub until the scanner re-runs, and that delay is not a reason to ask
+    for the work a second time.
+    """
+    from agent.server import _TASK_HANDLED_STATUSES
+    assert "done" in _TASK_HANDLED_STATUSES
+    assert set(_TASK_HANDLED_STATUSES) == {"running", "queued", "awaiting_approval",
+                                           "awaiting_merge", "escalated", "done"}
+    # Only a task that ended WITHOUT delivering releases its item.
+    for ended_empty in ("stopped", "error"):
+        assert ended_empty not in _TASK_HANDLED_STATUSES
+
+
+def test_a_done_task_keeps_its_item_out_of_the_queue():
+    """End to end through decide(), which is where it actually mattered."""
+    proj = _proj(dependabot_prs="propose")
+    # "handled" is what the server passes: the done task's id is in the set.
+    decisions, _ = gi.decide({"pr:1": _created("pr:1", task_id="finished")},
+                             [_item("pr:1")], proj, open_auto=0, live_tasks={"finished"})
+    assert decisions == []
+
+
+def test_a_stopped_tasks_item_still_comes_back():
+    """The case the rule was written for, unchanged."""
+    proj = _proj(dependabot_prs="propose")
+    decisions, _ = gi.decide({"pr:1": _created("pr:1", task_id="stopped-one")},
+                             [_item("pr:1")], proj, open_auto=0, live_tasks=set())
+    assert [(d.action, d.item.state) for d in decisions] == [("propose", "proposed")]
+    assert "without fixing it" in decisions[0].reason
+
+
+# ---------------------------------------------------------------------------
+# a code-scanning goal carries the code, not just its coordinates
+# ---------------------------------------------------------------------------
+#
+# The goal used to carry the rule id, a list of file:line, and one sentence
+# per location -- everything except the thing the task is about. Three
+# attempts on 2026-09-22 took the rule id as the subject, went and read the
+# analyser's own query source to work out what it meant, and never opened the
+# controller they had been handed the line number for. Prompt guidance telling
+# them not to held for about six minutes.
+#
+# The alert already knows the file and the line, and reading them is a file
+# read rather than a judgement. Deterministic on purpose: no model call, no
+# drift between runs, and an unreadable location is skipped rather than
+# guessed at.
+
+SUMMARY = (
+    "CodeQL · high · 3 open alerts for rule js/sql-injection\n"
+    "#5 src/a.js:3 — This query object depends on a user-provided value.\n"
+    "#6 src/a.js:9 — Also user-provided.\n"
+    "#7 src/b.js:2 — And here.\n"
+)
+
+
+@pytest.fixture
+def repo(tmp_path):
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "a.js").write_text("".join(f"line{n}\n" for n in range(1, 41)))
+    (tmp_path / "src" / "b.js").write_text("bee1\nbee2\nbee3\n")
+    return tmp_path
+
+
+def test_locations_are_parsed_out_of_the_rendered_summary():
+    assert gi.parse_locations(SUMMARY) == [
+        ("src/a.js", 3, "This query object depends on a user-provided value."),
+        ("src/a.js", 9, "Also user-provided."),
+        ("src/b.js", 2, "And here."),
+    ]
+
+
+def test_a_summary_with_no_locations_yields_nothing(repo):
+    assert gi.parse_locations("CodeQL · high · 0 alerts") == []
+    assert gi.code_for_locations(str(repo), "no locations here") == ""
+
+
+def test_the_flagged_line_is_marked_and_surrounded_by_context(repo):
+    out = gi.code_for_locations(str(repo), "#1 src/b.js:2 — And here.")
+    assert "bee2  <-- flagged" in out
+    assert "bee1" in out and "bee3" in out          # context either side
+    assert "And here." in out                        # the alert's own message
+
+
+def test_two_alerts_close_together_become_one_excerpt(repo):
+    """Lines 3 and 9 are six apart, so their ±6 windows overlap. Printing two
+    blocks would repeat the same four lines and read as two problems."""
+    out = gi.code_for_locations(str(repo), SUMMARY)
+    assert out.count("--- src/a.js") == 1
+    assert out.count("<-- flagged") == 3             # both in a.js, one in b.js
+
+
+def test_a_location_that_cannot_be_read_is_skipped_not_guessed(repo):
+    out = gi.code_for_locations(str(repo), "#1 src/gone.js:5 — vanished.\n#2 src/b.js:2 — here.")
+    assert "src/gone.js" not in out
+    assert "bee2" in out
+
+
+def test_a_path_cannot_escape_the_repository(repo):
+    """The path comes from GitHub. A goal builder is not a place to open an
+    arbitrary absolute path."""
+    out = gi.code_for_locations(str(repo), "#1 ../../etc/passwd:1 — nice try.")
+    assert out == ""
+
+
+def test_the_excerpt_is_bounded(repo):
+    big = "\n".join(f"#{n} src/a.js:{n} — hit." for n in range(1, 40))
+    assert len(gi.code_for_locations(str(repo), big)) <= gi._MAX_SNIPPET_CHARS + 500
+
+
+def test_the_goal_gains_the_code_and_says_not_to_research_the_analyser(repo):
+    item = {"kind": "code_scanning", "repo": "proj", "number": None,
+            "title": "[HIGH] js/sql-injection: x", "url": "u", "summary": SUMMARY}
+    plain = gi.build_goal(item)
+    withcode = gi.build_goal(item, repo_root=str(repo))
+    assert "bee2  <-- flagged" in withcode and "bee2" not in plain
+    assert "the flagged code, read from this repository" in withcode
+    # The instruction lands whether or not the code could be read -- it is in
+    # the template, not the appendix.
+    for g in (plain, withcode):
+        assert "Do not download, read or reason about the" in g
+        assert ".qll" in g
+
+
+def test_a_repo_that_cannot_be_read_produces_exactly_the_old_goal(tmp_path):
+    """No repo_root, or an empty one, and nothing changes. The enrichment is
+    additive or it is absent."""
+    item = {"kind": "code_scanning", "repo": "proj", "number": None,
+            "title": "t", "url": "u", "summary": SUMMARY}
+    assert gi.build_goal(item) == gi.build_goal(item, repo_root=str(tmp_path / "nope"))
+
+
+def test_other_kinds_are_untouched(repo):
+    """Only code_scanning names lines. A dependabot goal must not grow a
+    code appendix from a summary that never had locations in it."""
+    item = {"kind": "security_alerts", "repo": "proj", "number": 7,
+            "title": "t", "url": "u", "summary": "#5 src/a.js:3 — not a code-scanning item"}
+    assert gi.build_goal(item) == gi.build_goal(item, repo_root=str(repo))

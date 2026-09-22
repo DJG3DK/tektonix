@@ -36,6 +36,8 @@ import hashlib
 import hmac
 import json
 import logging
+import os
+import re
 import secrets
 import time
 from dataclasses import asdict, dataclass, field
@@ -443,7 +445,7 @@ def decide(existing: dict[str, dict], found: list[Item], proj: dict, open_auto: 
                     and not _still_being_worked(prev)):
                 item.state = "proposed"
                 item.created_at = prev.get("created_at", now)
-                decisions.append(Decision(item, "propose", "its task is no longer running"))
+                decisions.append(Decision(item, "propose", "its task ended without fixing it"))
                 continue
             continue
         if prev:
@@ -521,6 +523,105 @@ def approval_url(settings: dict, token: str) -> str | None:
 # task goal
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# putting the code in the goal
+# ---------------------------------------------------------------------------
+#
+# A code-scanning goal used to carry the rule id, a list of file:line, and one
+# sentence per location. Everything except the thing the task is about.
+#
+# What that produced, three times on 2026-09-22: the agent treated the rule id
+# as the subject, went and read CodeQL's own query source to work out what the
+# rule meant, and never opened the controller it had been handed the line
+# number for. Prompt guidance telling it not to held for about six minutes
+# against fifty thousand tokens of momentum.
+#
+# The alert already knows the file and the line. Reading them is a file read,
+# not a judgement, so the goal can simply CONTAIN the code -- and a goal with
+# the code in it has nothing left to research. Deterministic on purpose: no
+# model call, nothing to drift between runs, and a location that cannot be
+# read is skipped rather than guessed at.
+
+_LOC_RE = re.compile(r"^#(?P<num>\d+)\s+(?P<path>[^\s:]+):(?P<line>\d+)\s*(?:—|--)?\s*(?P<msg>.*)$")
+
+# Context either side of a flagged line. Six is enough to see the statement,
+# what feeds it and what it returns into, without pasting whole functions.
+_CONTEXT_LINES = 6
+# How many locations get their code inlined. The rest stay as the file:line
+# list they already were -- past a dozen the goal stops being readable, and a
+# rule with fifty hits is one pattern anyway.
+_MAX_INLINED = 12
+_MAX_SNIPPET_CHARS = 6000
+
+
+def parse_locations(summary: str) -> list[tuple[str, int, str]]:
+    """(path, line, message) for every `#N path:line — message` in a summary."""
+    out = []
+    for raw in (summary or "").splitlines():
+        m = _LOC_RE.match(raw.strip())
+        if m:
+            out.append((m.group("path"), int(m.group("line")), m.group("msg").strip()))
+    return out
+
+
+def _merge_ranges(lines: list[int]) -> list[tuple[int, int]]:
+    """Overlapping windows around flagged lines become one window.
+
+    Two alerts eleven lines apart in the same function should read as one
+    excerpt, not two with the same four lines printed twice.
+    """
+    spans = sorted((max(1, n - _CONTEXT_LINES), n + _CONTEXT_LINES) for n in lines)
+    merged: list[list[int]] = []
+    for lo, hi in spans:
+        if merged and lo <= merged[-1][1] + 1:
+            merged[-1][1] = max(merged[-1][1], hi)
+        else:
+            merged.append([lo, hi])
+    return [(lo, hi) for lo, hi in merged]
+
+
+def code_for_locations(repo_root: str, summary: str) -> str:
+    """The flagged code itself, grouped by file, or "" if none can be read."""
+    locs = parse_locations(summary)[:_MAX_INLINED]
+    if not locs or not repo_root:
+        return ""
+    by_file: dict[str, list[int]] = {}
+    messages: dict[tuple[str, int], str] = {}
+    for path, line, msg in locs:
+        by_file.setdefault(path, []).append(line)
+        messages[(path, line)] = msg
+
+    blocks: list[str] = []
+    total = 0
+    for path, lines in by_file.items():
+        # The path comes from GitHub, so it is checked before it is joined:
+        # a goal builder is not a place to open an arbitrary absolute path.
+        full = os.path.normpath(os.path.join(repo_root, path))
+        if not full.startswith(os.path.normpath(repo_root) + os.sep) or not os.path.isfile(full):
+            continue
+        try:
+            with open(full, encoding="utf-8", errors="replace") as fh:
+                content = fh.read().splitlines()
+        except OSError:
+            continue
+        for lo, hi in _merge_ranges(lines):
+            excerpt = []
+            for n in range(lo, min(hi, len(content)) + 1):
+                flag = "  <-- flagged" if n in lines else ""
+                excerpt.append(f"{n:>5}  {content[n - 1]}{flag}")
+            if not excerpt:
+                continue
+            notes = sorted({messages[(path, n)] for n in lines if lo <= n <= hi and messages.get((path, n))})
+            head = f"--- {path}:{lo}-{min(hi, len(content))} ---"
+            block = "\n".join([head, *(f"    {t}" for t in notes), "", *excerpt])
+            total += len(block)
+            if total > _MAX_SNIPPET_CHARS:
+                blocks.append("(further locations omitted -- the same pattern; the list above has them all)")
+                return "\n\n".join(blocks)
+            blocks.append(block)
+    return "\n\n".join(blocks)
+
+
 _GOAL_TEMPLATES = {
     "dependabot_prs": (
         "Land the dependency update proposed in GitHub pull request #{number} ({title}).\n\n"
@@ -552,6 +653,9 @@ _GOAL_TEMPLATES = {
         "Fix the code scanning finding {title} in THIS repository.\n\n{summary}\n\n"
         "Every location above is an open alert on this repository's Security → Code scanning page ({url}); "
         "the alerts belong to this repository only — do not look for or touch other projects. "
+        "THE FLAGGED CODE IS BELOW — start there. Do not download, read or reason about the "
+        "analyser's own rule definitions, query source, .qll files or test fixtures: the finding is "
+        "the alert plus the code, and both are in this goal. "
         "For each location: read the surrounding code, understand why the query flags it, and fix "
         "the cause (validate or constrain the input, use the safe API, or restructure the flow) with "
         "the smallest change that makes the finding untrue. Do not silence it: no lgtm/codeql "
@@ -564,10 +668,18 @@ _GOAL_TEMPLATES = {
 }
 
 
-def build_goal(item: Item | dict, pr_text: str | None = None) -> str:
+def build_goal(item: Item | dict, pr_text: str | None = None, repo_root: str | None = None) -> str:
     d = item.to_dict() if isinstance(item, Item) else dict(item)
     goal = _GOAL_TEMPLATES[d["kind"]].format(
         number=d.get("number"), title=d.get("title"), url=d.get("url"), summary=d.get("summary") or "")
+    # The code itself, for a finding that named lines. Appended rather than
+    # formatted in, so a template that never mentions it is unaffected and a
+    # repo that cannot be read produces exactly the goal it produced before.
+    if repo_root and d.get("kind") == "code_scanning":
+        snippets = code_for_locations(repo_root, d.get("summary") or "")
+        if snippets:
+            goal += ("\n\n--- the flagged code, read from this repository ---\n"
+                     "(line numbers as of now; the alert's own line may have moved)\n\n" + snippets)
     if pr_text:
         goal += "\n\n--- pull request as read from GitHub ---\n" + pr_text[:20_000]
     goal += "\n\n(Created from the GitHub inbox. This task goes through the normal review gate and merge approval.)"
@@ -654,7 +766,12 @@ async def create_task_for_item(item: dict, settings: dict, config: Config, creat
         slug = resolve_slug(item["repo"])
         if token and slug:
             pr_text = await pr_text_for(token, slug, int(item["number"]))
-    goal = build_goal(item, pr_text)
+    # The live checkout, not the agent's workspace: it is the canonical state
+    # of the branch the alert was raised against, and it is not being edited
+    # by a task while this reads it.
+    from agent.config import PROJECTS  # noqa: PLC0415
+    repo_root = (PROJECTS.get(item["repo"]) or {}).get("live")
+    goal = build_goal(item, pr_text, repo_root=repo_root)
     return await create_task(item["repo"], goal, float(proj["budget_usd"]), proj.get("route", "auto"))
 
 

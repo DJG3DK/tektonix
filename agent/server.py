@@ -812,26 +812,41 @@ async def _github_open_auto_count(repo: str) -> int:
     return n
 
 
-# The statuses that mean a task is genuinely on an item. Escalated counts:
-# it is in the operator's list with a Resume button, and re-proposing the
-# alert underneath it would queue the same work twice. Everything else --
-# stopped, error, done-without-fixing-it, or an id that no longer exists --
-# means nobody is on it.
-_LIVE_TASK_STATUSES = ("running", "queued", "awaiting_approval", "awaiting_merge", "escalated")
+# The statuses that mean an item is still being handled -- which is NOT the
+# same as "a task is running right now", and getting that wrong is what put a
+# finished piece of work back in the inbox asking to be done again.
+#
+#   running / queued / awaiting_*   -- in flight
+#   escalated                       -- in the operator's list with a Resume
+#                                      button; re-proposing underneath it
+#                                      would queue the same work twice
+#   done                            -- FINISHED. The fix is merged, or sitting
+#                                      in a pull request waiting for a human.
+#                                      The alert stays open on GitHub until
+#                                      the scanner re-runs and says otherwise,
+#                                      and that delay is not a reason to ask
+#                                      for the work again.
+#
+# What is left -- stopped, error, or an id that no longer exists -- is a task
+# that ended without delivering, and that is the only case where the item
+# genuinely needs to go back in the queue.
+_TASK_HANDLED_STATUSES = (
+    "running", "queued", "awaiting_approval", "awaiting_merge", "escalated", "done",
+)
 
 
 async def _github_live_tasks(repo: str) -> set[str]:
-    """Which of this project's tasks are still in flight.
+    """Which of this project's tasks still count as handling their item.
 
-    github_inbox.decide uses it to decide whether a `task_created` item is
-    still being worked on. Returning an empty set is a real answer ("nothing
-    is running"); the inbox only keeps items stuck when it is handed None,
-    which is why a failure here re-raises rather than pretending.
+    github_inbox.decide uses it to decide whether a `task_created` item should
+    go back to the queue. Returning an empty set is a real answer ("nothing is
+    handling anything"); the inbox only keeps items stuck when it is handed
+    None, which is why a failure here re-raises rather than pretending.
     """
     live = set()
     for it in await recent_items(app.state.store, ("tasks", repo), 100):
         v = it.value
-        if v.get("status") in _LIVE_TASK_STATUSES:
+        if v.get("status") in _TASK_HANDLED_STATUSES:
             live.add(v.get("task_id") or it.key)
     return live
 
