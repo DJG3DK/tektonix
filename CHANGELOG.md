@@ -2,6 +2,127 @@
 
 ## Unreleased
 
+### Is the agent getting better? Two ways to ask
+
+**A Benchmarks panel** at the top of Analytics. Everything else on that page
+answers *what happened*; this answers whether the agent is improving:
+first-pass review rate, fix cycles (median and p90), escalation rate, cost per
+shipped task, and whether the retrieval subsystems are earning their keep.
+Every number carries the previous window of the same length and the delta
+between them, because a 60% first-pass rate means nothing until you know it
+was 45%. A delta is **omitted, not shown as zero**, when either window had
+nothing to divide by, and under ten tasks the panel says the sample is too
+thin rather than drawing a confident arrow.
+
+**A golden-task eval suite** (`evals/`, `scripts/run_evals.py`). The panel
+above measures production tasks, which move with whatever you happened to need
+that fortnight — the right measure for "is it better in practice", the wrong
+one for "did that change help". The suite is twelve fixed goals against three
+dependency-free fixture repos, driving the **real** pipeline: real work node,
+real check suite, real commit, real reviewer. It stops before the merge with
+no special mode, because `require_merge_review` already parks a task after a
+READY verdict and the harness is simply an operator who never approves.
+
+Tasks are scored on **assertions, not outcome**. A task can ship, pass its
+checks and earn READY having "fixed" the bug by weakening the test, and that
+is the one failure every gate here is blind to. Assertions split into goals
+(must *become* true) and guards (must *stay* true), and `--verify` refuses a
+suite whose goals already pass on the pristine fixture — an assertion true
+before the agent runs tests nothing.
+
+A run is isolated by construction: its own SQLite store, its own
+`projects.json`, its own reviewer pair on free ports, its own verdict state
+and usage log. Measured on the first full run: **$0.28 and 67 minutes for
+twelve tasks** — money is not the constraint, wall-clock is.
+
+### A task that is waiting says so
+
+One task per project is a hard constraint — they share one worktree — but the
+status was written *before* the lock was taken, so a queued task was
+indistinguishable from a working one: "Running" with a live pulse, no log, no
+spend, and the only way to tell was noticing it had been like that a while.
+Tasks now show **Queued** (dim, not pulsing) until they actually hold the
+project. The orphan-recovery scan and the sidebar's Running group both learned
+about the new state; the Telegram alerter learned to ignore it.
+
+### A stopped task no longer strands its alert, or its workspace
+
+Two ways a task that ended badly used to leave damage behind.
+
+**Its inbox item.** Once an item reached `task_created` it was permanently
+non-actionable — the dashboard offers no button on that state and the poller
+had no transition back. So stopping a task took its GitHub alert out of reach
+while the alert was still open. An item whose task is no longer in flight now
+returns to `proposed`. "In flight" includes escalated (it is in your list with
+a Resume button); stopped, errored and finished-without-fixing-it are not.
+
+**Its workspace.** A stopped task left 2,086 files of downloaded reference
+material in the shared worktree. The next task read those instead of the code
+it was pointed at, and the base sync then refused *because* of that debris —
+the exact failure the sync exists to prevent, reintroduced by its own safety
+check, while returning `ok: True`. A task now claims the workspace when it
+syncs, so a dirty tree can be told apart: its own uncommitted work is left
+alone, and anyone else's is **stashed** (never deleted — `git stash list`
+recovers it) before the sync proceeds.
+
+### An episode means the work landed
+
+`_is_terminal` guarded the command-approval pause but not the merge-approval
+one, so a task parked on your final look wrote an episode saying
+`outcome: shipped` for a commit that had merged nowhere. Consolidation learns
+from episodes and reads "shipped" as work that landed, so a parked task taught
+one project's memory that a file existed; the operator never merged, and for a
+day the memory asserted something that was not on main. A planning session
+then believed it, concluded there was nothing to build, and a build task
+started against that conclusion.
+
+The episode is now deferred, not lost: approving re-enters the node, the merge
+happens, and the terminal write runs then. Note that tasks parked on your
+merge decision no longer appear in the Benchmarks panel until you merge — the
+numbers count landed work rather than approved work.
+
+### The planner will not hand you a plan that says there is no plan
+
+The unsaved-plan safety net adopts a long, markdown-structured final reply as
+the draft when no `save_plan` happened. A turn that investigated a request,
+found the work already done and ended *"So there's no plan to save"* cleared
+that bar — which armed Build Now, and a task started with a $10 budget whose
+goal was an essay explaining that nothing needed doing. The net now checks
+whether a reply *disclaims* itself, reading only its conclusion so a plan that
+mentions in passing that something already exists is still a plan.
+
+### The agent knows three more things about its own sandbox
+
+All three cost real tool calls and model time to rediscover per task.
+
+- **`gh` is installed**, and deliberately **not** logged in. No GitHub token
+  is passed into that container and none should be: the bash tool runs
+  LLM-chosen commands, so a token in there is one a prompt-injected
+  instruction could push with. It works for public endpoints; this
+  deployment's own private repos go through the server-side tools.
+- **Every bash call is its own container**, so `/tmp` does not survive to the
+  next one. A task curled a file to `/tmp`, got "No such file" on the next
+  call, and re-downloaded it — paying a 150-second model call each round.
+- **A finding that names a file and a line has already done the hard part.**
+  Given a CodeQL alert with sixteen exact locations, a task spent twenty-five
+  minutes reading the *analyser's* source and never opened the controller. The
+  guidance reaches the coordinator and the investigator both, and is bounded
+  on the other side so "stop researching the tool" does not become "stop
+  investigating".
+
+### GitHub refusing a workflow file now says what to do
+
+A task wrote a good `.github/workflows/ci.yml`, the review passed, and the
+push was refused: GitHub does not let a token write under
+`.github/workflows/` without workflow permission. Correct, and unhelpfully
+worded — it names a "workflow scope", which is the *classic* token's wording,
+while a fine-grained token spells it Repository permissions → Workflows →
+Read and write. The ship step now recognises that refusal and writes the path
+for the token kind actually in play, says the branch is committed locally and
+nothing is lost, and mentions that a deploy-key push is not subject to the
+restriction at all. The escalation carries that message instead of the repr of
+the result dict it used to print.
+
 ### Agent-authored code stops running on the host
 
 `commit-reviewer` ran each project's configured checks against the agent's

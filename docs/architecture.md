@@ -170,6 +170,8 @@ agent/
   episode_recall.py    the retrieval legs and their fusion, plus telemetry
   benchmarks.py        is the agent getting better -- two windows, and the delta
   evals/               the golden-task suite: the same question asked twice
+  tools/git.py         ...and which task owns the workspace, so a dirty tree
+                       can be told from debris (see sync_workspace_to_base)
   embeddings.py        one embedding call, skipped when the digest is unchanged
   capabilities.py      one shape for every optional subsystem: available()
   routers/             per-seam route modules, included by server.py

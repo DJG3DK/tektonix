@@ -3,10 +3,16 @@
 ## What you see
 
 The dashboard shows a task as **running**. The stream has not produced a line
-in a long time. Possibly the step counter is stuck partway, or the page shows
+in a long time.
+
+> If it shows **Queued** rather than Running, stop here: it is waiting for
+> another task on the same project and will start on its own. Jump to
+> [section 6](#6-is-another-process-holding-the-project).
+
+ Possibly the step counter is stuck partway, or the page shows
 thinking bubbles that never stop.
 
-There are six different causes behind that one appearance, and they need
+There are seven different causes behind that one appearance, and they need
 different actions. Work down this page in order; each check is cheap.
 
 ---
@@ -75,7 +81,7 @@ async def main():
         for repo in PROJECTS:
             for it in await store.asearch(("tasks", repo), limit=60):
                 v = it.value
-                if v.get("status") in ("running", "escalated", "awaiting_approval", "awaiting_merge"):
+                if v.get("status") in ("running", "queued", "escalated", "awaiting_approval", "awaiting_merge"):
                     print(f"{repo} {it.key[:8]} {v.get('status')} ${v.get('cost_so_far') or 0:.2f}")
 asyncio.run(main())
 PY
@@ -171,6 +177,16 @@ is there to catch a runaway, not to recycle a working process.
 
 ## 6. Is another process holding the project?
 
+**First, look at the badge.** Since 2026-09-22 a task waiting for the project
+says **Queued** — dim, not pulsing — instead of claiming to be running. If
+that is what you see, nothing is wrong: another task on the same project is
+ahead of it, and it starts by itself when that one finishes. One task per
+project is a hard constraint because they share one worktree.
+
+The rest of this section is for the case where a task says *running* and the
+lock is still the answer — an older task started before that change, or a
+second process holding the lock from outside this one.
+
 One task per project is enforced with a Postgres advisory lock. A second
 process holding it makes a task wait silently at the very start.
 
@@ -187,6 +203,56 @@ A lock with no live task behind it means a process is still running that you
 did not expect (`pm2 list`, `ps aux | grep uvicorn`). Postgres releases the
 lock when that process's connection closes, so stopping the stray process is
 the whole fix — never delete the row.
+
+---
+
+## 7. Is it reading the wrong thing?
+
+Not stuck, just lost — and it looks identical from outside: model calls
+landing, spend ticking up, no files changed. Two shapes seen live:
+
+- **Studying the tool instead of the defect.** Given a scanner alert with
+  exact `file:line` locations, a task spent twenty-five minutes reading the
+  *analyser's* own rule source and never opened the file it was pointed at.
+- **Inheriting someone else's debris.** A stopped task left a large downloaded
+  tree in the workspace; the next task found it and read that instead.
+
+Both now have guards (prompt guidance, and the workspace salvage in
+`sync_workspace_to_base`), but the diagnosis is worth knowing.
+
+**Check** what it is actually touching, rather than whether it is moving:
+
+```bash
+cd /home/3d-agent
+.venv/bin/python - <<'EOF'
+import asyncio, json, sys
+sys.path.insert(0, ".")
+from agent.config import load_config
+from agent.graph import open_store
+REPO, TASK = "your-project", "the-task-id"
+async def main():
+    async with open_store(load_config()) as s:
+        it = await s.aget(("task_log", REPO), TASK)
+        raw = (it.value or {}).get("content")
+        d = json.loads(raw) if isinstance(raw, str) else (it.value or {})
+        entries = d.get("entries") if isinstance(d, dict) else d
+        blob = json.dumps(entries)
+        print(len(entries), "entries")
+        for term in ("authController", ".qll", "semmle", "node_modules"):
+            print(f"  {term}: {blob.count(term)}")
+asyncio.run(main())
+EOF
+```
+
+Count the files the goal actually names against whatever else it is reading.
+A task with a hundred references to something the goal never mentioned is in
+a hole, and the fix is a fresh task with a sharper goal — not a resume, whose
+context is the hole.
+
+**Do not trust a grep for one spelling.** Diagnosing this live, a check for
+`.qll` and `raw.githubusercontent` came back clean and was reported as "the
+agent is behaving" — while the task was reading the same material from a local
+path that matched neither term.
 
 ---
 

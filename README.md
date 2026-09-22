@@ -285,7 +285,10 @@ first. The app lands on **Planning**, not the raw task composer.
 - **Sidebar** — Planning sessions and build tasks, each grouped by the same six-way category the
   classifier assigns (`bug-fix`, `feature`, `ui-styling`, `performance`, `investigation`, `other`),
   with search. Running tasks sit in their own always-visible group at the top, so a refresh mid-task
-  never buries the thing you're watching inside a collapsed category. Finished planning sessions
+  never buries the thing you're watching inside a collapsed category — and a task **Queued** behind
+  another on the same project sits there too, dim and not pulsing. One task per project is a hard
+  constraint (they share one worktree), and until the status said so a waiting task was
+  indistinguishable from a working one. Finished planning sessions
   archive into a collapsed group rather than growing one endless list. Each item can show a
   **route badge** (frontend / general) with the reason on hover.
 - **Mobile** — the app works on a phone, not just a narrow desktop. A bottom tab bar puts every
@@ -365,7 +368,10 @@ first. The app lands on **Planning**, not the raw task composer.
   who set a GitHub source to Auto, who generated a deploy key, and which inbox items were approved
   by a click, a signed link, or the poller itself. Kept in the same database as your tasks.
 - **GitHub** (admin only) — the inbox tab: proposed items, approve / dismiss / snooze, and a
-  per-repo filter. Settings for it live under Settings → GitHub.
+  per-repo filter, with a badge on the sidebar button counting what is waiting on a decision.
+  Settings for it live under Settings → GitHub. An item whose task ends without resolving it
+  (stopped, errored, finished with the alert still open) comes **back** to the queue — otherwise
+  stopping one task quietly takes its alert out of reach while it is still open on GitHub.
 - **Approvals inline** — when the agent hits a gated action or calls `ask_user`, the request appears
   in the task stream with approve/reject/answer controls; the answer goes straight back into the
   same paused thread. Past two minutes of silence on a running task the stream shows a *no activity*
@@ -704,6 +710,11 @@ createdb three_d_agent          # then put the DSN in .env
 
 # 1. The sandbox image — the agent's bash/edit tools run inside this container.
 #    Without it, the FIRST tool call of the first task fails.
+#    Carries node 22, python 3, git, ripgrep, jq, Playwright/Chromium and the
+#    GitHub CLI. `gh` is deliberately NOT logged in: no GitHub token is passed
+#    into a container running LLM-chosen commands, so it reaches public
+#    endpoints only and this deployment's own private repos go through the
+#    server-side github tools instead.
 docker build -t tektonix-sandbox:latest docker/agent-sandbox/
 
 # 2. The model router — everything resolves model aliases through it
