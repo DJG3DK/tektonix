@@ -9,6 +9,7 @@ The fix has two halves and only one of them is the image. Installing `gh`
 without saying what it can reach would trade `command not found` for
 `not logged in`, which looks more like something worth fighting.
 """
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -16,6 +17,36 @@ import pytest
 from agent import paths
 
 DOCKERFILE = paths.REPO_ROOT / "docker" / "agent-sandbox" / "Dockerfile"
+
+
+def _image_is_built() -> bool:
+    """Is the sandbox image actually on this machine?
+
+    Not `does a docker socket exist`, which is what the first version of this
+    asked and why CI went red: the runner has a working daemon and has never
+    built `tektonix-sandbox:latest`, which is a local image that is never
+    pushed to a registry. So `docker run` reached the daemon, missed locally,
+    tried to PULL, and failed with "pull access denied" -- a skip condition
+    dressed up as a failure.
+
+    The Dockerfile assertions above run everywhere and are what CI actually
+    guards; these two are for a machine that has built the image, where they
+    check the thing the Dockerfile only claims.
+    """
+    if not Path("/var/run/docker.sock").exists():
+        return False
+    try:
+        from agent.tools.sandbox import SANDBOX_IMAGE
+        # `image inspect` is local-only: it never contacts a registry, so a
+        # missing image is a clean non-zero rather than a slow failed pull.
+        return subprocess.run(["docker", "image", "inspect", SANDBOX_IMAGE],
+                              capture_output=True, timeout=60).returncode == 0
+    except (OSError, subprocess.SubprocessError, ImportError):
+        return False
+
+
+needs_image = pytest.mark.skipif(not _image_is_built(),
+                                 reason="the sandbox image is not built on this machine")
 
 
 def test_the_sandbox_image_installs_the_github_cli():
@@ -64,11 +95,9 @@ def test_the_prompt_says_gh_is_unauthenticated_and_names_the_alternative():
     assert "gh auth login" in guidance
 
 
-@pytest.mark.skipif(not Path("/var/run/docker.sock").exists(), reason="needs docker")
+@needs_image
 def test_gh_is_actually_in_the_built_image():
     """The Dockerfile saying so is not the same as the image having it."""
-    import subprocess
-
     from agent.tools.sandbox import SANDBOX_IMAGE
 
     proc = subprocess.run(
@@ -78,10 +107,8 @@ def test_gh_is_actually_in_the_built_image():
     assert "gh version" in proc.stdout
 
 
-@pytest.mark.skipif(not Path("/var/run/docker.sock").exists(), reason="needs docker")
+@needs_image
 def test_the_built_image_has_no_github_credentials():
-    import subprocess
-
     from agent.tools.sandbox import SANDBOX_IMAGE
 
     proc = subprocess.run(
