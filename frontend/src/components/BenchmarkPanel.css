@@ -1,0 +1,27 @@
+/* Benchmarks panel. Structure and spacing come from .analytics-section /
+   .analytics-card, which every other section on the page already uses -- only
+   the two things this panel adds are styled here. */
+
+.bench-warning {
+  margin: -4px 0 12px;
+  padding: 8px 12px;
+  border: 1px solid var(--amber, #e3a72e);
+  border-radius: 8px;
+  background: rgba(227, 167, 46, 0.08);
+  color: var(--amber, #e3a72e);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.bench-delta {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+/* Colour is the direction the metric MOVED IN ITS OWN TERMS -- green means
+   better, not larger. A falling escalation rate is green; a falling
+   first-pass rate is red. See deltaTone(). */
+.bench-delta-good { color: var(--green, #3fb950); }
+.bench-delta-bad { color: var(--red, #f85149); }
+.bench-delta-flat { color: var(--text-dim, #8b93a1); }
+.bench-delta-none { color: var(--text-dim, #8b93a1); font-weight: 400; font-style: italic; }

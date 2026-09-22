@@ -339,6 +339,14 @@ first. The app lands on **Planning**, not the raw task composer.
   cost was structurally invisible here); per-role model usage with
   token counts and latency; tool-call reliability and error rates; and per-task outcomes. Backed by
   LangSmith run data plus the episodic records `verify_and_ship` writes.
+- **Benchmarks** (top of Analytics) — the rest of that page answers *what happened*; this answers
+  whether the agent is getting **better**. First-pass review rate, fix cycles (median and p90),
+  escalation rate, cost per shipped task, and whether the retrieval subsystems are earning their
+  keep — history searches that led to a record being read, memory sections offered vs fetched.
+  Every number carries the previous window of the same length and the delta between them, because
+  a 60% first-pass rate means nothing until you know it was 45%. A delta is **omitted, not shown as
+  zero**, when either window had nothing to divide by, and under ten tasks the panel says the
+  sample is too thin to read. See `agent/benchmarks.py`.
 - **Models** (admin only) — the model-pin editor described under [Model routing](#model-routing).
 - **Users** (admin only) — create accounts, scope them to specific projects, revoke access, and
   grant auto mode **for named projects** rather than globally.

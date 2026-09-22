@@ -301,6 +301,48 @@ export interface TraceSummary {
   total_output_tokens: number;
 }
 
+// Benchmarks: whether a change to the agent made it better -- see
+// agent/benchmarks.py for what each number means and why it is a comparison
+// between two windows rather than a single figure.
+//
+// Every rate is nullable on purpose: null is "nothing to divide by", and
+// rendering it as 0 would show a regression that did not happen.
+export interface BenchmarkWindow {
+  tasks: number;
+  shipped: number;
+  escalated: number;
+  outcomes: Record<string, number>;
+  ship_rate: number | null;
+  escalation_rate: number | null;
+  first_pass_rate: number | null;
+  reviewed: number;
+  first_pass: number;
+  iterations_median: number | null;
+  iterations_p90: number | null;
+  cost_median: number | null;
+  cost_p90: number | null;
+  cost_per_shipped_median: number | null;
+  total_cost: number;
+  memory_prompts: number;
+  sections_offered: number;
+  sections_read: number;
+  section_reads_per_prompt: number | null;
+  history_queries: number;
+  history_used: number;
+  history_follow_rate: number | null;
+}
+
+export interface Benchmarks {
+  window_days: number;
+  current: BenchmarkWindow;
+  previous: BenchmarkWindow;
+  /** Only the metrics where BOTH windows had a value -- a missing key means
+   *  "unknown", which is not the same as "no change". */
+  delta: Partial<Record<keyof BenchmarkWindow, number>>;
+  /** Set when either window is too thin for the comparison to mean anything. */
+  sample_warning: string | null;
+}
+
 // The roles this agent pins -- see agent/model_config.py's MANAGED_ROLES.
 // That set INCLUDES agent-reviewer: the independent review service resolves
 // its model through this API (services/commit-reviewer/reviewer.js reads the

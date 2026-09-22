@@ -168,6 +168,7 @@ agent/
   memory_sections.py   splitting a project's memory; what stays in the prompt
   history_index.py     full-text over episodes, tasks and build transcripts
   episode_recall.py    the retrieval legs and their fusion, plus telemetry
+  benchmarks.py        is the agent getting better -- two windows, and the delta
   embeddings.py        one embedding call, skipped when the digest is unchanged
   capabilities.py      one shape for every optional subsystem: available()
   routers/             per-seam route modules, included by server.py

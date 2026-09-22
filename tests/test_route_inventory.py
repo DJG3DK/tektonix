@@ -198,6 +198,7 @@ EXPECTED: list[tuple[str, str, str | None]] = [
     ('DELETE', '/api/tasks/{task_id}', 'require_full_auth'),
     ('GET', '/_review/{path:path}', 'require_full_auth'),
     ('GET', '/api/analytics', 'require_full_auth'),
+    ('GET', '/api/analytics/benchmarks', 'require_full_auth'),
     ('GET', '/api/analytics/models', 'require_full_auth'),
     ('GET', '/api/analytics/tool-reliability', 'require_full_auth'),
     ('GET', '/api/analytics/trace-summary', 'require_full_auth'),

@@ -21,7 +21,7 @@ from fastapi import APIRouter, Depends, Request
 import json
 import logging
 
-from agent import auth, metrics, paths
+from agent import auth, benchmarks, metrics, paths
 from agent.auth import User, require_full_auth
 from agent.config import PROJECTS
 from agent.graph import read_with_retry
@@ -400,3 +400,36 @@ async def get_trace_summary(request: Request, user: User = Depends(require_full_
     # that is the number the panel was always trying to convey.
     data = await asyncio.to_thread(metrics.run_summary, _TRACE_SUMMARY_WINDOW_DAYS)
     return {**data, "cached": False, "tracing_disabled": not request.app.state.config.langsmith_tracing}
+
+
+@router.get("/benchmarks")
+async def get_benchmarks(request: Request, window_days: int = 14,
+                         user: User = Depends(require_full_auth)):
+    """Whether a change to the agent made it better -- see agent/benchmarks.py.
+
+    Separate from `GET ""` rather than folded into it because the two have
+    different jobs: that one is the dashboard's chart data and is read on
+    every page load, this one is read when somebody wants to know if last
+    week's change helped, and it walks two windows of episodes to answer.
+
+    `window_days` is a query parameter because the right window depends on
+    throughput -- 14 days is the default for a handful of tasks a week, and a
+    busier deployment wants it shorter so a comparison is not half stale.
+    """
+    auth.require_admin(user)
+    # Imported here, not at module scope: agent/deep_agent.py pulls in the
+    # whole agent build, and a route module that cannot be imported without
+    # it is a route module that cannot be tested without it.
+    from agent.deep_agent import episodes_namespace
+
+    # Clamped, not validated-and-rejected: the only callers are the dashboard
+    # and somebody poking at the URL, and 400ing the second one buys nothing.
+    # `int(window_days)` with no `or 14` fallback -- 0 is a value to clamp to
+    # 1, and `0 or 14` would have quietly turned it into a fortnight.
+    window = max(1, min(int(window_days), 90))
+    return await benchmarks.benchmark_summary(
+        request.app.state.store,
+        list(PROJECTS),
+        lambda repo: episodes_namespace(repo)(None),
+        window_days=window,
+    )

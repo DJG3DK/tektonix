@@ -13,8 +13,9 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { getAgentModelUsage, getAnalytics, getRouterBalance, getToolReliability, getTraceSummary } from "../api";
-import type { AgentModelUsage, Analytics, RouterBalance, ToolReliability, TraceSummary } from "../types";
+import { getAgentModelUsage, getAnalytics, getBenchmarks, getRouterBalance, getToolReliability, getTraceSummary } from "../api";
+import type { AgentModelUsage, Analytics, Benchmarks, RouterBalance, ToolReliability, TraceSummary } from "../types";
+import { BenchmarkPanel } from "./BenchmarkPanel";
 import { repoColor } from "../repoColor";
 import "./AnalyticsView.css";
 
@@ -118,11 +119,17 @@ export function AnalyticsView() {
   const [models, setModels] = useState<AgentModelUsage[]>([]);
   const [toolReliability, setToolReliability] = useState<ToolReliability | null>(null);
   const [traceSummary, setTraceSummary] = useState<TraceSummary | null>(null);
+  const [benchmarks, setBenchmarks] = useState<Benchmarks | null>(null);
+  const [benchmarksError, setBenchmarksError] = useState<string | null>(null);
 
   useEffect(() => {
     getAnalytics().then(setData).catch(() => {});
     getRouterBalance().then(setBalance).catch(() => {});
     getTraceSummary().then(setTraceSummary).catch(() => {});
+    // No retry loop around this one: unlike the model/tool panels it is
+    // computed from the store on every call, so an empty answer means there
+    // genuinely are no episodes yet, and asking again would say the same.
+    getBenchmarks().then(setBenchmarks).catch((e) => setBenchmarksError(String(e?.message ?? e)));
     // Retry a few times. The warming LangSmith cache this guarded is gone --
     // these read local logs now and answer on the first call -- but an empty
     // first answer is still possible while a fresh deployment has no history
@@ -207,6 +214,11 @@ export function AnalyticsView() {
           </div>
         </div>
       </div>
+
+      {/* Directly under the headline cards, and above everything else: this
+          is the section somebody opens the page FOR after changing a prompt
+          or a model pin. Everything below it is the detail behind it. */}
+      <BenchmarkPanel data={benchmarks} error={benchmarksError} />
 
       {/* Reviewer spend. Its own section, not folded into the totals above:
           the agent's budget and the gate's budget are different things, and

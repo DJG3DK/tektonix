@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { AuthError, getMe, listTasks, login, logout, setAuthFailureHandler, verify2FA } from "./api";
+import { AuthError, getBenchmarks, getMe, listTasks, login, logout, setAuthFailureHandler, verify2FA } from "./api";
 import { response, user } from "./test/fixtures";
 
 // api.ts carries several invariants that its own comments record as having
@@ -126,5 +126,48 @@ describe("session", () => {
     // would strand someone on a screen they have already left.
     stubFetch(async () => response({}, { status: 500 }));
     await expect(logout()).resolves.not.toThrow();
+  });
+});
+
+// The backend serves the SPA from a catch-all, so a route the running process
+// does not have answers 200 with index.html rather than 404. A frontend
+// deployed ahead of its backend hits that on purpose here (a restart kills
+// whatever task is in flight), and "Unexpected token '<'" is not a useful
+// thing for the dashboard to say about it.
+describe("getBenchmarks — telling a missing route from a real answer", () => {
+  function res(body: unknown, contentType: string, status = 200): Response {
+    return {
+      ok: status >= 200 && status < 300,
+      status,
+      headers: { get: (k: string) => (k.toLowerCase() === "content-type" ? contentType : null) },
+      json: async () => body,
+      text: async () => String(body),
+    } as unknown as Response;
+  }
+
+  it("reports route-missing when the catch-all returns the SPA", async () => {
+    stubFetch(async () => res("<!doctype html>", "text/html; charset=utf-8"));
+    await expect(getBenchmarks()).rejects.toThrow("route-missing");
+  });
+
+  it("reports route-missing on a real 404 too", async () => {
+    stubFetch(async () => res({ detail: "nope" }, "application/json", 404));
+    await expect(getBenchmarks()).rejects.toThrow("route-missing");
+  });
+
+  it("surfaces a genuine server error as itself, not as a missing route", async () => {
+    stubFetch(async () => res({ detail: "boom" }, "application/json", 500));
+    await expect(getBenchmarks()).rejects.toThrow("getBenchmarks failed: 500");
+  });
+
+  it("returns the body when the route is there", async () => {
+    stubFetch(async () => res({ window_days: 14 }, "application/json"));
+    await expect(getBenchmarks(14)).resolves.toEqual({ window_days: 14 });
+  });
+
+  it("passes the window through as a query parameter", async () => {
+    const spy = stubFetch(async () => res({ window_days: 7 }, "application/json"));
+    await getBenchmarks(7);
+    expect(spy.mock.calls[0][0]).toContain("window_days=7");
   });
 });

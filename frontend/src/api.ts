@@ -1,4 +1,4 @@
-import type { RepoStats, RouterBalance, TaskMeta, TaskState, Analytics, AgentModelUsage, ModelPin, ModelCatalogEntry, ToolReliability, TraceSummary, PlanningSessionMeta, PlanningLogEntry, CurrentUser } from "./types";
+import type { RepoStats, RouterBalance, TaskMeta, TaskState, Analytics, AgentModelUsage, ModelPin, ModelCatalogEntry, ToolReliability, TraceSummary, Benchmarks, PlanningSessionMeta, PlanningLogEntry, CurrentUser } from "./types";
 
 // import.meta.env.BASE_URL is Vite's own `base` config value ("/" in dev,
 // a subpath in the production build -- see vite.config.ts). Building
@@ -548,6 +548,22 @@ export async function getToolReliability(): Promise<ToolReliability> {
 export async function getTraceSummary(): Promise<TraceSummary> {
   const res = await apiFetch(`${API_BASE}/analytics/trace-summary`);
   if (!res.ok) throw new Error(`getTraceSummary failed: ${res.status}`);
+  return res.json();
+}
+
+/** Benchmarks, with one failure the others do not have.
+ *
+ *  The backend serves the SPA from a catch-all, so a route the running
+ *  process does not have comes back as 200 index.html rather than 404 --
+ *  which is exactly what a frontend deployed ahead of its backend sees. A
+ *  bare res.json() turns that into "Unexpected token '<'". The content type
+ *  is what actually distinguishes the two, so it is what is checked. */
+export async function getBenchmarks(windowDays = 14): Promise<Benchmarks> {
+  const res = await apiFetch(`${API_BASE}/analytics/benchmarks?window_days=${windowDays}`);
+  if (res.status === 404 || !(res.headers.get("content-type") ?? "").includes("json")) {
+    throw new Error("route-missing");
+  }
+  if (!res.ok) throw new Error(`getBenchmarks failed: ${res.status}`);
   return res.json();
 }
 

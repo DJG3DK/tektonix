@@ -306,6 +306,66 @@ Either default the sandbox to no network and punch a hole for
 guard on the host-side URL tools only. The wrong fix is a prompt
 instruction.
 
+## Benchmarks: is the agent actually getting better? — **built, 2026-09-22**
+
+Every item in this file is a change to the agent, and until now there was no
+number that said whether any of them helped. Analytics answered "what
+happened" — spend by day, model mix, which tasks ran — which is a different
+question from "did last week's change work".
+
+### What was built
+
+`agent/benchmarks.py`, `GET /api/analytics/benchmarks`, and a Benchmarks panel
+at the top of the Analytics page. Six numbers, each shown against the same
+length window immediately before it:
+
+| Metric | Reads |
+| --- | --- |
+| First-pass reviews | of the tasks that reached a review, how many passed without a redo |
+| Fix cycles (median, p90) | how many times a task was sent back |
+| Escalations | of all tasks, how many gave up and asked for a human |
+| Cost per shipped task | median `cost_usd` over the episodes that shipped |
+| History searches used | of the searches that ran, how many led to a record being read |
+| Memory reads / prompt | how often an indexed section was actually fetched |
+
+Sources are the ones that already exist: the `("episodes", repo)` namespace
+(`outcome`, `iteration_count`, `cost_usd`, `review_verdict`) and
+`logs/retrieval_events.jsonl`. No model call, no network, no new store — two
+reads and some arithmetic, recomputed per request the way the rest of
+Analytics is.
+
+Three decisions worth keeping:
+
+* **A comparison, not a number.** A 60% first-pass rate means nothing on its
+  own. Every metric carries the previous window of the same length and the
+  delta between them, and the delta is omitted — not shown as zero — when
+  either window had nothing to divide by.
+* **`null` is not `0`.** "No tasks ran" and "no tasks passed" are different
+  answers, and rendering the first as 0% sends somebody looking for a
+  regression that did not happen. The panel renders an em dash.
+* **`sample_warning`.** Under ten tasks in either window, the panel says so.
+  A confident green arrow drawn over three tasks is worse than no arrow.
+
+The one trap, now covered by a test: `iteration_count` counts **redos**, not
+passes — `verify_and_ship.py` only increments it in `_loop_back` — so a task
+written once and passed records `0`. A first-pass threshold of 1 silently
+folds every one-redo task into the headline number.
+
+### What is still missing — the eval suite
+
+These measure *production* tasks, so they move with whatever the operator
+happened to ask for that fortnight. That is the right measure for "is it
+getting better in practice" and the wrong one for "did this prompt change
+help", which needs the same inputs both times.
+
+The gap is a set of golden tasks — a dozen fixed goals against a fixed repo
+state, run on demand, scored by the same six metrics. That is a bigger piece
+of work (it needs a reset-to-known-state harness) and it is the natural next
+step here, not a prerequisite: the production numbers are what tell you
+whether it is worth building.
+
+---
+
 ## Six accuracy improvements (operator's list, 2026-09-21)
 
 Stored for later. Annotated against what this codebase already has, because
@@ -438,5 +498,6 @@ middleware already exists and this is a change to what it keeps.
 **If picking these up in order of value on this codebase:** 3 (cheap, closes a
 real feedback gap), 4 (composes with history search), 6's refinement (existing
 machinery), then 1 (large, and the only one that needs a new dependency). 5's
-re-ranker last, and only if the telemetry says ordering is the problem. 2 needs
-nothing.
+re-ranker last, and only if the telemetry says ordering is the problem -- that
+telemetry is now the "History searches used" number on the Benchmarks panel
+above. 2 needs nothing.
