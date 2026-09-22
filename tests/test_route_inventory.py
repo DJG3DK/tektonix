@@ -110,14 +110,36 @@ def _inventory():
     return sorted(rows)
 
 
-def test_routes_inside_an_included_router_are_counted():
-    """The guard on the guard. A seam moved into agent/routers/ must still
-    appear here; if this ever passes vacuously the snapshot below stops
-    covering the code that moved."""
-    paths = {path for _m, path, _d in _inventory()}
-    assert any(p.startswith("/api/push/") for p in paths), (
-        "no routes from agent/routers/push.py in the inventory -- _walk no longer "
-        "follows included routers, and every extracted seam is now unguarded by this test"
+def test_every_included_router_is_represented_in_the_inventory():
+    """The guard on the guard.
+
+    Asserting one prefix was enough while one seam had moved. It is not now:
+    a router that stopped being walked would drop out silently and the
+    snapshot below would simply stop covering it, which is the failure this
+    file exists to prevent arriving through the refactor it exists to make
+    safe. So every router the app includes is checked, by asking the ROUTER
+    what paths it owns rather than by listing them here -- a list would need
+    updating per seam and would be updated by whoever broke it.
+    """
+    from fastapi.routing import APIRoute as _APIRoute
+
+    inventoried = {path for _m, path, _d in _inventory()}
+    included = 0
+    for r in srv.app.routes:
+        inner = getattr(r, "original_router", None) or getattr(r, "router", None)
+        if inner is None or getattr(inner, "routes", None) is None:
+            continue
+        included += 1
+        owned = {x.path for x in inner.routes if isinstance(x, _APIRoute)}
+        missing = owned - inventoried
+        assert not missing, (
+            f"an included router's routes are absent from the inventory: {sorted(missing)} -- "
+            "_walk no longer follows included routers, and every route in that module is now "
+            "outside the only test that checks a route still has a guard"
+        )
+    assert included >= 5, (
+        f"only {included} included router(s) found; the seams extracted from server.py "
+        "are not being walked at all"
     )
 
 

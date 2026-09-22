@@ -191,7 +191,16 @@ function mountArgs(cfg, worktreePath) {
     // dependencies. Bounded to three levels: deep enough for a monorepo's
     // per-package node_modules, shallow enough not to walk a whole tree.
     for (const rel of nodeModulesLinks(worktreePath)) {
-        const target = fs.realpathSync(path.join(worktreePath, rel));
+        // A DANGLING link throws here rather than resolving, and an agent that
+        // deleted a directory its symlink pointed at is an ordinary state for
+        // a worktree to be in. Unguarded, that ENOENT came out of mountArgs
+        // and failed the entire review rather than skipping one mount.
+        let target;
+        try {
+            target = fs.realpathSync(path.join(worktreePath, rel));
+        } catch {
+            continue;
+        }
         // Agent-writable worktree, so the link target is agent-controlled:
         // only the project's own live checkout is an acceptable destination.
         if (!isInside(target, cfg.live) || seen.has(target)) continue;
@@ -243,7 +252,13 @@ function mountArgs(cfg, worktreePath) {
  * agreeing to, per check, is that this one command runs agent-authored code
  * WITH egress -- which is why it is per check and not a global switch.
  */
-async function runSandboxed(cfg, worktreePath, relDir, cmd, args, timeoutMs, extraEnv, network, stack) {
+/**
+ * The exact argv handed to docker. Pure, and exported, so the hardening can
+ * be ASSERTED rather than grepped for: --cap-drop ALL and --network none are
+ * the difference between containment and a container, and a source grep
+ * passes for a flag that has been moved into a branch that never runs.
+ */
+function dockerArgs(cfg, worktreePath, relDir, cmd, args, extraEnv, network, stack) {
     const target = imageFor(stack);
     const envArgs = [];
     for (const [k, v] of Object.entries({
@@ -281,6 +296,12 @@ async function runSandboxed(cfg, worktreePath, relDir, cmd, args, timeoutMs, ext
         ...(args || []),
     ];
 
+    return { docker, image: target.image };
+}
+
+
+async function runSandboxed(cfg, worktreePath, relDir, cmd, args, timeoutMs, extraEnv, network, stack) {
+    const { docker, image } = dockerArgs(cfg, worktreePath, relDir, cmd, args, extraEnv, network, stack);
     const r = await execp('docker', docker, { timeout: timeoutMs || 300_000 });
     const missing = missingTool(r.out);
     if (missing) {
@@ -295,7 +316,7 @@ async function runSandboxed(cfg, worktreePath, relDir, cmd, args, timeoutMs, ext
             code: r.code,
             missingTool: missing,
             output: `SETUP: this check needs \`${missing}\`, which the sandbox image `
-                  + `(${target.image}) does not have. The image carries Node and Python; a project on `
+                  + `(${image}) does not have. The image carries Node and Python; a project on `
                   + `another toolchain needs it added to docker/agent-sandbox/Dockerfile, or this `
                   + `check removed from the project's config. Nothing about the code under review `
                   + `is known either way -- the check did not run.`,
@@ -314,5 +335,5 @@ function missingTool(output) {
     return m ? m[1] : null;
 }
 
-module.exports = { probe, resetProbe, runSandboxed, mountArgs, nodeModulesLinks, isInside,
+module.exports = { probe, resetProbe, runSandboxed, dockerArgs, mountArgs, nodeModulesLinks, isInside,
                    missingTool, imageFor, STACKS, IMAGE, IN_CONTAINER };

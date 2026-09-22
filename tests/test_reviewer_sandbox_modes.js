@@ -63,13 +63,30 @@ test('the image is overridable, so a bundle build can pin its own', () => {
     freshSandbox(undefined);
 });
 
+test('a check that could not be RUN is flagged as infrastructure, not as failing', () => {
+    // The distinction decides whose problem it is. Everything downstream
+    // reads `.infrastructure`; without it, "the sandbox image has no go" is
+    // handed to the agent as a failing check, and the agent spends rounds
+    // debugging an environment it cannot see -- the exact loop the host-side
+    // MISSING_TOOL_RE was written to stop. That regex matches a SHELL saying
+    // "not found" and never matches our own SETUP message, which is why this
+    // is carried structurally instead of matched again.
+    const src = require('fs').readFileSync(
+        require('path').join(__dirname, '..', 'services', 'commit-reviewer', 'reviewer.js'), 'utf8');
+    assert.ok(/infrastructure: true/.test(src), 'the runner never flags a setup failure');
+    assert.ok(/r\.infrastructure \|\| r\.missingTool/.test(src),
+        'the check loop must carry the runner\'s own verdict rather than re-deriving it');
+    assert.ok(!/REFUSED:/.test(src),
+        'the refusal says SETUP:, like the missing-toolchain message, so both read the same way');
+});
+
 test('the refusal text tells an operator what to do and that nothing ran', () => {
     // Asserted against the reviewer's source rather than by driving a whole
     // review: what matters is that the refusal path exists, says it did not
     // run on the host, and names the fix.
     const src = require('fs').readFileSync(
         require('path').join(__dirname, '..', 'services', 'commit-reviewer', 'reviewer.js'), 'utf8');
-    assert.ok(src.includes('REFUSED:'), 'no refusal path');
+    assert.ok(src.includes('SETUP: this check runs code the agent wrote'), 'no refusal path');
     assert.ok(/It was not run on the host/.test(src), 'the refusal must say nothing ran');
     assert.ok(/docker\/agent-sandbox/.test(src), 'the refusal must name the fix');
 });

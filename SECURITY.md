@@ -164,6 +164,35 @@ check -- an environment error read as a code failure gets handed back to the
 agent, which then tries to debug an environment it cannot see, and a correct
 commit is rejected round after round.
 
+### The database checks, which stay on the host
+
+Three commands still run outside the sandbox on a host install: a project's
+`db:drift`, `db:seed` and `test:e2e`. They are agent-authored code, and they
+are the exception to everything above.
+
+They talk to Postgres and Redis on this machine's loopback. Inside a
+container `localhost` is the container, so containing them means one of two
+things: `--network host`, which is not containment; or rewriting each
+project's DSN to the bridge gateway and exposing those services to it. Both
+trade a working review for a boundary weaker than the one they would buy.
+
+What bounds them instead is real but partial. The commands come from
+`projects.json`, which lives outside the worktree and the agent cannot write.
+The database is a throwaway, created before and dropped after. The
+environment is constructed for the run rather than inherited, so the
+reviewer's own secrets are not in it. What is **not** bounded is the code
+those commands execute — that is the repository under review, and it runs as
+root on the host.
+
+Everything else that was in this position has moved: the checks, the build,
+the package-manager installs, schema generation, and the build assertions all
+go through the sandbox now. This is the residue, and it is written down
+rather than left to be discovered.
+
+Closing it properly means the reviewer's database dependencies moving into
+the compose stack, where a container can reach them by service name. That is
+the fix, and it is not built.
+
 ### What this does not fix
 
 - **The Docker socket in the bundle.** `agent` is given

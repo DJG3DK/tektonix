@@ -42,6 +42,7 @@ from agent.graph import read_with_retry
 from agent.routers import env_config as env_config_routes
 from agent.routers import settings as settings_routes
 from agent.routers import model_config as model_config_routes
+from agent.routers import audit_store as _routers_audit_store
 from agent.routers import analytics as analytics_routes
 from agent.routers import push as push_routes
 from agent.messages import add_message
@@ -337,6 +338,14 @@ app = FastAPI(lifespan=lifespan)
 # routes without ever entering lifespan. Setting it there would make every
 # such test fail on a missing attribute rather than on anything real.
 app.state.config = config
+
+
+class _AppShim:
+    """Just enough of a Request for routers.audit_store: it reads
+    `request.app.state`, and the routes still in this module have the app
+    itself rather than a request in scope."""
+
+    app = app
 # CORS was allow_origins=["*"] with a comment claiming nginx tightened it in
 # production. nginx sets no CORS headers at all, so nothing did -- the comment
 # described a control that did not exist. Real exposure was limited (credentials
@@ -759,10 +768,15 @@ async def disable_2fa_endpoint(req: Disable2FARequest,
 
 
 def _audit_store():
-    """The store, or None before lifespan has attached it. An audit write
-    must never be the reason a request 500s -- see agent/audit.py on why the
-    log yields to the action it records."""
-    return getattr(app.state, "store", None)
+    """This module's caller-side wrapper around routers.audit_store.
+
+    Two copies of this existed once the first seams moved out -- one here
+    reading `app.state` directly, one there taking a request -- which is one
+    definition of "where does an audit write get its store" too many. The
+    router package owns it; this passes the app in so the routes still in
+    this file read it the same way.
+    """
+    return _routers_audit_store(_AppShim)
 
 
 # ---------------------------------------------------------------------------

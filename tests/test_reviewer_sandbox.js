@@ -205,3 +205,96 @@ test('a missing toolchain is recognised from docker\'s own words', () => {
     assert.equal(sandbox.missingTool('2 tests failed'), null);
     assert.equal(sandbox.missingTool(''), null);
 });
+
+// --- the hardening itself -------------------------------------------------
+//
+// Asserted against the argv docker is actually given, not against the source.
+// A grep passes for a flag that has been moved into a branch which never
+// runs, or reordered so it applies to the wrong thing -- and the failure mode
+// of losing one of these is silent: the checks still pass, in a container
+// that no longer contains.
+
+function argvFor(over = {}) {
+    const { live, wt } = scratchProject();
+    const { docker } = sandbox.dockerArgs(
+        { live, ...(over.cfg || {}) }, wt, over.dir || '.',
+        over.cmd || 'npm', over.args || ['test'],
+        over.env || {}, over.network, over.stack);
+    return docker;
+}
+
+/** The value following a flag, so order cannot be asserted by accident. */
+function valueOf(argv, flag) {
+    const i = argv.indexOf(flag);
+    return i === -1 ? null : argv[i + 1];
+}
+
+test('every capability is dropped', () => {
+    assert.equal(valueOf(argvFor(), '--cap-drop'), 'ALL');
+});
+
+test('privilege cannot be regained inside', () => {
+    assert.equal(valueOf(argvFor(), '--security-opt'), 'no-new-privileges');
+});
+
+test('there is no network unless a check asked for one', () => {
+    assert.equal(valueOf(argvFor(), '--network'), 'none');
+    assert.equal(valueOf(argvFor({ network: 'bridge' }), '--network'), 'bridge');
+    // Anything else is not a way to open the network by accident.
+    assert.equal(valueOf(argvFor({ network: 'host' }), '--network'), 'none');
+    assert.equal(valueOf(argvFor({ network: 'HOST' }), '--network'), 'none');
+    assert.equal(valueOf(argvFor({ network: true }), '--network'), 'none');
+});
+
+test('the container is bounded and disposable', () => {
+    const argv = argvFor();
+    assert.ok(argv.includes('--rm'), 'a container that outlives its check is a leak');
+    assert.equal(valueOf(argv, '--memory'), '2g');
+    assert.equal(valueOf(argv, '--cpus'), '2');
+    assert.equal(valueOf(argv, '--pids-limit'), '512');
+});
+
+test('the command is the entrypoint, and its arguments follow the image', () => {
+    // Not `IMAGE cmd args`: this image inherits ENTRYPOINT
+    // ["docker-entrypoint.sh"] from the Node base, which hands anything it
+    // does not recognise to `node` -- so a missing tool came back as a Node
+    // module stack trace instead of "executable file not found".
+    const argv = argvFor({ cmd: 'go', args: ['vet', './...'] });
+    assert.equal(valueOf(argv, '--entrypoint'), 'go');
+    const image = argv.findIndex(a => a.includes('tektonix-sandbox'));
+    assert.deepStrictEqual(argv.slice(image + 1), ['vet', './...'],
+        'the check arguments must come after the image, as arguments to the entrypoint');
+});
+
+test('nothing is passed through a shell', () => {
+    const argv = argvFor({ cmd: 'npm', args: ['run', 'test:review; rm -rf /'] });
+    assert.ok(!argv.includes('sh') && !argv.includes('bash') && !argv.includes('-c'),
+        'an argv array has no shell to interpret a semicolon: ' + argv.join(' '));
+    assert.ok(argv.includes('run "test:review; rm -rf /"'.split(' ')[0]));
+    assert.ok(argv.includes('test:review; rm -rf /'), 'the argument survives intact, uninterpreted');
+});
+
+test('a stack image brings its toolchain env and still drops capabilities', () => {
+    const argv = argvFor({ stack: 'go' });
+    assert.ok(argv.some(a => a.includes('golang')), 'go runs in the go image');
+    assert.ok(argv.some(a => a.startsWith('GOCACHE=')), 'with somewhere writable to cache');
+    assert.equal(valueOf(argv, '--cap-drop'), 'ALL', 'hardening is not per-image');
+    assert.equal(valueOf(argv, '--network'), 'none');
+});
+
+test("a check's own env wins over the toolchain's", () => {
+    const argv = argvFor({ stack: 'go', env: { GOFLAGS: '-tags=integration' } });
+    assert.ok(argv.includes('GOFLAGS=-tags=integration'));
+    assert.equal(argv.filter(a => a.startsWith('GOFLAGS=')).length, 1);
+});
+
+test('a dangling symlink is skipped, not thrown', () => {
+    // An agent that deleted the directory its symlink pointed at is an
+    // ordinary state for a worktree. Unguarded, realpath's ENOENT came out of
+    // mountArgs and failed the whole review rather than one mount.
+    const { live, wt } = scratchProject();
+    fs.symlinkSync(path.join(live, 'gone-away'), path.join(wt, 'node_modules'));
+    const mounts = mountsOf(sandbox.mountArgs({ live }, wt));
+    assert.ok(mounts.includes(`${wt}:/workspace`), 'the worktree is still mounted');
+    assert.ok(!mounts.some(m => m.includes('gone-away')));
+});

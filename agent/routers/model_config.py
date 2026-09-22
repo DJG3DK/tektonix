@@ -9,15 +9,13 @@ which includes this router, would be a cycle.
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 
 from agent.auth import User, require_full_auth
 
 from agent import auth
 from agent import model_config
-from agent.config import load_config
 
-config = load_config()
 from fastapi import HTTPException
 from pathlib import Path
 from pydantic import BaseModel
@@ -162,14 +160,14 @@ async def probe_forced_tool_call(user: User = Depends(require_full_auth)):
 
 
 @router.post("/restart-router")
-def restart_model_router(user: User = Depends(require_full_auth)):
+def restart_model_router(request: Request, user: User = Depends(require_full_auth)):
     """Restarts the model router so a saved pin change actually takes effect.
     Shared-impact action: this restarts the same router the
     review service depend on, not just this agent -- the frontend must
     surface that plainly rather than bundling this into save.
     """
     auth.require_admin(user)
-    result = model_config.restart_llm_router(config.router_base_url)
+    result = model_config.restart_llm_router(request.app.state.config.router_base_url)
     if not result["ok"]:
         # The message is what the dialog shows, so it has to say which half
         # failed: a router that never came back is a different problem from a

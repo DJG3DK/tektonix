@@ -177,17 +177,22 @@ function run(cmd, args, cwd, timeoutMs = 300_000, env) {
 }
 
 // audit C-2 (reviewer side): the check/build commands run agent-authored code
-// (npm scripts + the test-writer's test files) on the HOST -- the reviewer's
-// checks legitimately need host Postgres (db:drift/seed/e2e) and the registry
-// (pnpm audit), so they can't be moved into a --network none sandbox the way the
-// agent's own check runner now is. As defense-in-depth, run them with a SEALED,
-// minimal environment (PATH/HOME/CI + only what the check explicitly declares)
-// instead of inheriting the reviewer's full process.env, so a malicious test
-// can't skim inherited variables. This does NOT close the filesystem read of
-// host .env files -- that residual requires a DB-reachable sandbox network and
-// is tracked separately; the reviewer's other mitigations (--ignore-scripts on
-// installs, review-scoped secretFiles, and the fact that the malicious code is
-// itself in the diff under review) stand in the meantime.
+// -- npm scripts and the test-writer's own test files. This comment used to
+// say they run on the HOST because they could not be contained. Since
+// 2026-09-21 they can, and they are: checks, the build, package-manager
+// installs, schema generation and the build assertions all go through
+// runAgentCode, which on a host install is a sandbox container and in the
+// bundle is this already-contained process.
+//
+// sealedEnv is still applied inside it, and is not redundant: containment
+// stops the code reaching the machine, the sealed environment stops it
+// reading the reviewer's own variables on the way past. Two different
+// failures.
+//
+// What genuinely stays on the host is db:drift / db:seed / test:e2e, which
+// talk to Postgres and Redis on loopback -- inside a container "localhost"
+// is the container. SECURITY.md has the reasoning and what closing it would
+// take; do not let this comment drift back into claiming more than that.
 function sealedEnv(extra) {
   return {
     PATH: process.env.PATH,
@@ -639,18 +644,21 @@ async function setupWorktree(project, cfg, sha, base, { depsChangedOverride = nu
       // as a standalone check command) because this branch always installs
       // into a real, isolated worktree node_modules, never the symlinked
       // one used below — nothing here can write through to live's.
-      const frozen = await run(pm, ['install', '--frozen-lockfile', '--ignore-scripts'], worktreePath, 300_000);
+      const frozen = await runAgentCode(cfg, worktreePath, '.', pm,
+        ['install', '--frozen-lockfile', '--ignore-scripts'], 300_000, undefined, 'bridge');
       if (frozen.ok) {
         // fall through, node_modules already installed
       } else if (/ERR_PNPM_OUTDATED_LOCKFILE/.test(frozen.output)) {
         setupIssues.push({ name: 'lockfile-consistency', ok: false, output: frozen.output.slice(-4000) });
-        const lenient = await run(pm, ['install', '--prefer-offline', '--ignore-scripts'], worktreePath, 300_000);
+        const lenient = await runAgentCode(cfg, worktreePath, '.', pm,
+          ['install', '--prefer-offline', '--ignore-scripts'], 300_000, undefined, 'bridge');
         if (!lenient.ok) throw new Error(`pnpm install failed even non-frozen: ${lenient.output.slice(0, 1000)}`);
       } else {
         throw new Error(`pnpm install --frozen-lockfile failed: ${frozen.output.slice(0, 1000)}`);
       }
     } else {
-      const install = await run(pm, ['install', '--prefer-offline', '--ignore-scripts'], worktreePath, 300_000);
+      const install = await runAgentCode(cfg, worktreePath, '.', pm,
+        ['install', '--prefer-offline', '--ignore-scripts'], 300_000, undefined, 'bridge');
       if (!install.ok) throw new Error(`${pm} install failed: ${install.output.slice(0, 1000)}`);
     }
     // A root install only covers the whole repo when the root manifest really
@@ -675,7 +683,8 @@ async function setupWorktree(project, cfg, sha, base, { depsChangedOverride = nu
     for (const rel of packagesNeedingOwnInstall(cfg, worktreePath)) {
       const dir = path.join(worktreePath, rel);
       log(`[${project}] ${rel}/ is a standalone package the root install did not cover — installing it`);
-      const sub = await run(pm, ['install', '--prefer-offline', '--ignore-scripts'], dir, 300_000);
+      const sub = await runAgentCode(cfg, worktreePath, path.relative(worktreePath, dir) || '.', pm,
+        ['install', '--prefer-offline', '--ignore-scripts'], 300_000, undefined, 'bridge');
       if (!sub.ok) {
         setupIssues.push({ name: `install (${rel})`, ok: false, output: sub.output.slice(-4000) });
       }
@@ -876,7 +885,8 @@ async function setupWorktree(project, cfg, sha, base, { depsChangedOverride = nu
     const targetDir = path.join(worktreePath, g.dir);
     if (schemaChanged) {
       log(`[${project}] ${g.schemaFile} changed — regenerating ${g.dir} instead of symlinking`);
-      const gen = await run(g.regenerate.cmd, g.regenerate.args, path.join(worktreePath, g.regenerate.dir), 120_000);
+      const gen = await runAgentCode(cfg, worktreePath, g.regenerate.dir,
+        g.regenerate.cmd, g.regenerate.args, 120_000, undefined, g.regenerate.network);
       if (!gen.ok) {
         log(`[${project}] regenerate failed for ${g.dir} — recording as a failed check instead of aborting`);
         setupIssues.push({ name: `generate (${g.dir})`, ok: false, output: gen.output.slice(-4000) });
@@ -931,6 +941,15 @@ async function runAgentCode(cfg, worktreePath, relDir, cmd, args, timeoutMs, ext
     return sandbox.runSandboxed(cfg, worktreePath, relDir, cmd, args, timeoutMs,
                                 sealedEnv(extraEnv), network, stack);
   }
+  if (mode.mode === 'unavailable') {
+    // Flagged as infrastructure at the source. Everything downstream that
+    // decides whose problem a failure is reads `.infrastructure`; deriving
+    // it by matching the message text again would be a second place for the
+    // two to disagree, and the disagreement costs an agent several rounds
+    // debugging an environment it cannot see.
+    const r = await unavailable(mode);
+    return { ...r, infrastructure: true };
+  }
   if (mode.mode === 'bundle') {
     // Already inside a container that is deliberately NOT given the docker
     // socket (docker-compose.yml gives it to `agent` alone). Starting a
@@ -938,17 +957,22 @@ async function runAgentCode(cfg, worktreePath, relDir, cmd, args, timeoutMs, ext
     // equivalent to gain isolation it already has.
     return runSealed(cmd, args, path.join(worktreePath, relDir || '.'), timeoutMs, extraEnv);
   }
-  // Fail closed. Running on the host instead would be the escalation this
-  // exists to close, and "fall back when the sandbox is unavailable" is the
-  // path anyone attacking it would engineer. Not a new fragility: the agent's
-  // own bash already requires Docker, so a box without it is not producing
-  // work to review.
+  return { ...(await unavailable(mode)), infrastructure: true };
+}
+
+
+// Fail closed. Running on the host instead would be the escalation this
+// exists to close, and "fall back when the sandbox is unavailable" is the
+// path anyone attacking it would engineer. Not a new fragility: the agent's
+// own bash already requires Docker, so a box without it is not producing
+// work to review.
+async function unavailable(mode) {
   return {
     ok: false,
     code: 1,
-    output: `REFUSED: this check runs code the agent wrote and cannot be contained here -- ${mode.reason}. `
+    output: `SETUP: this check runs code the agent wrote and cannot be contained here -- ${mode.reason}. `
           + `Build the sandbox image (docker/agent-sandbox) or run the reviewer in the bundle. `
-          + `It was not run on the host.`,
+          + `It was not run on the host, and nothing about the code under review is known either way.`,
   };
 }
 
@@ -969,7 +993,13 @@ async function runChecks(cfg, worktreePath) {
     const r = await runAgentCode(cfg, worktreePath, check.dir, check.cmd, check.args,
                                  check.timeoutMs, check.env, check.network,
                                  check.stack || cfg.stack);
-    results.push({ name: check.name, ok: r.ok, output: r.output.slice(-4000) });
+    results.push({
+      name: check.name, ok: r.ok, output: r.output.slice(-4000),
+      // Set by runAgentCode when the check could not be RUN -- a missing
+      // toolchain or an uncontainable host. It is not the agent's problem
+      // and must not be handed to it as one.
+      ...(r.infrastructure || r.missingTool ? { infrastructure: true } : {}),
+    });
   }
   return results;
 }
@@ -1057,7 +1087,7 @@ async function runBuildCheck(cfg, worktreePath) {
       continue;
     }
     log(`  running ${a.name} (${a.cmd} ${a.args.join(' ')}) in ${a.dir}`);
-    const r = await run(a.cmd, a.args, path.join(worktreePath, a.dir), 60_000);
+    const r = await runAgentCode(cfg, worktreePath, a.dir, a.cmd, a.args, 60_000, undefined, a.network);
     results.push({ name: a.name, ok: r.ok, output: r.output.slice(-4000) });
   }
   return results;
@@ -1115,6 +1145,19 @@ async function runDatabaseCheck(cfg, worktreePath) {
     if (!create.ok) return [{ name: 'db-setup', ok: false, output: create.output.slice(-2000) }];
     await run('redis-cli', ['-n', '15', 'flushdb'], '/', 10_000);
 
+    // THE ONE PLACE agent-authored code still runs on the host, and it is
+    // deliberate rather than missed. These three talk to Postgres and Redis
+    // on this machine's loopback: inside a container "localhost" is the
+    // container, so containing them means either --network host, which is
+    // not containment, or rewriting each project's DSN to the bridge gateway
+    // and opening those services to it. Both trade a real, working review
+    // for a weaker boundary than the one they would buy.
+    //
+    // What bounds it instead: the commands come from projects.json, which
+    // the agent cannot write; the database is a throwaway created and
+    // dropped around them; and the env is built here rather than inherited.
+    // What is NOT bounded is the code those commands execute, which is the
+    // repository under review. SECURITY.md says so plainly.
     log(`  running db-drift (pnpm db:drift) in ${dc.apiDir}`);
     const drift = await run(dc.driftCmd.cmd, dc.driftCmd.args, apiDir, 120_000, env);
     results.push({ name: 'db-drift', ok: drift.ok, output: drift.output.slice(-4000) });
