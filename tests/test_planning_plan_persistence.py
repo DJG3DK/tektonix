@@ -265,3 +265,83 @@ async def test_messages_after_a_compaction_still_stream():
     assert "fresh after compaction" in texts, texts
     assert texts.count("step 5") == 1, "surviving messages are not re-published after compaction"
     assert any(e.get("type") == "ping" for e in published), "a tick with nothing new still heartbeats"
+
+
+# ---------------------------------------------------------------------------
+# ...and a turn that concluded there is NOTHING to build must not be adopted
+# ---------------------------------------------------------------------------
+#
+# Live 2026-09-22, the mirror image of the incident above. A planning turn on a
+# real project investigated a request, found the work already done, and ended:
+# "So there's no plan to save -- any 'fix' would be a no-op." That reply was
+# 2,719 characters with three markdown headings, so it cleared the net's
+# length-and-structure bar, landed in the plan panel, and armed Build Now. The
+# operator pressed it. A build task started with a $10 budget whose GOAL was an
+# essay explaining that nothing needed doing.
+#
+# The net's own comment claimed the heuristic was "deliberately narrow ... so
+# an ordinary conversational answer never lands in the plan panel". It was not
+# narrow enough: structure says a reply is a DOCUMENT, never that it is a
+# document proposing work.
+
+from agent.planning_chat import looks_like_a_plan, reply_disclaims_a_plan
+
+# The shape of the real one: long, headed, and concluding that there is
+# nothing to do.
+NO_WORK_TEXT = (
+    "Verified -- the work is already done, and it landed on main.\n\n"
+    "## Answer: the root manifest already exists\n\n" + ("detail " * 200) +
+    "\n\n## How it got there\n\n" + ("history " * 100) +
+    "\n\n## Nothing to build\n\n"
+    "Every requirement in your request is satisfied in the current tree.\n"
+    "So there's no plan to save -- any \"fix\" would be a no-op."
+)
+
+
+def test_a_reply_that_says_there_is_no_plan_is_not_a_plan():
+    assert len(NO_WORK_TEXT) >= 1500 and NO_WORK_TEXT.count("\n#") >= 3, (
+        "the fixture must clear the OLD bar, or it is not reproducing the bug")
+    assert reply_disclaims_a_plan(NO_WORK_TEXT)
+    assert not looks_like_a_plan(NO_WORK_TEXT)
+
+
+def test_a_real_plan_is_still_adopted():
+    """The net exists for a real failure and must keep working."""
+    assert looks_like_a_plan(PLAN_TEXT)
+    assert not reply_disclaims_a_plan(PLAN_TEXT)
+
+
+@pytest.mark.parametrize("ending", [
+    "So there's no plan to save.",
+    "There is nothing to build here.",
+    "No changes are needed.",
+    "This is already done.",
+    "Any fix would be a no-op.",
+])
+def test_the_ways_a_turn_says_it_found_no_work(ending):
+    assert reply_disclaims_a_plan("## Findings\n\n" + ("x " * 400) + "\n\n" + ending)
+
+
+def test_a_plan_mentioning_that_something_already_exists_is_still_a_plan():
+    """Only the CONCLUSION is read. A plan may legitimately note in passing
+    that a file already exists while still proposing plenty of work -- reading
+    the whole document would reject it."""
+    text = ("## Plan\n\nThe manifest already exists, so step one is to extend it.\n\n"
+            + ("work " * 400) +
+            "\n\n## Steps\n\n1. Extend it\n2. Wire the script\n"
+            "\n## Verification\n\nRun the suite and confirm four suites are picked up.\n"
+            "\n## Rollback\n\nRevert the manifest.")
+    assert not reply_disclaims_a_plan(text)
+    assert looks_like_a_plan(text)
+
+
+async def test_the_net_leaves_the_panel_empty_for_a_no_work_conclusion():
+    """End to end through run_planning_turn: the panel stays empty, which is
+    what keeps Build Now disabled."""
+    assert await _turn(AIMessage(content=NO_WORK_TEXT)) is None
+
+
+async def test_a_saved_plan_is_never_clobbered_by_a_no_work_reply():
+    """If the turn DID save a plan and then concluded with a summary, the
+    saved plan stands."""
+    assert await _turn(AIMessage(content=NO_WORK_TEXT), saved="# Real plan") == "# Real plan"

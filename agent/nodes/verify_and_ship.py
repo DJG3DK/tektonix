@@ -208,12 +208,39 @@ async def _write_episode(store: BaseStore, state: AgentState, result: dict,
 
 
 def _is_terminal(result: dict) -> bool:
+    if result.get("escalated"):
+        # First, so that an escalation is never buried behind a parking flag
+        # left in the same result. A task that gave up has a real outcome to
+        # record; the two guards below are about work that is still in play.
+        # (No current path sets both -- verify_and_ship returns early on each
+        # -- so this is the function saying what it means rather than a fix.)
+        return True
     if result.get("pending_approval"):
         # Paused waiting on an operator decision, not a real outcome yet --
         # must not write an episode even though this shares the same
         # "no pending_feedback" shape a real terminal outcome has.
         return False
-    return bool(result.get("escalated")) or not result.get("pending_feedback")
+    if result.get("pending_merge_approval"):
+        # The SAME reasoning, and it was missing here until 2026-09-22.
+        #
+        # A READY verdict parked on the operator's final look has not shipped:
+        # the work is on a branch, live is untouched, and the operator may
+        # still send it back. Writing an episode here recorded outcome
+        # "shipped" for a commit that had merged nowhere.
+        #
+        # That is not a cosmetic mislabel. agent/consolidation.py learns from
+        # episodes, and a "shipped" one is read as work that LANDED -- so on
+        # 2026-09-21 a parked task taught this project's memory that "a root
+        # package.json now exists". The operator never merged. For a day the
+        # memory asserted a file that was not on main, a planning session
+        # believed it, concluded there was nothing to build, and a build task
+        # started against a goal that was an essay explaining as much.
+        #
+        # The episode is not lost, only deferred: approving re-enters this
+        # node, the merge happens, and the terminal write runs then -- with
+        # the outcome it actually had.
+        return False
+    return not result.get("pending_feedback")
 
 
 async def verify_and_ship_node(state: AgentState, app_config: Config, pg_store: BaseStore) -> dict:

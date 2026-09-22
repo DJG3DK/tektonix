@@ -960,3 +960,62 @@ async def test_the_node_hands_its_config_to_the_episode_writer(monkeypatch):
 
     assert seen["config"] is app_config, "the node's app_config must reach write_episode"
     assert seen["repo"] == "test-repo"
+
+
+# ---------------------------------------------------------------------------
+# a task parked on the operator's MERGE decision has not shipped
+# ---------------------------------------------------------------------------
+#
+# Live 2026-09-21..22, and the chain is worth recording because every link
+# looked fine on its own:
+#
+#   a task reached READY and parked on pending_merge_approval
+#     -> _is_terminal guarded pending_approval but not this, so an episode was
+#        written saying outcome="shipped"
+#     -> agent/consolidation.py learns from episodes, and read "shipped" as
+#        work that LANDED, writing into project memory: "a root package.json
+#        now exists"
+#     -> the operator never merged, so for a day the memory asserted a file
+#        that was not on main
+#     -> a planning session loaded that memory, concluded there was nothing to
+#        build, and a build task started with a $10 budget against a goal that
+#        was an essay explaining as much.
+#
+# The episode is deferred, never lost: approving re-enters the node, the merge
+# happens, and the terminal write runs then.
+
+def _parked_on_merge() -> dict:
+    return {
+        "committed_sha": "abc123",
+        "review_gate_result": {"verdict": "READY", "lastReviewedSha": "abc123"},
+        "pending_merge_approval": {"sha": "abc123", "repo": "demo", "at": 0},
+        "execution_log": [],
+    }
+
+
+def test_parking_on_a_merge_decision_is_not_a_terminal_outcome():
+    assert vs._is_terminal(_parked_on_merge()) is False
+
+
+def test_the_same_commit_is_terminal_once_the_merge_has_happened():
+    """What the approve path returns: the parking key is gone, so the episode
+    is written then -- with the outcome it actually had."""
+    merged = _parked_on_merge()
+    merged["pending_merge_approval"] = None
+    merged["committed_sha"] = None
+    assert vs._is_terminal(merged) is True
+
+
+def test_a_rejected_merge_loops_back_rather_than_writing_an_episode():
+    sent_back = _parked_on_merge()
+    sent_back["pending_merge_approval"] = None
+    sent_back["pending_feedback"] = "the operator asked for changes"
+    assert vs._is_terminal(sent_back) is False
+
+
+def test_an_escalation_is_still_terminal_even_while_parked():
+    """Escalation wins: a task that gave up has a real outcome to record, and
+    burying it behind a stale parking flag would lose it."""
+    escalated = _parked_on_merge()
+    escalated["escalated"] = True
+    assert vs._is_terminal(escalated) is True

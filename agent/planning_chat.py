@@ -580,6 +580,60 @@ def _message_key(msg) -> str:
     return str(mid) if mid else f"obj:{id(msg)}"
 
 
+# A plan describes work to DO. These are the ways a planning turn says the
+# opposite -- that it investigated and found nothing to build -- and they are
+# checked because the safety net below cannot otherwise tell the two apart.
+#
+# Live 2026-09-22: a turn on a real project ended "So there's no plan to save
+# -- any 'fix' would be a no-op", in a 2,719-character answer with three
+# markdown headings. That cleared the net's length-and-structure bar, landed
+# in the plan panel, and armed the Build Now button. The operator pressed it
+# and a task started with a $10 budget whose GOAL was an essay explaining that
+# nothing needed doing.
+#
+# Phrase matching is not a technique to be proud of, and it is the right one
+# here: this is not inferring intent from prose, it is reading the model's own
+# explicit statement about whether a plan exists. A turn that says there is no
+# plan to save is not a turn whose text should be saved as the plan.
+_NO_WORK_MARKERS = (
+    "no plan to save",
+    "nothing to build",
+    "nothing to do",
+    "no changes are needed",
+    "no changes needed",
+    "already done",
+    "already exists, exactly as",
+    "would be a no-op",
+    "there is no work",
+    "there's no work",
+)
+
+# Only the tail is searched. A plan may legitimately say "X already exists" in
+# passing while still proposing work; a CONCLUSION that nothing is needed lands
+# at the end, which is also where a reader looks for it.
+_CONCLUSION_TAIL_CHARS = 700
+
+
+def reply_disclaims_a_plan(text: str) -> bool:
+    """Does this reply say, in its own words, that there is nothing to plan?"""
+    tail = (text or "")[-_CONCLUSION_TAIL_CHARS:].lower()
+    return any(marker in tail for marker in _NO_WORK_MARKERS)
+
+
+def looks_like_a_plan(text: str) -> bool:
+    """Is this final reply a plan the operator could press Build Now on?
+
+    Three conditions, and the third is the one added after the 2026-09-22
+    incident. Length and heading structure say it is a DOCUMENT; they cannot
+    say it is a document proposing work, and a research answer with headings
+    satisfies both.
+    """
+    text = (text or "").strip()
+    if len(text) < 1500 or text.count("\n#") < 3:
+        return False
+    return not reply_disclaims_a_plan(text)
+
+
 async def run_planning_turn(agent, plan_ref: dict, thread_config: dict, text: str | None, publish, tracker=None) -> str | None:
     """Runs one turn (text=None resumes/continues the thread with no new
     input, e.g. after a process restart) and publishes each new message via
@@ -664,10 +718,17 @@ async def run_planning_turn(agent, plan_ref: dict, thread_config: dict, text: st
             last = messages[-1] if messages else None
             if isinstance(last, _AIMessage) and not getattr(last, "tool_calls", None):
                 text = content_text(last.content).strip()
-                if len(text) >= 1500 and text.count("\n#") >= 3:
+                if looks_like_a_plan(text):
                     logger.warning("planning turn ended with an unsaved plan-shaped reply "
                                    "(%d chars) -- adopting it as the draft plan", len(text))
                     plan_ref["markdown"] = text
+                elif reply_disclaims_a_plan(text):
+                    # Said out loud rather than passed over: the panel staying
+                    # empty here is the CORRECT outcome, and without a line in
+                    # the log it reads exactly like the bug this net exists to
+                    # fix -- a plan that went missing.
+                    logger.info("planning turn concluded there is nothing to build; leaving the "
+                                "plan panel empty so Build Now stays disabled")
         except Exception:  # noqa: BLE001 -- the net must never break a healthy turn
             logger.exception("unsaved-plan recovery failed; returning without a plan")
     return plan_ref.get("markdown")
