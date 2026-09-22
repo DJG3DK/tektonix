@@ -67,3 +67,42 @@ describe("ChatMessage", () => {
     expect(document.querySelector(".chat-tool-result-body")?.textContent).toContain("README.md");
   });
 });
+
+describe("every speaker wears the same mark", () => {
+  function agentEntry(node: LogEntry["node"]) {
+    return { node, step_id: null, summary: "did a thing", detail: "detail",
+             cost_usd: 0, timestamp: "2026-09-22T22:00:00Z" };
+  }
+
+  it("gives a subagent the mark, not its initials", () => {
+    // It used to render a tinted disc with "TE" for test-writer. The name is
+    // already on the line beside it, so the disc answered a question the
+    // label had already answered -- and made one transcript look like two
+    // different products talking.
+    const { container } = render(
+      <ChatMessage entry={agentEntry("work:test-writer")} prevEntry={undefined} />);
+    const avatar = container.querySelector(".chat-avatar")!;
+    expect(avatar.querySelector("svg")).not.toBeNull();
+    expect(avatar.textContent).toBe("");
+  });
+
+  it("gives the coordinator the same one", () => {
+    const { container } = render(<ChatMessage entry={agentEntry("work")} prevEntry={undefined} />);
+    expect(container.querySelector(".chat-avatar svg")).not.toBeNull();
+  });
+
+  it("has no tinted-disc variant left", () => {
+    const { container } = render(
+      <ChatMessage entry={agentEntry("work:investigator")} prevEntry={undefined} />);
+    expect(container.querySelector(".chat-avatar--sub")).toBeNull();
+    expect(container.querySelector(".chat-avatar--mark")).not.toBeNull();
+  });
+
+  it("still shows only one avatar for a run of messages from one speaker", () => {
+    // The avatar is suppressed on a continuation row; making every mark
+    // identical must not turn a conversation into a column of logos.
+    const prev = agentEntry("work:test-writer");
+    const { container } = render(<ChatMessage entry={agentEntry("work:test-writer")} prevEntry={prev} />);
+    expect(container.querySelector(".chat-avatar")).toBeNull();
+  });
+});

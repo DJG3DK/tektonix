@@ -339,13 +339,16 @@ function ChatMessageImpl({ entry, prevEntry }: { entry: LogEntry; prevEntry?: Lo
   const sameSpeaker = prevEntry && classify(prevEntry) === "agent" && agentName(prevEntry.node) === name;
   return (
     <div className={`chat-row chat-row--agent ${sameSpeaker ? "chat-row--cont" : ""}`}>
+      {/* One mark for every speaker, coordinator and subagent alike. The
+          subagents used to wear a tinted disc with their initials, on the
+          reasoning that two in a row need telling apart -- but the NAME is
+          already on the line beside it ("test-writer", "investigator"), so
+          the disc was a second and louder answer to a question the label had
+          already answered, and it made one transcript look like two different
+          products talking. */}
       {!sameSpeaker && (
-        <div className={`chat-avatar ${name !== "agent" ? "chat-avatar--sub" : "chat-avatar--mark"}`}>
-          {/* The coordinator wears the mark itself, floating -- no plate
-              behind it. Subagents keep the tinted disc with their initials,
-              because two of them in a row have to be told apart at a glance
-              and a repeated logo would not do that. */}
-          {name === "agent" ? <TektonixMark size={26} /> : name.slice(0, 2)}
+        <div className="chat-avatar chat-avatar--mark">
+          <TektonixMark size={26} />
         </div>
       )}
       <div className="chat-agent-col">

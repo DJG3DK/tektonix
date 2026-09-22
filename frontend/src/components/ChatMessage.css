@@ -26,20 +26,18 @@
   box-shadow: 0 2px 8px rgba(139, 124, 246, 0.35);
   margin-top: 2px;
 }
-/* The coordinator's avatar is the mark alone. No gradient, no disc, no
-   shadow -- the point is that it floats on the surface behind it rather than
-   sitting on a plate. Keeps the 32px box so every row's text still lines up
-   with the subagent rows above and below it. */
+/* Kept as a no-op hook rather than deleted: the class is what the markup and
+   the tests name, and a modifier meaning "this is the plain mark" is worth
+   being able to point at.
+
+   The `--sub` variant it used to sit beside is gone. Subagents wore a tinted
+   disc with their initials so two in a row could be told apart -- but their
+   NAME is already on the line next to it, so the disc was a second and louder
+   answer to a question the label had already answered, and it made one
+   transcript look like two different products talking. */
 .chat-avatar--mark {
   background: none;
   box-shadow: none;
-}
-
-.chat-avatar--sub {
-  background: linear-gradient(135deg, #d264c9, #8b7cf6);
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
 }
 
 .chat-agent-col {
@@ -272,7 +270,11 @@
 @media (max-width: 768px) {
   .chat-row { gap: 8px; }
   .chat-row--cont { padding-left: 0; margin-top: -2px; }
-  .chat-avatar { width: 26px; height: 26px; font-size: 12px; }
+  /* The svg is sized down with the box, or a 26px mark in a 26px box loses
+     the breathing room it has on desktop. font-size is gone with the
+     initials it used to set. */
+  .chat-avatar { width: 26px; height: 26px; }
+  .chat-avatar svg { width: 21px; height: 21px; }
   .chat-agent-col { max-width: calc(100% - 34px); }
   .chat-bubble { font-size: 14px; padding: 9px 12px; }
   .chat-bubble--user { max-width: 88%; }
