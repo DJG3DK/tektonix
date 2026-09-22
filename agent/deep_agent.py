@@ -1178,6 +1178,39 @@ to use `edit`/`read` instead.
 - NEVER run `git commit` (or amend/rebase) yourself via bash. The verify/ship gate commits your \
 work for you after its own checks pass -- a self-made commit bypasses that bookkeeping and gets \
 absorbed anyway, so it only adds confusion. Just edit files and let the gate handle git."""
+_FINDING_GUIDANCE = """ACTING ON A REPORTED FINDING (a scanner alert, a failing check, a stack trace):
+
+A finding that names a file and a line has already done the hard part. Open THAT file at THAT \
+line, first, before anything else. The message plus the code it points at is usually the whole \
+story: "this query object depends on a user-provided value" sitting beside a `User.findOne` \
+whose filter is an `email` taken straight out of `req.body` is not a puzzle to be researched, it \
+IS the answer -- send a `$ne` operator where the string was expected and the query matches every \
+row.
+
+(No braces appear anywhere in this section on purpose: it is concatenated into prompts that are \
+`.format()`-ed and into prompts that are not, so a literal brace either raises KeyError in one or \
+renders as a doubled brace in the other.)
+
+DO NOT go and read the tool that produced the finding. Its rule definitions, its query source, \
+its extension packs, its documentation past a one-line description -- that is studying the \
+detector instead of the defect, and it is the most reliable way there is to spend an hour and \
+change no files. Observed 2026-09-22: a task handed a CodeQL alert with sixteen exact file:line \
+locations spent twenty-five minutes downloading SqlInjection.qll and express.qll, then delegated \
+a subagent to research the query further, and never once opened the controller it was pointed at. \
+The two fixes it was asked for were three lines each and visible on sight.
+
+What IS worth investigating is the CODE: how user input reaches that line, what the callers \
+assume, what else in the repo shares the pattern, what a fix would break. Those are real \
+questions and the `investigator` subagent is the right place for them. "How does this analyser \
+decide?" is not one of them -- and if you are handed that question as a delegation, answer it \
+from the finding itself in a sentence and spend your effort on the code instead.
+
+If the message is still opaque after you have read the code it points at, look the rule up ONCE \
+by its short description and move on. If it is opaque even then, fix what you can see is wrong \
+and say plainly in your conclusion what you could not interpret. An honest partial fix beats a \
+complete understanding of a linter.
+"""
+
 
 INVESTIGATOR_SYSTEM_PROMPT = """You are a read-only investigation subagent. You research and \
 report -- you never modify anything. Your tools do not include write/edit (restricted at the code \
@@ -1200,7 +1233,7 @@ prompt doesn't ask you to examine an image, don't go analyze one on your own ini
 inspection via bash. If the prompt already states a fact (a product name, a file path, a value), \
 treat it as given and move on to the actual investigation instead of re-deriving it yourself.
 
-""" + _FILESYSTEM_GUIDANCE + _VISUAL_GUIDANCE + """
+""" + _FILESYSTEM_GUIDANCE + _VISUAL_GUIDANCE + _FINDING_GUIDANCE + """
 
 IMPORTANT: your final report is what returns to the coordinator -- everything else you did (every \
 file you read, every command you ran) stays isolated in your own context and is NOT automatically \
@@ -1240,7 +1273,7 @@ Also make sure any new test file is actually registered as an npm script and inc
 project's aggregate `test` script in package.json -- a test that exists on disk but was never wired \
 in silently never runs as part of any check.
 
-""" + _FILESYSTEM_GUIDANCE + _VISUAL_GUIDANCE + """
+""" + _FILESYSTEM_GUIDANCE + _VISUAL_GUIDANCE + _FINDING_GUIDANCE + """
 
 Your final report returns to the coordinator; the rest of your own work stays isolated in your own \
 context. Report which file(s) you wrote/changed and a short summary of what the tests actually \
@@ -1267,7 +1300,7 @@ eyes on test quality, and a test you author yourself to validate your own implem
 the blind spot it exists to remove. (Trivial mechanical fixes -- updating an expectation string, \
 renaming an import -- are fine to do directly.)
 
-""" + _FILESYSTEM_GUIDANCE + _VISUAL_GUIDANCE + """
+""" + _FILESYSTEM_GUIDANCE + _VISUAL_GUIDANCE + _FINDING_GUIDANCE + """
 
 DELEGATE RESEARCH: before you can change something you usually have to find out how it works. \
 The moment that costs more than a couple of looks -- you are about to open a third file, or run a \
