@@ -22,8 +22,24 @@ assert:
       path: src/report.py
       pattern: "nlargest|heapq"
     why: the goal names the mechanism, so a sort with a slice is not the fix
-  - diff_excludes: ["tests/test_report.py"]
+  # NOT `diff_excludes: tests/test_report.py`, which is what this said until
+  # 2026-09-22 and is stricter than its own intent. The agent added eight
+  # edge-case tests for top_n -- ties, n bounds, non-mutation, row identity --
+  # and touched not one existing line. The suite failed it anyway, because
+  # "do not weaken the tests" had been written as "do not touch the file",
+  # and adding tests to a refactor is a good thing to do.
+  #
+  # What the guard actually means is that the tests which already pass are
+  # still there. That is what these check.
+  - file_matches:
+      path: tests/test_report.py
+      pattern: "def test_top_n\\b"
+    guard: true
+    why: the original top_n test survives the refactor
+  - file_matches:
+      path: tests/test_report.py
+      pattern: "def test_total"
     guard: true
     why: >
-      this is a refactor behind an unchanged interface — the tests that
-      already pass should still pass untouched
+      and the rest of the suite with it — deleting tests is the cheapest way
+      to make a refactor look clean

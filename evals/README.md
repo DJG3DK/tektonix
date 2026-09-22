@@ -115,7 +115,9 @@ different state files, each unaware of the other's worktree.
 
 ## Cost and wall-clock — measured, not estimated
 
-First full run, 2026-09-22: **11/12 passed, $0.28, 67 minutes.**
+First full run, 2026-09-22: **11/12 passed, $0.28, 67 minutes** — and the one
+failure turned out to be this suite's fault, not the agent's (see below), so
+the honest score is 12/12.
 
 | | measured |
 | --- | --- |
@@ -149,6 +151,31 @@ agent did. The aggregate half is the **same six
 numbers** `agent/benchmarks.py` computes for production, so a run is directly
 comparable to the fortnight it was run in — an eval scoring itself on private
 metrics would answer a question the dashboard cannot be compared against.
+
+## What the first run taught the suite
+
+The single failure was `py-top-n-heap`, on a guard reading
+`diff_excludes: ["tests/test_report.py"]` whose stated intent was *"the tests
+that already pass should still pass untouched"*. The agent had added eight
+edge-case tests — ties, `n` bounds, non-mutation, row identity — and changed
+not one existing line. The suite failed it anyway, because **"do not weaken
+the tests" had been written as "do not touch the file"**, and adding tests to
+a refactor is a good thing to do.
+
+Two lessons, both now in the suite:
+
+* **Say what you mean, not something stricter that is easier to express.**
+  `diff_excludes` on a test file forbids improvement as well as sabotage. The
+  guard is now `file_matches` on the test functions that must survive, which
+  is what "do not weaken" actually is.
+* **Keep the diff.** Working this out needed the actual patch, and the first
+  run recorded only the changed *paths* — "the test file changed" is the same
+  sentence whether a test was added or deleted. Failing tasks now carry their
+  diff.
+
+A benchmark that marks good work as a failure is worse than no benchmark,
+because the number looks like a result. This one only surfaced because a
+failing task was investigated rather than believed.
 
 ## Adding a task
 

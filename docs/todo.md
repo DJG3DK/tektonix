@@ -383,10 +383,17 @@ real repositories. `REVIEW_ONLY_PROJECTS_JSON=1` closes it, and
 `tests/test_evals_isolation.py` pins it.
 
 **First full run, 2026-09-22:** 11/12 passed, $0.28, 67 minutes, 100%
-first-pass reviews, 0 escalations. The one failure is the suite doing its job:
-`py-top-n-heap` shipped, passed its checks and earned a READY verdict, and
-still changed the test file a guard said must not change — a violation every
-gate in the system is blind to.
+first-pass reviews, 0 escalations — and on investigation the one failure was
+the SUITE's fault. `py-top-n-heap` guarded `diff_excludes` on the test file
+while meaning "do not weaken the tests"; the agent had added eight edge-case
+tests and touched no existing line. The guard is now `file_matches` on the
+functions that must survive, and the honest score for that run is 12/12.
+
+Worth keeping because it is the failure mode a benchmark is most prone to: a
+spec that is stricter than its own intent marks good work as a regression,
+and the number looks like a result. It only surfaced because the failing task
+was investigated rather than believed — and diagnosing it is what added diff
+capture to the report.
 
 **Money is not the constraint; time is.** A full run costs pennies and takes
 over an hour, so this is an overnight or CI tool, not something to run between
