@@ -328,8 +328,23 @@ async def work_node(state: AgentState, app_config: Config, checkpointer, pg_stor
             elif fetched.get("diverged"):
                 print(f"[work] {repo}: local main has commits origin does not -- left alone")
 
-        sync = await sync_workspace_to_base(PROJECTS[repo]["sandbox"])
+        # task_id, so the sync can tell this task's own uncommitted work
+        # (a resume) from debris a different task abandoned. Without it every
+        # dirty tree looks the same and the safe answer is to refuse, which
+        # is how a task ends up silently running on a stale base.
+        sync = await sync_workspace_to_base(PROJECTS[repo]["sandbox"], task_id=task_id)
         print(f"[work] {repo}: workspace sync -> {sync}")
+        if sync.get("salvaged_from"):
+            # Said out loud. Something was stashed to make room for this task,
+            # and an operator who wants it back needs to know it exists.
+            print(f"[work] {repo}: stashed work left behind by {sync['salvaged_from']} "
+                  f"-- recover it with `git stash list` in the workspace")
+        elif not sync.get("synced"):
+            # A skipped sync used to return ok=True and vanish into a log
+            # line. It is the failure this function exists to prevent, so it
+            # says so.
+            print(f"[work] {repo}: WORKSPACE NOT SYNCED ({sync.get('reason')}) "
+                  f"-- this task starts from whatever HEAD was already at")
 
     agent, tracker, last_failed_edit_ref = await build_deep_agent(
         app_config,

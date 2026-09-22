@@ -97,7 +97,49 @@ async def git_diff(repo_root: str, staged: bool = False) -> str:
     return r["output"]
 
 
-async def sync_workspace_to_base(repo_root: str, base_ref: str = "main") -> dict:
+# Which task last took the workspace. Written into the worktree's OWN git
+# directory rather than the tree: a marker file in the tree would show up in
+# `git status`, get swept into `git add -A`, and become the very debris this
+# exists to clean up.
+_OWNER_MARKER = "tektonix-workspace-owner"
+
+
+async def _owner_marker_path(repo_root: str):
+    from pathlib import Path  # noqa: PLC0415
+    r = await _git("rev-parse --absolute-git-dir", repo_root, timeout=15)
+    if not r["ok"]:
+        return None
+    gitdir = r["output"].strip()
+    return Path(gitdir) / _OWNER_MARKER if gitdir else None
+
+
+async def _workspace_owner(repo_root: str) -> str | None:
+    """The task id that last synced this workspace, or None."""
+    path = await _owner_marker_path(repo_root)
+    if path is None:
+        return None
+    try:
+        return path.read_text().strip() or None
+    except OSError:
+        return None
+
+
+async def _claim_workspace(repo_root: str, task_id: str) -> None:
+    """Never raises: failing to record ownership must not fail the task. The
+    cost of losing it is one unnecessary stash next time, not damage."""
+    path = await _owner_marker_path(repo_root)
+    if path is None:
+        return
+    try:
+        path.write_text(f"{task_id}\n")
+    except OSError:
+        import logging  # noqa: PLC0415
+        logging.getLogger("tektonix").warning(
+            "could not claim the workspace at %s", repo_root)
+
+
+async def sync_workspace_to_base(repo_root: str, base_ref: str = "main",
+                                 task_id: str | None = None) -> dict:
     """Move an IDLE workspace to the current live tip before a fresh task edits.
 
     Why this exists: the workspace worktree only ever sat where the previous
@@ -110,22 +152,69 @@ async def sync_workspace_to_base(repo_root: str, base_ref: str = "main") -> dict
     operator-approved) merge then failed --ff-only with "diverging branches",
     and the agent had spent the whole task editing week-old code.
 
-    Only acts on a CLEAN tree -- a dirty tree means a resumed or concurrent
-    task owns the workspace, and moving the base under real work is exactly
-    the kind of silent damage this module exists to prevent. Detached
-    checkout, because `main` itself is checked out in the live worktree and
-    git (correctly) refuses to check a branch out twice.
+    A dirty tree used to end this function, on the reasoning that it meant a
+    resumed task owned the workspace and moving the base under real work is
+    silent damage. Half right, and the wrong half cost three separate
+    failures on 2026-09-22:
+
+      * a stopped task left 2,086 files of downloaded reference material in
+        the tree; the next task inherited them, spent calls working out what
+        they were, and would have hit the 500-file commit guard twenty
+        minutes in;
+      * the sync then refused BECAUSE of that debris, so the next task
+        silently skipped its base sync -- the exact failure this function
+        exists to prevent, reintroduced by its own safety check;
+      * and the refusal returned ok=True, so nothing anywhere treated it as
+        a problem.
+
+    The missing distinction is WHOSE dirty tree it is. A task that syncs
+    claims the workspace by writing its id into the worktree's git dir (not
+    the tree itself, so it is never committed and never shows in status).
+    After that:
+
+      * dirty and claimed BY THIS TASK -- a resume picking up its own
+        uncommitted work. Left completely alone, exactly as before.
+      * dirty and claimed by anyone else, or unclaimed -- abandoned. Stashed
+        (including untracked files) and then synced. `git stash` rather than
+        `clean -fd` on purpose: whatever it was, it is recoverable with
+        `git stash list` afterwards, and a harness that silently deletes a
+        directory it does not understand is not one to trust with a repo.
+
+    Detached checkout, because `main` itself is checked out in the live
+    worktree and git (correctly) refuses to check a branch out twice.
     """
     status = await _git("status --porcelain", repo_root, timeout=15)
     if not status["ok"]:
         return {"ok": False, "synced": False, "reason": f"status failed: {status['output'][:200]}"}
+
+    salvaged = None
     if status["output"].strip():
-        return {"ok": True, "synced": False, "reason": "tree dirty -- workspace belongs to in-flight work"}
+        owner = await _workspace_owner(repo_root)
+        if task_id and owner == task_id:
+            return {"ok": True, "synced": False,
+                    "reason": "tree dirty -- this task's own uncommitted work"}
+        whose = owner or "an unknown task"
+        stash = await _git(
+            f'stash push --include-untracked -m "tektonix: workspace left dirty by {whose}"',
+            repo_root, timeout=120)
+        if not stash["ok"]:
+            # Could not salvage, so do not destroy. The old refusal is the
+            # right outcome here -- it is only wrong when the alternative was
+            # available.
+            return {"ok": True, "synced": False,
+                    "reason": f"tree dirty and could not be stashed: {stash['output'][:200]}"}
+        salvaged = whose
+
     r = await _git(f"checkout --detach {base_ref}", repo_root, timeout=30)
     if not r["ok"]:
         return {"ok": False, "synced": False, "reason": r["output"][:300]}
+    if task_id:
+        await _claim_workspace(repo_root, task_id)
     sha = await _git("rev-parse --short HEAD", repo_root, timeout=15)
-    return {"ok": True, "synced": True, "base": sha["output"].strip() if sha["ok"] else base_ref}
+    out = {"ok": True, "synced": True, "base": sha["output"].strip() if sha["ok"] else base_ref}
+    if salvaged:
+        out["salvaged_from"] = salvaged
+    return out
 
 
 async def ensure_task_branch(repo_root: str, task_id: str, base_ref: str = "main") -> dict:
