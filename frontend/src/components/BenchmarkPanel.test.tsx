@@ -163,3 +163,9 @@ describe("<BenchmarkPanel /> when the fetch fails", () => {
     expect(screen.queryByText("First-pass reviews")).toBeNull();
   });
 });
+
+it("separates thousands in the counts", () => {
+  // "15151 sections offered" is a number the eye has to stop and parse.
+  render(<BenchmarkPanel data={data({ current: win({ sections_offered: 15151 }) })} />);
+  expect(screen.getByText("15,151 sections offered", { exact: false })).toBeInTheDocument();
+});

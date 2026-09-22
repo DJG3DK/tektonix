@@ -63,6 +63,10 @@ export function formatDelta(delta: number | undefined, fmt: Fmt): string {
   return `${sign}${mag.toFixed(mag < 10 ? 1 : 0)}`;
 }
 
+/** Counts in the sub-line get separators; "15151 sections offered" is a
+ *  number the eye has to stop and parse. */
+const n = (v: number) => v.toLocaleString("en-US");
+
 interface MetricSpec {
   key: keyof BenchmarkWindow;
   label: string;
@@ -78,7 +82,7 @@ const METRICS: MetricSpec[] = [
     key: "first_pass_rate",
     label: "First-pass reviews",
     fmt: "pct",
-    sub: (w) => `${w.first_pass} of ${w.reviewed} reviewed`,
+    sub: (w) => `${n(w.first_pass)} of ${n(w.reviewed)} reviewed`,
   },
   {
     key: "iterations_median",
@@ -90,25 +94,25 @@ const METRICS: MetricSpec[] = [
     key: "escalation_rate",
     label: "Escalations",
     fmt: "pct",
-    sub: (w) => `${w.escalated} of ${w.tasks} tasks`,
+    sub: (w) => `${n(w.escalated)} of ${n(w.tasks)} tasks`,
   },
   {
     key: "cost_per_shipped_median",
     label: "Cost per shipped task",
     fmt: "usd",
-    sub: (w) => `${w.shipped} shipped`,
+    sub: (w) => `${n(w.shipped)} shipped`,
   },
   {
     key: "history_follow_rate",
     label: "History searches used",
     fmt: "pct",
-    sub: (w) => `${w.history_used} of ${w.history_queries} searches`,
+    sub: (w) => `${n(w.history_used)} of ${n(w.history_queries)} searches`,
   },
   {
     key: "section_reads_per_prompt",
     label: "Memory reads / prompt",
     fmt: "num",
-    sub: (w) => `${w.sections_offered} sections offered`,
+    sub: (w) => `${n(w.sections_offered)} sections offered`,
   },
 ];
 
@@ -147,7 +151,7 @@ export function BenchmarkPanel({ data, error }: { data: Benchmarks | null; error
       <p className="analytics-section-sub">
         Whether the agent is getting better, not just what it did. Each number covers the last{" "}
         {data.window_days} days, compared with the {data.window_days} days before that
-        ({current.tasks} vs {previous.tasks} tasks).
+        ({n(current.tasks)} vs {n(previous.tasks)} tasks).
       </p>
 
       {/* Said plainly rather than left to the reader. With a handful of tasks
