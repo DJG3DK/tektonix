@@ -140,7 +140,13 @@ async def test_the_fast_path_requires_a_clean_tree():
 
 async def test_resuming_with_a_message_voids_the_old_approval(monkeypatch):
     import asyncio
+    from types import SimpleNamespace
+
     import agent.server as server
+    from agent.routers import tasks as tasks_routes
+
+    # The route reads the app off the request (agent/routers/tasks.py).
+    request = SimpleNamespace(app=server.app)
 
     class _Ck:
         values = {"repo": "p", "goal": "g", "budget_usd": 5.0, "max_iterations": 40,
@@ -158,11 +164,11 @@ async def test_resuming_with_a_message_voids_the_old_approval(monkeypatch):
     g_ = _G()
     monkeypatch.setattr(server.app.state, "graph", g_, raising=False)
     monkeypatch.setattr(server.app.state, "store", _S(), raising=False)
-    monkeypatch.setattr(server, "check_repo_access", lambda *a, **k: None)
+    monkeypatch.setattr(tasks_routes, "check_repo_access", lambda *a, **k: None)
 
     async def _stream(*a, **k): pass
-    monkeypatch.setattr(server, "_stream_graph", _stream)
-    await server.resume_task("t-2", server.ResumeTaskRequest(additional_budget_usd=0, message="redo it"), user=object())
+    monkeypatch.setattr(server.app.state, "stream_graph", _stream, raising=False)
+    await server.resume_task(request, "t-2", server.ResumeTaskRequest(additional_budget_usd=0, message="redo it"), user=object())
     await asyncio.sleep(0)
     server._running_tasks.pop("t-2", None)
     assert g_.patches[-1]["merge_approved_sha"] is None

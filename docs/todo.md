@@ -73,11 +73,12 @@ what proves the injection reached it.
 
 ## Split `agent/server.py` along the seams that already exist
 
-**Status:** started, 2026-09-21. Six seams out (`server.py` was 5,659 lines
-before them and is 4,705 on 2026-09-23):
+**Status:** started, 2026-09-21. Seven seams out (`server.py` was 5,659 lines
+before them and is 3,887 on 2026-09-23):
 `push`, `analytics`, `env_config`, `settings` (with the audit log it is
-interleaved with), `model_config`, and `github` (the inbox and approve links,
-2026-09-23, once task creation had moved). Do not flatten the rest in one pass.
+interleaved with), `model_config`, `github` (the inbox and approve links,
+2026-09-23, once task creation had moved) and `tasks` (2026-09-23, once the
+live run state had its own module, `agent/task_runtime.py`). Do not flatten the rest in one pass.
 
 **The remaining seams need one more move first, and it is a specific one.**
 The shared state is done: `agent/live_state.py` holds the five live
@@ -131,12 +132,10 @@ by `__name__` and every test overriding auth is keyed on identity.
 
 ### What breaks
 
-`agent/server.py` still holds the `tasks`, `planning`, auth and uploads
-seams and the review proxy. The move they were all waiting on is done
-(`agent/tasks.py`, above), and `github` has gone out through it. `tasks` and
-`planning` are next, one per commit; they reach `_stream_graph`, the planning
-turn machinery and the live-log buffers, which move with them or go on
-`app.state` the way `stream_graph` did. The repo
+`agent/server.py` still holds the `planning`, auth and uploads seams and the
+review proxy. `tasks` went out through `agent/tasks.py` and
+`agent/task_runtime.py`; `planning` is next, and needs the planning-turn
+machinery reachable the same way. The repo
 check inside each handler is now pinned too — `tests/test_repo_scope.py`
 snapshots every repo-scoped route with the check that guards it, so a seam
 that moves and loses `check_repo_access` fails CI (2026-09-23).

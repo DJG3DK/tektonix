@@ -238,13 +238,14 @@ _DELETE_PATHS = {
         "guarded by SyncResult.copied at its only call site, run_consolidation",
     "project_removal.py::purge":
         "takes the index and calls forget_project; the route refuses without one",
-    "server.py::delete_task":
+    # agent/routers/tasks.py since the tasks seam moved out (2026-09-23).
+    "routers/tasks.py::delete_task":
         "calls history_index.index_task immediately before both deletes",
 }
 
 # planning_log.forget is deliberately absent: it deletes from whatever
 # namespace it is handed and cannot know whether that one is indexed. Its
-# TASK_NAMESPACE caller is server.py::delete_task, which is listed above and
+# TASK_NAMESPACE caller is routers/tasks.py::delete_task, which is listed above and
 # pinned by its own test at the bottom of this file.
 
 
@@ -299,7 +300,7 @@ def test_the_delete_task_route_indexes_before_it_deletes():
     """Source order here, deliberately, because there is no seam to record
     calls through: the route is a FastAPI handler and both deletes are
     inline. The index call has to come first in the function text."""
-    source = (AGENT_DIR / "server.py").read_text()
+    source = (AGENT_DIR / "routers" / "tasks.py").read_text()
     tree = ast.parse(source)
     route = next(n for n in ast.walk(tree)
                  if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))

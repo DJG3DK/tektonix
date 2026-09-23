@@ -1,6 +1,7 @@
 """The final-look panel's hand edit: read from the branch, applied under the
 task's own run, and sent through the same gate as the agent's work."""
 import asyncio
+from types import SimpleNamespace
 import os
 import subprocess
 
@@ -8,6 +9,10 @@ import pytest
 
 import agent.nodes.verify_and_ship as vas
 import agent.server as server
+from agent.routers import tasks as tasks_routes
+
+# The routes read the app off the request (agent/routers/tasks.py).
+_REQUEST = SimpleNamespace(app=server.app)
 import agent.task_diff as td
 from agent.tools import git as g
 
@@ -163,9 +168,9 @@ def wired(monkeypatch):
         gr = _Graph(values)
         monkeypatch.setattr(server.app.state, "graph", gr, raising=False)
         monkeypatch.setattr(server.app.state, "store", object(), raising=False)
-        monkeypatch.setattr(server, "check_repo_access", lambda *a, **k: None)
+        monkeypatch.setattr(tasks_routes, "check_repo_access", lambda *a, **k: None)
         monkeypatch.setattr(server.audit, "record", _record)
-        monkeypatch.setattr(server, "_stream_graph", _stream)
+        monkeypatch.setattr(server.app.state, "stream_graph", _stream, raising=False)
         return gr, _User()
     return _wire
 
@@ -176,7 +181,7 @@ def _req(sha="abc", path="src/app.js"):
 
 async def _submit(req, user):
     try:
-        return await server.submit_operator_edits("t-9", req, user=user)
+        return await server.submit_operator_edits(_REQUEST, "t-9", req, user=user)
     finally:
         await asyncio.sleep(0)
         server._running_tasks.pop("t-9", None)

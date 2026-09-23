@@ -178,10 +178,11 @@ async def test_the_planners_preview_names_the_repo(two_projects, monkeypatch):
 # them.
 
 def test_an_admin_may_reference_every_project(monkeypatch):
+    import agent.config as agent_config_mod
     import agent.server as srv
     from agent.auth import User
 
-    monkeypatch.setattr(srv, "PROJECTS", {"a": {}, "b": {}}, raising=False)
+    monkeypatch.setattr(agent_config_mod, "PROJECTS", {"a": {}, "b": {}}, raising=False)
     admin = User(id=1, email="a@e", role="admin", allowed_repos=None, totp_enabled=True,
                  must_change_password=False, auto_approve_commands=False,
                  require_merge_review=True)
@@ -189,10 +190,11 @@ def test_an_admin_may_reference_every_project(monkeypatch):
 
 
 def test_a_restricted_user_may_reference_only_their_own(monkeypatch):
+    import agent.config as agent_config_mod
     import agent.server as srv
     from agent.auth import User
 
-    monkeypatch.setattr(srv, "PROJECTS", {"a": {}, "b": {}}, raising=False)
+    monkeypatch.setattr(agent_config_mod, "PROJECTS", {"a": {}, "b": {}}, raising=False)
     user = User(id=2, email="d@e", role="user", allowed_repos=["a", "gone"], totp_enabled=True,
                 must_change_password=False, auto_approve_commands=False,
                 require_merge_review=True)

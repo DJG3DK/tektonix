@@ -35,7 +35,8 @@ def client(monkeypatch):
     async def planning_meta(session_id):
         return "proj", {"session_id": session_id, "repo": "proj"}
 
-    monkeypatch.setattr(srv, "_resolve_task_repo", task_repo)
+    from agent.routers import tasks as tasks_routes
+    monkeypatch.setattr(tasks_routes, "_resolve_task_repo", lambda app, task_id: task_repo(task_id))
     monkeypatch.setattr(srv, "_find_planning_meta", planning_meta)
     return TestClient(srv.app)
 

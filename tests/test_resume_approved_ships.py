@@ -4,11 +4,16 @@ It used to go back to work with a "continue the task" note, paying for a pass
 that redid finished changes, when all that had failed was the way out.
 """
 import asyncio
+from types import SimpleNamespace
 
 import pytest
 from langgraph.graph import END
 
 import agent.server as server
+from agent.routers import tasks as tasks_routes
+
+# The routes read the app off the request (agent/routers/tasks.py).
+_REQUEST = SimpleNamespace(app=server.app)
 from agent.outer_graph import _route_after_verify
 
 
@@ -48,19 +53,19 @@ def wired(monkeypatch):
         g = _Graph(values)
         monkeypatch.setattr(server.app.state, "graph", g, raising=False)
         monkeypatch.setattr(server.app.state, "store", _Store(), raising=False)
-        monkeypatch.setattr(server, "check_repo_access", lambda *a, **k: None)
+        monkeypatch.setattr(tasks_routes, "check_repo_access", lambda *a, **k: None)
         started = []
 
         async def _stream(*a, **k):
             started.append(a)
-        monkeypatch.setattr(server, "_stream_graph", _stream)
+        monkeypatch.setattr(server.app.state, "stream_graph", _stream, raising=False)
         return g
     return _wire
 
 
 async def _resume(message=None):
     req = server.ResumeTaskRequest(additional_budget_usd=0, message=message)
-    out = await server.resume_task("t-1", req, user=object())
+    out = await server.resume_task(_REQUEST, "t-1", req, user=object())
     await asyncio.sleep(0)
     server._running_tasks.pop("t-1", None)
     return out

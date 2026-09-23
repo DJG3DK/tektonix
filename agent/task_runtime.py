@@ -254,3 +254,12 @@ def fuller_log(buffered: list | None, durable: list | None) -> list:
     before this process started). Identity comes from the entry's own content
     -- see agent/log_stream.py."""
     return log_stream.merge(durable, buffered)
+
+
+async def apply_transition(graph, thread_config: dict, patch: dict, as_node: str | None) -> None:
+    """Write a lifecycle.Transition to the checkpoint. as_node=None leaves the
+    checkpoint's own next node in place (see agent/lifecycle.py)."""
+    if as_node is None:
+        await graph.aupdate_state(thread_config, patch)
+    else:
+        await graph.aupdate_state(thread_config, patch, as_node=as_node)

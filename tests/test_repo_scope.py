@@ -25,6 +25,7 @@ leaves this untouched; dropping its check fails it.
 """
 import inspect
 import re
+import typing
 
 from fastapi.routing import APIRoute, APIWebSocketRoute
 
@@ -41,8 +42,16 @@ UNGUARDED: dict[tuple[str, str], str] = {}
 
 
 def _body_has_repo(endpoint) -> bool:
-    for p in inspect.signature(endpoint).parameters.values():
-        fields = getattr(p.annotation, "model_fields", None)
+    # Resolved type hints, not raw annotations: a router module written with
+    # `from __future__ import annotations` stores them as STRINGS, and a
+    # string has no model_fields -- which is how POST /api/tasks silently
+    # stopped counting as repo-scoped when the tasks seam moved out.
+    try:
+        hints = typing.get_type_hints(endpoint)
+    except Exception:  # noqa: BLE001 -- fall back to what the signature says
+        hints = {n: p.annotation for n, p in inspect.signature(endpoint).parameters.items()}
+    for ann in hints.values():
+        fields = getattr(ann, "model_fields", None)
         if fields and "repo" in fields:
             return True
     return False

@@ -95,7 +95,8 @@ def test_task_endpoints_fail_closed_on_unresolvable_repo(monkeypatch):
     async def unresolvable(task_id):
         return None
 
-    monkeypatch.setattr(srv, "_resolve_task_repo", unresolvable)
+    from agent.routers import tasks as tasks_routes
+    monkeypatch.setattr(tasks_routes, "_resolve_task_repo", lambda app, task_id: unresolvable(task_id))
     client = TestClient(srv.app)
 
     for method, path, payload in (
