@@ -311,12 +311,16 @@ KNOBS: dict[str, dict] = {
         "group": "Model & sandbox timeouts",
     },
     "auto_heal_attempts": {
-        "label": "Auto-heal attempts per task",
+        # "0 = off" in the label, not only the help: the panel shows help as a
+        # hover tooltip, which a phone never shows, and this is the one global
+        # switch for the supervisor (2026-09-23 follow-up review, F11).
+        "label": "Auto-heal attempts per task (0 = off)",
         "help": (
             "How many times the supervisor may put a task escalated by an infrastructure "
             "failure (the reviewer not answering, main moving under a merge, a dropped "
             "connection) back through the gate on its own, once the cause has cleared. "
-            "Failures of the task itself are never healed. 0 turns healing off."
+            "Failures of the task itself are never healed, nor is anything older than a "
+            "day. 0 turns healing off for every task; there is no per-task switch."
         ),
         "unit": "attempts",
         "default": 3,
