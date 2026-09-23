@@ -168,3 +168,14 @@ body {
 .route-missing button {
   margin-left: auto; background: none; border: 0; color: var(--text-dim); cursor: pointer; font: inherit;
 }
+
+/* An admin-only view opened by a restricted account. Centred, quiet: it is an
+   explanation, not an error. */
+.main-pane > .admin-only {
+  flex: 0 0 auto;
+  margin: 48px auto; max-width: 420px; padding: 24px;
+  border: 1px solid var(--border); border-radius: var(--radius, 10px);
+  background: var(--surface-raised); color: var(--text-dim); text-align: center;
+}
+.admin-only h2 { margin: 0 0 8px; font-size: 16px; color: var(--text); }
+.admin-only p { margin: 0; font-size: 13px; }

@@ -97,4 +97,11 @@ describe("deep links", () => {
     });
     await waitFor(() => expect(window.location.pathname).toBe("/settings"));
   });
+
+  it("an admin URL opened by a restricted account explains the empty pane", async () => {
+    getMe.mockResolvedValue(user({ role: "user", allowed_repos: ["webapp"] }));
+    at("/analytics");
+    render(<App />);
+    expect(await screen.findByRole("heading", { name: /admins only/i })).toBeInTheDocument();
+  });
 });

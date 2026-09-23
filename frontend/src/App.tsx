@@ -323,6 +323,16 @@ function AuthenticatedApp({ user, onLogout, onUserChanged }: { user: CurrentUser
           </div>
         )}
         {view === "users" && user.role === "admin" && <UsersPanel repos={repos} />}
+        {(view === "analytics" || view === "models" || view === "users") && user.role !== "admin" && (
+          /* An admin URL opened by a restricted account (a shared link, a
+             bookmark). The server is the boundary -- every API behind these
+             views answers 403 -- so this is only so the pane says why it is
+             empty rather than being blank (2026-09-23 follow-up, F12). */
+          <div className="admin-only" role="status">
+            <h2>Admins only</h2>
+            <p>This view is for admin accounts. Planning, your tasks and Settings are all yours.</p>
+          </div>
+        )}
         {view === "settings" && <SettingsPage user={user} onUserChanged={onUserChanged} onProjectsChanged={refreshRepos} />}
         {view === "github" && (
           <GitHubInboxView
