@@ -1338,7 +1338,10 @@ async function runDatabaseCheck(cfg, worktreePath) {
   try {
     const create = await psql(`CREATE DATABASE ${throwawayDb};`);
     if (!create.ok) return [{ name: 'db-setup', ok: false, output: create.output.slice(-2000) }];
-    await run('redis-cli', ['-n', '15', 'flushdb'], '/', 10_000);
+    // Sealed like everything else this function starts, though redis-cli is
+    // not agent-authored: the rule is simpler to hold as "no child of this
+    // function sees the reviewer's environment" than as a list of exceptions.
+    await runSealed('redis-cli', ['-n', '15', 'flushdb'], '/', 10_000);
 
     // THE ONE PLACE agent-authored code still runs on the host, and it is
     // deliberate rather than missed. These three talk to Postgres and Redis

@@ -76,3 +76,8 @@ def test_db_check_children_do_not_inherit_the_reviewers_env(tmp_path):
 
     psql_env = next(dumps.glob("psql.*.env")).read_text()
     assert "planted-router-key" not in psql_env and "PGPASSWORD=pw" in psql_env
+    # redis-cli too: every child of the function is sealed, not just the
+    # agent-authored three (2026-09-23 follow-up review, F1).
+    redis_env = next(dumps.glob("redis-cli.*.env")).read_text()
+    for planted in ("planted-router-key", "planted-control-secret", "planted-smtp"):
+        assert planted not in redis_env

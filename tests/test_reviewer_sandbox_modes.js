@@ -115,9 +115,13 @@ test('nothing executes agent code through runSealed any more', () => {
     assert.equal(calls, 2,
         `runSealed appears ${calls} times outside runDatabaseCheck (expect its definition + one call); `
         + 'agent-authored code must go through runAgentCode');
-    // Inside it: the psql helper and the three project commands, and no run()
-    // of a project command at all.
-    assert.equal((dbCheck.match(/[^\w]runSealed\(/g) || []).length, 4);
+    // Inside it: the psql helper, redis-cli and the three project commands,
+    // and no run() of anything at all.
+    assert.equal((dbCheck.match(/[^\w]runSealed\(/g) || []).length, 5);
+    // Comments stripped first: the function's own comments explain why it
+    // never calls run(), and name it doing so.
+    const code = dbCheck.replace(/\/\/.*$/gm, '');
+    assert.ok(!/[^\w]run\(/.test(code), 'runDatabaseCheck calls run(), which inherits process.env');
     assert.ok(!/await run\(dc\./.test(dbCheck), 'a database check went back to run(), which inherits process.env');
 });
 
