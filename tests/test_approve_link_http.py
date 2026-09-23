@@ -27,7 +27,7 @@ def client(monkeypatch):
     monkeypatch.setattr(rate_limit, "_locked_until", {})
     acted = []
 
-    async def act(repo, key, action, nonce=None):
+    async def act(app, repo, key, action, nonce=None):
         if any(a[3] == nonce for a in acted):
             raise HTTPException(409, "already handled")     # the nonce is spent
         acted.append((repo, key, action, nonce))
@@ -37,7 +37,8 @@ def client(monkeypatch):
         return {"k1": {"title": "Fix it", "summary": "s", "kind": "code_scanning",
                        "approval_nonce": "n1", "state": "proposed"}}
 
-    monkeypatch.setattr(srv, "_github_act", act)
+    from agent.routers import github as github_routes
+    monkeypatch.setattr(github_routes, "_github_act", act)
     monkeypatch.setattr(srv.app.state, "store", object(), raising=False)
     monkeypatch.setattr(gi, "list_items", items)
     monkeypatch.setattr(srv.github_settings, "project_settings", lambda *a, **k: {"budget_usd": 2.0})

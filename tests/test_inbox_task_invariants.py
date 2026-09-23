@@ -136,7 +136,12 @@ def test_every_inbox_path_goes_through_the_same_creator():
     from agent import github_inbox
 
     assert "create_task(" in inspect.getsource(github_inbox.create_task_for_item)
-    act = inspect.getsource(srv._github_act)
-    assert "create_task_for_item" in act and "_github_create_task" in act
+    from agent.routers import github as github_routes
+
+    act = inspect.getsource(github_routes._github_act)
+    # The route module reaches server.py's creator on app.state; the one it
+    # puts there is _github_create_task itself (asserted below).
+    assert "create_task_for_item" in act and "app.state.github_create_task" in act
+    assert srv.app.state.github_create_task is srv._github_create_task
     poll = inspect.getsource(srv._github_poll_once)
     assert "_github_create_task" in poll

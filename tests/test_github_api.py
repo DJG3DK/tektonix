@@ -58,6 +58,9 @@ def wired(monkeypatch):
         return "task-1"
 
     monkeypatch.setattr(srv, "_github_create_task", fake_create)
+    # The inbox routes live in agent/routers/github.py and reach the creator
+    # on app.state (a router cannot import it from server.py).
+    monkeypatch.setattr(srv.app.state, "github_create_task", fake_create)
     monkeypatch.setattr(gi, "resolve_slug", lambda repo: "o/proj")
     return {"store": store, "created": created}
 
