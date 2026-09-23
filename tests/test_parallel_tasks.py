@@ -357,3 +357,70 @@ def test_the_reviewer_clears_worktrees_left_by_an_interrupted_review(tmp_path):
     assert sorted(swept) == ["p-abc123", "unowned-dir"]
     assert list(root.iterdir()) == []
     assert "p-abc123" not in sp.run(["git", "worktree", "list"], cwd=live, capture_output=True, text=True).stdout
+
+
+def test_the_reviewer_does_not_borrow_an_install_that_does_not_match_its_lockfile(tmp_path):
+    """A merge that bumps a lockfile installs nothing by itself. Borrowing that
+    stale install ran every review against the old packages; the failures
+    showed on the base too and were waved through as pre-existing."""
+    live = tmp_path / "live"
+    (live / "node_modules" / "multer").mkdir(parents=True)
+    (live / "node_modules" / "multer" / "package.json").write_text('{"version": "1.4.5"}')
+    lock = {"packages": {"": {}, "node_modules/multer": {"version": "2.4.0"},
+                         "node_modules/@img/sharp-darwin-arm64": {"version": "1", "optional": True}}}
+    (live / "package-lock.json").write_text(json.dumps(lock))
+    cfg = json.dumps({"live": str(live), "nodeModulesDirs": ["."]})
+    stale = _node(f"r.liveInstallIsStale({cfg})", tmp_path)
+    assert len(stale) == 1 and "multer 1.4.5 != 2.4.0" in stale[0]
+    # Installed as locked -- and a missing optional platform binary is normal.
+    (live / "node_modules" / "multer" / "package.json").write_text('{"version": "2.4.0"}')
+    assert _node(f"r.liveInstallIsStale({cfg})", tmp_path) == []
+
+
+@pytest.mark.skipif(not _deps_installed() and os.environ.get("REQUIRE_SERVICE_TESTS") != "1",
+                    reason="services/agent-review dependencies not installed")
+def test_a_deploy_installs_what_the_lockfile_says_before_building(tmp_path):
+    """The build ran on whatever happened to be installed, so a merged
+    Dependabot fix never reached the running site."""
+    live = tmp_path / "live"
+    (live / "node_modules" / "nanoid").mkdir(parents=True)
+    (live / "node_modules" / "nanoid" / "package.json").write_text('{"version": "3.3.16"}')
+    (live / "package-lock.json").write_text(json.dumps(
+        {"packages": {"": {}, "node_modules/nanoid": {"version": "3.3.19"}}}))
+    calls = tmp_path / "calls.txt"
+    shim = tmp_path / "bin"
+    shim.mkdir()
+    (shim / "npm").write_text(f"#!/bin/sh\necho \"npm $*\" >> {calls}\n")
+    (shim / "npm").chmod(0o755)
+    projects = tmp_path / "projects.json"
+    projects.write_text(json.dumps({"projects": {"p": {
+        "live": str(live), "sandbox": str(live),
+        "deploy": {"build": [{"dir": ".", "cmd": "npm", "args": ["run", "build"]}]}}}}))
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    proc = subprocess.Popen(
+        ["node", str(paths.REPO_ROOT / "services/agent-review/server.js")],
+        env={**os.environ, "PATH": f"{shim}:{os.environ['PATH']}",
+             "AGENT_PROJECTS_JSON": str(projects), "REVIEW_ONLY_PROJECTS_JSON": "1",
+             "REVIEW_STATE_DIR": str(state_dir), "REVIEW_CONTROL_SECRET": SECRET,
+             "MODEL_ROUTER_KEY": "unused", "REVIEW_BIND_ADDRESS": "127.0.0.1",
+             "REVIEW_SERVICE_PORT": str(port)},
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        for _ in range(100):
+            try:
+                urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=1)
+                break
+            except urllib.error.HTTPError:
+                break
+            except Exception:  # noqa: BLE001
+                time.sleep(0.1)
+        status, body = _post(f"http://127.0.0.1:{port}/api/projects/p/restart", {})
+        assert status == 200 and body["installed"] == ["."], body
+        assert calls.read_text().splitlines() == ["npm ci", "npm run build"]
+    finally:
+        proc.kill()
+        proc.wait()

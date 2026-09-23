@@ -789,6 +789,29 @@ function baselineKey(base, depsChanged) {
   return `${base}:${depsChanged ? 'install' : 'linked'}`;
 }
 
+// Is what live has INSTALLED what live's lockfile says? The symlink path
+// below borrows live's node_modules on the assumption that it is -- and a
+// merge that bumps a lockfile does not reinstall anything by itself. Found
+// 2026-09-23: a project's Dependabot fixes (multer 1 -> 2, nodemailer 6 -> 9
+// and 30 more) had merged but never been installed in the checkout, so every
+// review ran the suite against the old packages, 11 version tests failed on
+// the branch AND on the base, and were waved through as "pre-existing" -- two
+// five-minute test runs per review, and a real regression in those tests
+// would have been waved through the same way. Returns a description of each
+// mismatch; empty means live's install can be borrowed.
+function liveInstallIsStale(cfg) {
+  const { installMismatch } = require('../shared/deps-state');
+  const out = [];
+  for (const rel of new Set(['.', ...(cfg.nodeModulesDirs || [])])) {
+    const dir = path.join(cfg.live, rel);
+    // Nothing installed means nothing to borrow; the symlink path copes.
+    if (!fs.existsSync(path.join(dir, 'node_modules'))) continue;
+    const why = installMismatch(dir);
+    if (why) out.push(`${rel}: ${why}`);
+  }
+  return out;
+}
+
 async function setupWorktree(project, cfg, sha, base, { depsChangedOverride = null } = {}) {
   const worktreePath = path.join(WORKTREE_ROOT, `${project}-${sha.slice(0, 12)}`);
   // Self-heal before the rmSync: a previous attempt that died between setup
@@ -836,8 +859,12 @@ async function setupWorktree(project, cfg, sha, base, { depsChangedOverride = nu
   // is built with sha === base, so its own diff is EMPTY and it would always
   // take the symlink path while the branch took the install path. Comparing
   // the two then compares provisioning, not code -- see markPreexistingFailures.
+  const staleLive = depsChangedOverride === null ? liveInstallIsStale(cfg) : [];
+  if (staleLive.length) {
+    log(`[${project}] live's installed dependencies do not match its own lockfile (${staleLive.slice(0, 3).join('; ')}${staleLive.length > 3 ? '; ...' : ''}) -- installing fresh for this review instead of borrowing them`);
+  }
   const depsChanged = depsChangedOverride === null
-    ? /package\.json|pnpm-lock\.yaml|package-lock\.json/.test(diffFiles)
+    ? /package\.json|pnpm-lock\.yaml|package-lock\.json/.test(diffFiles) || staleLive.length > 0
     : depsChangedOverride;
 
   const setupIssues = [];
@@ -2397,4 +2424,5 @@ module.exports = {
   classifyInfrastructureFailures, packagesNeedingOwnInstall, baselineKey,
   detectNodeModulesDirs, NM_BUILD_CACHES,
   branchRecord, withBranchRecord, computeFileChurn, queueReview, pendingReviews, sweepLeftoverWorktrees,
+  liveInstallIsStale,
 };

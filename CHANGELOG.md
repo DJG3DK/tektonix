@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### A merged dependency fix now reaches the running site
+
+A merge that bumps a lockfile installs nothing by itself, and a deploy only
+built, so merged Dependabot fixes never reached what was running: on one
+site served from this machine, `sharp`, `nanoid`, `next` and `nodemailer` were
+all still at the versions the fixes replaced. A deploy now installs what the
+lockfile says (`npm ci`, or pnpm/yarn frozen) before it builds, whenever what
+is installed does not match it -- so the next deploy also heals drift that is
+already there. The reviewer asks the same question before borrowing live's
+install: it had been testing every review against the stale packages, and the
+resulting version-test failures showed on the base too and were waved through
+as pre-existing. On the project where that happened, the suite went from 11
+failures in 306 seconds to none in 5.
+
 ### Several tasks per project at once
 
 Each task now has its own workspace — a git worktree on its own branch, filled

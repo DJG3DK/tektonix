@@ -162,6 +162,8 @@ async function clearReviewState(project, branch = null) {
     await fs.promises.rename(tmp, REVIEW_STATE_PATH);
 }
 
+const { installMismatch, frozenInstall } = require('../shared/deps-state');
+
 const app = express();
 app.use(express.json());
 // Every route here reads or writes files or runs git; nothing on this
@@ -472,9 +474,31 @@ app.post('/api/projects/:name/restart', requireControlSecret, async (req, res) =
     // app), so `p.build is not iterable` came back as stage 'build' -- which
     // verify_and_ship reads as a compile error the agent should fix, sending it
     // round the work loop chasing a TypeError in this file.
+    // Install what the lockfile says before building on it. A merge that
+    // bumps a lockfile installs nothing by itself, so a Dependabot fix used
+    // to merge, "deploy" (build against the old packages) and never reach the
+    // running site -- found 2026-09-23 on a site served from this machine,
+    // HIGH advisories included. Keyed on what is INSTALLED, not on what this
+    // merge changed, so the next deploy also heals drift already there.
+    const installed = [];
+    try {
+        const dirs = [...new Set((p.build || []).map((s) => (s.dir || '.')))];
+        for (const rel of dirs) {
+            const dir = path.join(p.live, rel);
+            const why = installMismatch(dir);
+            const how = why && frozenInstall(dir);
+            if (!how) continue;
+            console.log(`[Review] ${req.params.name}: ${rel} install does not match its lockfile (${why}) -- ${how.cmd} ${how.args.join(' ')}`);
+            await run(how.cmd, how.args, dir);
+            installed.push(rel);
+        }
+    } catch (e) {
+        return res.status(500).json({ ok: false, error: e.message, stage: 'build', built, installed });
+    }
+
     try {
         for (const step of p.build || []) {
-            if (!stepIsStale(step)) {
+            if (!stepIsStale(step) && !installed.includes(step.dir || '.')) {
                 skipped.push(step.dir);
                 continue;
             }
@@ -521,7 +545,7 @@ app.post('/api/projects/:name/restart', requireControlSecret, async (req, res) =
         for (const appName of wanted) {
             await run('pm2', ['restart', appName], '/');
         }
-        res.json({ ok: true, built, skipped, restarted: wanted });
+        res.json({ ok: true, installed, built, skipped, restarted: wanted });
     } catch (e) { res.status(500).json({ ok: false, error: e.message, stage: 'restart', built }); }
 });
 
