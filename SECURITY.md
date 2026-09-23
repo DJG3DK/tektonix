@@ -212,6 +212,21 @@ the fix, and it is not built.
 - **A project with no checks** is reviewed without running anything, so none
   of this applies to it.
 
+## The review services
+
+The review dashboard (`:4100`) and the commit reviewer's control port
+(`:4101`) hold the only write path into a live repository, and publish no
+port. On a host install they bind loopback; in the container bundle they bind
+the compose network, because the agent is a different container. That network
+also reaches the agent's sandboxes, which have ordinary network access — so
+binding is not the boundary there. The shared secret is: every route on both
+services except `/health` requires `X-Review-Secret`, reads included (until
+2026-09-23 the dashboard's reads — every project's diff among them — were
+open). `/health` stays unauthenticated for monitoring and names nothing: the
+reviewer reports how many projects are under review, and names them only to a
+caller holding the secret. `tests/test_review_services_gated.py` starts both
+and asks from outside.
+
 ## Sessions, links and second factors
 
 ### Approve links

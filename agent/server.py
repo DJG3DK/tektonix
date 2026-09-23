@@ -3173,8 +3173,12 @@ async def get_router_balance(user: User = Depends(require_full_auth)):
     # admin-only". Now it is.
     auth.require_admin(user)
     async with httpx.AsyncClient(timeout=10.0) as client:
-        from agent.tools.review_gate import REVIEW_SERVICE_HOST, REVIEW_SERVICE_PORT  # noqa: PLC0415
-        resp = await client.get(f"http://{REVIEW_SERVICE_HOST}:{REVIEW_SERVICE_PORT}/api/router/balance")
+        from agent.tools.review_gate import (  # noqa: PLC0415
+            _CONTROL_HEADERS, REVIEW_SERVICE_HOST, REVIEW_SERVICE_PORT)
+        # The review service's reads need the control secret too (SECURITY.md,
+        # "The review services").
+        resp = await client.get(f"http://{REVIEW_SERVICE_HOST}:{REVIEW_SERVICE_PORT}/api/router/balance",
+                                headers=_CONTROL_HEADERS)
         resp.raise_for_status()
         return resp.json()
 

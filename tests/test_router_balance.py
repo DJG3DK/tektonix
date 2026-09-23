@@ -37,8 +37,9 @@ class _FakeAsyncClient:
     async def __aexit__(self, *args):
         return False
 
-    async def get(self, url):
+    async def get(self, url, headers=None):
         _FakeAsyncClient.last_url = url
+        _FakeAsyncClient.last_headers = headers or {}
         return _FakeResponse({"totalCredits": 165, "totalUsage": 143.4, "remaining": 21.6})
 
 
@@ -51,7 +52,11 @@ def test_router_balance_proxies_the_review_service_through_this_apps_own_auth(mo
 
     assert res.status_code == 200
     assert res.json() == {"totalCredits": 165, "totalUsage": 143.4, "remaining": 21.6}
-    assert _FakeAsyncClient.last_url == f"{srv._REVIEW_SERVICE_BASE_URL}/api/router/balance"
+    from agent.tools.review_gate import REVIEW_SERVICE_HOST, REVIEW_SERVICE_PORT
+    # review_gate's address, not a copy of it (2026-09-23 review, 8.1), and the
+    # control secret, which the review service's reads now require (3.1).
+    assert _FakeAsyncClient.last_url == f"http://{REVIEW_SERVICE_HOST}:{REVIEW_SERVICE_PORT}/api/router/balance"
+    assert "X-Review-Secret" in _FakeAsyncClient.last_headers
 
 
 def test_router_balance_requires_login(monkeypatch):

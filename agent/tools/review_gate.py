@@ -161,7 +161,8 @@ def _reviewed_sha_is(got: str | None, expect: str) -> bool:
 
 async def _read_state(project: str) -> dict | None:
     async with httpx.AsyncClient(timeout=15) as client:
-        r = await client.get(f"http://{REVIEW_SERVICE_HOST}:{REVIEW_SERVICE_PORT}/api/review/status")
+        r = await client.get(f"http://{REVIEW_SERVICE_HOST}:{REVIEW_SERVICE_PORT}/api/review/status",
+                             headers=_CONTROL_HEADERS)
         r.raise_for_status()
         return r.json().get(project)
 

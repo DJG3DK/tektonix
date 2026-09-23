@@ -142,7 +142,17 @@ app.use(express.json());
 // that polls a few endpoints every few seconds, tight against a loop.
 app.use(rateLimit({ windowMs: 60 * 1000, limit: 600, standardHeaders: 'draft-7', legacyHeaders: false }));
 
-app.get('/api/projects', (req, res) => {
+// READS need the secret too (2026-09-23). They used to be open on the
+// reasoning that the service binds loopback -- true on a host install, and
+// false in the bundle, where it binds 0.0.0.0 on the compose network so the
+// agent can reach it, and where the agent's sandbox containers also have
+// network access. Any of them could read every project's name, status and
+// full diff. Both bridges a person uses already send the secret on every
+// request, reads included: nginx on a host install, the agent's /_review/
+// proxy in the bundle. So gating reads changes nothing for the dashboard and
+// closes the port to everything else. /health stays open -- it is what
+// monitoring and the supervisor ask, and it names nothing.
+app.get('/api/projects', requireControlSecret, (req, res) => {
     res.json(Object.keys(currentProjects()));
 });
 
@@ -187,7 +197,7 @@ async function agentRefFor(p, name, liveBranch) {
     return null;
 }
 
-app.get('/api/projects/:name/status', async (req, res) => {
+app.get('/api/projects/:name/status', requireControlSecret, async (req, res) => {
     const p = projectOr404(req, res); if (!p) return;
     try {
         const branch = (await git(p.live, ['rev-parse', '--abbrev-ref', 'HEAD'])).trim();
@@ -212,7 +222,7 @@ app.get('/api/projects/:name/status', async (req, res) => {
 });
 
 // Read-only: full diff of what the agent's workspace (a worktree of live) has that live doesn't yet.
-app.get('/api/projects/:name/diff', async (req, res) => {
+app.get('/api/projects/:name/diff', requireControlSecret, async (req, res) => {
     const p = projectOr404(req, res); if (!p) return;
     try {
         const branch = (await git(p.live, ['rev-parse', '--abbrev-ref', 'HEAD'])).trim();
@@ -253,7 +263,8 @@ app.get('/health', (req, res) => {
                 fs.accessSync(REVIEW_STATE_PATH, fs.constants.R_OK);
                 return { ok: true };
             } catch {
-                return { ok: false, detail: `cannot read ${REVIEW_STATE_PATH}` };
+                // No path: /health is unauthenticated.
+                return { ok: false, detail: 'the review state file is not readable' };
             }
         })(),
     };
@@ -480,7 +491,7 @@ app.post('/api/projects/:name/restart', requireControlSecret, async (req, res) =
 // answering model on every turn (2026-08-16 — user watching a complex edit
 // saw Pro for a few seconds then flash, and it was this, not misrouting).
 // Only entries with `tier` set are real, classifier-decided completions.
-app.get('/api/router/current', async (req, res) => {
+app.get('/api/router/current', requireControlSecret, async (req, res) => {
     try {
         const raw = await fs.promises.readFile(ROUTING_LOG, 'utf8').catch(() => '');
         const lines = raw.trim().split('\n').filter(Boolean);
@@ -513,7 +524,7 @@ app.get('/api/router/current', async (req, res) => {
 // genuinely complex edit; the actual routed completions split ~49/42
 // flash/pro). `models`/`recent`/`totals` below cover real completions
 // (tier set) only; overhead is reported separately in `overhead`.
-app.get('/api/router/stats', async (req, res) => {
+app.get('/api/router/stats', requireControlSecret, async (req, res) => {
     try {
         const raw = await fs.promises.readFile(ROUTING_LOG, 'utf8').catch(() => '');
         const allEntries = raw.trim().split('\n').filter(Boolean).map(line => {
@@ -580,8 +591,8 @@ const { readServiceSecret } = require('../shared/service-env');
 const REVIEW_CONTROL_SECRET = readServiceSecret('REVIEW_CONTROL_SECRET', AGENT_HOME);
 
 function requireControlSecret(req, res, next) {
-    // Fail CLOSED: if the secret is unset the mutating surface is disabled, not
-    // wide open -- a missing secret must never mean "no check".
+    // Fail CLOSED: if the secret is unset the API (reads and writes) is disabled,
+    // not wide open -- a missing secret must never mean "no check".
     if (!REVIEW_CONTROL_SECRET) {
         return res.status(503).json({ ok: false, error: 'REVIEW_CONTROL_SECRET not configured; mutating endpoints disabled' });
     }
@@ -610,7 +621,7 @@ function readOpenRouterKey() {
     } catch { return null; }
 }
 
-app.get('/api/router/balance', async (req, res) => {
+app.get('/api/router/balance', requireControlSecret, async (req, res) => {
     if (_balanceCache && (Date.now() - _balanceCache.ts) < BALANCE_CACHE_MS) {
         return res.json(_balanceCache.data);
     }
@@ -636,7 +647,7 @@ app.get('/api/router/balance', async (req, res) => {
 // Claude Sonnet 5 review in an isolated worktree off LIVE (real secrets,
 // real env), and writes its findings to state.json — this just surfaces
 // that file, it doesn't run anything itself.
-app.get('/api/review/status', async (req, res) => {
+app.get('/api/review/status', requireControlSecret, async (req, res) => {
     res.json(await readReviewState());
 });
 

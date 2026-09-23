@@ -2107,17 +2107,29 @@ function startControlServer(routerKey) {
             loadState();
             return { ok: true };
           } catch (e) {
-            return { ok: false, detail: `state.json unreadable: ${e.message}` };
+            // A fixed sentence: /health is unauthenticated, and the error
+            // text carries the file's path.
+            log(`health: state.json unreadable: ${e.message}`);
+            return { ok: false, detail: 'the review state file is unreadable' };
           }
         })(),
       };
       const ok = Object.values(checks).every((c) => c.ok);
+      // A COUNT for anyone, the names only for a caller holding the control
+      // secret -- the same rule as agent/health.py's project_count. In the
+      // bundle this port is on the compose network, and "which private repo
+      // is being worked on right now" is not this route's to publish.
+      const presented = Buffer.from(req.headers['x-review-secret'] || '');
+      const expected = Buffer.from(REVIEW_CONTROL_SECRET || '');
+      const trusted = REVIEW_CONTROL_SECRET && presented.length === expected.length
+        && require('crypto').timingSafeEqual(presented, expected);
       res.writeHead(ok ? 200 : 503, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({
         ok,
         service: 'commit-reviewer',
         checks,
-        reviewing: [...inProgressProjects],
+        reviewing_count: inProgressProjects.size,
+        ...(trusted ? { reviewing: [...inProgressProjects] } : {}),
       }));
       return;
     }

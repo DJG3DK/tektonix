@@ -18,6 +18,14 @@ if that verdict is `READY` — fast-forwards the work into live and pushes it.
 | `GET /api/review/status`, `POST /api/review/check/:name` | reviewer state and a manual trigger |
 | `GET /api/router/*` | model-router usage, stats and balance |
 
+Every route except `GET /health` requires `X-Review-Secret` — the reads as
+well as the writes, since 2026-09-23. In the container bundle this service is
+on the compose network, not loopback, and the diff route is every project's
+full source change. The console reaches it through `/_review/` (nginx on a host
+install, the agent's own proxy in the bundle), and both inject the secret, so
+the dashboard is unaffected. A hand-written nginx location that predates this
+must carry the `X-Review-Secret` line from [INSTALL.md](../../INSTALL.md).
+
 ## Merging
 
 The merge is gated: it refuses if the project has not been reviewed, if the reviewer's verdict is
