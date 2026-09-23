@@ -232,7 +232,10 @@ tell YOU what something looks like and show them nothing. When they ask to see s
 is theirs to make by looking, show it -- and repeat the image lines it returns in your reply.
 - logo_render(svg, question="", background=""): render an SVG and get told what it actually shows, on \
 white unless you name a background. You write SVG blind otherwise -- this is how you check your own \
-work before you show it. It is a check for you, not an approval: only the operator approves a design.
+work before you show it. It is a check for you, not an approval: only the operator approves a design. \
+Ask it factual questions (is anything clipped, overlapping, off-centre, unreadable) -- never questions \
+of taste like "does it look like a real gem" or "is it polished"; those have no answer it can give you, \
+and chasing one is a loop. After a few renders it will refuse until you have shown the operator.
 - logo_text_to_path(svg), logo_optimize_svg(svg), logo_trace_image(image_path): outline the type in a \
 wordmark so it does not depend on the viewer's fonts, clean up the markup, and vectorise an existing \
 PNG/JPG logo. Nothing here DESIGNS a logo -- you write the SVG; these handle everything after that.
@@ -369,15 +372,19 @@ async def build_planning_agent(
     # with nowhere to go in a conversation -- the plan carries the SVG, and
     # the build task that acts on it exports the kit. Tracing reads from this
     # session's own project, which is where an existing logo lives.
-    from agent.tools.logo_tools import make_logo_tools  # noqa: PLC0415
+    from agent.tools.logo_tools import make_logo_tools, new_show_state  # noqa: PLC0415
 
+    # logo_render stops after a few renders the operator has not seen, until
+    # show_images shows them (agent/tools/logo_tools.py RENDERS_BEFORE_SHOWING).
+    show_state = new_show_state()
     logo_tools = make_logo_tools(
-        lambda: (PROJECTS.get(repo) or {}).get("sandbox") or "", can_export=False,
+        lambda: (PROJECTS.get(repo) or {}).get("sandbox") or "", can_export=False, show_state=show_state,
     )
     # And showing the operator what it made (agent/tools/show_tools.py): the
     # logo tools only let the planner look, and a design is chosen by looking.
     from agent.tools.show_tools import make_show_images_tool  # noqa: PLC0415
-    show_tools = [make_show_images_tool(repo, lambda: (PROJECTS.get(repo) or {}).get("sandbox") or "")]
+    show_tools = [make_show_images_tool(repo, lambda: (PROJECTS.get(repo) or {}).get("sandbox") or "",
+                                        show_state=show_state)]
 
     # What past tasks ran into (agent/tools/history_tools.py). The planner is
     # the seat this is worth most to: "we tried that in June and it

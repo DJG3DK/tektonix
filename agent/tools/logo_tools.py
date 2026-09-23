@@ -120,7 +120,23 @@ def _fmt(op: str, result: dict) -> str:
 # the tools
 # ---------------------------------------------------------------------------
 
-def make_logo_tools(root_for_writes=None, *, can_export: bool = True) -> list:
+# How many times logo_render may run before the operator has been shown
+# anything (agent/tools/show_tools.py resets the count). Found 2026-09-23, the
+# second session in a row: a planner rendered one logo twenty times, asking the
+# vision model "is it a faceted diamond?" and tweaking on each hedged answer --
+# a question of taste no render can settle -- and showed the operator nothing.
+# Checking your own work takes a render or two; past that it is a decision, and
+# decisions are the operator's.
+RENDERS_BEFORE_SHOWING = 3
+
+
+def new_show_state() -> dict:
+    """Shared by one seat's logo_render and show_images: renders since the
+    operator last saw anything. Built per turn, so each message resets it."""
+    return {"renders_since_show": 0}
+
+
+def make_logo_tools(root_for_writes=None, *, can_export: bool = True, show_state: dict | None = None) -> list:
     """The logo toolset.
 
     `root_for_writes` is a callable returning the directory writes are
@@ -205,6 +221,16 @@ def make_logo_tools(root_for_writes=None, *, can_export: bool = True) -> list:
         bad = _svg_arg(svg)
         if bad:
             return bad
+        if show_state is not None:
+            if show_state["renders_since_show"] >= RENDERS_BEFORE_SHOWING:
+                return (
+                    f"STOP RENDERING. You have rendered {show_state['renders_since_show']} times "
+                    f"without showing the operator anything. Call show_images NOW with your current "
+                    f"version (and the original, for comparison), say in one or two sentences what "
+                    f"you changed, and ask what they want. Whether it looks right is their call, "
+                    f"not the vision model's -- do not keep adjusting to its opinions."
+                )
+            show_state["renders_since_show"] += 1
         args = {"svg": svg, "width": max(16, min(int(width or 512), 2048)),
                 "height": max(16, min(int(height or 512), 2048))}
         # White unless told otherwise: a transparent render is judged against

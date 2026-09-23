@@ -153,3 +153,39 @@ def test_planning_and_build_both_have_it():
     assert "make_show_images_tool" in inspect.getsource(planning_chat)
     assert "*show_tools" in inspect.getsource(planning_chat)
     assert "make_show_images_tool" in inspect.getsource(deep_agent.build_deep_agent)
+
+
+async def test_rendering_stops_until_the_operator_has_been_shown_something(monkeypatch, tmp_path):
+    """A planner rendered one logo twenty times, asking the vision model a
+    question of taste and tweaking on each hedged answer, and showed the
+    operator nothing. A few renders check the work; past that it is a
+    decision, and the decision is theirs."""
+    import base64 as _b64
+
+    from agent.tools import logo_tools
+
+    calls = []
+
+    async def fake_call(op, args):
+        calls.append(op)
+        return {"success": True, "pngBase64": _b64.b64encode(_png()).decode()}
+
+    async def fake_describe(data, mime, prompt):
+        return "a purple gem"
+
+    monkeypatch.setattr(logo_tools, "installed", lambda: True)
+    monkeypatch.setattr(logo_tools, "_call", fake_call)
+    monkeypatch.setattr("agent.tools.vision.describe_image_bytes", fake_describe)
+    state = logo_tools.new_show_state()
+    render = {t.name: t for t in logo_tools.make_logo_tools(lambda: str(tmp_path), show_state=state)}["logo_render"]
+    show = show_tools.make_show_images_tool(REPO, lambda: str(tmp_path), show_state=state)
+
+    for _ in range(logo_tools.RENDERS_BEFORE_SHOWING):
+        assert "purple gem" in await render.ainvoke({"svg": "<svg/>"})
+    refused = await render.ainvoke({"svg": "<svg/>"})
+    assert refused.startswith("STOP RENDERING") and "show_images" in refused
+    assert len(calls) == logo_tools.RENDERS_BEFORE_SHOWING, "a refused render never reaches the renderer"
+
+    shown = await show.ainvoke({"images": [{"caption": "current", "svg": "<svg/>"}]})
+    assert shown.startswith("![current]")
+    assert "purple gem" in await render.ainvoke({"svg": "<svg/>"}), "showing the operator resets it"

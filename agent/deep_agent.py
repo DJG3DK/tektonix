@@ -1744,13 +1744,15 @@ async def build_deep_agent(
     # Designing a mark and exporting a brand kit (agent/tools/logo_tools.py).
     # The coordinator only: it is the seat that writes files, and an export
     # puts two dozen binary assets in the repo.
-    from agent.tools.logo_tools import make_logo_tools  # noqa: PLC0415
+    from agent.tools.logo_tools import make_logo_tools, new_show_state  # noqa: PLC0415
 
-    logo_tools = make_logo_tools(lambda: repo_root)
+    show_state = new_show_state()
+    logo_tools = make_logo_tools(lambda: repo_root, show_state=show_state)
     # Showing the operator an image -- a render, a screenshot, the exported
     # logo -- in the task's log (agent/tools/show_tools.py).
     from agent.tools.show_tools import make_show_images_tool  # noqa: PLC0415
-    project_tools = [*project_tools, *logo_tools, make_show_images_tool(repo, lambda: repo_root)]
+    project_tools = [*project_tools, *logo_tools,
+                     make_show_images_tool(repo, lambda: repo_root, show_state=show_state)]
 
     # What past tasks ran into (agent/tools/history_tools.py). Empty when the
     # installation has no history index, so no seat carries a pair of tools

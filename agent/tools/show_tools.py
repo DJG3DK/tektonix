@@ -36,7 +36,7 @@ async def _render_svg(svg: str, background: str, width: int, height: int) -> byt
     return base64.b64decode(r["pngBase64"])
 
 
-def make_show_images_tool(repo: str, root_for_reads):
+def make_show_images_tool(repo: str, root_for_reads, *, show_state: dict | None = None):
     """`root_for_reads` returns the directory `path` images are read from --
     the task's workspace, or the project's for planning."""
 
@@ -99,6 +99,8 @@ def make_show_images_tool(repo: str, root_for_reads):
                 problems.append(f"image {i} ({caption}): {e}")
                 continue
             lines.append(f"![{caption}]({url})")
+        if lines and show_state is not None:
+            show_state["renders_since_show"] = 0      # the operator has seen it (logo_tools)
         out = "\n".join(lines)
         if problems:
             out += ("\n\n" if out else "") + "Not shown:\n" + "\n".join(f"- {p}" for p in problems)
