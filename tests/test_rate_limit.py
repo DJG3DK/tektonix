@@ -104,3 +104,19 @@ def test_a_successful_2fa_clears_the_verify_window(monkeypatch):
     assert res.status_code == 200, res.text
     assert ("203.0.113.7", "verify-2fa") not in rl._attempts
     assert ("203.0.113.7", "verify-2fa") not in rl._locked_until
+
+
+def test_an_internal_failure_lets_the_request_through_and_says_so(monkeypatch, caplog):
+    """Fail open, never silently: a limiter that quietly stopped limiting would
+    look exactly like one that works."""
+    def boom(request):
+        raise RuntimeError("limiter bug")
+
+    monkeypatch.setattr(rl, "client_ip", boom)
+    with caplog.at_level("ERROR", logger="tektonix"):
+        rl.check_rate_limit(_req({}), "login")          # does not raise
+    assert "request allowed through unlimited" in caplog.text
+
+
+def test_the_single_process_assumption_is_written_where_it_would_break():
+    assert "SINGLE PROCESS IS AN ASSUMPTION" in rl.__doc__

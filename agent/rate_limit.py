@@ -4,7 +4,16 @@ No new dependency and no external store: a single-process FastAPI app with one
 uvicorn worker (how this deploys) can hold attempt counters in a dict. A sliding
 window per (client-ip, action) with a lockout once the threshold is exceeded.
 Deliberately fails OPEN on its own errors -- a bug here must never lock every
-user out of their own dashboard -- but that is the only case it permits through.
+user out of their own dashboard -- but that is the only case it permits through,
+and it says so in the log every time (a limiter that silently stops limiting is
+indistinguishable from one that works).
+
+SINGLE PROCESS IS AN ASSUMPTION, not a detail. The counters live in this
+process's memory: they reset on every restart (a deploy clears a lockout), and
+with more than one uvicorn worker each worker would count on its own, so the
+effective limit would multiply by the worker count. The app runs one worker
+(pm2 on a host install, one uvicorn in the bundle). Raising that means moving
+these counters into Postgres, or failing closed -- in the same change.
 
 Keyed on the client IP. audit N-1: the IP is taken from X-Real-IP (which nginx
 sets authoritatively from $remote_addr, OVERWRITING any client-supplied value),
@@ -18,10 +27,13 @@ the socket peer. Not perfect against a botnet, but it turns the measured
 
 from __future__ import annotations
 
+import logging
 import time
 from collections import defaultdict
 
 from fastapi import HTTPException, Request
+
+logger = logging.getLogger("tektonix")
 
 # action -> (max_attempts, window_seconds, lockout_seconds)
 _LIMITS = {
@@ -110,6 +122,7 @@ def check_rate_limit(request: Request, action: str) -> None:
     except HTTPException:
         raise
     except Exception:  # noqa: BLE001 -- fail OPEN on an internal limiter bug
+        logger.exception("rate limiter failed for %r -- request allowed through unlimited", action)
         return
 
 
@@ -121,4 +134,5 @@ def clear_rate_limit(request: Request, action: str) -> None:
         _attempts.pop(key, None)
         _locked_until.pop(key, None)
     except Exception:  # noqa: BLE001
+        logger.exception("rate limiter could not clear %r", action)
         return
