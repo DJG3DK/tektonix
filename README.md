@@ -12,13 +12,15 @@ submitting and watching build tasks, chatting with Planning Chat, and administer
 and repos.
 
 The agent targets a fixed set of local projects (`PROJECTS` in `agent/config.py` /
-`projects.json`). Each task runs against that project's own **workspace** — a git worktree of the
-live repo at `/home/agent-workspaces/<project>`, on a per-task branch `agent/<task-id>` — one task per project
-at a time, enforced by a Postgres session-level advisory lock (`agent/graph.py`). The lock lives in
-the database rather than in the process because the rule is a property of the project: a second
-worker, an overlapping restart, or a script run against the same database would each hold their own
-in-process lock and happily run two tasks on one worktree. Postgres drops the claim when the
-connection closes, so a crashed process releases it with nobody cleaning up.
+`projects.json`). Each task gets its **own workspace** — a git worktree of the live repo at
+`/home/agent-workspaces/.tasks/<project>/<task-id>`, on its own branch `agent/<task-id>`, filled
+from the project's workspace (`/home/agent-workspaces/<project>`) with dependencies hardlinked and
+build output copied (`agent/workspaces.py`). So tasks on the same project can run side by side:
+**Settings → Tasks at once per project** sets how many (default 1). They code in parallel and take
+turns only for checks, review and merge; a task that merges second is rebased onto the first and
+reviewed again. The limit is a set of Postgres advisory locks (`agent/graph.py`, `project_slot`)
+rather than anything in the process, because it is a property of the project: a second worker or an
+overlapping restart sees the same slots, and Postgres drops a claim when its connection closes.
 
 ## Screenshots
 
@@ -286,8 +288,8 @@ first. The app lands on **Planning**, not the raw task composer.
   classifier assigns (`bug-fix`, `feature`, `ui-styling`, `performance`, `investigation`, `other`),
   with search. Running tasks sit in their own always-visible group at the top, so a refresh mid-task
   never buries the thing you're watching inside a collapsed category — and a task **Queued** behind
-  another on the same project sits there too, dim and not pulsing. One task per project is a hard
-  constraint (they share one worktree), and until the status said so a waiting task was
+  another on the same project sits there too, dim and not pulsing — every slot the project allows
+  is taken (Settings → Tasks at once per project), and until the status said so a waiting task was
   indistinguishable from a working one. Finished planning sessions
   archive into a collapsed group rather than growing one endless list. Each item can show a
   **route badge** (frontend / general) with the reason on hover.
@@ -899,6 +901,10 @@ into a worktree.
   as a *subset* of what it just proposed. `checks` and `build` are executed verbatim by
   the review and deploy services, so a submitted check is matched by name and replaced
   with the server's own command — a client cannot author one.
+- A project can name the environment its commands run in: `"stack": "go"` (an entry in
+  `docker/stack-images.json`, the map the reviewer already uses) or `"sandbox_image": "<image>"`
+  for one of its own. Same mounts, limits and hardening either way; without one it is the shared
+  `tektonix-sandbox` image.
 - `secretFiles`, mounts and `db_env_file` must be repo-relative and inside the project;
   traversal (`../../root/.ssh/id_rsa`) and absolute paths are refused.
 - Creating a project applies the same rule to a directory the server makes: it goes under the

@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+### Several tasks per project at once
+
+Each task now has its own workspace — a git worktree on its own branch, filled
+from the project's workspace with dependencies hardlinked (instant, no extra
+disk) and build output copied — so tasks on the same project no longer queue
+behind each other. **Settings → Tasks at once per project** sets how many
+(default 1, so nothing changes until it is raised). Tasks code in parallel and
+take turns only for checks, review and merge; the second to merge is rebased
+and reviewed again.
+
+The reviewer keeps a verdict per branch instead of per project, queues a review
+asked for while it is busy (it used to drop it, leaving the task to wait out its
+whole timeout), and counts fix rounds and churn per branch. A merge clears only
+the merged branch's verdict. A finished or deleted task's workspace is removed;
+the supervisor sweeps up the rest, and a workspace is never deleted while
+anything is mounted in it.
+
+A project can name its own sandbox environment — `stack` from
+`docker/stack-images.json` or `sandbox_image` — for the agent as well as the
+reviewer. The golden suite can run tasks in parallel (`--parallel`, or "Tasks at
+once" on the dashboard) and records how it ran.
+
 ### The golden suite on the dashboard, and 30 tasks instead of 12
 
 Analytics has a **Golden suite** panel for admins: the latest full run as a

@@ -142,7 +142,7 @@ def test_the_status_is_written_only_once_the_project_is_held():
     from agent import server
 
     src = inspect.getsource(server._stream_graph)
-    lock_at = src.index("async with project_lock(")
+    lock_at = src.index("async with project_slot(")
     running_at = src.index('await _mark("running")')
     assert running_at > lock_at, '"running" is still written before the lock'
     # And the pre-lock mark says queued.

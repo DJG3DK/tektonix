@@ -581,6 +581,11 @@ async def delete_task(request: Request, task_id: str, repo: str, user: User = De
             request.app.state.config, repo, task_id, meta.value,
             log_item.value if log_item is not None else None)
         await store.adelete(("tasks", repo), task_id)
+        # Its own workspace goes with it (agent/workspaces.py). Uncommitted
+        # edits in it go too -- deleting a task is the operator saying the
+        # work is done with; the branch keeps anything it committed.
+        from agent import workspaces
+        await workspaces.remove(repo, task_id)
         # Nothing will ever stream for this task again.
         _live_task_log.pop(task_id, None)
         _task_recorders.pop(task_id, None)

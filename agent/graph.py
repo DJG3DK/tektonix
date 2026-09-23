@@ -181,6 +181,115 @@ async def project_lock(repo: str, dsn: str | None = None, on_wait=None):
             await conn.close()
 
 
+# --- more than one task per project -----------------------------------------
+#
+# Since each task has its own workspace (agent/workspaces.py), the project lock
+# no longer protects a directory -- it protects the machine and the budget: how
+# many tasks may run on one project at once is now an operator's setting,
+# `parallel_tasks_per_project`. A task takes one of that many SLOTS. Slot 0 is
+# the project lock itself, under its old key, so a process still running the
+# single-slot code contends with this one rather than ignoring it.
+_SLOT_POLL_S = 2.0
+
+
+def _slot_name(repo: str, scope: str, index: int) -> str:
+    return repo if (scope == "task" and index == 0) else f"{repo}#{scope}{index}"
+
+
+async def _try_hold(name: str, dsn: str | None):
+    """Take `name` if it is free, without waiting. An async release function,
+    or None when someone has it."""
+    local = _in_process_lock(name)
+    if local.locked():
+        return None
+    await local.acquire()
+    try:
+        if not dsn:
+            async def _release_local():
+                local.release()
+            return _release_local
+        if backend_for_dsn(dsn) == "sqlite":
+            fd = file_lock.try_acquire(dsn, name, advisory_key(name))
+            if fd is None:
+                local.release()
+                return None
+
+            async def _release_file():
+                try:
+                    file_lock.release(fd)
+                finally:
+                    local.release()
+            return _release_file
+        conn = await _connect(dsn, autocommit=True)
+        try:
+            cur = await conn.execute("SELECT pg_try_advisory_lock(%s, %s)",
+                                     (_LOCK_NAMESPACE, advisory_key(name)))
+            row = await cur.fetchone()
+        except BaseException:
+            await conn.close()
+            raise
+        if not (row and row[0]):
+            await conn.close()
+            local.release()
+            return None
+
+        async def _release_pg():
+            try:
+                await conn.execute("SELECT pg_advisory_unlock(%s, %s)", (_LOCK_NAMESPACE, advisory_key(name)))
+            finally:
+                try:
+                    await conn.close()
+                finally:
+                    local.release()
+        return _release_pg
+    except BaseException:
+        if local.locked():
+            local.release()
+        raise
+
+
+@asynccontextmanager
+async def project_slot(repo: str, dsn: str | None = None, *, slots: int = 1,
+                       on_wait=None, scope: str = "task"):
+    """Hold one of `slots` places on this project; yields the slot's number.
+
+    With slots=1 this IS project_lock -- same key, same waiting -- so an
+    installation that never raises the setting behaves exactly as before.
+    Above one, every slot is tried without waiting and the whole set polled
+    until one frees, so a task never queues behind one slot while another
+    is open. `on_wait` is announced once, as project_lock does.
+    """
+    slots = max(1, int(slots))
+    if slots == 1:
+        async with project_lock(_slot_name(repo, scope, 0), dsn, on_wait=on_wait):
+            yield 0
+        return
+    announced = False
+    started = time.monotonic()
+    while True:
+        for index in range(slots):
+            release = await _try_hold(_slot_name(repo, scope, index), dsn)
+            if release is None:
+                continue
+            waited = time.monotonic() - started
+            if announced and waited > _LOCK_WAIT_WARN_S:
+                logger.warning("project %s: slot %d free after waiting %.0fs", repo, index, waited)
+            try:
+                yield index
+            finally:
+                await release()
+            return
+        if not announced:
+            announced = True
+            logger.warning("project %s: all %d slots busy; waiting for one", repo, slots)
+            if on_wait is not None:
+                try:
+                    await on_wait()
+                except Exception:  # noqa: BLE001 -- cosmetic, never fatal (see project_lock)
+                    logger.exception("project %s: could not announce the wait", repo)
+        await asyncio.sleep(_SLOT_POLL_S)
+
+
 @asynccontextmanager
 async def open_checkpointer(config: Config):
     # A dispatch and nothing else. Both halves of the real work live in the

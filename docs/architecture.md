@@ -168,10 +168,22 @@ A gate heal needs no model call; a work pass cut off mid-flight goes back to
 work with a note. Every heal is written into the task's log and sent as an
 alert.
 
-**One task per project.** Held as a Postgres *advisory* lock keyed by the
-project name (`agent/graph.py`), not an in-process lock — so a second worker
-or an overlapping restart cannot run two tasks against one worktree, and a
-crash releases the claim when its connection closes.
+**A workspace per task, and a number of tasks per project.** Each task has
+its own git worktree on its own branch (`agent/workspaces.py`), filled from the
+project's workspace: dependency trees hardlinked, build output copied, live-data
+mounts mounted again read-only -- never linked, since a link would reach
+production. How many tasks run on a project at once is a setting
+(`parallel_tasks_per_project`, default 1), held as that many Postgres *advisory*
+locks (`agent/graph.py`, `project_slot`; slot 0 is the old project lock's key),
+so a second worker or an overlapping restart sees the same slots and a crash
+releases its claim when its connection closes. Tasks code in parallel and take
+turns at one gate per project -- checks, review, merge (`_ship_gate` in
+verify_and_ship) -- because the reviewer reviews one branch of a project at a
+time and a merge moves the base the others rebase onto. The reviewer keeps a
+verdict per branch (`state[project].branches`), queues a request that arrives
+while it is busy, and counts fix rounds and churn per branch; a merge clears
+only the merged branch's verdict. A finished or deleted task's workspace is
+removed, and the supervisor sweeps up any left behind.
 
 ---
 

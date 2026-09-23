@@ -93,3 +93,40 @@ def _advisory_lock_without_postgres(monkeypatch):
         return _Conn()
 
     monkeypatch.setattr(_graph, "_connect", _connect)
+
+
+@pytest.fixture(autouse=True)
+def _task_workspace_is_the_project_workspace(request, monkeypatch):
+    """Each task gets its own git worktree (agent/workspaces.py), made with
+    real git against the project's live repo. Most unit tests drive the work
+    and ship nodes against a fake project whose paths are not repositories,
+    with git mocked out -- the one-workspace-per-project model they were
+    written for. For them the task's workspace IS the project's, which is
+    exactly the behaviour they pin.
+
+    Tests of the workspaces themselves -- and anything else that wants real
+    worktrees -- opt out with @pytest.mark.real_workspaces.
+    """
+    if request.node.get_closest_marker("real_workspaces"):
+        return
+    from agent import workspaces as _ws
+
+    async def _ensure(repo, task_id):
+        cfg = _ws._projects().get(repo) or {}
+        try:
+            from agent.nodes import verify_and_ship as _vs
+            cfg = (_vs.PROJECTS.get(repo) or cfg)
+        except Exception:  # noqa: BLE001
+            pass
+        return {"ok": True, "path": cfg.get("sandbox", ""), "created": False}
+
+    async def _remove(repo, task_id):
+        return {"ok": True, "removed": False}
+
+    async def _refresh_generated(root, rules):
+        return []
+
+    monkeypatch.setattr(_ws, "ensure", _ensure)
+    monkeypatch.setattr(_ws, "remove", _remove)
+    # Asks the live reviewer for its rules and runs the sandbox; not here.
+    monkeypatch.setattr(_ws, "refresh_generated", _refresh_generated)

@@ -286,7 +286,12 @@ function mountArgs(cfg, worktreePath) {
  * passes for a flag that has been moved into a branch that never runs.
  */
 function dockerArgs(cfg, worktreePath, relDir, cmd, args, extraEnv, network, stack) {
-    const target = imageFor(stack);
+    // A check's own stack wins; then the project's own image
+    // (projects.json `sandbox_image`), then the project's stack, then the
+    // default -- the same order agent/tools/sandbox.py uses, so the agent
+    // and its reviewer run a project's code in the same environment.
+    const target = imageFor(stack || (cfg && cfg.stack));
+    if (!stack && cfg && cfg.sandboxImage) target.image = cfg.sandboxImage;
     const envArgs = [];
     for (const [k, v] of Object.entries({
         CI: 'true', DEBIAN_FRONTEND: 'noninteractive', LANG: 'C.UTF-8',

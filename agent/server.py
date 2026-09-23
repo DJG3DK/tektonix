@@ -39,7 +39,8 @@ from agent.config import PROJECTS, load_config, require_server_config
 from agent.observability import install_langsmith
 from agent import tasks
 from agent import task_runtime
-from agent.outer_graph import build_outer_graph, open_checkpointer, open_store, project_lock
+from agent.outer_graph import build_outer_graph, open_checkpointer, open_store
+from agent.graph import project_slot
 from agent.routers import env_config as env_config_routes
 from agent.routers import github as github_routes
 from agent.routers import tasks as tasks_routes
@@ -56,6 +57,7 @@ from agent import runtime_settings
 from agent import github_inbox, github_settings
 from agent import audit
 from agent import live_state
+from agent import workspaces
 from agent.backends import backend_for_dsn
 from agent.store_paging import all_items
 from agent import health as health_checks
@@ -126,6 +128,12 @@ async def _supervisor_deps():
         items = await _tasks_in(repo, ("escalated", "awaiting_merge"))
         return [{**item.value, "task_id": item.value.get("task_id") or item.key} for item in items]
 
+    async def task_statuses(repo: str) -> dict[str, str]:
+        # Every task, whatever its status -- the workspace sweep must know a
+        # running task exists (supervisor.sweep_workspaces).
+        items = await all_items(app.state.store, ("tasks", repo))
+        return {item.key: (item.value or {}).get("status") or "unknown" for item in items}
+
     async def read_state(task_id: str):
         snap = await app.state.graph.aget_state({"configurable": {"thread_id": task_id}})
         if not snap or not snap.values:
@@ -161,6 +169,9 @@ async def _supervisor_deps():
         live_clean=supervisor.live_is_clean,
         landed=supervisor.commit_landed,
         max_attempts=lambda: runtime_settings.as_int("auto_heal_attempts"),
+        existing_workspaces=workspaces.existing,
+        remove_workspace=workspaces.remove,
+        task_statuses=task_statuses,
     )
 
 
@@ -1465,11 +1476,11 @@ async def _stream_graph(task_id: str, repo: str, goal: str, budget_usd: float, g
         )
         _publish(task_id, {"type": "status", "status": status})
 
-    # "queued", not "running", while another task holds this project.
+    # "queued", not "running", while this project's task slots are all taken.
     #
-    # One task per project is a hard constraint -- they share one worktree,
-    # and two of them editing it would interleave their commits (agent/graph.py's
-    # project_lock). But the status was written BEFORE the lock was taken, so
+    # How many tasks may run on a project at once is the operator's setting
+    # (parallel_tasks_per_project; each task has its own workspace since
+    # 2026-09-23, agent/workspaces.py). But the status was written BEFORE the lock was taken, so
     # a queued task was indistinguishable from a working one: the sidebar
     # showed "Running", the log showed nothing, the spend showed nothing, and
     # the only way to tell was to notice it had been like that for a while.
@@ -1483,12 +1494,13 @@ async def _stream_graph(task_id: str, repo: str, goal: str, budget_usd: float, g
     last_meta_cost = starting_cost
 
     try:
-        # The DSN, not pg_dsn: it is what project_lock dispatches on, and on
+        # The DSN, not pg_dsn: it is what project_slot dispatches on, and on
         # this deployment it is the same Postgres string it always was. So
-        # this is still a Postgres advisory lock rather than an object in
-        # this process, and a second worker or an overlapping restart still
-        # cannot run two tasks on one worktree (agent/graph.py).
-        async with project_lock(repo, config.dsn, on_wait=lambda: _mark("queued")):
+        # the slots are Postgres advisory locks rather than objects in this
+        # process, and a second worker or an overlapping restart still cannot
+        # run more tasks on a project than the setting allows (agent/graph.py).
+        async with project_slot(repo, config.dsn, slots=runtime_settings.as_int("parallel_tasks_per_project"),
+                                on_wait=lambda: _mark("queued")):
             # The project is ours now, so this is the first honest moment to
             # say "running". A task that never waited passes through both
             # marks in a millisecond and the dashboard only ever sees the
@@ -1659,6 +1671,13 @@ async def _stream_graph(task_id: str, repo: str, goal: str, budget_usd: float, g
             _sha = str(_pm.get("sha", ""))[:12] if isinstance(_pm, dict) else ""
             _detail = f"commit {_sha} passed review -- approve the merge in the dashboard"
         _alert_task_status(task_id, status, repo, goal, values.get("cost_so_far"), _detail)
+        if status == "done":
+            # Finished: its work is merged, or in a pull request, or there was
+            # none. The branch keeps whatever it committed; the workspace --
+            # hardlinks, copies and all -- is freed now, not at the next sweep.
+            removed = await workspaces.remove(repo, task_id)
+            if not removed.get("ok"):
+                logger.warning("task %s: workspace not removed: %s", task_id, removed.get("reason"))
     except asyncio.CancelledError:
         # The operator's Stop button (/stop below) cancels this task
         # directly. CancelledError is a BaseException, not an Exception, so

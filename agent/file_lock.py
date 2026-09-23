@@ -227,3 +227,26 @@ async def _wait_for_lock(path: Path, repo: str) -> int:
         # this lock, which guards an inode nobody can reach any more, and
         # contend for the file that is there now.
         os.close(fd)
+
+
+def try_acquire(dsn: str, repo: str, key: int) -> int | None:
+    """Take the lock only if it is free right now: an fd holding it, or None.
+
+    The slot lock (agent.graph.project_slot) asks this of each of a project's
+    N slots in turn, and must never wait on any one of them -- a slot that
+    frees up while it waits on another is a task needlessly queued. Release
+    with release()."""
+    if fcntl is None:
+        raise RuntimeError(f"a file lock needs POSIX flock, which {sys.platform} does not have")
+    path = lock_path(dsn, repo, key)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_CLOEXEC, 0o644)
+    if _try_acquire(fd) and _is_current(fd, path):
+        _note_holder(fd, repo)
+        return fd
+    os.close(fd)
+    return None
+
+
+def release(fd: int) -> None:
+    os.close(fd)

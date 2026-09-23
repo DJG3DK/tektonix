@@ -123,10 +123,38 @@ async function readReviewState() {
 // NEEDS_FIXES) verdict indefinitely for work that's already shipped. The
 // review card just goes back to its idle "nothing pending" state until the
 // next commit lands and gets reviewed.
-async function clearReviewState(project) {
+// Per branch since 2026-09-23 (see branchRecord in commit-reviewer): a merge
+// clears the merged branch's verdict and nobody else's. Other tasks of the
+// same project may be parked READY on their own branches, and wiping the
+// whole project sent every one of them back through a full re-review.
+const TASK_BRANCH_RE = /^agent\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+function branchRecord(projectState, branch) {
+    if (!projectState || !branch) return null;
+    const rec = projectState.branches && Object.hasOwn(projectState.branches, branch)
+        ? projectState.branches[branch] : null;
+    if (rec) return rec;
+    if (projectState.branch === branch && projectState.lastReviewedSha) {
+        const { branches, inProgress, ...legacy } = projectState;
+        return legacy;
+    }
+    return null;
+}
+
+async function clearReviewState(project, branch = null) {
     const state = await readReviewState();
-    if (!(project in state)) return;
-    delete state[project];
+    if (!Object.hasOwn(state, project)) return;
+    const current = state[project] || {};
+    const branches = { ...(current.branches || {}) };
+    if (branch) delete branches[branch];
+    if (!branch || current.branch === branch || !Object.keys(branches).length) {
+        // The dashboard's card showed the merged branch: back to idle, keeping
+        // the records of branches that have not merged.
+        if (Object.keys(branches).length) state[project] = { branches };
+        else delete state[project];
+    } else {
+        state[project] = { ...current, branches };
+    }
     // audit M-11: atomic temp-file + rename, matching commit-reviewer's
     // saveState -- a reader (or a crash) never sees a partial state.json.
     const tmp = `${REVIEW_STATE_PATH}.tmp-${process.pid}-${Date.now()}`;
@@ -286,7 +314,25 @@ app.post('/api/projects/:name/merge', requireControlSecret, async (req, res) => 
     const p = projectOr404(req, res); if (!p) return;
     try {
         const branch = (await git(p.live, ['rev-parse', '--abbrev-ref', 'HEAD'])).trim();
-        const agentRef = await agentRefFor(p, req.params.name, branch);
+        // The agent names the branch it means. With one task per project the
+        // latest verdict's branch was always it; with several, "latest" is
+        // whichever was reviewed last, which may be somebody else's.
+        const requested = typeof req.body?.branch === 'string' ? req.body.branch : null;
+        if (requested && !TASK_BRANCH_RE.test(requested)) {
+            return res.status(400).json({ ok: false, reason: 'bad_branch', error: 'not a task branch' });
+        }
+        let agentRef = null;
+        if (requested) {
+            try {
+                await git(p.live, ['rev-parse', '--verify', `${requested}^{commit}`]);
+                agentRef = requested;
+            } catch {
+                return res.status(409).json({ ok: false, reason: 'nothing_to_merge',
+                    error: `${requested} does not exist.` });
+            }
+        } else {
+            agentRef = await agentRefFor(p, req.params.name, branch);
+        }
         if (!agentRef) {
             return res.status(409).json({ ok: false, reason: 'nothing_to_merge',
                 error: 'No agent task branch exists for this project.' });
@@ -294,7 +340,9 @@ app.post('/api/projects/:name/merge', requireControlSecret, async (req, res) => 
         const tipSha = (await git(p.live, ['rev-parse', agentRef])).trim();
 
         if (!req.body?.force) {
-            const review = (await readReviewState())[req.params.name];
+            const projectState = (await readReviewState())[req.params.name];
+            const review = requested ? branchRecord(projectState, requested) : projectState;
+            if (review && projectState?.inProgress) review.inProgress = projectState.inProgress;
             if (!review) {
                 return res.status(409).json({ ok: false, reason: 'not_reviewed',
                     error: 'Not yet reviewed by the automated review service (polls every 2 minutes). Wait for it, or merge anyway.' });
@@ -335,7 +383,7 @@ app.post('/api/projects/:name/merge', requireControlSecret, async (req, res) => 
         const mergedFrom = (await git(p.live, ['rev-parse', 'HEAD'])).trim();
 
         const output = await git(p.live, ['merge', '--ff-only', agentRef]);
-        await clearReviewState(req.params.name);
+        await clearReviewState(req.params.name, agentRef);
 
         // Push to the real GitHub remote as part of the merge, not as a
         // separate manual step afterwards. Before this, a merge only ever

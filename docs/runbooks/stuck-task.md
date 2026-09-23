@@ -187,8 +187,10 @@ The rest of this section is for the case where a task says *running* and the
 lock is still the answer — an older task started before that change, or a
 second process holding the lock from outside this one.
 
-One task per project is enforced with a Postgres advisory lock. A second
-process holding it makes a task wait silently at the very start.
+How many tasks run on a project at once (Settings → Tasks at once per
+project, default 1) is enforced with Postgres advisory locks, one per slot.
+A second process holding them makes a task wait at the very start, marked
+Queued.
 
 ```bash
 grep 'locked by another process' /root/.pm2/logs/tektonix-error.log | tail -3

@@ -135,18 +135,73 @@ def _mount_allow_roots(cwd: str) -> list[str]:
     compare against.
     """
     roots = [os.path.realpath(cwd)]
-    try:
-        from agent.config import PROJECTS
-    except Exception:  # noqa: BLE001 -- config unavailable; workspace-only
-        return roots
-    real_cwd = os.path.realpath(cwd)
-    for cfg in PROJECTS.values():
-        if os.path.realpath(cfg.get("sandbox", "")) == real_cwd:
-            live = cfg.get("live")
-            if live:
-                roots.append(os.path.realpath(live))
-            break
+    found = _project_of(cwd)
+    if found:
+        cfg = found[1]
+        live = cfg.get("live")
+        if live:
+            roots.append(os.path.realpath(live))
+        # A task's own workspace (agent/workspaces.py) is filled from the
+        # project's, and a dependency symlink copied from there may point
+        # into it -- the same server-owned tree the task was made from.
+        template = cfg.get("sandbox")
+        if template and os.path.realpath(template) != roots[0]:
+            roots.append(os.path.realpath(template))
     return roots
+
+
+def _project_of(cwd: str):
+    """(name, config) of the project whose workspace -- its own, or one of
+    its tasks' -- `cwd` is. Decided from server-owned config only."""
+    try:
+        from agent.workspaces import project_for_path
+        return project_for_path(cwd)
+    except Exception:  # noqa: BLE001 -- config unavailable (tests); workspace-only
+        return None
+
+
+def _stack_images() -> dict:
+    """docker/stack-images.json -- the one map of toolchain -> image the
+    reviewer and onboarding already read. Missing means default only."""
+    import json
+    from agent import paths
+    try:
+        return json.loads((paths.REPO_ROOT / "docker" / "stack-images.json").read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def sandbox_environment_for(cwd: str) -> tuple[str, dict]:
+    """The image a command in this workspace runs in, and the env its
+    toolchain needs.
+
+    In order: the project's own `sandbox_image` from projects.json, then the
+    image of its `stack` (docker/stack-images.json, the map the reviewer
+    already runs checks with), then the shared image. A project whose
+    toolchain the shared image lacks -- a Python version, a system library, a
+    whole other language -- gets an environment of its own, and nothing else
+    changes: same mounts, same limits, same hardening."""
+    found = _project_of(cwd)
+    cfg = found[1] if found else {}
+    stack = (_stack_images().get("stacks") or {}).get(cfg.get("stack") or "") or {}
+    image = cfg.get("sandbox_image") or stack.get("image") or SANDBOX_IMAGE
+    return str(image), dict(stack.get("env") or {})
+
+
+def sandbox_image_for(cwd: str) -> str:
+    return sandbox_environment_for(cwd)[0]
+
+
+def _shell(cmd: str) -> list[str]:
+    """bash where the image has it, sh where it does not.
+
+    The shared image has bash and every command the agent writes assumes it.
+    A toolchain image from a stack may not -- the Alpine ones ship only sh --
+    and `bash -c` there fails every command before it starts. sh is in every
+    image, so it starts the command and hands it to bash when bash exists."""
+    return ["sh", "-c",
+            'if command -v bash >/dev/null 2>&1; then exec bash -c "$0"; else exec sh -c "$0"; fi',
+            cmd]
 
 
 def _mount_target_allowed(target: str, allow_roots: list[str]) -> bool:
@@ -225,8 +280,10 @@ async def run_shell_sandboxed(
     run_shell, so callers don't need to branch on which one they used.
     """
     container_name = f"lga-{uuid.uuid4().hex[:12]}"
+    image, toolchain_env = sandbox_environment_for(cwd)
     env_args = []
-    for k, v in {"CI": "true", "DEBIAN_FRONTEND": "noninteractive", **(extra_env or {})}.items():
+    for k, v in {"CI": "true", "DEBIAN_FRONTEND": "noninteractive", **toolchain_env,
+                 **(extra_env or {})}.items():
         env_args += ["-e", f"{k}={v}"]
 
     # The workspace is a git WORKTREE of the live repo (see the 2026-08-25
@@ -291,8 +348,8 @@ async def run_shell_sandboxed(
         "--cap-drop", "ALL",
         "--security-opt", "no-new-privileges",
         *env_args,
-        SANDBOX_IMAGE,
-        "bash", "-c", cmd,
+        image,
+        *_shell(cmd),
     ]
     proc = await asyncio.create_subprocess_exec(
         *docker_args,
@@ -370,8 +427,8 @@ async def start_preview_container(cmd: str, cwd: str, container_port: int,
         "--security-opt", "no-new-privileges",
         "-e", "CI=true",
         *env_args,
-        SANDBOX_IMAGE,
-        "bash", "-c", cmd,
+        sandbox_image_for(cwd),
+        *_shell(cmd),
     ]
     try:
         proc = await asyncio.create_subprocess_exec(

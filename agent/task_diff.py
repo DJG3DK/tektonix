@@ -135,6 +135,13 @@ async def _branch_diff(root: str, repo: str, branch: str, tip: str, base_ref: st
     }
 
 
+def _root_for(repo: str, project: dict, task_branch: str | None) -> str:
+    if task_branch and task_branch.startswith("agent/"):
+        from agent.workspaces import workspace_for
+        return workspace_for(repo, task_branch.removeprefix("agent/"))
+    return project["sandbox"]
+
+
 async def collect_task_diff(repo: str, base_ref: str = "main", task_branch: str | None = None) -> dict:
     """Everything the workspace holds that `base_ref` does not -- committed
     AND uncommitted, plus untracked files -- as one structured payload.
@@ -144,7 +151,10 @@ async def collect_task_diff(repo: str, base_ref: str = "main", task_branch: str 
     project = PROJECTS.get(repo)
     if not project:
         raise KeyError(f"unknown repo {repo!r}")
-    root = project["sandbox"]
+    # The task's own workspace when it has one (agent/workspaces.py): its
+    # uncommitted work is only there. Otherwise the project's, where the
+    # branch fallback below reads the committed work from git.
+    root = _root_for(repo, project, task_branch)
 
     rc, head = await _git(root, "rev-parse", "HEAD")
     rc_b, branch = await _git(root, "rev-parse", "--abbrev-ref", "HEAD")

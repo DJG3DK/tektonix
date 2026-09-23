@@ -133,6 +133,13 @@ class Deps:
     live_clean: Callable[[str], Awaitable[bool]]
     landed: Callable[[str, str], Awaitable[bool]]               # (live root, committed sha)
     max_attempts: Callable[[], int]
+    # Task workspaces on disk for a project, and removing one (agent/workspaces.py).
+    existing_workspaces: Callable[[str], list[str]] | None = None
+    remove_workspace: Callable[[str, str], Awaitable[dict]] | None = None
+    # EVERY task's status on a project, task id -> status. Not list_tasks,
+    # which returns only the parked ones: read as "the tasks that exist", it
+    # would make every running task look deleted.
+    task_statuses: Callable[[str], Awaitable[dict[str, str]]] | None = None
 
 
 def _log_entry(summary: str, detail: str = "") -> dict:
@@ -229,6 +236,40 @@ async def sweep(deps: Deps, now: float | None = None) -> list[dict]:
     return done
 
 
+async def sweep_workspaces(deps: Deps) -> list[dict]:
+    """Free the workspaces of tasks that are finished or gone.
+
+    A task's workspace is removed when its run ends `done` and when it is
+    deleted; this catches the rest -- a task concluded here by the landed
+    check above, a crash between the two, a delete from before workspaces
+    were per-task. Only `done` and missing tasks: anything else may resume,
+    and resuming is what the workspace is for. Never a running task."""
+    if not (deps.existing_workspaces and deps.remove_workspace and deps.task_statuses):
+        return []
+    freed: list[dict] = []
+    for repo in deps.projects:
+        dirs = deps.existing_workspaces(repo)
+        if not dirs:
+            continue
+        try:
+            status = await deps.task_statuses(repo)
+        except Exception:  # noqa: BLE001 -- unknown statuses: remove nothing
+            logger.exception("supervisor: listing tasks failed for %s; workspaces left alone", repo)
+            continue
+        for name in dirs:
+            if deps.is_running(name) or status.get(name, "missing") not in ("done", "missing"):
+                continue
+            try:
+                out = await deps.remove_workspace(repo, name)
+            except Exception:  # noqa: BLE001 -- one workspace must not stop the sweep
+                logger.exception("supervisor: removing the workspace of %s failed", name)
+                continue
+            if out.get("ok") and out.get("removed"):
+                freed.append({"task": name, "action": "workspace_removed",
+                              "was": status.get(name, "missing")})
+    return freed
+
+
 async def run_forever(deps: Deps, interval: float = SWEEP_INTERVAL_S, startup_delay: float = 30.0) -> None:
     # After startup settles: the startup auto-resume reconnects orphans first,
     # and a heal racing it for the same task would be pointless.
@@ -242,6 +283,12 @@ async def run_forever(deps: Deps, interval: float = SWEEP_INTERVAL_S, startup_de
                         logger.warning("supervisor: %s", a)
             except Exception:  # noqa: BLE001 -- the loop outlives any one sweep
                 logger.exception("supervisor: sweep failed")
+        # Whether or not healing is on: disk is disk.
+        try:
+            for a in await sweep_workspaces(deps):
+                logger.info("supervisor: %s", a)
+        except Exception:  # noqa: BLE001
+            logger.exception("supervisor: workspace sweep failed")
         await asyncio.sleep(interval)
 
 

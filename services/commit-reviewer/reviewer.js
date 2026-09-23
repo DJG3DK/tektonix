@@ -394,6 +394,40 @@ function saveState(state) {
   fs.renameSync(tmp, STATE_PATH);
 }
 
+// A verdict belongs to a BRANCH. Each task has its own branch and, since
+// 2026-09-23, its own workspace, so several branches of one project can be in
+// review, parked READY, or looping on fixes at the same time. `state[project]`
+// stays what the dashboard shows -- the latest review -- and
+// `state[project].branches[branch]` holds each branch's own last verdict, which
+// is what the round counter, the churn detector, the dedup check, the agent's
+// wait and the merge gate all read. Without it, a second task's review
+// overwrote the first's and the first lost its round history and its READY.
+const MAX_BRANCH_RECORDS = 40;
+
+function branchRecord(projectState, branch) {
+  if (!projectState || !branch) return null;
+  const rec = projectState.branches && Object.hasOwn(projectState.branches, branch)
+    ? projectState.branches[branch] : null;
+  if (rec) return rec;
+  // Written before per-branch records existed: the top-level record is this
+  // branch's only when it names it.
+  if (projectState.branch === branch && projectState.lastReviewedSha) {
+    const { branches, inProgress, ...legacy } = projectState;
+    return legacy;
+  }
+  return null;
+}
+
+function withBranchRecord(projectState, branch, record) {
+  const branches = { ...((projectState && projectState.branches) || {}), [branch]: record };
+  const names = Object.keys(branches);
+  if (names.length > MAX_BRANCH_RECORDS) {
+    names.sort((a, b) => String(branches[a].reviewedAt || '').localeCompare(String(branches[b].reviewedAt || '')));
+    for (const old of names.slice(0, names.length - MAX_BRANCH_RECORDS)) delete branches[old];
+  }
+  return branches;
+}
+
 // One line per review, never overwritten or cleared — the durable record
 // state.json can't provide. Best-effort: a history-append failure should
 // never take down a review that otherwise succeeded.
@@ -409,7 +443,7 @@ function appendHistory(project, entry) {
 // (not instead of) the consecutive-failure escalation. Reads history.jsonl
 // rather than state.json specifically because state.json only ever holds
 // the latest round — this needs the last several hours of them.
-function computeFileChurn(project, currentFindings) {
+function computeFileChurn(project, currentFindings, branch = null) {
   const counts = new Map();
   const bump = (file) => counts.set(file, (counts.get(file) || 0) + 1);
 
@@ -423,6 +457,9 @@ function computeFileChurn(project, currentFindings) {
     let entry;
     try { entry = JSON.parse(line); } catch { continue; }
     if (entry.project !== project) continue;
+    // Per branch: two tasks each drawing a finding on the same file is two
+    // tasks, not one task going round in circles.
+    if (branch && entry.branch && entry.branch !== branch) continue;
     if (!entry.reviewedAt || new Date(entry.reviewedAt).getTime() < cutoff) continue;
     for (const f of entry.findings || []) {
       if (f?.file) bump(f.file);
@@ -483,6 +520,17 @@ const ignoredRefs = new Set();
 
 // `prev` is the project's current review record; a parameter so a test can
 // drive this against a scratch repository without a state file.
+// The worktree that has `branch` checked out, from live's own worktree list.
+async function worktreeFor(cfg, branch) {
+  const out = (await git(cfg.live, ['worktree', 'list', '--porcelain'])).output || '';
+  let path = null;
+  for (const line of out.split('\n')) {
+    if (line.startsWith('worktree ')) path = line.slice('worktree '.length);
+    else if (line === `branch refs/heads/${branch}` && path) return path;
+  }
+  return null;
+}
+
 async function detectNewCommit(project, cfg, prev = loadState()[project], requested = null) {
   // The agent's workspace is now a git worktree of this same repository, so its
   // per-task branch is already a local ref here -- there is no clone to fetch
@@ -545,14 +593,20 @@ async function detectNewCommit(project, cfg, prev = loadState()[project], reques
   }
 
   // Same branch at the same tip as last round -> already reviewed. Keyed on
-  // branch AND sha so a re-tipped branch still counts as new work.
-  if (prev && prev.branch === ref && prev.lastReviewedSha === head) return null;
+  // branch AND sha so a re-tipped branch still counts as new work -- and read
+  // from THAT branch's record, so another task's review in between does not
+  // make this one look new.
+  const prevForRef = branchRecord(prev, ref);
+  if (prevForRef && prevForRef.lastReviewedSha === head) return null;
 
-  // Don't review a moving target: the agent's workspace must be clean. Only
-  // meaningful when the workspace is actually on this branch -- a stale
-  // branch from a finished task is not being written to.
-  if (wsBranch === ref) {
-    const statusOut = (await git(cfg.sandbox, ['status', '--short'])).output.trim();
+  // Don't review a moving target: the workspace holding this branch must be
+  // clean. Since 2026-09-23 each task has its own worktree, so that is
+  // whichever worktree has the branch checked out -- not the project's
+  // `sandbox`, which no task works in any more. A branch no worktree holds
+  // is not being written to.
+  const holder = (await worktreeFor(cfg, ref)) || (wsBranch === ref ? cfg.sandbox : null);
+  if (holder) {
+    const statusOut = (await git(holder, ['status', '--short'])).output.trim();
     if (statusOut) {
       if (requested === ref) log(`[${project}] asked to review ${ref}, but its workspace has uncommitted changes -- waiting for a clean tree`);
       return null;
@@ -1865,6 +1919,30 @@ function buildAgentMessage(review, checkResults) {
 // "Check now" click (see startControlServer) racing each other onto the same
 // worktree path for the same project.
 const inProgressProjects = new Set();
+// Branches asked for while their project was already being reviewed, in the
+// order asked. Before this a busy reviewer answered "already reviewing" and
+// forgot the request, and the task that made it waited out its whole review
+// timeout for a review nobody was going to run -- rare with one task per
+// project, routine with several.
+const pendingReviews = new Map();
+
+function queueReview(project, branch) {
+  const q = pendingReviews.get(project) || [];
+  if (!q.includes(branch)) q.push(branch);
+  pendingReviews.set(project, q);
+}
+
+function runNextQueued(project, routerKey) {
+  const q = pendingReviews.get(project);
+  if (!q || !q.length) return;
+  const next = q.shift();
+  if (!q.length) pendingReviews.delete(project);
+  const cfg = currentProjects()[project];
+  if (!cfg) return;
+  log(`[${project}] reviewing queued request for ${next}`);
+  setImmediate(() => reviewProject(project, cfg, routerKey, next)
+    .catch((err) => log(`[${project}] queued check failed: ${err.message}`)));
+}
 
 function setStep(project, step) {
   const state = loadState();
@@ -1876,7 +1954,10 @@ function setStep(project, step) {
 async function reviewProject(project, cfg, routerKey, requested = null) {
   const unit = await detectNewCommit(project, cfg, undefined, requested);
   if (!unit) return { started: false };
-  if (inProgressProjects.has(project)) return { started: false, reason: 'already reviewing' };
+  if (inProgressProjects.has(project)) {
+    if (requested) queueReview(project, requested);
+    return { started: false, reason: 'already reviewing' };
+  }
   inProgressProjects.add(project);
 
   // `base` is the fork point, fixed for the life of the branch. Every range
@@ -1939,7 +2020,8 @@ async function reviewProject(project, cfg, routerKey, requested = null) {
     // bookkeeping below, where this used to live) so reviewWithSonnet can see
     // the prior round's findings and be asked directly whether this round's
     // issues share a root cause with them — see priorRoundContext below.
-    let prevState = loadState()[project];
+    const projectState = loadState()[project];
+    let prevState = branchRecord(projectState, branch);
     if (prevState?.lastReviewedSha && !(await isAncestor(cfg, prevState.lastReviewedSha, sha))) {
       // The prior round's commit isn't in this commit's own history anymore
       // (see isAncestor's own comment) -- its findings/streak belong to a
@@ -1953,7 +2035,10 @@ async function reviewProject(project, cfg, routerKey, requested = null) {
     // run turns out to be missing it too (in which case it is pre-existing and
     // blocks nothing).
     classifyInfrastructureFailures(checkResults);
-    const baseline = await markPreexistingFailures(project, cfg, base, checkResults, prevState?.baseline, branchDepsChanged);
+    // The baseline is a fact about the BASE commit, cached per base sha, so
+    // any branch's cache serves -- this one's first, else the project's latest.
+    const baseline = await markPreexistingFailures(project, cfg, base, checkResults,
+      prevState?.baseline || projectState?.baseline, branchDepsChanged);
     const existingTestCoverage = gatherExistingTestCoverage(worktreePath, diff);
     const referencedFiles = gatherReferencedFiles(worktreePath, commitLog, diff);
 
@@ -2031,11 +2116,11 @@ async function reviewProject(project, cfg, routerKey, requested = null) {
     // Computed BEFORE appendHistory below writes this round's own entry —
     // otherwise a later round would double-count this one (once read back
     // from history, once from currentFindings).
-    const churn = verdict === 'READY' ? null : computeFileChurn(project, review.findings);
+    const churn = verdict === 'READY' ? null : computeFileChurn(project, review.findings, branch);
     const escalated = verdict === 'READY' ? false : (wasEscalated || infraFailed || consecutiveNeedsFixes >= MAX_CONSECUTIVE_FIXES || Boolean(churn));
 
     const state = loadState();
-    state[project] = {
+    const record = {
       // The review unit, recorded in full: a verdict is only meaningful for the
       // branch and base it was produced against. agent-review's merge endpoint
       // reads `branch` so it merges exactly what was reviewed, and the next
@@ -2066,8 +2151,9 @@ async function reviewProject(project, cfg, routerKey, requested = null) {
       consecutiveNeedsFixes,
       escalated,
     };
+    state[project] = { ...record, branches: withBranchRecord(state[project], branch, record) };
     saveState(state);
-    appendHistory(project, state[project]);
+    appendHistory(project, record);
 
     if (verdict === 'NEEDS_FIXES' && !wasEscalated) {
       log(`[${project}] NEEDS_FIXES — findings recorded in state.json/history.jsonl for the dashboard`);
@@ -2088,6 +2174,7 @@ async function reviewProject(project, cfg, routerKey, requested = null) {
   } finally {
     if (worktreePath) await cleanupWorktree(cfg, worktreePath);
     inProgressProjects.delete(project);
+    runNextQueued(project, routerKey);
   }
 }
 
@@ -2165,7 +2252,15 @@ function startControlServer(routerKey) {
       const out = {};
       for (const [name, cfg] of Object.entries(currentProjects())) {
         const checks = Array.isArray(cfg.checks) ? cfg.checks : [];
-        out[name] = { checks: checks.length, names: checks.map((c) => c.name).filter(Boolean) };
+        out[name] = {
+          checks: checks.length,
+          names: checks.map((c) => c.name).filter(Boolean),
+          // Generated code outside git and node_modules (a Prisma client) and
+          // how to regenerate it. The agent keeps its own workspaces' copies
+          // current with the same rule this service applies to its worktrees.
+          generated: (cfg.generated || []).filter((g) => g && g.dir && g.schemaFile && g.regenerate)
+            .map((g) => ({ dir: g.dir, schemaFile: g.schemaFile, regenerate: g.regenerate })),
+        };
       }
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ ok: true, projects: out }));
@@ -2202,8 +2297,10 @@ function startControlServer(routerKey) {
       return;
     }
     if (inProgressProjects.has(project)) {
+      // Queued, not dropped: it runs as soon as the current review ends.
+      if (requestedBranch && TASK_BRANCH_RE.test(requestedBranch)) queueReview(project, requestedBranch);
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ ok: true, started: false, reason: 'already reviewing' }));
+      res.end(JSON.stringify({ ok: true, started: false, queued: Boolean(requestedBranch), reason: 'already reviewing' }));
       return;
     }
     // Fire-and-forget: reviewProject can take minutes (real builds/tests/LLM
@@ -2260,4 +2357,5 @@ module.exports = {
   detectNewCommit, reviewWithSonnet, buildAgentMessage, applyBaseline, TASK_BRANCH_RE,
   classifyInfrastructureFailures, packagesNeedingOwnInstall, baselineKey,
   detectNodeModulesDirs, NM_BUILD_CACHES,
+  branchRecord, withBranchRecord, computeFileChurn, queueReview, pendingReviews,
 };

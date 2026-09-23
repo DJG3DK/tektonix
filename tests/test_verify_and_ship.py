@@ -676,7 +676,7 @@ async def test_self_committed_head_is_adopted_instead_of_polling_stale_sha(monke
     must adopt the real HEAD as the pending commit instead."""
     seen = {}
 
-    async def _wait(repo, sha, timeout):
+    async def _wait(repo, sha, timeout, branch=None):
         seen["sha"] = sha
         return {"verdict": "NEEDS_FIXES", "summary": "reviewed head", "findings": []}
 

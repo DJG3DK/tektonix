@@ -1665,7 +1665,11 @@ async def build_deep_agent(
     entirely and produces the same end result (memory content in the system
     prompt) via a confirmed-working path instead of a confirmed-broken one.
     """
-    repo_root = PROJECTS[repo]["sandbox"]
+    # The task's own workspace (agent/workspaces.py); the project's when there
+    # is no task -- or, for a task whose workspace does not exist yet, which
+    # the work node creates before it gets here.
+    from agent.workspaces import own_or_template  # noqa: PLC0415
+    repo_root = own_or_template(PROJECTS[repo]["sandbox"], task_id)
     # Which of the paths this task names are not on disk. Appended to the
     # coordinator's prompt AND to every subagent's, because the subagents are
     # what go looking: on task 3ee0d030 seven delegations each searched for a

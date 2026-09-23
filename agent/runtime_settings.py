@@ -30,6 +30,22 @@ KEY = "runtime"
 # name -> spec. `env` is the variable that seeded the old default, kept so an
 # existing deployment's configuration is not silently discarded on upgrade.
 KNOBS: dict[str, dict] = {
+    "parallel_tasks_per_project": {
+        "label": "Tasks at once per project",
+        "help": (
+            "How many tasks may work on one project at the same time. Each task has its "
+            "own workspace, so they cannot touch each other's files; above 1 they code in "
+            "parallel and take turns only for checks, review and merge. A task that merges "
+            "second is rebased onto the first and reviewed again. Each running task has its "
+            "own sandbox containers and model calls, so raise it with the machine in mind."
+        ),
+        "unit": "tasks",
+        "default": 1,
+        "min": 1,
+        "max": 8,
+        "env": None,
+        "group": "Budgets & loop limits",
+    },
     "planning_read_budget": {
         "label": "Planning reads before a draft",
         "help": (

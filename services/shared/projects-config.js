@@ -68,6 +68,11 @@ function loadProjects(builtins, { section, file } = {}) {
             sandbox: entry.sandbox,
             workspace: entry.sandbox,
         };
+        // The project's own environment, when it names one (see
+        // agent/tools/sandbox.py sandbox_image_for). Only when set, so an
+        // absent key never overrides a built-in's.
+        if (entry.stack) base.stack = entry.stack;
+        if (entry.sandbox_image) base.sandboxImage = entry.sandbox_image;
         const extra = (section && entry[section]) || {};
         out[name] = { ...base, ...extra };
     }

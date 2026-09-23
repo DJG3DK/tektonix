@@ -289,6 +289,26 @@ def _reconciled_cost(state: AgentState) -> float:
     return checkpointed
 
 
+async def _generated_rules(repo: str) -> list[dict]:
+    """The reviewer's `generated` rules for this project (review_gate's cached
+    /projects read); none when it cannot be reached."""
+    try:
+        from agent.tools.review_gate import project_checks
+        return list(((await project_checks()).get(repo) or {}).get("generated") or [])
+    except Exception:  # noqa: BLE001 -- no rules is the old behaviour, never a failure
+        return []
+
+
+_TEMPLATE_SYNC_LOCKS: dict[str, "asyncio.Lock"] = {}
+
+
+def _template_sync_lock(repo: str):
+    import asyncio
+    if repo not in _TEMPLATE_SYNC_LOCKS:
+        _TEMPLATE_SYNC_LOCKS[repo] = asyncio.Lock()
+    return _TEMPLATE_SYNC_LOCKS[repo]
+
+
 async def work_node(state: AgentState, app_config: Config, checkpointer, pg_store) -> dict:
     # Parameter names `app_config`/`pg_store` are deliberate, not stylistic:
     # LangGraph auto-injects its own runtime object into any node parameter
@@ -300,22 +320,21 @@ async def work_node(state: AgentState, app_config: Config, checkpointer, pg_stor
     task_id = state["task_id"]
     repo = state["repo"]
 
-    # Fresh task, first pass: move the workspace to the current live tip
-    # BEFORE the agent reads or edits anything. Safe here and only here -- the
-    # whole graph run holds project_lock (server.py), iteration_count==0 with
-    # no committed_sha means no prior pass owns the tree, and the sync itself
-    # refuses to act on a dirty tree. Without this, tasks branched from
-    # wherever the last task left HEAD: stale bases, stale code being edited,
-    # and --ff-only merges failing on "diverging branches" (observed live
-    # 2026-08-26, a branch 9 commits behind main).
-    if state["iteration_count"] == 0 and not state.get("committed_sha"):
-        from agent.tools.git import fetch_base_from_origin, sync_workspace_to_base
-        from agent.config import PROJECTS
+    from agent import workspaces
+    from agent.config import PROJECTS
+    from agent.tools.git import (
+        _claim_workspace,
+        fetch_base_from_origin,
+        reclaim_own_stash,
+        restore_task_workspace,
+        sync_workspace_to_base,
+    )
 
+    first_pass = state["iteration_count"] == 0 and not state.get("committed_sha")
+    if first_pass:
         # The local checkout is a cache of GitHub, not the source of truth.
-        # Fetch FIRST, then move the workspace, so "the current live tip" means
-        # the current one rather than whatever this machine last saw. Against
-        # the live repo: the workspace is a worktree of it and shares its refs.
+        # Fetch FIRST, so "the current live tip" a new workspace starts from
+        # means the current one rather than whatever this machine last saw.
         #
         # Every failure here is ordinary -- no remote, offline, a host that is
         # down, or local commits that cannot fast-forward -- and none of them
@@ -327,44 +346,76 @@ async def work_node(state: AgentState, app_config: Config, checkpointer, pg_stor
                 print(f"[work] {repo}: origin had moved; live main now at {fetched['base'][:12]}")
             elif fetched.get("diverged"):
                 print(f"[work] {repo}: local main has commits origin does not -- left alone")
+        # The project's own workspace is no task's any more: it is the
+        # template new workspaces are filled from, and what planning and the
+        # cartographer read. Kept on the current tip for them. Best-effort --
+        # two tasks starting at once may both try, and the loser changes
+        # nothing by failing.
+        # Tasks starting together take turns: git's index lock would turn
+        # all but one away, and all but one of them had nothing to do anyway.
+        async with _template_sync_lock(repo):
+            template = await sync_workspace_to_base(PROJECTS[repo]["sandbox"])
+            # Generated code (a Prisma client) regenerated once here when the
+            # schema moved, so the workspaces filled from this one start current.
+            regenerated = await workspaces.refresh_generated(PROJECTS[repo]["sandbox"],
+                                                             await _generated_rules(repo))
+            if regenerated:
+                print(f"[work] {repo}: regenerated in the project workspace -> {regenerated}")
+        if template.get("salvaged_from"):
+            # Said out loud: something was stashed to sync it -- from before
+            # tasks had their own workspaces -- and whoever wants it back
+            # needs to know it exists.
+            print(f"[work] {repo}: stashed work left in the project workspace by "
+                  f"{template['salvaged_from']} -- recover it with `git stash list` there")
+        elif not template.get("synced"):
+            print(f"[work] {repo}: PROJECT WORKSPACE NOT SYNCED ({template.get('reason')}) "
+                  f"-- planning and new workspaces' ignored files read it as it is")
 
-        # task_id, so the sync can tell this task's own uncommitted work
-        # (a resume) from debris a different task abandoned. Without it every
-        # dirty tree looks the same and the safe answer is to refuse, which
-        # is how a task ends up silently running on a stale base.
-        sync = await sync_workspace_to_base(PROJECTS[repo]["sandbox"], task_id=task_id)
-        print(f"[work] {repo}: workspace sync -> {sync}")
-        if sync.get("salvaged_from"):
-            # Said out loud. Something was stashed to make room for this task,
-            # and an operator who wants it back needs to know it exists.
-            print(f"[work] {repo}: stashed work left behind by {sync['salvaged_from']} "
-                  f"-- recover it with `git stash list` in the workspace")
-        elif not sync.get("synced"):
-            # A skipped sync used to return ok=True and vanish into a log
-            # line. It is the failure this function exists to prevent, so it
-            # says so.
-            print(f"[work] {repo}: WORKSPACE NOT SYNCED ({sync.get('reason')}) "
-                  f"-- this task starts from whatever HEAD was already at")
+    # This task's own workspace (agent/workspaces.py): created on first use at
+    # the current live tip, and handed back as it was on every later pass --
+    # its uncommitted work included, since no other task ever touches it.
+    try:
+        ws = await workspaces.ensure(repo, task_id)
+    except Exception as e:  # noqa: BLE001 -- a task with nowhere to work stops, and says why
+        logger.exception("could not prepare a workspace for %s", task_id)
+        return {
+            "escalated": True,
+            "escalation_reason": f"could not prepare this task's workspace: {e}",
+            "execution_log": [{"node": "work", "step_id": None,
+                               "summary": "could not prepare this task's workspace",
+                               "detail": str(e)[:2000], "cost_usd": 0.0,
+                               "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ")}],
+        }
+    workspace = ws["path"]
+    # And in the task's own, whose schema is its own once it edits it.
+    regenerated = await workspaces.refresh_generated(workspace, await _generated_rules(repo))
+    if regenerated:
+        print(f"[work] {repo}: regenerated in {task_id}'s workspace -> {regenerated}")
+    if ws.get("created"):
+        await _claim_workspace(workspace, task_id)
+        populated = ws.get("populated") or {}
+        print(f"[work] {repo}: workspace for {task_id} at {workspace} "
+              f"({'from ' + ws['base'] if ws.get('base') else 'on its existing branch'}; "
+              f"{len(populated.get('linked', []))} linked, {len(populated.get('copied', []))} copied, "
+              f"{populated.get('took_s')}s)")
+        if ws.get("moved_from"):
+            print(f"[work] {repo}: moved {ws['branch']} out of the shared workspace {ws['moved_from']}"
+                  + (" with its uncommitted work" if ws.get("moved_uncommitted_work") else ""))
 
     workspace_note = None
     if state.get("approval_decision"):
-        # Resuming a turn that paused for an approval. That turn's edits are
-        # uncommitted and, if another task ran meanwhile, stashed under this
-        # task's name; the paused turn continues as if they were still there,
-        # so they have to be. Nothing else about the tree moves here.
-        from agent.tools.git import reclaim_own_stash
-        from agent.config import PROJECTS
-
-        reclaimed = await reclaim_own_stash(PROJECTS[repo]["sandbox"], task_id)
-        print(f"[work] {repo}: reclaim before resuming the paused turn -> {reclaimed}")
-    elif not (state["iteration_count"] == 0 and not state.get("committed_sha")):
-        # Any later pass -- a loop-back, or a resume after other tasks have
-        # had the workspace. Not under a pending approval decision: that
-        # resumes a paused turn mid-thought, and the tree is its own.
-        from agent.tools.git import restore_task_workspace
-        from agent.config import PROJECTS
-
-        restored = await restore_task_workspace(PROJECTS[repo]["sandbox"], task_id)
+        # Resuming a turn that paused for an approval: its edits are in the
+        # tree, exactly as the paused turn left them. Only a task parked
+        # before workspaces were per-task can have them in a stash instead.
+        reclaimed = await reclaim_own_stash(workspace, task_id)
+        if reclaimed.get("reclaimed"):
+            print(f"[work] {repo}: reclaimed stashed work before resuming the paused turn -> {reclaimed}")
+    elif not (first_pass and ws.get("created") and ws.get("base")):
+        # Anything but a brand-new workspace: put the task on the current
+        # base. Its own uncommitted work is left exactly where it is; a
+        # committed branch is rebased onto main, which other tasks may have
+        # moved while this one was parked or queued.
+        restored = await restore_task_workspace(workspace, task_id)
         print(f"[work] {repo}: workspace restore -> {restored}")
         if restored.get("reset_onto_base"):
             workspace_note = (

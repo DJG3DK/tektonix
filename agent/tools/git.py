@@ -48,12 +48,11 @@ def _trusted_git_dir_error(repo_root: str) -> str | None:
     except Exception:  # noqa: BLE001 -- config unavailable (tests); nothing to compare
         return None
 
-    live = None
-    real_root = os.path.realpath(repo_root)
-    for cfg in PROJECTS.values():
-        if os.path.realpath(cfg.get("sandbox", "")) == real_root:
-            live = cfg.get("live")
-            break
+    # The project's own workspace or one of its tasks' (agent/workspaces.py):
+    # either way a worktree of that project's live repo.
+    from agent.workspaces import project_for_path
+    found = project_for_path(repo_root) if PROJECTS else None
+    live = found[1].get("live") if found else None
     if not live:
         return None
 

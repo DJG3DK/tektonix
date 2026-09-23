@@ -161,15 +161,35 @@ def _reviewed_sha_is(got: str | None, expect: str) -> bool:
     return got == expect
 
 
-async def _read_state(project: str) -> dict | None:
+def branch_verdict(project_state: dict | None, branch: str | None) -> dict | None:
+    """One branch's own last verdict out of a project's review record.
+
+    Since 2026-09-23 the reviewer keeps a record per branch
+    (`branches[branch]`) beside the project's latest review, because several
+    tasks of one project can be in review or parked at once and the latest
+    review is often somebody else's. A record written before that has no
+    `branches`; it is this branch's only when it names it. Without a branch,
+    the latest review, as before."""
+    if not project_state or not branch:
+        return project_state
+    rec = (project_state.get("branches") or {}).get(branch)
+    if rec:
+        return rec
+    if project_state.get("branch") == branch:
+        return {k: v for k, v in project_state.items() if k not in ("branches", "inProgress")}
+    return None
+
+
+async def _read_state(project: str, branch: str | None = None) -> dict | None:
     async with httpx.AsyncClient(timeout=15) as client:
         r = await client.get(f"http://{REVIEW_SERVICE_HOST}:{REVIEW_SERVICE_PORT}/api/review/status",
                              headers=_CONTROL_HEADERS)
         r.raise_for_status()
-        return r.json().get(project)
+        return branch_verdict(r.json().get(project), branch)
 
 
-async def wait_for_review(project: str, expect_sha: str, timeout: int = 900, poll_interval: int = 5) -> dict:
+async def wait_for_review(project: str, expect_sha: str, timeout: int = 900, poll_interval: int = 5,
+                          branch: str | None = None) -> dict:
     """Polls until the review service has reviewed `expect_sha` specifically,
     not just any review -- a stale result for an older sha would otherwise
     silently pass a since-changed diff. Raises TimeoutError past `timeout`.
@@ -182,7 +202,7 @@ async def wait_for_review(project: str, expect_sha: str, timeout: int = 900, pol
     elapsed = 0
     while elapsed < timeout:
         try:
-            state = await _read_state(project)
+            state = await (_read_state(project, branch) if branch else _read_state(project))
         except httpx.HTTPError as e:
             logger.warning("wait_for_review: transient poll failure for %s (will retry): %s", project, e)
             state = None
@@ -193,7 +213,7 @@ async def wait_for_review(project: str, expect_sha: str, timeout: int = 900, pol
     raise TimeoutError(f"review service did not review {expect_sha[:12]} within {timeout}s")
 
 
-async def merge_and_deploy(project: str) -> dict:
+async def merge_and_deploy(project: str, branch: str | None = None) -> dict:
     """Only called after wait_for_review returns a ready verdict. Not
     re-verified here: the review service's own merge endpoint re-gates on
     current review state server-side, so a stale or incorrect call fails
@@ -207,7 +227,10 @@ async def merge_and_deploy(project: str) -> dict:
         # raised JSONDecodeError up into the caller's committed_sha-losing
         # escalation path (C-6), possibly after a partial merge. So: parse JSON,
         # and only synthesize a stage error when the body cannot be decoded.
-        merge_res = await client.post(f"http://{REVIEW_SERVICE_HOST}:{REVIEW_SERVICE_PORT}/api/projects/{project}/merge", json={}, headers=_CONTROL_HEADERS)
+        # The branch, named: with several tasks per project the reviewer's
+        # latest verdict may be another task's (agent-review's merge gate).
+        merge_res = await client.post(f"http://{REVIEW_SERVICE_HOST}:{REVIEW_SERVICE_PORT}/api/projects/{project}/merge",
+                                      json={"branch": branch} if branch else {}, headers=_CONTROL_HEADERS)
         try:
             merge_body = merge_res.json()
         except ValueError:

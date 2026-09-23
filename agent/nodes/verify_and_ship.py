@@ -40,6 +40,7 @@ existing commit instead of stranding a real, unreviewed change.
 """
 
 import os
+from contextlib import asynccontextmanager
 import time
 
 from langgraph.store.base import BaseStore
@@ -336,7 +337,51 @@ async def _verify_and_ship(state: AgentState, config: Config, store: BaseStore |
         return _escalate(f"hit max_iterations ({state['max_iterations']}) without completing")
 
     repo = state["repo"]
-    repo_root = PROJECTS[repo]["sandbox"]
+    # One task at a time per project from here to the end of the node: the
+    # checks, the commit, the review and the merge. Tasks code in parallel
+    # (parallel_tasks_per_project), but the reviewer reviews one branch of a
+    # project at a time and a merge moves the base every other task rebases
+    # onto, so this is where they take turns. Uncontended -- a no-op -- with
+    # the default of one task per project.
+    async with _ship_gate(repo, config):
+        return await _verify_and_ship_gated(state, config, store, repo)
+
+
+@asynccontextmanager
+async def _ship_gate(repo: str, config: Config | None):
+    from agent.graph import project_slot
+
+    async def _announce():
+        try:
+            from langgraph.config import get_stream_writer
+            get_stream_writer()({"type": "log_entry", "entry": {
+                "node": "verify_and_ship", "step_id": None,
+                "summary": "waiting for another task on this project to finish its review and merge",
+                "detail": "", "cost_usd": 0.0,
+                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            }})
+        except Exception:  # noqa: BLE001 -- outside a graph run there is no stream
+            pass
+
+    async with project_slot(repo, getattr(config, "dsn", None), slots=1, scope="ship",
+                            on_wait=_announce):
+        yield
+
+
+async def _verify_and_ship_gated(state: AgentState, config: Config | None, store: BaseStore | None,
+                                 repo: str) -> dict:
+    # The task's own workspace, made if it is missing: a task can reach this
+    # node straight from a resume, with no work pass before it, and its
+    # workspace may have been cleaned up since -- or never exist, for a task
+    # from before workspaces were per-task. ensure() is instant when it is there.
+    from agent import workspaces
+    try:
+        repo_root = (await workspaces.ensure(repo, state["task_id"]))["path"]
+    except Exception as e:  # noqa: BLE001
+        esc = _escalate(f"could not prepare this task's workspace: {e}")
+        if state.get("committed_sha"):
+            esc["committed_sha"] = state["committed_sha"]
+        return esc
 
     if state.get("committed_sha") and not state.get("operator_edits"):
         # A task with a commit ships from its own branch, whoever used the
@@ -780,7 +825,7 @@ async def _review_and_deploy(state: AgentState, repo: str, sha: str) -> dict:
         pass
 
     try:
-        review = await wait_for_review(repo, sha, timeout=_rs.as_int("review_wait_timeout_s"))
+        review = await wait_for_review(repo, sha, timeout=_rs.as_int("review_wait_timeout_s"), branch=branch)
     except TimeoutError as e:
         return {"committed_sha": sha, **_escalate(str(e))}
 
@@ -892,7 +937,7 @@ async def _review_and_deploy(state: AgentState, repo: str, sha: str) -> dict:
         branch = task_branch_name(state["task_id"])
         deployed = await ship_as_pull_request(repo, branch, sha, state["goal"].splitlines()[0][:72])
     else:
-        deployed = await merge_and_deploy(repo)
+        deployed = await merge_and_deploy(repo, branch)
     # Say what actually happened. "merged and deployed" after a pull request
     # opened is simply untrue -- nothing merged, nothing deployed, and the one
     # thing the operator needs is the link, which was buried in a stringified
@@ -929,7 +974,8 @@ async def _review_and_deploy(state: AgentState, repo: str, sha: str) -> dict:
         # the branch exactly as cut and opened a PR that was already behind,
         # and where the changes overlapped, one that would not merge at all.
         # Same base moving, same answer.
-        repo_root = PROJECTS[repo]["sandbox"]
+        from agent.workspaces import workspace_for
+        repo_root = workspace_for(repo, state["task_id"])
         rb = await rebase_onto_base(repo_root)
         if rb.get("conflicts"):
             # Genuine disagreement between two changes. The agent has the task
