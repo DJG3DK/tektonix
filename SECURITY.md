@@ -179,8 +179,13 @@ trade a working review for a boundary weaker than the one they would buy.
 What bounds them instead is real but partial. The commands come from
 `projects.json`, which lives outside the worktree and the agent cannot write.
 The database is a throwaway, created before and dropped after. The
-environment is constructed for the run rather than inherited, so the
-reviewer's own secrets are not in it. What is **not** bounded is the code
+environment is constructed for the run rather than inherited: `PATH`, `HOME`,
+`LANG`, `CI` and `DEBIAN_FRONTEND`, plus the throwaway `DATABASE_URL`, a
+`REDIS_URL` on a scratch database, and freshly generated JWT and encryption
+secrets — nothing of the reviewer's own, so its router key and control secret
+are not in it. (Until 2026-09-23 this sentence was true of the checks and
+false of these three commands, which inherited the reviewer's full
+environment; `tests/test_db_check_env.py` now pins it.) What is **not** bounded is the code
 those commands execute — that is the repository under review, and it runs as
 root on the host.
 

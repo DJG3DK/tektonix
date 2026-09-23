@@ -1325,7 +1325,9 @@ async function runDatabaseCheck(cfg, worktreePath) {
   };
 
   const results = [];
-  const psql = (sql) => run('psql', [adminUrl, '-c', sql], '/', 30_000, { PGPASSWORD: dbPass });
+  // Sealed too, though psql is not agent-authored: it costs nothing, and it
+  // means no child of this function sees the reviewer's own variables.
+  const psql = (sql) => runSealed('psql', [adminUrl, '-c', sql], '/', 30_000, { PGPASSWORD: dbPass });
   try {
     const create = await psql(`CREATE DATABASE ${throwawayDb};`);
     if (!create.ok) return [{ name: 'db-setup', ok: false, output: create.output.slice(-2000) }];
@@ -1341,21 +1343,27 @@ async function runDatabaseCheck(cfg, worktreePath) {
     //
     // What bounds it instead: the commands come from projects.json, which
     // the agent cannot write; the database is a throwaway created and
-    // dropped around them; and the env is built here rather than inherited.
-    // What is NOT bounded is the code those commands execute, which is the
-    // repository under review. SECURITY.md says so plainly.
+    // dropped around them; and the env is sealedEnv() plus the throwaway
+    // DSN, Redis URL and generated secrets above -- runSealed, never run().
+    // Until 2026-09-23 these went through run(), which spreads process.env
+    // underneath, while this comment and SECURITY.md both said the env was
+    // built rather than inherited: agent-authored scripts could read the
+    // reviewer's router key and control secret. tests/test_db_check_env.py
+    // now plants both and requires they do not arrive. What is NOT bounded
+    // is the code those commands execute, which is the repository under
+    // review. SECURITY.md says so plainly.
     log(`  running db-drift (pnpm db:drift) in ${dc.apiDir}`);
-    const drift = await run(dc.driftCmd.cmd, dc.driftCmd.args, apiDir, 120_000, env);
+    const drift = await runSealed(dc.driftCmd.cmd, dc.driftCmd.args, apiDir, 120_000, env);
     results.push({ name: 'db-drift', ok: drift.ok, output: drift.output.slice(-4000) });
     if (!drift.ok) return results; // seed/e2e need a migrated, non-drifted schema
 
     log(`  running db-seed (pnpm db:seed) in ${dc.apiDir}`);
-    const seed = await run(dc.seedCmd.cmd, dc.seedCmd.args, apiDir, 60_000, env);
+    const seed = await runSealed(dc.seedCmd.cmd, dc.seedCmd.args, apiDir, 60_000, env);
     results.push({ name: 'db-seed', ok: seed.ok, output: seed.output.slice(-4000) });
     if (!seed.ok) return results;
 
     log(`  running e2e (pnpm test:e2e) in ${dc.apiDir}`);
-    const e2e = await run(dc.e2eCmd.cmd, dc.e2eCmd.args, apiDir, 300_000, env);
+    const e2e = await runSealed(dc.e2eCmd.cmd, dc.e2eCmd.args, apiDir, 300_000, env);
     results.push({ name: 'e2e', ok: e2e.ok, output: e2e.output.slice(-4000) });
     return results;
   } finally {
