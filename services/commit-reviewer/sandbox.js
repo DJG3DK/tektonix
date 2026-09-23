@@ -208,6 +208,33 @@ function mountArgs(cfg, worktreePath) {
         args.push('-v', `${target}:${target}:ro`);
     }
 
+    // ...and the layout the loop above cannot see. When a project's package
+    // directories carry named package.json files, setupWorktree builds a REAL
+    // node_modules/ directory and symlinks each ENTRY inside it into live's
+    // copy (so a workspace-internal package can be redirected to the
+    // worktree's own build). node_modules itself is then not a link, the loop
+    // above finds nothing, and every entry dangles inside the container.
+    //
+    // Found 2026-09-22 on a project of three standalone apps: once the review
+    // service finally knew which directories needed node_modules, the checks
+    // STILL failed with `oxlint: not found`, because frontend/node_modules/.bin
+    // pointed at /home/<project>/frontend/node_modules/.bin -- a path the
+    // container had never been given. Mounting each configured directory's
+    // live node_modules read-only at its own absolute path makes every such
+    // entry resolve, and it is the same mount the symlink layout already gets.
+    for (const rel of cfg.nodeModulesDirs || []) {
+        const liveNm = path.join(cfg.live, rel, 'node_modules');
+        let target;
+        try {
+            target = fs.realpathSync(liveNm);
+        } catch {
+            continue;                       // not installed in live: nothing to mount
+        }
+        if (!isInside(target, cfg.live) || seen.has(target)) continue;
+        seen.add(target);
+        args.push('-v', `${target}:${target}:ro`);
+    }
+
     const dotgit = path.join(worktreePath, '.git');
     try {
         if (fs.statSync(dotgit).isFile()) {

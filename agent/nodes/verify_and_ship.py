@@ -39,7 +39,6 @@ retry/resume with no new diff correctly resumes polling review for that
 existing commit instead of stranding a real, unreviewed change.
 """
 
-import re
 import time
 
 from langgraph.store.base import BaseStore
@@ -651,13 +650,17 @@ async def _review_and_deploy(state: AgentState, repo: str, sha: str) -> dict:
     # trigger_check the same single-retry transient tolerance wait_for_review
     # already has, so a blip escalates recoverably (committed_sha carried)
     # instead of stranding a real commit.
+    # The branch this commit is on, so the reviewer reviews THIS work rather
+    # than whichever of the project's parked branches it would guess at.
+    from agent.tools.git import task_branch_name
+    branch = task_branch_name(state["task_id"])
     try:
-        await trigger_check(repo)
+        await trigger_check(repo, branch)
     except Exception:  # noqa: BLE001
         import asyncio as _asyncio
         await _asyncio.sleep(3)
         try:
-            await trigger_check(repo)
+            await trigger_check(repo, branch)
         except Exception as e2:  # noqa: BLE001
             return {"committed_sha": sha, **_escalate(f"could not trigger review for {sha[:12]}: {e2}")}
     # Same reasoning as the check announcement, and this one was missing
@@ -785,7 +788,8 @@ async def _review_and_deploy(state: AgentState, repo: str, sha: str) -> dict:
     # The gate is identical either way: this is only what happens after a pass.
     ship_mode = (PROJECTS.get(repo) or {}).get("ship", "push")
     if ship_mode == "pr":
-        branch = f"agent/{re.sub(r'[^A-Za-z0-9._-]', '-', str(state['task_id'])).strip('-.') or 'task'}"
+        from agent.tools.git import task_branch_name
+        branch = task_branch_name(state["task_id"])
         deployed = await ship_as_pull_request(repo, branch, sha, state["goal"].splitlines()[0][:72])
     else:
         deployed = await merge_and_deploy(repo)

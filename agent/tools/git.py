@@ -217,6 +217,19 @@ async def sync_workspace_to_base(repo_root: str, base_ref: str = "main",
     return out
 
 
+def task_branch_name(task_id: str) -> str:
+    """`agent/<task-id>`, sanitised -- the one definition of a task's branch.
+
+    Used to be written out inline at each place that needed it: here, in
+    verify_and_ship, and in the eval harness. The review service accepts ONLY
+    this shape (its TASK_BRANCH_RE), so a copy that drifted would name a branch
+    the reviewer refuses to review -- silently, since the refusal just falls
+    back to guessing.
+    """
+    safe = re.sub(r"[^A-Za-z0-9._-]", "-", str(task_id)).strip("-.") or "task"
+    return f"agent/{safe}"
+
+
 async def ensure_task_branch(repo_root: str, task_id: str, base_ref: str = "main") -> dict:
     """Put the agent's workspace on a per-task branch before committing.
 
@@ -235,8 +248,7 @@ async def ensure_task_branch(repo_root: str, task_id: str, base_ref: str = "main
     Idempotent: on resume the branch already exists and is checked out, and this
     returns without touching the tree.
     """
-    safe = re.sub(r"[^A-Za-z0-9._-]", "-", str(task_id)).strip("-.") or "task"
-    branch = f"agent/{safe}"
+    branch = task_branch_name(task_id)
 
     cur = await _git("rev-parse --abbrev-ref HEAD", repo_root, timeout=15)
     if cur["ok"] and cur["output"].strip() == branch:

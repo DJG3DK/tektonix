@@ -82,9 +82,21 @@ _CONTROL_HEADERS = (
 )
 
 
-async def trigger_check(project: str) -> dict:
+async def trigger_check(project: str, branch: str | None = None) -> dict:
+    """Ask the review service to review now -- and, where known, WHICH branch.
+
+    The reviewer holds one review unit per project and, left to itself, picks
+    the workspace's branch or else the newest unmerged one. With one task per
+    project at a time that was always the right one. With a queue and
+    pull-request shipping it is not: several branches sit parked at once, a
+    later one becomes the project's unit, and a re-review asked for an earlier
+    one is never visited -- the caller waits out 900s and escalates. Naming the
+    branch removes the guess.
+    """
+    params = {"branch": branch} if branch else None
     async with httpx.AsyncClient(timeout=15) as client:
-        r = await client.post(f"http://{REVIEW_CONTROL_HOST}:{REVIEW_CONTROL_PORT}/check/{project}", headers=_CONTROL_HEADERS)
+        r = await client.post(f"http://{REVIEW_CONTROL_HOST}:{REVIEW_CONTROL_PORT}/check/{project}",
+                              headers=_CONTROL_HEADERS, params=params)
         r.raise_for_status()
         return r.json()
 

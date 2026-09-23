@@ -191,14 +191,13 @@ def changed_diff(mf: MaterializedFixture, task_branch: str | None) -> str:
 def task_branch_name(task_id: str) -> str:
     """What verify_and_ship will name the branch for this task.
 
-    Mirrors agent/tools/git.py rather than being derived independently: the
-    reviewer only ever reviews a branch matching `agent/<uuid>`, so a harness
-    that guessed a different shape would look for a diff that is there under
-    another name and report every task as having changed nothing.
+    Delegates to the one definition rather than keeping a copy: the reviewer
+    only reviews `agent/<uuid>`, so a harness that guessed a different shape
+    would look for a diff that is there under another name and report every
+    task as having changed nothing.
     """
-    import re
-    safe = re.sub(r"[^A-Za-z0-9._-]", "-", str(task_id)).strip("-.") or "task"
-    return f"agent/{safe}"
+    from agent.tools.git import task_branch_name as _canonical  # noqa: PLC0415
+    return _canonical(task_id)
 
 
 def teardown(root: Path) -> None:

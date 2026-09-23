@@ -440,6 +440,21 @@ def _workspace_dirs(live: Path, pkg: dict) -> list[str]:
         elif pat and not any(c in pat for c in "*?"):
             if (live / pat / "package.json").is_file():
                 dirs.append(pat)
+    # ...and standalone packages that no `workspaces` entry names. A repo made
+    # of backend/, frontend/ and admin/ -- each its own npm project with its
+    # own lockfile, tied together by nothing -- is every bit as common as a
+    # workspace monorepo, and the patterns above cannot see it at all. Without
+    # this, onboarding recorded only ".", the review service installed only at
+    # a root that had no dependencies, and every check in every app failed on
+    # a missing tool. services/commit-reviewer/reviewer.js detectNodeModulesDirs
+    # applies the SAME rule at review time; tests/test_node_modules_detection.py
+    # holds the two to the same fixtures so they cannot drift apart.
+    dirs.extend(_standalone_package_dirs(live))
+    # "." only when the root actually needs node_modules: it declares
+    # dependencies, or it is a workspace root (where the store and hoisted
+    # packages live even though it declares nothing itself).
+    if not (_declares_dependencies(pkg) or _is_workspace_root(live, pkg)):
+        dirs = [d for d in dirs if d != "."]
     # dedupe, keep order
     seen, out = set(), []
     for d in dirs:
@@ -447,6 +462,45 @@ def _workspace_dirs(live: Path, pkg: dict) -> list[str]:
             seen.add(d)
             out.append(d)
     return out
+
+
+# Output directories, never source: a package.json in one of these is a copy,
+# not a project. Mirrors NM_SKIP in the reviewer.
+_NM_SKIP = frozenset({"node_modules", ".git", "dist", "build", "coverage", ".next",
+                      ".nuxt", ".turbo", ".cache", "out", "vendor", "tmp"})
+_NM_MAX_DEPTH = 2
+
+
+def _declares_dependencies(pkg: dict) -> bool:
+    return bool((pkg.get("dependencies") or {}) or (pkg.get("devDependencies") or {}))
+
+
+def _is_workspace_root(live: Path, pkg: dict) -> bool:
+    return (live / "pnpm-workspace.yaml").is_file() or bool(pkg.get("workspaces"))
+
+
+def _standalone_package_dirs(live: Path) -> list[str]:
+    """Every directory below the root, to depth 2, whose package.json declares
+    dependencies. Shallow on purpose: a poll must not turn into a tree scan."""
+    found: list[str] = []
+
+    def walk(rel: Path, depth: int) -> None:
+        if depth >= _NM_MAX_DEPTH:
+            return
+        try:
+            children = sorted((live / rel).iterdir()) if rel.parts else sorted(live.iterdir())
+        except OSError:
+            return
+        for child in children:
+            if not child.is_dir() or child.name.startswith(".") or child.name in _NM_SKIP:
+                continue
+            sub = child.relative_to(live)
+            if _declares_dependencies(_read_json(child / "package.json")):
+                found.append(str(sub))
+            walk(sub, depth + 1)
+
+    walk(Path(), 0)
+    return found
 
 
 def _script_is_risky(live: Path, script_body: str) -> str | None:

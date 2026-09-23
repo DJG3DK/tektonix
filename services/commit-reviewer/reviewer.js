@@ -70,9 +70,20 @@ const MISSING_TOOL_RE =
 // Pure, and exported for tests: marks each FAILED check whose output says its
 // own command was missing. Leaves passing checks alone -- output on a passing
 // check may quote anything.
+// A check that could not WRITE where it needed to. EROFS is the kernel's
+// "read-only file system", and nothing in the commit under review can cause
+// it -- it means the review environment handed the tool a read-only path. It
+// is here for the same reason as a missing tool: otherwise the base fails
+// identically, the failure is filed as pre-existing, and the gate never ran
+// the check on either commit. That is exactly what `vite build` did on
+// 2026-09-22 until it was caught by reading the output rather than the label.
+const READ_ONLY_FS_RE = /\bEROFS\b|read-only file system/i;
+
 function classifyInfrastructureFailures(checkResults) {
   for (const c of checkResults) {
-    if (!c.ok && MISSING_TOOL_RE.test(c.output || '')) c.infrastructure = true;
+    if (c.ok) continue;
+    const out = c.output || '';
+    if (MISSING_TOOL_RE.test(out) || READ_ONLY_FS_RE.test(out)) c.infrastructure = true;
   }
   return checkResults;
 }
@@ -180,9 +191,115 @@ const { loadProjects, healthProjectsCheck } = require('../shared/projects-config
 // branches, /check answered 404, and the agent's wait_for_review timed out
 // against a verdict that could not arrive. loadProjects reads a small file;
 // once per tick and per request is nothing.
-function currentProjects() {
-  return loadProjects(BUILTIN_PROJECTS, { section: 'review' });
+// Directories that need their own node_modules, read from the tree AS IT IS
+// NOW rather than recorded once at onboarding.
+//
+// Onboarding already detected this, from the root manifest's `workspaces`.
+// Two things beat it on 2026-09-22 and both are ordinary:
+//
+//   * a repo made of standalone packages -- backend/, frontend/, admin/, each
+//     with its own package.json and lockfile and NO workspaces entry tying
+//     them together -- which workspaces-based detection cannot see at all;
+//   * a project that changed after it was onboarded. That one had no root
+//     manifest when it was added; the root task-runner and the CI that
+//     exercises all three apps arrived later. A snapshot taken at onboarding
+//     cannot know about a layout that did not exist yet.
+//
+// With nothing configured, the review installed at the repo root only --
+// which had no dependencies -- and every check in every app failed on a
+// missing tool. See applyBaseline for how that then became a READY.
+//
+// So: explicit config always wins (an operator who deselected directories
+// meant it, and `[]` is a real answer), and only an ABSENT key falls back to
+// looking. The walk is shallow and skips everything that is output rather
+// than source, so a poll tick costs a handful of stats, not a tree scan.
+const NM_SKIP = new Set(['node_modules', '.git', 'dist', 'build', 'coverage', '.next',
+  '.nuxt', '.turbo', '.cache', 'out', 'vendor', 'tmp']);
+const NM_MAX_DEPTH = 2;
+// Entries in a node_modules directory that tools WRITE to during a run. Never
+// linked from live: see the entry-by-entry loop in setupWorktree. Dependency
+// structure that looks similar -- .bin, .pnpm, .modules.yaml, lockfile state --
+// is deliberately absent and still linked.
+const NM_BUILD_CACHES = new Set(['.vite', '.vite-temp', '.cache', '.tmp', '.parcel-cache',
+  '.turbo', '.next', '.nuxt', '.eslintcache', '.angular', '.svelte-kit']);
+
+function declaresDependencies(pkgPath) {
+  try {
+    const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+    const n = (o) => (o && typeof o === 'object' ? Object.keys(o).length : 0);
+    return n(pkg.dependencies) + n(pkg.devDependencies) > 0;
+  } catch {
+    return false;       // unreadable or not JSON: nothing to install from it
+  }
 }
+
+// A workspace root declares nothing itself and still needs node_modules: it
+// is where pnpm keeps the store every member links into, and where an npm or
+// yarn workspace hoists shared dependencies. Found by cross-checking this
+// detector against the hand-tuned configs on 2026-09-22 -- it agreed on three
+// projects and dropped "." from the pnpm monorepo, which would have left every
+// member's links pointing at nothing.
+function isWorkspaceRoot(dir) {
+  if (fs.existsSync(path.join(dir, 'pnpm-workspace.yaml'))) return true;
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8'));
+    return Boolean(pkg.workspaces);
+  } catch {
+    return false;
+  }
+}
+
+function detectNodeModulesDirs(root) {
+  if (!root || !fs.existsSync(root)) return [];
+  const found = [];
+  const walk = (rel, depth) => {
+    const dir = path.join(root, rel);
+    const manifest = path.join(dir, 'package.json');
+    if (fs.existsSync(manifest)
+        && (declaresDependencies(manifest) || (rel === '' && isWorkspaceRoot(dir)))) {
+      found.push(rel || '.');
+    }
+    if (depth >= NM_MAX_DEPTH) return;
+    let entries;
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      if (!e.isDirectory() || e.name.startsWith('.') || NM_SKIP.has(e.name)) continue;
+      walk(rel ? path.join(rel, e.name) : e.name, depth + 1);
+    }
+  };
+  walk('', 0);
+  return found.sort((a, b) => (a === '.' ? -1 : b === '.' ? 1 : a.localeCompare(b)));
+}
+
+function currentProjects() {
+  const projects = loadProjects(BUILTIN_PROJECTS, { section: 'review' });
+  for (const [name, cfg] of Object.entries(projects)) {
+    // An explicit empty list is a decision -- "this project needs none" -- and
+    // is honoured as written.
+    if (Array.isArray(cfg.nodeModulesDirs) && cfg.nodeModulesDirs.length === 0) continue;
+
+    const detected = detectNodeModulesDirs(cfg.live);
+    const configured = Array.isArray(cfg.nodeModulesDirs) ? cfg.nodeModulesDirs : [];
+    // A configured list is a FLOOR, not a ceiling. Treating it as the whole
+    // answer only moves the staleness problem: a project onboarded with the
+    // right list goes wrong the day it grows another package, which is exactly
+    // how the project that prompted this broke -- its layout arrived after it
+    // was onboarded. So anything the tree has now is added to what was
+    // configured, and nothing configured is ever dropped.
+    const added = detected.filter((d) => !configured.includes(d));
+    if (!added.length) continue;
+    cfg.nodeModulesDirs = [...configured, ...added];
+    cfg.nodeModulesDirsDetected = added;
+    const key = `${name}:${added.join(',')}`;
+    if (!loggedDetection.has(key)) {
+      loggedDetection.add(key);
+      log(`[${name}] ${configured.length ? 'nodeModulesDirs is missing' : 'no nodeModulesDirs configured --'} `
+        + `${added.join(', ')}${configured.length ? ', which the tree now has -- adding' : ' detected from the tree'}`);
+    }
+  }
+  return projects;
+}
+const loggedDetection = new Set();
 
 const GITLEAKS_BIN = path.join(__dirname, 'bin', 'gitleaks');
 
@@ -366,7 +483,7 @@ const ignoredRefs = new Set();
 
 // `prev` is the project's current review record; a parameter so a test can
 // drive this against a scratch repository without a state file.
-async function detectNewCommit(project, cfg, prev = loadState()[project]) {
+async function detectNewCommit(project, cfg, prev = loadState()[project], requested = null) {
   // The agent's workspace is now a git worktree of this same repository, so its
   // per-task branch is already a local ref here -- there is no clone to fetch
   // from and no `agent` remote in the picture. Branches are `agent/<task-id>`.
@@ -392,7 +509,20 @@ async function detectNewCommit(project, cfg, prev = loadState()[project]) {
   // workspace is on main or detached, the newest branch live does not yet
   // contain is the best guess. Older unmerged branches are never visited.
   const wsBranch = (await git(cfg.sandbox, ['rev-parse', '--abbrev-ref', 'HEAD'])).output.trim();
-  let ref = candidates.includes(wsBranch) ? wsBranch : null;
+  // A caller that knows WHICH commit it is waiting on names its branch, and
+  // that wins over every guess below. "Older unmerged branches are never
+  // visited" was true when a project had one task at a time and branches
+  // merged promptly; with a queue and pull-request shipping it became
+  // starvation. 2026-09-22: a task parked READY, a second task's branch was
+  // then reviewed and became the project's unit, the operator approved the
+  // first -- and its re-review asked for a branch the reviewer would never
+  // pick, so it waited out 900s and escalated. Only a real task branch that
+  // exists is honoured; anything else falls through to the old choice.
+  let ref = (requested && candidates.includes(requested)) ? requested : null;
+  if (requested && !ref) {
+    log(`[${project}] asked to review ${requested}, which is not a current task branch -- choosing as usual`);
+  }
+  if (!ref) ref = candidates.includes(wsBranch) ? wsBranch : null;
   if (!ref) {
     for (const c of candidates) {
       const h = (await git(cfg.live, ['rev-parse', c])).output.trim();
@@ -407,7 +537,12 @@ async function detectNewCommit(project, cfg, prev = loadState()[project]) {
   // Already contained in live -- merged, or live moved past it. Reviewing
   // that case is what produced inverted diffs, where a branch's additions
   // read as deletions of everything live had gained since.
-  if (await isAncestor(cfg, head, liveHead)) return null;
+  if (await isAncestor(cfg, head, liveHead)) {
+    // Said out loud only when asked: a caller that named this branch is now
+    // waiting on it, and silence here reads as a hung reviewer.
+    if (requested === ref) log(`[${project}] asked to review ${ref}, but live already contains it -- nothing to review`);
+    return null;
+  }
 
   // Same branch at the same tip as last round -> already reviewed. Keyed on
   // branch AND sha so a re-tipped branch still counts as new work.
@@ -418,7 +553,10 @@ async function detectNewCommit(project, cfg, prev = loadState()[project]) {
   // branch from a finished task is not being written to.
   if (wsBranch === ref) {
     const statusOut = (await git(cfg.sandbox, ['status', '--short'])).output.trim();
-    if (statusOut) return null;
+    if (statusOut) {
+      if (requested === ref) log(`[${project}] asked to review ${ref}, but its workspace has uncommitted changes -- waiting for a clean tree`);
+      return null;
+    }
   }
 
   const base = (await git(cfg.live, ['merge-base', 'HEAD', head])).output.trim();
@@ -779,6 +917,15 @@ async function setupWorktree(project, cfg, sha, base, { depsChangedOverride = nu
         // as cheap to link this way — still a symlink, not a copy.
         fs.mkdirSync(targetNodeModules, { recursive: true });
         for (const entry of fs.readdirSync(liveNodeModules)) {
+          // Build caches are per-run scratch, not dependencies. Linking one
+          // points the worktree's copy at LIVE's, which the check container
+          // sees read-only -- so the first tool to write its cache dies with
+          // EROFS. Seen 2026-09-22: `vite build` failed on every commit because
+          // a manual build on the live checkout had left node_modules/.vite-temp
+          // behind, the worktree linked it, and Vite could not write its config
+          // bundle. Skipped here, the tool simply creates a fresh one in the
+          // worktree, where it belongs.
+          if (NM_BUILD_CACHES.has(entry)) continue;
           if (entry.startsWith('@')) {
             const scopeDir = path.join(liveNodeModules, entry);
             let scopedEntries;
@@ -1043,7 +1190,22 @@ async function runChecks(cfg, worktreePath) {
 function applyBaseline(checkResults, baselineForBase) {
   // Pure: marks each failed check whose baseline entry is a recorded FAILURE
   // as pre-existing. Returns the same objects, mutated, for the caller.
+  //
+  // NEVER an infrastructure failure. A check whose command was missing failed
+  // on the base for the same reason it failed on the branch -- the tool is
+  // not installed -- so "it also fails on base" says nothing about the code.
+  // It means the gate ran the check on NEITHER commit.
+  //
+  // Treating it as pre-existing is what turned the review into a rubber stamp
+  // on 2026-09-22: a project whose three apps each keep their own
+  // node_modules had none installed in the review worktree, so lint, build
+  // and test all failed with `oxlint: not found` / `vite: not found`, the base
+  // failed identically, every one was marked pre-existing, and every commit
+  // came back "READY -- no issues found" having run nothing at all. The
+  // infrastructure escalation below existed for exactly this and never fired,
+  // because it filters on `!c.preexisting`.
   for (const c of checkResults) {
+    if (c.infrastructure) continue;
     if (!c.ok && baselineForBase && baselineForBase[c.name] === false) c.preexisting = true;
   }
   return checkResults;
@@ -1693,8 +1855,8 @@ function setStep(project, step) {
   saveState(state);
 }
 
-async function reviewProject(project, cfg, routerKey) {
-  const unit = await detectNewCommit(project, cfg);
+async function reviewProject(project, cfg, routerKey, requested = null) {
+  const unit = await detectNewCommit(project, cfg, undefined, requested);
   if (!unit) return { started: false };
   if (inProgressProjects.has(project)) return { started: false, reason: 'already reviewing' };
   inProgressProjects.add(project);
@@ -1979,7 +2141,11 @@ function startControlServer(routerKey) {
       res.end(JSON.stringify({ ok: true, projects: out }));
       return;
     }
-    const m = req.url.match(/^\/check\/([^/]+)$/);
+    // Split the query off BEFORE matching: `[^/]+` would otherwise read
+    // "Artistic_Gamut?branch=agent/..." as the project name.
+    const parsed = new URL(req.url, 'http://control.local');
+    const m = parsed.pathname.match(/^\/check\/([^/]+)$/);
+    const requestedBranch = parsed.searchParams.get('branch') || null;
     if (req.method !== 'POST' || !m) {
       res.writeHead(404, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ ok: false, error: 'not found' }));
@@ -2017,7 +2183,7 @@ function startControlServer(routerKey) {
     // itself) to show progress instead.
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ ok: true, started: true }));
-    reviewProject(project, cfg, routerKey)
+    reviewProject(project, cfg, routerKey, requestedBranch)
       .catch((err) => log(`[${project}] manual check failed: ${err.message}`));
   });
   // See agent-review/server.js for why this is not simply loopback. The
@@ -2063,4 +2229,5 @@ module.exports = {
   materializeDependencyDirs, installChangedDependencies,
   detectNewCommit, reviewWithSonnet, buildAgentMessage, applyBaseline, TASK_BRANCH_RE,
   classifyInfrastructureFailures, packagesNeedingOwnInstall, baselineKey,
+  detectNodeModulesDirs, NM_BUILD_CACHES,
 };

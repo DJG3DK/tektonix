@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+### The reviewer stopped approving checks it never ran
+
+A project that added CI after onboarding had its linters and bundler living in
+per-package `node_modules` the reviewer did not know about, so `oxlint`,
+`vite` and friends were "not found" on the task branch **and** on its base, and
+the baseline filed every one as pre-existing: READY with no check actually run.
+
+- **A check that could not run is never pre-existing.** A missing tool or a
+  read-only filesystem (`EROFS`) is infrastructure; the baseline now skips it,
+  so it reaches the escalation instead of the approval.
+- **`node_modules` directories are detected live**, on every poll, by the
+  reviewer and by provisioning with the same rule (parity-tested): any package
+  dir up to two levels deep that declares dependencies, plus the root when it
+  declares its own or is a workspace root. What is configured is a floor, not
+  a ceiling; an explicit `[]` still means none.
+- **Per-package `node_modules` are mounted into the check container**, not just
+  a root-level symlink, and **build caches are never linked** from live — a
+  stale `.vite-temp` made `vite build` fail read-only on every commit.
+- **The agent names the branch it wants reviewed** (`/check/<project>?branch=`)
+  instead of the reviewer guessing the newest unmerged one.
+
 ### Is the agent getting better? Two ways to ask
 
 **A Benchmarks panel** at the top of Analytics. Everything else on that page
