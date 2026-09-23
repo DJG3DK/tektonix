@@ -151,3 +151,20 @@ body {
   color: var(--text-dim, #9a9aa8);
   font-size: 0.9em;
 }
+
+/* A deep link to a task or session that is not in the list. Sits above the
+   pane's content rather than replacing it, so the view underneath still
+   works. */
+.main-pane > .route-missing {
+  display: flex; align-items: center; gap: 12px;
+  margin: 12px 16px 0; padding: 10px 12px;
+  border: 1px solid var(--border-strong); border-radius: var(--radius-sm, 6px);
+  background: var(--surface-raised); color: var(--text-dim); font-size: 13px;
+  /* Same specificity as `.main-pane > *:not(.mobile-topbar)` above, and
+     later, so this wins: that rule gives every child flex: 1, and a one-line
+     notice taking half the pane is the bug the models-view wrapper exists for. */
+  flex: 0 0 auto;
+}
+.route-missing button {
+  margin-left: auto; background: none; border: 0; color: var(--text-dim); cursor: pointer; font: inherit;
+}

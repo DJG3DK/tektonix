@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { createTask, getGitHubSettings, getMe, listPlanningSessions, listRepos, listTasks, logout, setAuthFailureHandler, uploadFiles } from "./api";
 import { ChangePasswordPage } from "./components/ChangePasswordPage";
 import { LoginPage } from "./components/LoginPage";
@@ -22,9 +22,8 @@ const AnalyticsView = lazy(() =>
   import("./components/AnalyticsView").then((m) => ({ default: m.AnalyticsView })),
 );
 import { useTaskStream } from "./useTaskStream";
+import { parseRoute, routePath, type Route, type View } from "./route";
 import "./App.css";
-
-type View = "new-task" | "task" | "analytics" | "models" | "planning" | "users" | "settings" | "github";
 
 function AuthenticatedApp({ user, onLogout, onUserChanged }: { user: CurrentUser; onLogout: () => void; onUserChanged: (u: CurrentUser) => void }) {
   const [repos, setRepos] = useState<string[]>([]);
@@ -32,10 +31,21 @@ function AuthenticatedApp({ user, onLogout, onUserChanged }: { user: CurrentUser
   const [selected, setSelected] = useState<TaskMeta | null>(null);
   const [planningSessions, setPlanningSessions] = useState<PlanningSessionMeta[]>([]);
   const [selectedPlanningSession, setSelectedPlanningSession] = useState<PlanningSessionMeta | null>(null);
-  // Plan-first (2026-08-28): the app lands on Planning -- a fresh session
-  // panel -- not the raw task composer. Planning chat always happens first;
-  // Build Now is how tasks get made.
-  const [view, setView] = useState<View>("planning");
+  // The URL says where to start (see route.ts). With no path it is Planning:
+  // plan-first (2026-08-28), a fresh session panel rather than the raw task
+  // composer -- planning chat always happens first; Build Now makes tasks.
+  const [initialRoute] = useState<Route>(() => parseRoute(window.location.pathname));
+  const [view, setView] = useState<View>(initialRoute.view);
+  // A task or session named by the URL, waiting for the lists to load so it
+  // can be selected. Cleared once found; `missing` if the list came back
+  // without it (deleted, or older than the recent-tasks window).
+  const [pending, setPending] = useState<{ taskId?: string; sessionId?: string } | null>(
+    initialRoute.taskId || initialRoute.sessionId
+      ? { taskId: initialRoute.taskId, sessionId: initialRoute.sessionId } : null,
+  );
+  const [missing, setMissing] = useState<string | null>(null);
+  const [tasksLoaded, setTasksLoaded] = useState(false);
+  const [sessionsLoaded, setSessionsLoaded] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
   // Bumping this forces useTaskStream to open a fresh WS connection after a
@@ -50,11 +60,15 @@ function AuthenticatedApp({ user, onLogout, onUserChanged }: { user: CurrentUser
   const taskStream = useTaskStream(selected?.task_id ?? null, selected?.repo ?? null, generation);
   // Mobile only (<=768px, see App.css): which pane is visible. On desktop
   // both panes always render side by side and this class has no effect.
-  const [mobilePane, setMobilePane] = useState<"list" | "main">("list");
+  // A link to something specific opens straight onto it.
+  const [mobilePane, setMobilePane] = useState<"list" | "main">(
+    window.location.pathname.replace(import.meta.env.BASE_URL || "/", "") ? "main" : "list",
+  );
 
   const refreshTasks = useCallback(async () => {
     try {
       setTasks(await listTasks());
+      setTasksLoaded(true);
     } catch {
       // Backend not reachable yet — sidebar just stays on its last known list.
     }
@@ -63,6 +77,7 @@ function AuthenticatedApp({ user, onLogout, onUserChanged }: { user: CurrentUser
   const refreshPlanningSessions = useCallback(async () => {
     try {
       setPlanningSessions(await listPlanningSessions());
+      setSessionsLoaded(true);
     } catch {
       // Same tolerance as refreshTasks -- sidebar just stays on its last known list.
     }
@@ -92,6 +107,62 @@ function AuthenticatedApp({ user, onLogout, onUserChanged }: { user: CurrentUser
     }, 8000); // catches status/cost/title changes for anything other than the selected item
     return () => clearInterval(interval);
   }, [refreshRepos, refreshTasks, refreshPlanningSessions]);
+
+  // URL -> selection: once the lists are in, select what the URL named.
+  useEffect(() => {
+    if (!pending) return;
+    if (pending.taskId && tasksLoaded) {
+      const t = tasks.find((x) => x.task_id === pending.taskId);
+      if (t) setSelected(t);
+      else setMissing(`Task ${pending.taskId.slice(0, 8)} is not in your task list — it may have been deleted, or be older than the list goes back.`);
+      setPending(null);
+    } else if (pending.sessionId && sessionsLoaded) {
+      const s = planningSessions.find((x) => x.session_id === pending.sessionId);
+      if (s) setSelectedPlanningSession(s);
+      else setMissing(`Planning session ${pending.sessionId.slice(0, 8)} is not in your list — it may have been deleted or archived.`);
+      setPending(null);
+    }
+  }, [pending, tasks, planningSessions, tasksLoaded, sessionsLoaded]);
+
+  // Selection -> URL. Only a real change pushes a history entry, so applying
+  // the URL's own route (on load, or on back/forward below) never adds one.
+  useEffect(() => {
+    if (pending) return;   // still resolving what the URL asked for; leave it be
+    const path = routePath({
+      view,
+      taskId: view === "task" ? selected?.task_id : undefined,
+      sessionId: view === "planning" ? selectedPlanningSession?.session_id : undefined,
+    });
+    if (path !== window.location.pathname) window.history.pushState(null, "", path);
+  }, [view, selected?.task_id, selectedPlanningSession?.session_id, pending]);
+
+  // Back / forward: apply the URL the browser moved to.
+  const listsRef = useRef({ tasks, planningSessions });
+  listsRef.current = { tasks, planningSessions };
+  useEffect(() => {
+    const onPop = () => {
+      const r = parseRoute(window.location.pathname);
+      setMissing(null);
+      setView(r.view);
+      if (r.taskId) {
+        const t = listsRef.current.tasks.find((x) => x.task_id === r.taskId);
+        if (t) setSelected(t);
+        else setPending({ taskId: r.taskId });
+      }
+      if (r.view === "planning") {
+        if (r.sessionId) {
+          const s = listsRef.current.planningSessions.find((x) => x.session_id === r.sessionId);
+          if (s) setSelectedPlanningSession(s);
+          else setPending({ sessionId: r.sessionId });
+        } else {
+          setSelectedPlanningSession(null);
+        }
+      }
+      setMobilePane("main");
+    };
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
 
   // Whether "create a private GitHub repo" can work at all: admins only,
   // asked once after sign-in. The endpoint is admin-only, so a restricted
@@ -217,6 +288,12 @@ function AuthenticatedApp({ user, onLogout, onUserChanged }: { user: CurrentUser
           </button>
           <span className="mobile-topbar-title">{viewTitle}</span>
         </div>
+        {missing && (
+          <div className="route-missing" role="status">
+            {missing}
+            <button type="button" onClick={() => setMissing(null)} aria-label="Dismiss">✕</button>
+          </div>
+        )}
         {view === "task" && selected && <TaskView task={selected} stream={taskStream} setGeneration={setGeneration} />}
         {view === "new-task" && <NewTaskPanel repos={repos} onSubmit={handleCreate} submitting={submitting} error={createError} onClearError={() => setCreateError(null)} />}
         {view === "analytics" && user.role === "admin" && (
