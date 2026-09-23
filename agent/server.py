@@ -27,6 +27,7 @@ from fastapi import Cookie, Depends, FastAPI, File, HTTPException, Request, Resp
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.staticfiles import NotModifiedResponse
 from email.utils import parsedate_to_datetime as _parsedate
 from pydantic import BaseModel, Field
 
@@ -4927,7 +4928,12 @@ if FRONTEND_DIST.is_dir():
                 stat_result=candidate.stat(),
             )
             if _not_modified(request, response):
-                return Response(status_code=304, headers=dict(response.headers))
+                # Starlette's own 304, not a Response carrying this one's
+                # headers: those include content-length, and a 304 has no
+                # body, so uvicorn raised "Response content shorter than
+                # Content-Length" on every browser revalidation of an icon.
+                # NotModifiedResponse keeps only what a 304 may carry.
+                return NotModifiedResponse(response.headers)
             return response
         return FileResponse(
             FRONTEND_DIST / "index.html",
