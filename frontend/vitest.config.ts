@@ -1,9 +1,9 @@
 import { defineConfig } from 'vitest/config'
 import react from '@vitejs/plugin-react'
 
-// Separate from vite.config.ts on purpose. That file's `base` switches to
-// '/v2/' for a build, which is correct for serving behind nginx and wrong
-// for a test run — api.ts derives request paths from import.meta.env.BASE_URL,
+// Separate from vite.config.ts on purpose. That file's `base` is a deploy
+// concern (it was '/v2/' until 2026-09-15 and is '/' now), and tests must not
+// inherit it — api.ts derives request paths from import.meta.env.BASE_URL,
 // so tests asserting on URLs would have to encode the deploy prefix. Keeping
 // the test config standalone means a test says what the code does, not where
 // it happens to be mounted.

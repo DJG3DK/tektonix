@@ -73,7 +73,8 @@ what proves the injection reached it.
 
 ## Split `agent/server.py` along the seams that already exist
 
-**Status:** started, 2026-09-21. Five seams out, 5,659 -> 4,843 lines:
+**Status:** started, 2026-09-21. Five seams out (`server.py` was 5,659 lines
+before them and is 4,918 on 2026-09-23):
 `push`, `analytics`, `env_config`, `settings` (with the audit log it is
 interleaved with), `model_config`. Do not flatten the rest in one pass.
 
@@ -127,12 +128,12 @@ by `__name__` and every test overriding auth is keyed on identity.
 
 ### What breaks
 
-`agent/server.py` is past 5,600 lines and still growing. The review proxy
-landed at the bottom of the same file. `tests/test_route_inventory.py` still
-says "3,700 lines with 60+ routes" — the inventory grew; the comment is the
-record of when this was last treated as urgent. A route can lose
-`check_repo_access` inside the handler body and the inventory stays green,
-because the snapshot pins the FastAPI dependency, not the repo check.
+`agent/server.py` still holds the `github`, `tasks`, `planning`, auth and
+uploads seams and the review proxy, and every one of them waits on the same
+move: `_start_task` / `_run_task` into `agent/tasks.py` (above). The repo
+check inside each handler is now pinned too — `tests/test_repo_scope.py`
+snapshots every repo-scoped route with the check that guards it, so a seam
+that moves and loses `check_repo_access` fails CI (2026-09-23).
 
 ### What already exists
 

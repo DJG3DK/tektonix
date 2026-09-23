@@ -4790,12 +4790,13 @@ def _not_modified(request: Request, response: FileResponse) -> bool:
 # The review services listen on 4100/4101 and hold the only write path into a
 # live repo, so they bind loopback and publish nothing. On a host install nginx
 # bridges the console to them at /_review/, injecting the shared secret the
-# browser must never hold. In the container bundle there is no nginx, so the
-# gate ran and the agent drove it while a person could not: Check now, the diff
-# view and the manual merge were host-install only.
+# browser must never hold. The container bundle has no nginx, and until
+# 2026-09-20 that meant Check now, the diff view and the manual merge worked
+# only on a host install.
 #
-# This is that bridge, in the one process that is already the authenticated
-# front door. It changes nothing about who may call: admin, over the session
+# The proxy below is why they work in the bundle too, with the ports still
+# unpublished: the same bridge, in the one process that is already the
+# authenticated front door. It changes nothing about who may call: admin, over the session
 # the console already required, exactly as before. The ports stay unpublished.
 _REVIEW_PROXY_HOP_BY_HOP = frozenset({
     "connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
