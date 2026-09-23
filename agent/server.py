@@ -636,6 +636,14 @@ def _user_public(user: User) -> dict:
 
 
 def _set_session_cookie(response: Response, token: str) -> None:
+    # SameSite=strict is this app's whole CSRF defence for the session API:
+    # there are no CSRF tokens, because a strict cookie is never sent on a
+    # request another site starts, and the SPA only ever calls same-origin.
+    # That coupling is load-bearing. Loosening this to lax or none (for an
+    # embed, an OAuth return, a subdomain) makes CSRF tokens -- or a
+    # Sec-Fetch-Site check on every mutating route -- required in the same
+    # change. The one unauthenticated acting POST, the approve link, has its
+    # own Sec-Fetch-Site check (_approve_is_cross_site) for this reason.
     response.set_cookie(
         SESSION_COOKIE_NAME, token, max_age=auth.SESSION_TTL_SECONDS,
         httponly=True, samesite="strict", secure=True, path="/",
@@ -708,6 +716,12 @@ async def login(req: LoginRequest, response: Response, request: Request):
         raise HTTPException(401, "invalid email or password")
     rate_limit.clear_rate_limit(request, "login")
     if row["totp_enabled"]:
+        # Returned in the body, held in page memory between the two login
+        # steps: short-lived, single-use, and useless without the second
+        # factor. The page that holds it is the one place script injection
+        # would matter most, which is one more reason the dashboard never
+        # renders model- or repo-supplied HTML (ChatMessage renders text, and
+        # the CSP is script-src 'self').
         temp_token = await auth.create_pending_2fa(app.state.auth_pool, row["id"])
         return {"requires_2fa": True, "temp_token": temp_token}
     token = await auth.create_session(app.state.auth_pool, row["id"])
@@ -794,6 +808,10 @@ async def setup_2fa(req: Setup2FARequest = Setup2FARequest(), user: User = Depen
         row = await auth.get_user_by_id(app.state.auth_pool, user.id)
         if not req.password or not auth.verify_password(req.password, row["password_hash"]):
             raise HTTPException(403, "current password required to re-initialize 2FA")
+    # Once-only by construction: every call mints a NEW secret (start_totp_setup
+    # overwrites the pending one), so this response is the only time a given
+    # secret leaves the server -- no GET returns it later. The raw secret rides
+    # along with the provisioning URI for someone who cannot scan a QR code.
     secret, uri = await auth.start_totp_setup(app.state.auth_pool, config, user.id)
     return {"secret": secret, "uri": uri}
 
