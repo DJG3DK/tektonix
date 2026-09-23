@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseRoute, routePath, type Route } from "./route";
+import { parseRoute, routePath, sameRoute, type Route } from "./route";
 
 describe("route", () => {
   it("lands on Planning with no path, and on anything it does not know", () => {
@@ -30,5 +30,14 @@ describe("route", () => {
 
   it("a task view with no task is just the root, not /task/undefined", () => {
     expect(routePath({ view: "task" })).toBe("/");
+  });
+
+  it("the other spellings name the same route as their canonical path", () => {
+    // `/planning` and unknown paths are accepted, and App REPLACES them with
+    // the canonical path rather than pushing -- pushing made Back bounce.
+    for (const [spelling, canonical] of [["/planning", "/"], ["/planning/", "/"], ["/nope", "/"]]) {
+      expect(sameRoute(parseRoute(spelling), parseRoute(canonical))).toBe(true);
+      expect(routePath(parseRoute(spelling))).toBe(canonical);
+    }
   });
 });

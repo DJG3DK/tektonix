@@ -83,4 +83,18 @@ describe("deep links", () => {
     });
     await waitFor(() => expect(window.location.pathname).toBe("/"));
   });
+
+  it("a synonym is replaced, not pushed, so Back is not trapped", async () => {
+    window.history.replaceState(null, "", "/settings");
+    window.history.pushState(null, "", "/planning");
+    const before = window.history.length;
+    render(<App />);
+    await waitFor(() => expect(window.location.pathname).toBe("/"));
+    expect(window.history.length).toBe(before);           // no new entry
+    await act(async () => {
+      window.history.back();
+      await new Promise((r) => setTimeout(r, 20));
+    });
+    await waitFor(() => expect(window.location.pathname).toBe("/settings"));
+  });
 });

@@ -22,7 +22,7 @@ const AnalyticsView = lazy(() =>
   import("./components/AnalyticsView").then((m) => ({ default: m.AnalyticsView })),
 );
 import { useTaskStream } from "./useTaskStream";
-import { parseRoute, routePath, type Route, type View } from "./route";
+import { parseRoute, routePath, sameRoute, type Route, type View } from "./route";
 import "./App.css";
 
 function AuthenticatedApp({ user, onLogout, onUserChanged }: { user: CurrentUser; onLogout: () => void; onUserChanged: (u: CurrentUser) => void }) {
@@ -124,16 +124,22 @@ function AuthenticatedApp({ user, onLogout, onUserChanged }: { user: CurrentUser
     }
   }, [pending, tasks, planningSessions, tasksLoaded, sessionsLoaded]);
 
-  // Selection -> URL. Only a real change pushes a history entry, so applying
-  // the URL's own route (on load, or on back/forward below) never adds one.
+  // Selection -> URL. A real change pushes a history entry. A URL that
+  // already MEANS this route in another spelling -- `/planning` for `/`, an
+  // unknown path that lands on Planning -- is REPLACED with the canonical
+  // one instead: pushing there made Back return to `/planning`, which pushed
+  // `/` again, so Back could never get past it (2026-09-23 follow-up, F7).
   useEffect(() => {
     if (pending) return;   // still resolving what the URL asked for; leave it be
-    const path = routePath({
+    const route: Route = {
       view,
       taskId: view === "task" ? selected?.task_id : undefined,
       sessionId: view === "planning" ? selectedPlanningSession?.session_id : undefined,
-    });
-    if (path !== window.location.pathname) window.history.pushState(null, "", path);
+    };
+    const path = routePath(route);
+    if (path === window.location.pathname) return;
+    if (sameRoute(parseRoute(window.location.pathname), route)) window.history.replaceState(null, "", path);
+    else window.history.pushState(null, "", path);
   }, [view, selected?.task_id, selectedPlanningSession?.session_id, pending]);
 
   // Back / forward: apply the URL the browser moved to.
@@ -143,6 +149,10 @@ function AuthenticatedApp({ user, onLogout, onUserChanged }: { user: CurrentUser
     const onPop = () => {
       const r = parseRoute(window.location.pathname);
       setMissing(null);
+      // `selected` is deliberately KEPT when Back leaves the task view: the
+      // task stream is held open across views (see useTaskStream above), and
+      // every view but "task" ignores it. A view that starts reading it while
+      // view !== "task" must clear it here first.
       setView(r.view);
       if (r.taskId) {
         const t = listsRef.current.tasks.find((x) => x.task_id === r.taskId);

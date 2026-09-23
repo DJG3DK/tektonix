@@ -7,6 +7,11 @@
  * review, finding 11.1). No router dependency: six paths and the History API
  * are the whole requirement.
  *
+ * Every route has ONE canonical path (routePath). A few other spellings are
+ * accepted on the way in -- `/planning` for the Planning landing at `/`, and
+ * any unknown path -- and App replaces them with the canonical one rather
+ * than pushing, so they never become history entries of their own.
+ *
  * Paths are relative to the deploy `base` (vite.config.ts), read through
  * import.meta.env.BASE_URL the same way api.ts builds request paths, so a
  * subpath deploy keeps working. The server's SPA fallback already answers any
@@ -63,4 +68,10 @@ export function routePath(route: Route): string {
   if (route.view === "planning" && route.sessionId) return `${b}planning/${encodeURIComponent(route.sessionId)}`;
   const p = PATH_OF[route.view];
   return p ? `${b}${p}` : b;
+}
+
+/** Two routes that name the same place. */
+export function sameRoute(a: Route, b: Route): boolean {
+  return a.view === b.view && (a.taskId ?? null) === (b.taskId ?? null)
+    && (a.sessionId ?? null) === (b.sessionId ?? null);
 }
