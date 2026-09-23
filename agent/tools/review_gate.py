@@ -25,7 +25,9 @@ logger = logging.getLogger("tektonix")
 #
 # Two variables, one per port, is what that single one could not be. The
 # defaults are the old constants, so a host install is unchanged and the
-# control port keeps its localhost-only property. What they are FOR is
+# control port keeps its localhost-only property; the compose bundle sets
+# REVIEW_SERVICE_HOST / REVIEW_CONTROL_HOST (below) to the review containers'
+# service names instead. What the PORT variables are FOR is
 # agent/evals: an eval run starts its own reviewer pair on free ports against
 # its own projects.json, so that a benchmark cannot review -- or be reviewed
 # against -- a real project. A knob with one honest caller, rather than none.

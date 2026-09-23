@@ -653,7 +653,8 @@ async function materializeDependencyDirs(
  * They run with network, because fetching is the entire point -- so on a
  * host install this is the one place agent-influenced code runs contained
  * AND online, and containment is the only thing standing between it and the
- * machine.
+ * machine. In the compose bundle it runs in this process like every other
+ * check (runAgentCode), which is itself a container without the Docker socket.
  *
  * Returns the directories that were installed fresh, so the caller knows not
  * to mount live's copy over them.
@@ -1164,8 +1165,9 @@ async function runChecks(cfg, worktreePath) {
     // A check may declare its own budget; test:review runs 50 suites and
     // needs more than run()'s 5-minute default.
     // audit C-2: sealed env -- these run agent-authored code. Since
-    // 2026-09-21 they also run inside the sandbox on a host install; see
-    // runAgentCode and SECURITY.md.
+    // 2026-09-21 they also run inside the sandbox on a host install, and in
+    // the bundle in this already-contained process; see runAgentCode and
+    // SECURITY.md.
     const r = await runAgentCode(cfg, worktreePath, check.dir, check.cmd, check.args,
                                  check.timeoutMs, check.env, check.network,
                                  check.stack || cfg.stack);

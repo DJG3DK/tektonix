@@ -106,9 +106,9 @@ function projectOr404(req, res) {
 
 // Shared by the merge gate below and the read-only /api/review/status
 // endpoint further down — same file, same shape either way.
-// Same file the reviewer writes, and the same override, because in the bundle
-// the two are separate containers sharing a volume rather than two processes
-// sharing a directory.
+// Same file the reviewer writes, and the same override: on a host install the
+// two are processes sharing a directory, and in the bundle they are separate
+// containers sharing a volume, which REVIEW_STATE_DIR points both at.
 const REVIEW_STATE_PATH = process.env.REVIEW_STATE_DIR
     ? path.join(process.env.REVIEW_STATE_DIR, 'state.json')
     : path.join(AGENT_HOME, 'services/commit-reviewer/state.json');
