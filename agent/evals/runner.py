@@ -134,6 +134,13 @@ def _read_outcome(state: dict) -> tuple[str, str | None]:
         return "escalated", state.get("escalation_reason")
     if state.get("pending_approval"):
         requests = (state["pending_approval"] or {}).get("action_requests") or [{}]
+        # A question is the agent asking for a human -- an escalation it chose,
+        # not a gate it was stopped at, so it counts as one and the report
+        # carries the question. Scored as "blocked", it left the aggregate and
+        # the scorecard kept saying "0 asked for a human" while one had.
+        if requests[0].get("name") == "ask_user":
+            question = str((requests[0].get("args") or {}).get("question") or "").strip()
+            return "escalated", f"asked the operator: {question[:600] or '(no question text)'}"
         return "blocked", f"parked awaiting approval for: {requests[0].get('name', 'a tool call')}"
     if state.get("pending_merge_approval"):
         # The resting state this harness AIMS for: a READY verdict, parked on
@@ -212,7 +219,8 @@ async def run_task(task: TaskSpec, *, graph, config, eval_root: Path,
     # undetermined -- which scores as a failure, not a pass.
     if run.review_verdict:
         run.checks_pass = True
-    elif run.outcome == "escalated" and "check" in (run.escalation_reason or "").lower():
+    elif (run.outcome == "escalated" and "check" in (run.escalation_reason or "").lower()
+          and not run.escalation_reason.startswith("asked the operator:")):
         run.checks_pass = False
     # A blocked task is not an outcome: nothing was verified, nothing was
     # reviewed, and verify_and_ship wrote no episode for it either. Leaving

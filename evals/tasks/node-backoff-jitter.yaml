@@ -6,7 +6,8 @@ goal: |
   Add an optional `jitter` to `backoffMs` in src/retry.js. When the option is
   a number between 0 and 1, the returned delay is randomised by up to that
   fraction either side of the computed value — so `jitter: 0.5` on a 100ms
-  backoff returns something in [50, 150].
+  backoff returns something in [50, 150]. Any other `jitter` -- below 0,
+  above 1, NaN, or not a number at all -- throws a RangeError.
 
   The result must never be negative, and must never exceed the ceiling. With
   no `jitter` option the function returns exactly what it returns today, so

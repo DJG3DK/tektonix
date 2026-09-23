@@ -398,6 +398,25 @@ async def test_a_task_parked_on_a_command_approval_is_blocked_not_finished(run_k
     assert run.checks_pass is None
 
 
+ASKED = {"escalated": False, "review_gate_result": None, "cost_so_far": 0.007,
+         "pending_approval": {"action_requests": [{"name": "ask_user", "args": {
+             "question": "Should an invalid jitter throw, or be ignored? Either could check out."}}]}}
+
+
+@pytest.mark.asyncio
+async def test_a_question_to_the_operator_is_an_escalation_carrying_the_question(run_kwargs):
+    """The agent chose to ask for a human. As "blocked" it left the aggregate
+    and the scorecard said nobody was asked; the question is also the only
+    useful thing to show for the task."""
+    run = await runner.run_task(task(), graph=FakeGraph(ASKED), **run_kwargs)
+    assert run.outcome == "escalated"
+    assert "invalid jitter throw" in run.escalation_reason
+    assert not run.passed
+    assert run.checks_pass is None      # "check" in the question says nothing about checks
+    report = ev_report.build(make_suite([make_run("a", True), run]), cost_ceiling_usd=25.0)
+    assert report["benchmarks"]["escalated"] == 1
+
+
 @pytest.mark.asyncio
 async def test_the_resting_state_the_harness_aims_for_is_a_ship(run_kwargs):
     """A READY verdict parked on the operator's final look. This is the
