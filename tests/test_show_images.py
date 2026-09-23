@@ -189,3 +189,75 @@ async def test_rendering_stops_until_the_operator_has_been_shown_something(monke
     shown = await show.ainvoke({"images": [{"caption": "current", "svg": "<svg/>"}]})
     assert shown.startswith("![current]")
     assert "purple gem" in await render.ainvoke({"svg": "<svg/>"}), "showing the operator resets it"
+
+
+# --- drafts: large SVGs travel by name ---------------------------------------
+
+BIG_SVG = ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 50">'
+           + "".join(f'<rect x="{i % 100}" y="{i % 50}" width="1" height="1" fill="#7c3aed"/>' for i in range(400))
+           + "</svg>")
+
+
+async def test_a_large_svg_comes_back_as_a_draft_and_every_tool_takes_one(monkeypatch, tmp_path):
+    """A 95 KB trace, passed around as markup, meant the model retyping it --
+    minutes of output, past the per-call timeout."""
+    import base64 as _b64
+    import re
+
+    from agent import artifacts as arts
+    from agent.tools import logo_tools
+
+    rendered = []
+
+    async def fake_call(op, args):
+        if op == "optimize_svg":
+            return {"success": True, "svg": args["svg"], "originalSize": 1, "optimizedSize": 1,
+                    "savedPercent": "0%"}
+        rendered.append(args["svg"])
+        return {"success": True, "pngBase64": _b64.b64encode(_png()).decode()}
+
+    async def fake_describe(data, mime, prompt):
+        return "a purple mark"
+
+    monkeypatch.setattr(logo_tools, "installed", lambda: True)
+    monkeypatch.setattr(logo_tools, "_call", fake_call)
+    monkeypatch.setattr("agent.tools.vision.describe_image_bytes", fake_describe)
+    tools = {t.name: t for t in logo_tools.make_logo_tools(lambda: str(tmp_path), repo=REPO)}
+
+    out = await tools["logo_optimize_svg"].ainvoke({"svg": BIG_SVG})
+    assert "<svg" not in out, "a large result is not handed back as markup"
+    draft = re.search(r"draft ([0-9a-f]{12})", out).group(1)
+    assert arts.load_draft(REPO, draft) == BIG_SVG
+
+    assert "purple mark" in await tools["logo_render"].ainvoke({"draft": draft})
+    assert rendered[-1] == BIG_SVG
+
+    composed = await tools["logo_compose"].ainvoke({
+        "draft": draft, "defs": '<filter id="glow"><feGaussianBlur stdDeviation="3"/></filter>',
+        "group_attributes": 'filter="url(#glow)"', "after": '<circle cx="80" cy="10" r="3" fill="#fff"/>'})
+    new = re.search(r"draft ([0-9a-f]{12})", composed.split("onto draft")[1]).group(1)
+    lit = arts.load_draft(REPO, new)
+    assert '<filter id="glow">' in lit and '<g filter="url(#glow)">' in lit and lit.endswith('fill="#fff"/></svg>')
+    assert arts.load_draft(REPO, draft) == BIG_SVG, "the original draft is untouched"
+
+    shown = await show_tools.make_show_images_tool(REPO, lambda: str(tmp_path)).ainvoke(
+        {"images": [{"caption": "original", "draft": draft}, {"caption": "with glow", "draft": new}]})
+    assert shown.count("![") == 2
+    assert "no draft" in await tools["logo_render"].ainvoke({"draft": "0" * 12})
+
+
+def test_a_traced_logo_loses_its_white_canvas_and_nothing_else():
+    """A logo on a white PNG traced to a white box: it could not sit on a dark
+    header, and a glow behind it was hidden."""
+    from agent.tools.logo_tools import _drop_traced_background
+
+    traced = ('<svg xmlns="http://www.w3.org/2000/svg" width="587" height="230">'
+              '<path d="M0,0C195,0,391,0,587,0L587,230L0,230Z" fill="#FDFDFD" transform="translate(0,0)"/>'
+              '<path d="M101,82c-1,5-2,10-4,15Z" fill="#272727"/></svg>')
+    out, removed = _drop_traced_background(traced)
+    assert removed == "#FDFDFD" and "#FDFDFD" not in out and 'fill="#272727"' in out
+    dark_canvas = traced.replace("#FDFDFD", "#1E1338")
+    assert _drop_traced_background(dark_canvas) == (dark_canvas, None), "only a LIGHT canvas is taken"
+    not_first = traced.replace('<path d="M101', '<path d="M5,5L6,6Z" fill="#000000"/><path d="M101')
+    moved = not_first.replace('<path d="M0,0', '<path d="M5,5L7,7Z" fill="#111111"/><path d="M0,0', 1)
+    assert _drop_traced_background(moved)[1] is None, "a background that is not the first shape is left alone"

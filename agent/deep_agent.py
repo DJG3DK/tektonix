@@ -1081,9 +1081,10 @@ def _make_run_checks_tool(repo_root: str, repo: str):
 # the repo) before it stumbles onto /workspace via bash trial-and-error.
 _LOGO_GUIDANCE = """MAKING A LOGO OR A BRAND KIT:
 
-If the plan you were given carries an agreed SVG, THAT is the logo: the \
-design was chosen in planning, by the operator, by looking at it. Export it \
-(steps 3-5 below); do not redesign it. And if the project already has a logo \
+If the plan you were given carries an agreed SVG or a logo DRAFT id, THAT \
+is the logo: the design was chosen in planning, by the operator, by looking \
+at it. Export it (steps 3-5 below, passing `draft=` to each tool); do not \
+redesign it. Large SVGs travel as draft ids -- never retype one. And if the project already has a logo \
 and nobody asked for a new one, start from it with `logo_trace_image`.
 
 You write the SVG yourself -- nothing here designs one for you. The logo \
@@ -1747,7 +1748,7 @@ async def build_deep_agent(
     from agent.tools.logo_tools import make_logo_tools, new_show_state  # noqa: PLC0415
 
     show_state = new_show_state()
-    logo_tools = make_logo_tools(lambda: repo_root, show_state=show_state)
+    logo_tools = make_logo_tools(lambda: repo_root, show_state=show_state, repo=repo)
     # Showing the operator an image -- a render, a screenshot, the exported
     # logo -- in the task's log (agent/tools/show_tools.py).
     from agent.tools.show_tools import make_show_images_tool  # noqa: PLC0415

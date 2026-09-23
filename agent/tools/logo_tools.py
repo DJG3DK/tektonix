@@ -110,6 +110,28 @@ def _svg_arg(svg: str) -> str | None:
     return None
 
 
+def _drop_traced_background(svg: str) -> tuple[str, str | None]:
+    """Remove the canvas a tracer turns a logo's background into.
+
+    VTracer stacks shapes bottom-up, and the first is the image's background:
+    a path from the origin across the whole canvas. Left in, a logo on a white
+    PNG traces to a white box -- it cannot sit on a dark header, and a glow
+    behind it is hidden. Found 2026-09-23 on a real logo: the first of 251
+    paths, #FDFDFD from 0,0. Only a LIGHT first path from the origin is taken;
+    anything else is left exactly as traced. Returns (svg, the colour removed
+    or None)."""
+    import re  # noqa: PLC0415
+
+    m = re.search(r'<path\b[^>]*\bd="M\s*0[ ,]+0[^"]*"[^>]*/>', svg)
+    first = re.search(r"<path\b[^>]*/>", svg)
+    if not m or not first or m.start() != first.start():
+        return svg, None
+    fill = re.search(r'fill="#([0-9a-fA-F]{6})"', m.group(0))
+    if not fill or min(int(fill.group(1)[i:i + 2], 16) for i in (0, 2, 4)) < 0xE8:
+        return svg, None
+    return svg[:m.start()] + svg[m.end():], f"#{fill.group(1).upper()}"
+
+
 def _fmt(op: str, result: dict) -> str:
     if not result.get("success"):
         return f"ERROR: {op} failed: {result.get('error') or 'no reason given'}"
@@ -136,7 +158,13 @@ def new_show_state() -> dict:
     return {"renders_since_show": 0}
 
 
-def make_logo_tools(root_for_writes=None, *, can_export: bool = True, show_state: dict | None = None) -> list:
+# An SVG longer than this comes back as a draft id, not as markup: writing it
+# back out costs the model roughly a token per three bytes (agent/artifacts.py).
+INLINE_SVG_LIMIT = 6_000
+
+
+def make_logo_tools(root_for_writes=None, *, can_export: bool = True, show_state: dict | None = None,
+                    repo: str | None = None) -> list:
     """The logo toolset.
 
     `root_for_writes` is a callable returning the directory writes are
@@ -151,9 +179,38 @@ def make_logo_tools(root_for_writes=None, *, can_export: bool = True, show_state
     if not installed():
         return []
 
+    from agent import artifacts  # noqa: PLC0415
+
+    def _source(svg: str, draft: str) -> tuple[str | None, str | None]:
+        """(markup, None) from `draft` or `svg`, or (None, an error to return)."""
+        if (draft or "").strip():
+            if not repo:
+                return None, "ERROR: drafts are not available here -- pass the svg markup"
+            text = artifacts.load_draft(repo, draft)
+            if text is None:
+                return None, f"ERROR: there is no draft {draft!r} -- use an id a logo tool returned"
+            return text, None
+        bad = _svg_arg(svg)
+        return (None, bad) if bad else (svg, None)
+
+    def _hand_back(svg_out: str, label: str) -> str:
+        """Small SVG inline (and saved); big SVG as a draft id only."""
+        draft_id = None
+        if repo:
+            try:
+                draft_id = artifacts.save_draft(repo, svg_out, note=label)
+            except artifacts.ArtifactError as e:
+                logger.warning("could not save a logo draft: %s", e)
+        if draft_id and len(svg_out) > INLINE_SVG_LIMIT:
+            return (f"{label}: {len(svg_out):,} bytes of SVG, saved as draft {draft_id}. The markup is "
+                    f"not repeated here -- writing it back out would take minutes. Pass "
+                    f"draft=\"{draft_id}\" to logo_render, logo_compose, show_images, "
+                    f"logo_text_to_path, logo_optimize_svg or the export, and name the draft in the plan.")
+        return f"{label}" + (f" (saved as draft {draft_id})" if draft_id else "") + f".\n\n{svg_out}"
+
     @tool
     @tool_errors_to_text
-    async def logo_text_to_path(svg: str, font_path: str = "") -> str:
+    async def logo_text_to_path(svg: str = "", font_path: str = "", draft: str = "") -> str:
         """Convert every <text> in an SVG logo to outlined <path>.
 
         Do this before shipping any logo with type in it. A <text> element
@@ -162,45 +219,47 @@ def make_logo_tools(root_for_writes=None, *, can_export: bool = True, show_state
         the font -- and on every PNG exported from it. Outlines have no such
         dependency.
 
-        `svg` is the markup itself, not a path. `font_path` is an optional
-        .ttf/.otf; the bundled Inter is used when it is empty.
+        `svg` is the markup itself, not a path -- or pass `draft`, the id of a
+        saved draft. `font_path` is an optional .ttf/.otf; the bundled Inter is
+        used when it is empty.
 
-        Returns the converted SVG. Run logo_optimize_svg on the result.
+        Returns the converted SVG (or, when it is large, a draft id). Run
+        logo_optimize_svg on the result.
         """
-        bad = _svg_arg(svg)
+        svg, bad = _source(svg, draft)
         if bad:
             return bad
         r = await _call("text_to_path", {"svg": svg, "fontPath": font_path or None})
         err = _fmt("text_to_path", r)
         if err:
             return err
-        return f"Converted {r.get('convertedCount', 0)} <text> element(s).\n\n{r.get('svg', '')}"
+        return _hand_back(r.get("svg", ""), f"Converted {r.get('convertedCount', 0)} <text> element(s)")
 
     @tool
     @tool_errors_to_text
-    async def logo_optimize_svg(svg: str, aggressive: bool = False) -> str:
+    async def logo_optimize_svg(svg: str = "", aggressive: bool = False, draft: str = "") -> str:
         """Clean up an SVG: drop metadata, merge paths, shorten coordinates.
 
-        `svg` is the markup itself. `aggressive` also strips class and style
-        attributes -- fine for a finished logo, wrong for an SVG something
-        else is styling.
+        `svg` is the markup itself, or pass `draft`. `aggressive` also strips
+        class and style attributes -- fine for a finished logo, wrong for an
+        SVG something else is styling.
 
-        Returns the optimised SVG and what it saved.
+        Returns the optimised SVG (or a draft id when large) and what it saved.
         """
-        bad = _svg_arg(svg)
+        svg, bad = _source(svg, draft)
         if bad:
             return bad
         r = await _call("optimize_svg", {"svg": svg, "aggressive": aggressive})
         err = _fmt("optimize_svg", r)
         if err:
             return err
-        return (f"{r.get('originalSize')} -> {r.get('optimizedSize')} bytes "
-                f"({r.get('savedPercent')} smaller).\n\n{r.get('svg', '')}")
+        return _hand_back(r.get("svg", ""), f"{r.get('originalSize')} -> {r.get('optimizedSize')} bytes "
+                                            f"({r.get('savedPercent')} smaller)")
 
     @tool
     @tool_errors_to_text
-    async def logo_render(svg: str, question: str = "", width: int = 512,
-                          height: int = 512, background: str = "") -> str:
+    async def logo_render(svg: str = "", question: str = "", width: int = 512,
+                          height: int = 512, background: str = "", draft: str = "") -> str:
         """LOOK at an SVG. Renders it and describes what it actually shows.
 
         Use this on every concept before you offer it to anyone. You are
@@ -208,7 +267,7 @@ def make_logo_tools(root_for_writes=None, *, can_export: bool = True, show_state
         add up to a mark rather than to overlapping shapes, clipped strokes,
         or text sitting outside its own viewBox.
 
-        `svg` is the markup itself. `question` narrows the description -- ask
+        `svg` is the markup itself, or pass `draft`. `question` narrows the description -- ask
         about the thing you are unsure of ("is the monogram centred?", "does
         the wordmark overlap the icon?"). `background` is the hex colour it is
         rendered ON -- white when empty. Check a mark on a dark colour too.
@@ -218,7 +277,7 @@ def make_logo_tools(root_for_writes=None, *, can_export: bool = True, show_state
 
         Returns a description of the rendered image.
         """
-        bad = _svg_arg(svg)
+        svg, bad = _source(svg, draft)
         if bad:
             return bad
         if show_state is not None:
@@ -253,18 +312,21 @@ def make_logo_tools(root_for_writes=None, *, can_export: bool = True, show_state
     @tool
     @tool_errors_to_text
     async def logo_trace_image(image_path: str, color_mode: str = "color",
-                               precision: int = 6) -> str:
+                               precision: int = 6, keep_background: bool = False) -> str:
         """Turn an existing raster logo (PNG/JPG) into SVG paths.
 
         For "here is our current logo, make it a vector". `image_path` is
         repo-relative. `color_mode` is "color" or "binary" (binary is a
         single-colour silhouette). Tracing a photograph produces thousands of
-        useless paths; this is for flat marks.
+        useless paths; this is for flat marks. The image's own light background
+        is dropped, so the logo is transparent and sits on any colour -- pass
+        keep_background=True to keep it.
 
-        Returns the traced SVG. Expect to clean it up afterwards -- a trace
-        is a starting point, not a finished logo, and it will have more paths
-        and more colours than anything you would draw by hand. Render it and
-        look before you build on it.
+        Returns the traced SVG -- as a draft id, since a trace is large. Expect
+        to clean it up afterwards -- a trace is a starting point, not a
+        finished logo, and it will have more paths and more colours than
+        anything you would draw by hand. Add effects with logo_compose; do not
+        retype it.
         """
         if root_for_writes is None:
             return "ERROR: this seat has no project to read images from"
@@ -282,17 +344,59 @@ def make_logo_tools(root_for_writes=None, *, can_export: bool = True, show_state
         err = _fmt("image_to_svg", r)
         if err:
             return err
-        return f"Traced to {r.get('fileSize')} bytes of SVG.\n\n{r.get('svg', '')}"
+        traced = r.get("svg", "")
+        label = f"Traced {image_path}"
+        if not keep_background:
+            traced, dropped = _drop_traced_background(traced)
+            if dropped:
+                label += f" (its {dropped} background removed, so it is transparent)"
+        return _hand_back(traced, label)
 
-    tools = [logo_text_to_path, logo_optimize_svg, logo_render, logo_trace_image]
+    @tool
+    @tool_errors_to_text
+    async def logo_compose(draft: str, defs: str = "", group_attributes: str = "", before: str = "",
+                           after: str = "", svg_attributes: str = "") -> str:
+        """Add to a draft WITHOUT retyping it: effects, a backdrop, extra shapes.
+
+        The draft's own content is wrapped, untouched, in a <g>, so a 95 KB
+        trace gets lighting in a few lines:
+
+          defs: filters and gradients, e.g.
+            '<filter id="glow"><feGaussianBlur stdDeviation="4" result="b"/>'
+            '<feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>'
+          group_attributes: applied to the wrapped logo, e.g. 'filter="url(#glow)"'
+          before / after: markup drawn behind / in front of it (a highlight,
+            a sheen, a backdrop), in the draft's own coordinates
+          svg_attributes: extra attributes for the root <svg>, e.g. a viewBox
+
+        Returns the id of a NEW draft; the original is unchanged, so you can
+        show both.
+        """
+        import re  # noqa: PLC0415
+
+        base, bad = _source("", draft)
+        if bad:
+            return bad
+        m = re.search(r"<svg\b([^>]*)>(.*)</svg>", base, re.S | re.I)
+        if not m:
+            return f"ERROR: draft {draft} has no <svg> ... </svg> to wrap"
+        attrs, inner = m.group(1), m.group(2)
+        if "xmlns=" not in attrs:
+            attrs += ' xmlns="http://www.w3.org/2000/svg"'
+        extra = f" {svg_attributes.strip()}" if svg_attributes.strip() else ""
+        out = (f"<svg{attrs}{extra}><defs>{defs}</defs>{before}"
+               f"<g {group_attributes.strip()}>{inner}</g>{after}</svg>")
+        return _hand_back(out, f"Composed onto draft {draft}")
+
+    tools = [logo_text_to_path, logo_optimize_svg, logo_render, logo_trace_image, logo_compose]
     if not can_export:
         return tools
 
     @tool
     @tool_errors_to_text
-    async def logo_export_brand_kit(svg: str, output_dir: str, name: str,
+    async def logo_export_brand_kit(svg: str = "", output_dir: str = "brand", name: str = "",
                                     primary: str = "", secondary: str = "",
-                                    dark_svg: str = "") -> str:
+                                    dark_svg: str = "", draft: str = "") -> str:
         """Export a finished SVG logo as a full brand kit, into this project.
 
         Writes roughly two dozen files: the logo and icon and wordmark as SVG
@@ -305,14 +409,15 @@ def make_logo_tools(root_for_writes=None, *, can_export: bool = True, show_state
         just makes two dozen copies of the problem.
 
         `svg` is the finished markup, with its text already converted by
-        logo_text_to_path. `output_dir` is repo-relative (for example
+        logo_text_to_path -- or `draft`, the id of the agreed draft (the plan
+        names it when the logo was chosen in planning). `output_dir` is repo-relative (for example
         "brand" or "public/brand"). `name` is the brand name. `primary` and
         `secondary` are hex colours for BRAND.md. `dark_svg` is an optional
         dark-mode variant; without one the dark files are derived.
 
         Returns the list of files written.
         """
-        bad = _svg_arg(svg)
+        svg, bad = _source(svg, draft)
         if bad:
             return bad
         if root_for_writes is None:

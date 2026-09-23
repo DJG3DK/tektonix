@@ -55,6 +55,8 @@ def make_show_images_tool(repo: str, root_for_reads, *, show_state: dict | None 
         `images` is a list (at most 8) of objects, each with:
           "caption": what this one is -- "A: traced from your current logo",
           and ONE of
+          "draft": the id of a saved SVG draft (what the logo tools return for
+                   anything large -- never retype a big SVG, pass its draft), or
           "svg": SVG markup, rendered to an image here, or
           "path": a repo-relative image file (PNG, JPEG, GIF, WebP or SVG).
         Optional per image: "background" (hex, e.g. "#1e1338" -- show a mark
@@ -79,7 +81,13 @@ def make_show_images_tool(repo: str, root_for_reads, *, show_state: dict | None 
                 width = max(64, min(int(item.get("width") or 800), 2048))
                 height = max(64, min(int(item.get("height") or 400), 2048))
                 background = str(item.get("background") or "")
-                if item.get("svg"):
+                if item.get("draft"):
+                    markup = artifacts.load_draft(repo, str(item["draft"]))
+                    if markup is None:
+                        raise artifacts.ArtifactError(f"there is no draft {item['draft']!r}")
+                    data = await _render_svg(markup, background, width, height)
+                    source = f"draft {item['draft']}"
+                elif item.get("svg"):
                     data = await _render_svg(str(item["svg"]), background, width, height)
                     source = "svg"
                 elif item.get("path"):
@@ -93,7 +101,7 @@ def make_show_images_tool(repo: str, root_for_reads, *, show_state: dict | None 
                         data = raw
                     source = str(item["path"])
                 else:
-                    raise artifacts.ArtifactError("give an svg or a path")
+                    raise artifacts.ArtifactError("give a draft, an svg or a path")
                 url = artifacts.save(repo, data, caption=caption, source=source)
             except (artifacts.ArtifactError, PathEscapeError, ValueError) as e:
                 problems.append(f"image {i} ({caption}): {e}")

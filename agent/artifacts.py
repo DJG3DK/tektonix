@@ -96,3 +96,44 @@ def load(repo: str, artifact_id: str) -> tuple[bytes, str] | None:
         if kind:
             return data, kind[1]
     return None
+
+
+# --- SVG drafts ----------------------------------------------------------------
+#
+# A logo in progress, kept here so the agent can pass it around by NAME. Found
+# 2026-09-23: a trace of a real logo was 95 KB of SVG, every tool took SVG only
+# as markup in the call, and showing it meant the model typing all 95 KB back
+# out -- some thirty thousand tokens, minutes of generation, past the per-call
+# timeout. A draft id is a few characters. Drafts are read server-side only and
+# are never served as SVG (see the module docstring); what a person sees is the
+# raster show_images makes from one.
+DRAFT_ID_RE = re.compile(r"^[0-9a-f]{12}$")
+MAX_DRAFT_BYTES = 4 * 1024 * 1024
+
+
+def save_draft(repo: str, svg: str, note: str = "") -> str:
+    data = svg.encode("utf-8")
+    if len(data) > MAX_DRAFT_BYTES:
+        raise ArtifactError(f"SVG is {len(data)} bytes; the draft limit is {MAX_DRAFT_BYTES}")
+    if "<svg" not in svg[:4000].lower():
+        raise ArtifactError("not SVG markup")
+    folder = _dir(repo) / "drafts"
+    folder.mkdir(parents=True, exist_ok=True)
+    draft_id = uuid.uuid4().hex[:12]
+    (folder / f"{draft_id}.svg").write_bytes(data)
+    (folder / f"{draft_id}.json").write_text(json.dumps({"note": note[:300], "created_at": time.time(),
+                                                         "bytes": len(data)}))
+    return draft_id
+
+
+def load_draft(repo: str, draft_id: str) -> str | None:
+    if not DRAFT_ID_RE.match((draft_id or "").strip()):
+        return None
+    try:
+        path = _dir(repo) / "drafts" / f"{draft_id.strip()}.svg"
+    except ArtifactError:
+        return None
+    try:
+        return path.read_text("utf-8")
+    except OSError:
+        return None

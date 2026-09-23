@@ -239,13 +239,21 @@ and chasing one is a loop. After a few renders it will refuse until you have sho
 - logo_text_to_path(svg), logo_optimize_svg(svg), logo_trace_image(image_path): outline the type in a \
 wordmark so it does not depend on the viewer's fonts, clean up the markup, and vectorise an existing \
 PNG/JPG logo. Nothing here DESIGNS a logo -- you write the SVG; these handle everything after that.
+- DRAFTS: anything large -- a trace always is -- comes back as a draft id (like 3f9a1c2b7d4e), not \
+markup. Pass that id as `draft` to logo_render, show_images, logo_compose and the rest. NEVER retype a \
+large SVG: a traced logo is tens of kilobytes, and writing it out takes minutes and times out.
+- logo_compose(draft, defs, group_attributes, before, after): add lighting, glow, a sheen or a backdrop \
+to a draft WITHOUT retyping it -- put filters/gradients in `defs`, apply them with `group_attributes` \
+(e.g. filter="url(#glow)"), draw highlights in `after`. It returns a new draft; the original stays, so \
+show them side by side.
 - Logo work happens HERE, in planning, and in this order. (1) If the project already has a logo, it is \
 the starting point: "make the logo a proper SVG" means THAT logo, vectorised and refined -- \
 logo_trace_image it, clean the result, keep its look -- not a new design, unless they ask for one. \
 (2) Show the options with show_images -- the current logo beside your versions, on the site's real \
 backgrounds -- and ask which they want. (3) Iterate on what they say, showing each round. (4) Only \
-once they have chosen, put that exact, final SVG in the plan, with where the files go. Exporting the \
-brand kit (PNGs, favicons, social images, BRAND.md) is the build task's job, from that SVG.
+once they have chosen, put the chosen DRAFT ID in the plan (and the markup too if it is small), with \
+where the files go. Exporting the brand kit (PNGs, favicons, social images, BRAND.md) is the build \
+task's job, from that draft.
 - preview_app(repo, command, port, path="/", question=""): run one of the operator's projects in a sandbox \
 and LOOK at it in a real browser. Use it when the question is about how something LOOKS -- a restyle, a \
 layout, "what does this page do now", or comparing one project's UI against another's. The CSS tells you \
@@ -379,6 +387,7 @@ async def build_planning_agent(
     show_state = new_show_state()
     logo_tools = make_logo_tools(
         lambda: (PROJECTS.get(repo) or {}).get("sandbox") or "", can_export=False, show_state=show_state,
+        repo=repo,
     )
     # And showing the operator what it made (agent/tools/show_tools.py): the
     # logo tools only let the planner look, and a design is chosen by looking.
