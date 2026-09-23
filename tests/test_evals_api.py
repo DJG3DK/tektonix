@@ -150,3 +150,13 @@ def test_the_runner_writes_its_progress(tmp_path):
     assert rec["running"] is True and rec["done"] == 2 and rec["passed"] == 1 and rec["spent_usd"] == 0.05
     ev_status.finish(path, exit_code=1, report="logs/evals/x.json")
     assert ev_status.read(path)["running"] is False
+
+
+def test_the_previous_run_is_a_report_never_the_progress_file(tmp_path):
+    """status.json sorts after every timestamp; the diff read it as the last run."""
+    import json as _json
+
+    from agent.evals import report as ev_report
+    (tmp_path / "2026-09-23T16-43-24Z.json").write_text(_json.dumps({"tasks_passed": 12}))
+    (tmp_path / "status.json").write_text(_json.dumps({"started_at": 1790185940.4}))
+    assert ev_report.latest_report(tmp_path) == {"tasks_passed": 12}

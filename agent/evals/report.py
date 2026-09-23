@@ -15,6 +15,7 @@ is for.
 from __future__ import annotations
 
 import json
+import re
 import time
 from dataclasses import asdict
 from pathlib import Path
@@ -218,11 +219,17 @@ def diff_against(report: dict, previous: dict) -> str:
     return "\n".join(lines)
 
 
+_REPORT_NAME = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}Z$")
+
+
 def latest_report(directory: Path | None = None) -> dict | None:
     directory = directory or REPORT_DIR
     if not directory.is_dir():
         return None
-    files = sorted(directory.glob("*.json"))
+    # Reports only: the directory also holds status.json, a run's live
+    # progress file, which sorts after every timestamp and was being "diffed
+    # against" as if it were the previous run ("vs 1790185940.4: None/None").
+    files = sorted(f for f in directory.glob("*.json") if _REPORT_NAME.match(f.stem))
     for path in reversed(files):
         try:
             return json.loads(path.read_text())
