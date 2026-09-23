@@ -9,6 +9,7 @@ import { PlanTracker } from "./PlanTracker";
 import { RepoBadge } from "./RepoBadge";
 import { ResumePanel } from "./ResumePanel";
 import { JumpToBottom } from "./JumpToBottom";
+import { useStickToBottom } from "../useStickToBottom";
 import { ReviewGatePanel } from "./ReviewGatePanel";
 import { StatusBadge } from "./StatusBadge";
 import { StopButton } from "./StopButton";
@@ -39,7 +40,6 @@ interface Props {
 }
 
 export function TaskView({ task, stream, setGeneration }: Props) {
-  const logEndRef = useRef<HTMLDivElement>(null);
   const logContainerRef = useRef<HTMLDivElement>(null);
   const [diffOpen, setDiffOpen] = useState(false);
 
@@ -58,17 +58,10 @@ export function TaskView({ task, stream, setGeneration }: Props) {
   // mounts rows nobody asked for.
   useEffect(() => setWindowSize(LOG_WINDOW), [task.task_id]);
 
-  useEffect(() => {
-    // audit H-16: only auto-scroll when the user is already near the bottom.
-    // Previously every new entry yanked the view down with smooth scroll even
-    // while the user was reading earlier output higher up.
-    const c = logContainerRef.current;
-    if (c) {
-      const nearBottom = c.scrollHeight - c.scrollTop - c.clientHeight < 120;
-      if (!nearBottom) return;
-    }
-    logEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [stream.log.length]);
+  // Follows the newest entry while the reader is at the bottom, and stops
+  // the moment they scroll up (audit H-16) -- see useStickToBottom for why
+  // this is tracked from their scrolling rather than measured per entry.
+  useStickToBottom(logContainerRef, stream.log.length, task.task_id);
 
   const firstShown = Math.max(0, stream.log.length - windowSize);
   const shownLog = firstShown === 0 ? stream.log : stream.log.slice(firstShown);
@@ -260,7 +253,6 @@ export function TaskView({ task, stream, setGeneration }: Props) {
               onResumed={() => setGeneration((g) => g + 1)}
             />
           )}
-          <div ref={logEndRef} />
         </div>
       </div>
 

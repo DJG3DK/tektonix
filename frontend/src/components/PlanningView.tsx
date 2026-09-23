@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { useBudgetInput } from "../useDefaultTaskBudget";
 import { RouteBadge, RouteSelect, type RouteChoice } from "./RouteSelect";
 import { JumpToBottom } from "./JumpToBottom";
+import { useStickToBottom } from "../useStickToBottom";
 import type { AttachmentEntry, CreateProjectResult } from "../api";
 import { archivePlanningSession, createPlanningSession, createProject, decideNewProject, uploadFiles } from "../api";
 import type { NewProjectProposal, PlanningLogEntry, PlanningSessionMeta } from "../types";
@@ -402,13 +403,13 @@ export function PlanningView({ repos, isAdmin, githubReady, onProjectCreated, se
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
-  const logEndRef = useRef<HTMLDivElement>(null);
   const logContainerRef = useRef<HTMLDivElement>(null);
   const stream = usePlanningStream(session?.session_id ?? null);
 
-  useEffect(() => {
-    logEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [stream.log.length]);
+  // Same rule as a task's log: follow the newest entry only while the
+  // reader is at the bottom. This used to scroll on every entry, pulling
+  // anyone reading earlier research back down mid-sentence.
+  useStickToBottom(logContainerRef, stream.log.length, session?.session_id);
 
   async function openSession(chosenRepo: string, route: RouteChoice) {
     const { session_id } = await createPlanningSession(chosenRepo, route);
@@ -639,7 +640,6 @@ export function PlanningView({ repos, isAdmin, githubReady, onProjectCreated, se
               </div>
             )}
             {stream.sendError && <div className="planning-send-error">{stream.sendError}</div>}
-            <div ref={logEndRef} />
           </div>
         </div>
         </div>
