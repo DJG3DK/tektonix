@@ -124,15 +124,25 @@ export function LoginPage({ onLoggedIn }: Props) {
         <div className="login-card">
           <LoginMark />
           <h1>Two-factor code</h1>
-          <p className="login-sub">Enter the 6-digit code from your authenticator app.</p>
+          <p className="login-sub">
+            Enter the 6-digit code from your authenticator app — or, if you have lost it, one of your
+            recovery codes.
+          </p>
           <label className="form-field">
             <span>Code</span>
+            {/* Text, not numeric, and room for 13: a recovery code is
+                "a1b2c3-d4e5f6" (agent/auth.py). This was inputMode="numeric"
+                with maxLength 12, so a pasted recovery code lost its last
+                character and a phone keypad could not type its letters --
+                the lost-authenticator path could not be completed. */}
             <input
               type="text"
-              inputMode="numeric"
+              inputMode="text"
               autoComplete="one-time-code"
+              autoCapitalize="none"
+              spellCheck={false}
               autoFocus
-              maxLength={12}
+              maxLength={20}
               value={code}
               onChange={(e) => setCode(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && handleVerify()}

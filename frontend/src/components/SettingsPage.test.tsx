@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { SettingsPage } from "./SettingsPage";
@@ -7,6 +7,7 @@ import type { CurrentUser } from "../types";
 const setAutoApprove = vi.fn();
 const listProjectsConfig = vi.fn();
 const getTelegramSettings = vi.fn();
+const disable2FA = vi.fn();
 vi.mock("../api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../api")>();
   return {
@@ -14,6 +15,7 @@ vi.mock("../api", async (importOriginal) => {
     setAutoApprove: (...a: unknown[]) => setAutoApprove(...a),
     listProjectsConfig: () => listProjectsConfig(),
     getTelegramSettings: () => getTelegramSettings(),
+    disable2FA: (...a: unknown[]) => disable2FA(...a),
   };
 });
 
@@ -95,5 +97,59 @@ describe("auto mode is chosen per project", () => {
     await openAgentBehavior(user({ auto_approve_commands: true, auto_approve_repos: ["sandbox"] }));
     await userEvent.click(await screen.findByRole("button", { name: /Turn auto mode off/ }));
     expect(setAutoApprove).toHaveBeenCalledWith(false, undefined);
+  });
+});
+
+describe("two-factor in Settings", () => {
+  function openAccount(u: CurrentUser, onUserChanged = vi.fn()) {
+    try {
+      localStorage.clear();
+    } catch {
+      /* no storage in this environment */
+    }
+    render(<SettingsPage user={u} onUserChanged={onUserChanged} />);
+    return onUserChanged;
+  }
+
+  beforeEach(() => {
+    disable2FA.mockReset();
+    getTelegramSettings.mockReset();
+    getTelegramSettings.mockResolvedValue({ configured: false, chat_id: "", bot_token_hint: "" });
+    listProjectsConfig.mockReset();
+    listProjectsConfig.mockResolvedValue({ projects: {} });
+  });
+
+  it("a user can turn it off, with their password", async () => {
+    disable2FA.mockResolvedValue(undefined);
+    const changed = openAccount(user({ totp_enabled: true }));
+    const card = screen.getByRole("heading", { name: /two-factor authentication/i }).closest("section")!;
+    const turnOff = within(card).getByRole("button", { name: /turn off 2fa/i });
+    expect(turnOff).toBeDisabled();                          // not without the password
+    await userEvent.type(within(card).getByLabelText(/current password/i), "hunter2hunter2");
+    await userEvent.click(turnOff);
+    expect(disable2FA).toHaveBeenCalledWith("hunter2hunter2");
+    await waitFor(() => expect(changed).toHaveBeenCalledWith(expect.objectContaining({ totp_enabled: false })));
+  });
+
+  it("says why when the server refuses", async () => {
+    disable2FA.mockRejectedValue(new Error("current password required to disable 2FA"));
+    openAccount(user({ totp_enabled: true }));
+    const card = screen.getByRole("heading", { name: /two-factor authentication/i }).closest("section")!;
+    await userEvent.type(within(card).getByLabelText(/current password/i), "wrong");
+    await userEvent.click(within(card).getByRole("button", { name: /turn off 2fa/i }));
+    expect(await within(card).findByText(/current password required/)).toBeInTheDocument();
+  });
+
+  it("a user without it is offered to turn it on", () => {
+    openAccount(user({ totp_enabled: false }));
+    const card = screen.getByRole("heading", { name: /two-factor authentication/i }).closest("section")!;
+    expect(within(card).getByRole("button", { name: /turn on 2fa/i })).toBeInTheDocument();
+  });
+
+  it("an admin cannot turn it off, and is told where recovery lives", () => {
+    openAccount(user({ role: "admin", allowed_repos: null, totp_enabled: true }));
+    const card = screen.getByRole("heading", { name: /two-factor authentication/i }).closest("section")!;
+    expect(within(card).queryByRole("button", { name: /turn off/i })).toBeNull();
+    expect(within(card).getByText(/recovery codes/i)).toBeInTheDocument();
   });
 });

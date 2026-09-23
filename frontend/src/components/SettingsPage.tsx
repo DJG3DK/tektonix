@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
+import { SetupTotpPage } from "./SetupTotpPage";
 import { RuntimeLimitsPanel } from "./RuntimeLimitsPanel";
 import { SettingsSaveBar, SettingsSaveProvider } from "./SettingsSaveBar";
-import { changePassword, setAutoApprove, setMergeReview, getTelegramSettings, setTelegramSettings, sendTelegramTest, listProjectsConfig } from "../api";
+import { changePassword, disable2FA, setAutoApprove, setMergeReview, getTelegramSettings, setTelegramSettings, sendTelegramTest, listProjectsConfig } from "../api";
 import type { CurrentUser } from "../types";
 import "./SettingsPage.css";
 import { ApiKeysPanel } from "./ApiKeysPanel";
@@ -58,6 +59,30 @@ export function SettingsPage({ user, onUserChanged, onProjectsChanged }: Props) 
   const [pwSaving, setPwSaving] = useState(false);
   const [pwError, setPwError] = useState<string | null>(null);
   const [pwDone, setPwDone] = useState(false);
+
+  // Two-factor. Required (and forced at sign-in) for admins; optional for
+  // everyone else, who can turn it on here and off again with their
+  // password -- the same password /2fa/disable demands, because dropping a
+  // second factor is exactly what a stolen session would want to do.
+  const [enrolling2fa, setEnrolling2fa] = useState(false);
+  const [tfaPassword, setTfaPassword] = useState("");
+  const [tfaSaving, setTfaSaving] = useState(false);
+  const [tfaError, setTfaError] = useState<string | null>(null);
+
+  async function handleDisable2fa(e: React.FormEvent) {
+    e.preventDefault();
+    setTfaSaving(true);
+    setTfaError(null);
+    try {
+      await disable2FA(tfaPassword);
+      setTfaPassword("");
+      onUserChanged({ ...user, totp_enabled: false });
+    } catch (err) {
+      setTfaError(err instanceof Error ? err.message : "could not turn off 2FA");
+    } finally {
+      setTfaSaving(false);
+    }
+  }
 
   const [autoSaving, setAutoSaving] = useState(false);
   const [autoError, setAutoError] = useState<string | null>(null);
@@ -153,7 +178,7 @@ export function SettingsPage({ user, onUserChanged, onProjectsChanged }: Props) 
   // reading width clipped its Budget column behind a horizontal scrollbar
   // while 300px of screen sat empty to the right of it.
   const sections: { id: SectionId; label: string; blurb: string; admin?: boolean; wide?: boolean }[] = [
-    { id: "account", label: "Account", blurb: "Who you are signed in as, and your password." },
+    { id: "account", label: "Account", blurb: "Who you are signed in as, your password, and two-factor." },
     { id: "appearance", label: "Appearance", blurb: "The console's colour scheme, for this account." },
     { id: "agent", label: "Agent behavior", blurb: "How much the agent does without stopping to ask." },
     { id: "notifications", label: "Notifications", blurb: "Where the agent reaches you." },
@@ -165,6 +190,19 @@ export function SettingsPage({ user, onUserChanged, onProjectsChanged }: Props) 
   ];
   const visible = sections.filter((s) => !s.admin || user.role === "admin");
   const active = visible.find((s) => s.id === section) ?? visible[0];
+
+  if (enrolling2fa) {
+    // The same full-screen flow an admin is forced through at sign-in:
+    // QR code, confirm a code, then the recovery codes shown once.
+    return (
+      <SetupTotpPage
+        onDone={() => {
+          setEnrolling2fa(false);
+          onUserChanged({ ...user, totp_enabled: true });
+        }}
+      />
+    );
+  }
 
   return (
     <SettingsSaveProvider>
@@ -241,6 +279,53 @@ export function SettingsPage({ user, onUserChanged, onProjectsChanged }: Props) 
                   {pwSaving ? "Saving…" : "Update password"}
                 </button>
               </form>
+            </section>
+
+            <section className="settings-card">
+              <h2>
+                Two-factor authentication{" "}
+                <span className={`settings-pill ${user.totp_enabled ? "settings-pill--on" : ""}`}>
+                  {user.totp_enabled ? "ON" : "OFF"}
+                </span>
+              </h2>
+              {user.role === "admin" ? (
+                <p className="settings-card-sub">
+                  Required on admin accounts, so it cannot be turned off here. Lost your authenticator? Sign in
+                  with one of your recovery codes. With none left, it is a reset on the server — see{" "}
+                  <code>docs/runbooks/two-factor.md</code>.
+                </p>
+              ) : user.totp_enabled ? (
+                <form onSubmit={handleDisable2fa} className="settings-form">
+                  <p className="settings-card-sub">
+                    A code from your authenticator app is asked for at sign-in. Turning it off needs your
+                    password, and deletes your recovery codes.
+                  </p>
+                  <label className="field">
+                    <span>Current password</span>
+                    <input
+                      type="password"
+                      autoComplete="current-password"
+                      value={tfaPassword}
+                      onChange={(e) => setTfaPassword(e.target.value)}
+                      required
+                    />
+                  </label>
+                  {tfaError && <div className="settings-error">{tfaError}</div>}
+                  <button className="submit-btn" type="submit" disabled={tfaSaving || !tfaPassword}>
+                    {tfaSaving ? "Turning off…" : "Turn off 2FA"}
+                  </button>
+                </form>
+              ) : (
+                <>
+                  <p className="settings-card-sub">
+                    Optional for your account: a code from an authenticator app at sign-in, on top of your
+                    password.
+                  </p>
+                  <button className="submit-btn" type="button" onClick={() => setEnrolling2fa(true)}>
+                    Turn on 2FA
+                  </button>
+                </>
+              )}
             </section>
           </div>
         )}

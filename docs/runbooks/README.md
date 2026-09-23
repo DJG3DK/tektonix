@@ -10,6 +10,7 @@ box and the dashboard in a browser.
 | [consolidation.md](consolidation.md) | The consolidation card saying never-run, stale or failed |
 | [router-refusals.md](router-refusals.md) | "No endpoints found", a role that silently answers from its fallback, a reviewer that returns nothing |
 | [merge-vs-github.md](merge-vs-github.md) | A merge that succeeded while GitHub stayed behind |
+| [two-factor.md](two-factor.md) | Someone who has lost their authenticator app, with or without recovery codes |
 
 **The commands assume this deployment's layout.** They are written to be
 pasted, which means they carry concrete paths; on another install, substitute:

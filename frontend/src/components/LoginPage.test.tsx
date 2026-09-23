@@ -120,6 +120,23 @@ describe("LoginPage — two-factor", () => {
     expect(onLoggedIn).toHaveBeenCalledWith(me);
   });
 
+  it("accepts a whole recovery code, not just six digits", async () => {
+    // A recovery code is 13 characters ("a1b2c3-d4e5f6", agent/auth.py). The
+    // field used to cap input at 12, so the lost-authenticator path could
+    // never be completed.
+    login.mockResolvedValue({ requires_2fa: true, temp_token: "tmp-2" });
+    verify2FA.mockResolvedValue({ user: user() });
+    renderLogin();
+    await userEvent.type(emailBox(), "a@b.c");
+    await userEvent.type(passwordBox(), "pw");
+    await userEvent.click(screen.getByRole("button", { name: /^sign in$/i }));
+    await screen.findByRole("heading", { name: /two-factor/i });
+
+    await userEvent.type(screen.getByLabelText(/code/i), "a1b2c3-d4e5f6");
+    await userEvent.click(screen.getByRole("button", { name: /verify/i }));
+    expect(verify2FA).toHaveBeenCalledWith("tmp-2", "a1b2c3-d4e5f6");
+  });
+
   it("reports an invalid code without losing the screen", async () => {
     login.mockResolvedValue({ requires_2fa: true, temp_token: "tmp-1" });
     verify2FA.mockRejectedValue(new Error("invalid code"));
