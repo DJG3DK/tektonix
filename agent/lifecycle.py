@@ -186,6 +186,16 @@ def merge_decision(values: dict, store_status: str | None, decision: str,
 
 def command_decision(values: dict, store_status: str | None, decision: str,
                      message: str | None) -> Transition:
+    """One operator decision, applied to EVERY pending action request.
+
+    An assumption, stated so it cannot be broken quietly: the dashboard shows
+    one approval card per interrupt, and the model virtually always proposes
+    one gated call at a time -- so one click answers one card, fanned out as
+    N identical decisions. If a turn ever queues two DIFFERENT gated calls,
+    this would answer both with the one click. tests/test_lifecycle.py pins
+    the fan-out, so a per-action approval UI has to change this function on
+    purpose rather than inherit it (2026-09-23 follow-up review, F10).
+    """
     _require("command_decision", values, store_status)
     count = len((values["pending_approval"] or {}).get("action_requests") or [])
     if decision == "approve":

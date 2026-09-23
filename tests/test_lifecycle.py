@@ -195,3 +195,13 @@ def test_a_done_task_needs_a_note_to_reopen():
 def test_every_resting_state_rests(phase):
     values, _ = _values(phase)
     assert _route_after_verify(values) == END
+
+
+def test_one_command_decision_answers_every_pending_action():
+    """The one-card-per-interrupt assumption (lifecycle.command_decision). A
+    per-action approval UI must change the function on purpose, and this
+    fails when it does."""
+    values, status = _values("awaiting_approval", pending_approval={"action_requests": [
+        {"name": "bash", "args": {"command": "rm a"}}, {"name": "edit", "args": {"file_path": "b"}}]})
+    t = lc.command_decision(values, status, "reject", "not these")
+    assert t.patch["approval_decision"] == [{"type": "reject", "message": "not these"}] * 2
