@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### The review's follow-up, worked through
+
+`docs/review-2026-09-23-followup.md` has a resolution table. The ones that
+change behaviour: the supervisor, startup resume and the inbox's "still
+handled" check now see every task, not the newest 50 or 100; a push the
+remote refuses is no longer "healed"; a parked task gets its own stashed work
+back when it resumes; `/planning` no longer traps the Back button; an admin
+URL opened by a restricted account explains itself. `server.py` is down to
+3,659 lines with the task and planning routes in their own routers.
+
 ### The 2026-09-23 review, worked through
 
 All forty findings are answered in `docs/review-2026-09-23.md` §17. The ones
