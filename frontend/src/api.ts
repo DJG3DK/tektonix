@@ -1,4 +1,4 @@
-import type { RepoStats, RouterBalance, TaskMeta, TaskState, Analytics, AgentModelUsage, ModelPin, ModelCatalogEntry, ToolReliability, TraceSummary, Benchmarks, PlanningSessionMeta, PlanningLogEntry, CurrentUser } from "./types";
+import type { RouterBalance, TaskMeta, TaskState, Analytics, AgentModelUsage, ModelPin, ModelCatalogEntry, ToolReliability, TraceSummary, Benchmarks, PlanningSessionMeta, PlanningLogEntry, CurrentUser } from "./types";
 
 // import.meta.env.BASE_URL is Vite's own `base` config value ("/" in dev,
 // a subpath in the production build -- see vite.config.ts). Building
@@ -608,12 +608,6 @@ export async function getBenchmarks(windowDays = 14): Promise<Benchmarks> {
 export async function getAnalytics(): Promise<Analytics> {
   const res = await apiFetch(`${API_BASE}/analytics`);
   if (!res.ok) throw new Error(`getAnalytics failed: ${res.status}`);
-  return res.json();
-}
-
-export async function getRepoStats(): Promise<RepoStats> {
-  const res = await apiFetch(`${API_BASE}/stats`);
-  if (!res.ok) throw new Error(`getRepoStats failed: ${res.status}`);
   return res.json();
 }
 

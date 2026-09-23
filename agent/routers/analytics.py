@@ -33,7 +33,7 @@ router = APIRouter(prefix="/api/analytics", tags=["analytics"])
 @router.get("")
 async def get_analytics(request: Request, user: User = Depends(require_full_auth)):
     """Chart-ready aggregates for the Analytics view, computed fresh from the
-    Store on every call (same freshness-over-counters reasoning as /api/stats,
+    Store on every call (freshness over running counters,
     which stays as-is for the lighter sidebar/balance uses). Sources:
 
     - ("tasks", repo) meta entries: per-task cost/status/created_at/budget --

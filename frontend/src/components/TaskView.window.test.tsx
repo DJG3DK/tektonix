@@ -46,7 +46,7 @@ function streamWith(log: unknown[]) {
   // The real StreamState, so this renders the real component rather than a
   // shape only this test believes in.
   return {
-    log, plan: [], currentStepIndex: 0, costSoFar: 0, escalated: false,
+    log, plan: [], costSoFar: 0, escalated: false,
     escalationReason: null, reviewGateResult: null, pendingApproval: null,
     committedSha: null, status: "running", connected: true, hydrateError: null,
     idleSeconds: 0, orphaned: false,

@@ -12,14 +12,14 @@ LIVE = [{"content": "Diagnose and fix test:research-mcp failure", "status": "in_
 
 
 def test_live_mirror_beats_the_checkpoints_end_of_pass_plan():
-    snapshot = {"plan": _todos_to_plan(OLD), "current_step_index": None}
+    snapshot = {"plan": _todos_to_plan(OLD)}
     out = _apply_plan_fallback(snapshot, {"latest_todos": LIVE})
     assert len(out["plan"]) == 3
     assert out["plan"] == _todos_to_plan(LIVE)
 
 
 def test_checkpoint_plan_is_used_when_there_is_no_mirror():
-    snapshot = {"plan": _todos_to_plan(OLD), "current_step_index": None}
+    snapshot = {"plan": _todos_to_plan(OLD)}
     assert _apply_plan_fallback(snapshot, {})["plan"] == _todos_to_plan(OLD)
 
 

@@ -225,7 +225,6 @@ EXPECTED: list[tuple[str, str, str | None]] = [
     ('GET', '/api/router-balance', 'require_full_auth'),
     ('GET', '/api/settings/github', 'require_full_auth'),
     ('GET', '/api/settings/runtime', 'require_full_auth'),
-    ('GET', '/api/stats', 'require_full_auth'),
     ('GET', '/api/tasks', 'require_full_auth'),
     ('GET', '/api/tasks/{task_id}', 'require_full_auth'),
     ('GET', '/api/tasks/{task_id}/diff', 'require_full_auth'),

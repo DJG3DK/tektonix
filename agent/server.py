@@ -1597,8 +1597,7 @@ def _publish(task_id: str, event: dict) -> None:
             logger.warning("dropping event for a stalled task %s subscriber", task_id)
 
 
-# The outer graph's own AgentState has no `plan`/`current_step_index` keys at
-# all -- write_todos (deepagents' own planning tool, living in the inner
+# The outer graph's own AgentState has no `plan` key at all -- write_todos (deepagents' own planning tool, living in the inner
 # deep-agent thread) is the plan, and `latest_todos` (a plain snapshot copied
 # into the outer state at the end of each "work" pass, see work.py) is the
 # closest equivalent. Translated here into the PlanStep[] shape the
@@ -1631,7 +1630,9 @@ def _state_snapshot_for_frontend(values: dict) -> dict:
     custom event happened to arrive, since the raw checkpoint dict has
     `latest_todos`, not `plan`, and the frontend only reads the latter.
     """
-    return {**values, "plan": _todos_to_plan(values.get("latest_todos")), "current_step_index": None}
+    # No current_step_index: it belonged to the legacy plan->execute graph,
+    # was always None here, and nothing read it (removed 2026-09-23).
+    return {**values, "plan": _todos_to_plan(values.get("latest_todos"))}
 
 
 def _apply_plan_fallback(snapshot: dict | None, meta_value: dict) -> dict | None:
@@ -3116,7 +3117,7 @@ _REVIEW_SERVICE_BASE_URL = "http://127.0.0.1:4100"
 
 @app.get("/api/router-balance")
 async def get_router_balance(user: User = Depends(require_full_auth)):
-    # Admin-only, as /api/stats and /api/consolidation/status are: it is the
+    # Admin-only, as /api/consolidation/status and Analytics are: it is the
     # operator's spend and remaining credit. It required only a session until
     # 2026-09-23, so a restricted account could read both -- while BalanceStrip
     # already rendered nothing for non-admins, "because the endpoint is
@@ -3126,46 +3127,6 @@ async def get_router_balance(user: User = Depends(require_full_auth)):
         resp = await client.get(f"{_REVIEW_SERVICE_BASE_URL}/api/router/balance")
         resp.raise_for_status()
         return resp.json()
-
-
-@app.get("/api/stats")
-async def get_stats(user: User = Depends(require_full_auth)):
-    """Per-repo cost/outcome aggregates, computed fresh from the Store on
-    every call rather than maintained as a running counter -- this backend
-    doesn't run often enough or handle enough volume for that to matter, and
-    computing fresh avoids a counter silently drifting from reality.
-    """
-    auth.require_admin(user)
-    store = app.state.store
-    per_repo = {}
-    total_cost = 0.0
-    total_tasks = 0
-    status_counts = {"running": 0, "done": 0, "escalated": 0, "error": 0}
-
-    for repo in PROJECTS:
-        results = await _read_with_retry(lambda repo=repo: store.asearch(("tasks", repo), limit=200))
-        tasks = [item.value for item in results]
-        repo_cost = sum(t.get("cost_so_far", 0.0) or 0.0 for t in tasks)
-        per_repo[repo] = {
-            "task_count": len(tasks),
-            "total_cost": repo_cost,
-            "status_counts": {
-                s: sum(1 for t in tasks if t.get("status") == s) for s in ("running", "done", "escalated", "error")
-            },
-        }
-        total_cost += repo_cost
-        total_tasks += len(tasks)
-        for t in tasks:
-            s = t.get("status")
-            if s in status_counts:
-                status_counts[s] += 1
-
-    return {
-        "per_repo": per_repo,
-        "total_cost": total_cost,
-        "total_tasks": total_tasks,
-        "status_counts": status_counts,
-    }
 
 
 @app.post("/api/tasks/{task_id}/message")

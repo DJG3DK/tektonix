@@ -139,7 +139,6 @@ export interface TaskState {
   repo: string;
   budget_usd: number;
   plan: PlanStep[];
-  current_step_index: number;
   execution_log: LogEntry[];
   cost_so_far: number;
   escalated: boolean;
@@ -150,19 +149,6 @@ export interface TaskState {
   pull_request_url?: string | null;
 }
 
-export interface RepoStats {
-  per_repo: Record<
-    string,
-    {
-      task_count: number;
-      total_cost: number;
-      status_counts: { running: number; done: number; escalated: number; error: number };
-    }
-  >;
-  total_cost: number;
-  total_tasks: number;
-  status_counts: { running: number; done: number; escalated: number; error: number };
-}
 
 export interface RouterBalance {
   totalCredits: number;
@@ -175,7 +161,6 @@ export interface StreamEvent {
   node?: string;
   execution_log?: LogEntry[];
   plan?: PlanStep[] | null;
-  current_step_index?: number | null;
   cost_so_far?: number;
   escalated?: boolean;
   escalation_reason?: string | null;

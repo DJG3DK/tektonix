@@ -5,7 +5,6 @@ import type { LogEntry, PendingApproval, PlanStep, ReviewGateResult, StreamEvent
 interface StreamState {
   log: LogEntry[];
   plan: PlanStep[];
-  currentStepIndex: number;
   costSoFar: number;
   escalated: boolean;
   escalationReason: string | null;
@@ -104,7 +103,6 @@ export function mergeLog(durable: LogEntry[] | undefined | null, live: LogEntry[
 const EMPTY_STATE: StreamState = {
   log: [],
   plan: [],
-  currentStepIndex: 0,
   costSoFar: 0,
   escalated: false,
   escalationReason: null,
@@ -199,7 +197,6 @@ export function useTaskStream(taskId: string | null, repo: string | null, genera
               // anything the socket delivered since is appended.
               log: mergeLog(graphState.execution_log, s.log),
               plan: graphState.plan ?? s.plan,
-              currentStepIndex: graphState.current_step_index ?? s.currentStepIndex,
               costSoFar: graphState.cost_so_far ?? s.costSoFar,
               escalated: graphState.escalated ?? s.escalated,
               escalationReason: graphState.escalation_reason ?? s.escalationReason,
@@ -266,7 +263,6 @@ export function useTaskStream(taskId: string | null, repo: string | null, genera
         // must not double an entry.
         log: event.execution_log ? mergeLog(s.log, event.execution_log) : s.log,
         plan: event.plan ?? s.plan,
-        currentStepIndex: event.current_step_index ?? s.currentStepIndex,
         costSoFar: event.cost_so_far ?? s.costSoFar,
         committedSha: event.committed_sha ?? s.committedSha,
         escalated: event.escalated ?? s.escalated,

@@ -13,7 +13,15 @@ whose plan never completes -- so an all-pending rewrite can hold a finished
 task open. Both reasons to merge rather than replace.
 """
 
-from agent.plan_progress import counts, merge_todos
+from agent.plan_progress import merge_todos
+
+
+def counts(todos):
+    """(completed, total) -- what the plan strip shows (PlanTracker counts
+    done steps over plan length). A test helper: the backend never needed
+    it, so it no longer lives in agent/plan_progress.py."""
+    items = [t for t in todos if isinstance(t, dict)] if isinstance(todos, list) else []
+    return (sum(1 for t in items if t.get("status") == "completed"), len(items))
 
 
 def _t(content, status="pending"):
@@ -80,12 +88,6 @@ def test_malformed_entries_never_raise():
     merged = merge_todos(before, after)
     assert any(isinstance(t, dict) and t.get("content") == "a"
                and t["status"] == "completed" for t in merged)
-    assert counts("not a list") == (0, 0)
-
-
-def test_counts_is_what_the_strip_shows():
-    assert counts([_t("a", "completed"), _t("b", "in_progress"), _t("c")]) == (1, 3)
-    assert counts(None) == (0, 0)
 
 
 def test_the_denominator_never_shrinks_across_a_sequence_of_rewrites():

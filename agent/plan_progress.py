@@ -141,11 +141,3 @@ def merge_todos(previous: list | None, incoming: list | None) -> list | None:
         else:
             out.append(todo)
     return out
-
-
-def counts(todos: list | None) -> tuple[int, int]:
-    """(completed, total). What the step strip shows."""
-    if not isinstance(todos, list):
-        return (0, 0)
-    items = [t for t in todos if isinstance(t, dict)]
-    return (sum(1 for t in items if t.get("status") == COMPLETED), len(items))

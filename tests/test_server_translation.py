@@ -68,7 +68,7 @@ def test_state_snapshot_translates_latest_todos_into_plan():
     assert snapshot["plan"] == [
         {"id": "0", "description": "x", "status": "pending", "result": None, "verified": False}
     ]
-    assert snapshot["current_step_index"] is None
+    assert "current_step_index" not in snapshot
     # Everything else passes through unchanged.
     assert snapshot["cost_so_far"] == 1.5
     assert snapshot["escalated"] is False
