@@ -40,6 +40,18 @@ describe("ChatMessage", () => {
     expect(btn).toHaveAccessibleName("Hide gate detail");
   });
 
+  it("a supervisor heal reads as the system acting, not the agent speaking", () => {
+    const entry = {
+      node: "supervisor",
+      summary: "supervisor: auto-heal #1: review_timeout",
+      detail: "",
+      timestamp: new Date().toISOString(),
+    } as unknown as LogEntry;
+    const { container } = render(<ChatMessage entry={entry} />);
+    expect(container.querySelector(".chat-system")).not.toBeNull();
+    expect(screen.getByText("supervisor: auto-heal #1: review_timeout")).toBeTruthy();
+  });
+
   it("a gate verdict with no detail is not a button", () => {
     const entry = {
       node: "verify_and_ship",

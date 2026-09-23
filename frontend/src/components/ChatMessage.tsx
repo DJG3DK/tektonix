@@ -14,6 +14,9 @@ type Kind = "agent" | "tool-call" | "tool-result" | "system" | "user";
 function classify(entry: LogEntry): Kind {
   if (entry.node === "operator") return "user";
   if (entry.node === "verify_and_ship") return "system";
+  // The supervisor's heals and conclusions (agent/supervisor.py) are the
+  // system acting on the task, not the agent speaking.
+  if (entry.node === "supervisor") return "system";
   // A heartbeat ("ping") or any entry without text must never take the page
   // down: the error boundary swallowed the whole planning view on 2026-09-09
   // when a ping was wrapped as a log entry and reached this with no summary.

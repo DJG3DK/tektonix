@@ -86,8 +86,9 @@ export interface PlanStep {
 // unchanged (a human-sent message). The old "plan"/"execute"/"reflect"/
 // "review"/"deploy" node names belonged to the legacy plan->execute->reflect
 // graph and no longer appear once server.py is on the new outer graph.
+// "supervisor" is agent/supervisor.py healing or concluding a parked task.
 export interface LogEntry {
-  node: "work" | "verify_and_ship" | "operator" | `work:${string}`;
+  node: "work" | "verify_and_ship" | "operator" | "supervisor" | `work:${string}`;
   step_id: string | null;
   summary: string;
   detail: string;
