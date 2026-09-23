@@ -35,6 +35,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 # Safe to import now: none of these reach agent.config or agent.tools.
 from agent.evals import fixtures as fx  # noqa: E402
 from agent.evals import reviewer as ev_reviewer  # noqa: E402
+from agent.evals import status as ev_status  # noqa: E402 -- imports agent.paths only
 from agent.evals.spec import SpecError, load_fixture, load_suite  # noqa: E402
 
 DEFAULT_CEILING_USD = 25.0
@@ -55,6 +56,9 @@ def _parse_args(argv=None):
     p.add_argument("--keep", action="store_true",
                    help="leave the working directory behind for inspection")
     p.add_argument("--notes", default="", help="a line recorded in the report")
+    p.add_argument("--status-file", nargs="?", const="default", default=None,
+                   help="write progress to a file the dashboard reads (logs/evals/status.json "
+                        "unless a path is given); set by a run started from the dashboard")
     return p.parse_args(argv)
 
 
@@ -162,23 +166,30 @@ async def verify(tasks, root: Path) -> int:
 def dry_run(tasks, ceiling: float) -> int:
     print(f"\n{len(tasks)} task(s) would run, ceiling ${ceiling:.2f}")
     print("=" * 64)
+    # The real run checks ACTUAL spend so far plus the next task's cap, so a
+    # task marked "if room" here is only skipped when the ones before it
+    # really spent that much -- the worst case, not the expected one.
     spend = 0.0
+    at_risk = 0
     for t in tasks:
         if t.skip:
             print(f"  SKIP {t.id:28} {t.skip}")
             continue
-        if spend + t.budget_usd > ceiling:
-            print(f"  ---- {t.id:28} not reached: would cross the ceiling")
-            continue
+        room = spend + t.budget_usd <= ceiling
         spend += t.budget_usd
-        print(f"  run  {t.id:28} {t.category:14} {t.fixture:8} "
+        at_risk += not room
+        print(f"  {'run ' if room else 'room?'} {t.id:28} {t.category:14} {t.fixture:9} "
               f"${t.budget_usd:.2f}  {len(t.assertions)} assertion(s)")
     print("-" * 64)
-    print(f"  worst case ${spend:.2f}; typical spend is well under each task's cap\n")
+    print(f"  caps add up to ${spend:.2f}; typical spend is a few cents a task")
+    if at_risk:
+        print(f"  {at_risk} task(s) marked room? run only if the ones before them leave room "
+              f"under the ${ceiling:.2f} ceiling -- skipped only in the worst case")
+    print()
     return 0
 
 
-async def run(tasks, args, root: Path) -> int:
+async def run(tasks, args, root: Path, status_path: Path | None = None) -> int:
     # --- 1. the fixtures, and the projects.json that is the ONLY one this run
     # can see. Written before anything reads AGENT_PROJECTS_JSON.
     materialized = [fx.materialize(load_fixture(name), root / "work")
@@ -210,6 +221,9 @@ async def run(tasks, args, root: Path) -> int:
         def announce(r):
             mark = "PASS" if r.passed else "FAIL"
             print(f"  {mark}  {r.task.id:28} ${r.cost_usd:>6.2f}  {r.outcome}")
+            if status_path is not None:
+                ev_status.task_done(status_path, task_id=r.task.id, passed=r.passed,
+                                    cost_usd=r.cost_usd, outcome=r.outcome)
 
         async with open_checkpointer(config) as checkpointer, open_store(config) as store:
             graph = build_outer_graph(config, checkpointer, store).compile(
@@ -221,8 +235,9 @@ async def run(tasks, args, root: Path) -> int:
                                     run_command=_sandboxed, on_task=announce)
 
         previous = ev_report.latest_report()
-        report = ev_report.build(suite, cost_ceiling_usd=args.ceiling, notes=args.notes)
+        report = ev_report.build(suite, cost_ceiling_usd=args.ceiling, notes=args.notes, only=args.only)
         path = ev_report.write(report)
+        args._report_path = str(path)
         print(ev_report.render(report))
         if previous:
             print(ev_report.diff_against(report, previous))
@@ -230,6 +245,12 @@ async def run(tasks, args, root: Path) -> int:
         return 0 if report["tasks_passed"] == report["tasks_attempted"] else 1
     finally:
         await ev_reviewer.stop(rev)
+
+
+def _status_path(args) -> Path | None:
+    if not args.status_file:
+        return None
+    return ev_status.STATUS_PATH if args.status_file == "default" else Path(args.status_file)
 
 
 async def main_async(argv=None) -> int:
@@ -247,7 +268,17 @@ async def main_async(argv=None) -> int:
     try:
         if args.verify:
             return await verify(tasks, root)
-        return await run(tasks, args, root)
+        status_path = _status_path(args)
+        if status_path is not None:
+            ev_status.start(status_path, notes=args.notes, only=args.only, tasks_total=len(tasks))
+        code = 1
+        try:
+            code = await run(tasks, args, root, status_path)
+            return code
+        finally:
+            if status_path is not None:
+                ev_status.finish(status_path, exit_code=code,
+                                 report=getattr(args, "_report_path", None))
     finally:
         if args.keep:
             print(f"  working directory kept at {root}")

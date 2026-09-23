@@ -31,7 +31,10 @@ FIXTURES_DIR = EVALS_DIR / "fixtures"
 # a run can be read per category ("it got worse at bug-fixes"), and declaring
 # one outside the taxonomy would produce a row that matches nothing on the
 # Analytics page.
-CATEGORIES = ("bug-fix", "feature", "ui-styling", "performance", "investigation", "other")
+CATEGORIES = ("bug-fix", "feature", "ui-styling", "performance", "investigation",
+              # 2026-09-23, when the suite grew from 12 tasks to 30: work a real
+              # project asks for that none of the above names.
+              "security", "refactor", "tests", "other")
 
 # Same shape as a project name, because that is what a fixture becomes: a
 # directory basename and a key in the eval's own projects.json.

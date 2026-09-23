@@ -105,7 +105,7 @@ def test_the_id_must_match_the_filename(tmp_path, fixtures_dir):
 
 
 def test_a_category_outside_the_taxonomy_is_refused(tmp_path, fixtures_dir):
-    p = write(tmp_path, "demo-task", good_task(category="refactor"))
+    p = write(tmp_path, "demo-task", good_task(category="refactoring"))
     with pytest.raises(spec.SpecError, match="is not one of"):
         spec.load_task(p, fixtures_dir)
 
