@@ -447,6 +447,80 @@ async def rebase_onto_base(repo_root: str, base_ref: str = "main") -> dict:
     }
 
 
+async def reclaim_own_stash(repo_root: str, task_id: str) -> dict:
+    """Put back a task's own uncommitted work that another task stashed.
+
+    The workspace is shared and the project lock is held only while a task
+    RUNS. A task parked mid-turn -- waiting for an approval, most often --
+    holds its edits uncommitted in the tree and holds no lock, so the next
+    task's sync stashes them as "left dirty by <that task>". Recoverable, and
+    until 2026-09-23 never recovered: the parked task resumed into someone
+    else's tree without its own edits. Seen live that day twice in a row on
+    one task, which redid its work, paused again, and lost the redo the same
+    way.
+
+    The stash's label names the owner, and its first parent is the commit the
+    work was made on. So: set aside whatever is in the tree now (another
+    task's, stashed the same recoverable way), go back to that commit -- on
+    the task's own branch when the branch is still there -- and pop the
+    newest stash this task owns. A conflicting pop leaves the stash in place
+    and says so; nothing is ever dropped that was not applied.
+
+    Never raises.
+    """
+    async def stashes() -> list[tuple[str, str, str]] | None:
+        """(ref, commit, subject), newest first."""
+        r = await _git("stash list --format=%gd%x09%H%x09%s", repo_root, timeout=15)
+        if not r["ok"]:
+            return None
+        return [tuple(ln.split("\t", 2)) for ln in r["output"].splitlines() if ln.count("\t") >= 2]
+
+    listed = await stashes()
+    if listed is None:
+        return {"ok": False, "reclaimed": False, "reason": "could not list stashes"}
+    mine = [(ref, sha) for ref, sha, subject in listed if subject.endswith(f"left dirty by {task_id}")]
+    if not mine:
+        return {"ok": True, "reclaimed": False}
+    ref, stash_sha = mine[0]           # newest first
+    base = await _git(f"rev-parse {stash_sha}^1", repo_root, timeout=15)
+    if not base["ok"]:
+        return {"ok": False, "reclaimed": False, "reason": f"cannot read {ref}: {base['output'][:200]}"}
+    base_sha = base["output"].strip()
+
+    status = await _git("status --porcelain", repo_root, timeout=15)
+    out: dict = {"ok": True, "stash": ref, "base": base_sha[:12]}
+    if status["output"].strip():
+        owner = await _workspace_owner(repo_root)
+        whose = owner or "an unknown task"
+        aside = await _git(
+            f'stash push --include-untracked -m "tektonix: workspace left dirty by {whose}"',
+            repo_root, timeout=120)
+        if not aside["ok"]:
+            return {**out, "ok": False, "reclaimed": False,
+                    "reason": f"tree dirty and could not be stashed: {aside['output'][:200]}"}
+        out["salvaged_from"] = whose
+        # Setting that aside renumbered every stash; find ours again by commit.
+        relisted = await stashes() or []
+        ref = next((r for r, sha, _ in relisted if sha == stash_sha), None)
+        if ref is None:
+            return {**out, "ok": False, "reclaimed": False, "reason": "own stash vanished while reclaiming"}
+
+    branch = task_branch_name(task_id)
+    tip = await _git(f"rev-parse --verify --quiet refs/heads/{branch}", repo_root, timeout=15)
+    target = branch if tip["ok"] and tip["output"].strip() == base_sha else f"--detach {base_sha}"
+    co = await _git(f"checkout {target}", repo_root, timeout=30)
+    if not co["ok"]:
+        return {**out, "ok": False, "reclaimed": False, "reason": f"checkout failed: {co['output'][:200]}"}
+    pop = await _git(f"stash pop --index {ref}", repo_root, timeout=120)
+    if not pop["ok"]:
+        pop = await _git(f"stash pop {ref}", repo_root, timeout=120)
+    if not pop["ok"]:
+        return {**out, "ok": False, "reclaimed": False,
+                "reason": f"the stash did not apply cleanly and was kept: {pop['output'][:200]}"}
+    await _claim_workspace(repo_root, task_id)
+    return {**out, "reclaimed": True, "older_stashes": len(mine) - 1}
+
+
 async def restore_task_workspace(repo_root: str, task_id: str, base_ref: str = "main",
                                  rebase: bool = True) -> dict:
     """Put a RESUMED task back on its own branch, on the current base, before it edits.
@@ -506,6 +580,12 @@ async def restore_task_workspace(repo_root: str, task_id: str, base_ref: str = "
         if not r["ok"]:
             return {**out, "ok": False, "reason": f"could not check out {branch}: {r['output'][:200]}"}
     await _claim_workspace(repo_root, task_id)
+    # Its own work, stashed by another task while it was parked, comes back
+    # before anything moves the branch (reclaim_own_stash).
+    reclaimed = await reclaim_own_stash(repo_root, task_id)
+    if reclaimed.get("reclaimed"):
+        out["reclaimed"] = reclaimed
+        return {**out, "restored": True}   # dirty again, and the task's own: nothing to rebase
     if not rebase:
         return {**out, "restored": True}
 

@@ -347,7 +347,17 @@ async def work_node(state: AgentState, app_config: Config, checkpointer, pg_stor
                   f"-- this task starts from whatever HEAD was already at")
 
     workspace_note = None
-    if not (state["iteration_count"] == 0 and not state.get("committed_sha")) and not state.get("approval_decision"):
+    if state.get("approval_decision"):
+        # Resuming a turn that paused for an approval. That turn's edits are
+        # uncommitted and, if another task ran meanwhile, stashed under this
+        # task's name; the paused turn continues as if they were still there,
+        # so they have to be. Nothing else about the tree moves here.
+        from agent.tools.git import reclaim_own_stash
+        from agent.config import PROJECTS
+
+        reclaimed = await reclaim_own_stash(PROJECTS[repo]["sandbox"], task_id)
+        print(f"[work] {repo}: reclaim before resuming the paused turn -> {reclaimed}")
+    elif not (state["iteration_count"] == 0 and not state.get("committed_sha")):
         # Any later pass -- a loop-back, or a resume after other tasks have
         # had the workspace. Not under a pending approval decision: that
         # resumes a paused turn mid-thought, and the tree is its own.
