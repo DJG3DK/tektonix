@@ -20,11 +20,16 @@ HEAL = [
      "base_moved"),
     ("merge/deploy failed: {'ok': False, 'error': 'error: Your local changes to the following files would be "
      "overwritten by merge'}", "live_dirty"),
-    ("merge/deploy failed: {'ok': False, 'stage': 'ship', 'error': 'could not push agent/x'}", "push_failed"),
+    ("merge/deploy failed: {'ok': False, 'stage': 'ship', 'error': 'could not push agent/x: fatal: unable to "
+     "access \\'https://github.com/o/r.git/\\': Could not resolve host: github.com'}", "push_failed"),
+    ("could not push agent/x: error: RPC failed; HTTP 502 curl 22 The requested URL returned error: 502",
+     "push_failed"),
     ("work node failed: peer closed connection without sending complete message body (incomplete chunked read)",
      "work_connection"),
     ("verify_and_ship failed: All connection attempts failed", "gate_connection"),
 ]
+WORK_CUT = next(r for r, k in HEAL if k == "work_connection")
+
 LEAVE = [
     "The independent review service escalated this after repeated non-converging rounds",
     "work node failed: Model call limits exceeded: run limit (400/400)",
@@ -33,6 +38,15 @@ LEAVE = [
     "budget exhausted: $5.02 of $5.00",
     "hit max_iterations (40) without completing",
     "operator edit not applied: the task's branch moved after the editor was opened -- reopen it",
+    # Pushes the remote REFUSED: a retry only repeats them (F6).
+    "could not push agent/x: ! [remote rejected] agent/x -> agent/x (refusing to allow a Personal Access "
+    "Token to create or update workflow `.github/workflows/ci.yml` without `workflow` scope)",
+    "could not push agent/x: remote: Permission to o/r.git denied to bot. fatal: unable to access "
+    "'https://github.com/o/r.git/': The requested URL returned error: 403",
+    "could not push agent/x: git@github.com: Permission denied (publickey). fatal: Could not read from "
+    "remote repository.",
+    "could not push agent/x: remote: error: GH006: Protected branch update failed for refs/heads/main.",
+    "could not push agent/x: remote: Repository not found.",
     "",
     None,
 ]
@@ -49,7 +63,7 @@ def test_the_tasks_own_failures_are_left_for_the_operator(reason):
 
 
 def test_a_cut_off_work_pass_resumes_work_and_a_gate_failure_does_not():
-    assert sv.classify(HEAL[6][0]).stage == "work"
+    assert sv.classify(WORK_CUT).stage == "work"
     assert all(sv.classify(r).stage == "gate" for r, k in HEAL if k != "work_connection")
 
 
@@ -163,7 +177,7 @@ def test_backoff_grows_with_each_heal():
 
 
 def test_a_cut_off_work_pass_goes_back_to_work_with_a_note():
-    w = World(reason=HEAL[6][0], approved="abc1234")
+    w = World(reason=WORK_CUT, approved="abc1234")
     _sweep(w, now=0)
     _sweep(w, now=10_000)
     t, _ = w.applied[0]
@@ -289,7 +303,7 @@ def test_a_heal_loses_to_a_task_that_is_already_running(monkeypatch):
 def test_an_old_escalation_is_left_alone():
     """The first dry run against live data would have revived a task that had
     sat escalated for a month -- restarting old, paid work nobody asked for."""
-    w = World(reason=HEAL[6][0])
+    w = World(reason=WORK_CUT)
     _sweep(w, now=0)
     assert _sweep(w, now=sv.MAX_AGE_S + 1) == [] and w.applied == []
 

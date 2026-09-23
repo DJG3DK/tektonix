@@ -81,7 +81,19 @@ KINDS: tuple[Kind, ...] = (
     Kind("base_moved", re.compile(
         r"Diverging branches|'reason': 'diverged'|live moved on and the branch could not be rebased"), None, "gate"),
     Kind("live_dirty", re.compile(r"Your local changes to the following files would be overwritten"), "live_clean", "gate"),
-    Kind("push_failed", re.compile(r"could not push"), None, "gate"),
+    # A push the NETWORK refused, not the remote. "could not push" alone also
+    # covers a token without workflow scope, a 403, a missing deploy key and a
+    # protected branch -- permanent refusals a retry only repeats, spending
+    # attempts on motion nobody asked for (2026-09-23 follow-up review, F6).
+    # So the git error has to name a transport failure: name resolution, a
+    # connection that timed out, reset or was refused, a remote that hung up,
+    # or a 5xx from the host.
+    Kind("push_failed", re.compile(
+        r"could not push.*(Could not resolve host|Temporary failure in name resolution|"
+        r"Connection timed out|Operation timed out|Connection reset|Connection refused|"
+        r"Failed to connect|remote end hung up unexpectedly|early EOF|RPC failed|"
+        r"The requested URL returned error: 5\d\d|HTTP 5\d\d|gnutls_handshake\(\) failed|"
+        r"SSL_ERROR_SYSCALL)", re.I | re.S), None, "gate"),
     Kind("work_connection", re.compile(
         r"^work node failed: .*(peer closed connection|incomplete chunked read|RemoteProtocolError|"
         r"ReadTimeout|ConnectTimeout|Server disconnected|502 Bad Gateway|503 Service Unavailable|"
