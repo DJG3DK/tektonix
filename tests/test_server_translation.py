@@ -1,7 +1,7 @@
 """Unit tests for server.py's todos<->plan translation layer -- the part
-that lets the frontend's existing PlanTracker/LogEntryCard components keep
-working unmodified against the new deepagents-based graph's own state shape
-(latest_todos, not plan/current_step_index). Written during the full
+that lets the frontend's PlanTracker (the plan strip) and ChatMessage (the
+log) keep working against the deepagents-based graph's own state shape
+(latest_todos, not the legacy plan/current_step_index). Written during the full
 LangGraph/deepagents docs audit, which found zero automated coverage
 anywhere in this system.
 """

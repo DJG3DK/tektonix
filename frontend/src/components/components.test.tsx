@@ -2,9 +2,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ConsolidationStatusPanel } from "./ConsolidationStatusPanel";
-import { LogEntryCard } from "./LogEntryCard";
 import { MobileNav } from "./MobileNav";
-import type { LogEntry } from "../types";
 
 const getConsolidationStatus = vi.fn();
 vi.mock("../api", async (importOriginal) => {
@@ -12,71 +10,8 @@ vi.mock("../api", async (importOriginal) => {
   return { ...actual, getConsolidationStatus: () => getConsolidationStatus() };
 });
 
-const entry = (over: Partial<LogEntry> = {}): LogEntry =>
-  ({
-    node: "work",
-    step_id: null,
-    summary: "did a thing",
-    detail: "the long version",
-    cost_usd: 0,
-    timestamp: new Date().toISOString(),
-    ...over,
-  }) as LogEntry;
-
 beforeEach(() => {
   getConsolidationStatus.mockReset();
-});
-
-describe("LogEntryCard", () => {
-  it("labels the coordinator's own work entries", () => {
-    render(<LogEntryCard entry={entry({ node: "work" })} index={0} />);
-    expect(screen.getByText("Work")).toBeInTheDocument();
-  });
-
-  it("names a subagent from its work:<name> tag", () => {
-    // The set of subagents is not known in advance, so the label is derived
-    // rather than looked up.
-    render(<LogEntryCard entry={entry({ node: "work:investigator" })} index={0} />);
-    expect(screen.getByText("investigator")).toBeInTheDocument();
-  });
-
-  it("falls back to the raw node name for anything unrecognised", () => {
-    // Cast on purpose: the union says this cannot happen, and the component
-    // guards against it anyway — because the backend can ship a new node type
-    // before the frontend's type is updated, and the honest failure there is
-    // an unfamiliar label, not a blank card.
-    const unknownNode = { node: "something_new" } as unknown as Partial<LogEntry>;
-    render(<LogEntryCard entry={entry(unknownNode)} index={0} />);
-    expect(screen.getByText("something_new")).toBeInTheDocument();
-  });
-
-  it("starts expanded, because collapsed-by-default hid the reasoning", () => {
-    render(<LogEntryCard entry={entry({ detail: "the long version" })} index={0} />);
-    expect(screen.getByText("the long version")).toBeInTheDocument();
-  });
-
-  it("collapses on click when there is detail to hide", async () => {
-    render(<LogEntryCard entry={entry({ summary: "did a thing", detail: "the long version" })} index={0} />);
-    await userEvent.click(screen.getByText("did a thing"));
-    expect(screen.queryByText("the long version")).not.toBeInTheDocument();
-  });
-
-  it("does not offer to collapse an entry with no detail", async () => {
-    render(<LogEntryCard entry={entry({ summary: "just a line", detail: "" })} index={0} />);
-    await userEvent.click(screen.getByText("just a line"));
-    expect(screen.getByText("just a line")).toBeInTheDocument(); // no crash, nothing to toggle
-  });
-
-  it("renders a fresh entry as seconds old", () => {
-    render(<LogEntryCard entry={entry({ timestamp: new Date().toISOString() })} index={0} />);
-    expect(screen.getByText(/\d+s ago/)).toBeInTheDocument();
-  });
-
-  it("renders an older entry in minutes and hours", () => {
-    const twoHoursAgo = new Date(Date.now() - 2 * 3600_000).toISOString();
-    render(<LogEntryCard entry={entry({ timestamp: twoHoursAgo })} index={0} />);
-    expect(screen.getByText("2h ago")).toBeInTheDocument();
-  });
 });
 
 describe("ConsolidationStatusPanel", () => {
