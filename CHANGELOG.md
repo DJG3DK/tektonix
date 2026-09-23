@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+### The 2026-09-23 review, worked through
+
+All forty findings are answered in `docs/review-2026-09-23.md` §17. The ones
+that change behaviour:
+
+- **The reviewer's host database checks no longer inherit its environment** —
+  they ran with the router key and control secret in reach while the comment
+  and `SECURITY.md` said otherwise.
+- **The review services answer nothing but `/health` without the control
+  secret**, reads included; `/health` counts projects under review instead of
+  naming them. Both console bridges already sent the secret.
+- **Every repo-scoped route is pinned with its repo check**
+  (`tests/test_repo_scope.py`), so a refactor cannot drop one quietly.
+- **The router balance is admin-only**; the approve link refuses cross-site
+  posts, is rate-limited and uncached; health failures carry a reason code,
+  not exception text; the rate limiter logs when it fails open.
+- **Two-factor in Settings** — users can turn it on or off; admins are
+  pointed at recovery codes and a runbook. A recovery code could not be typed
+  into the login box (13 characters into a 12-character numeric field); now
+  it can.
+- **Deep links**: a task, a planning session and every view have a URL, with
+  back/forward.
+- `agent/tasks.py` holds task creation, and the GitHub inbox is its own router
+  seam; dead code (`LogEntryCard`, `/api/stats`, `current_step_index`,
+  `plan_progress.counts`) is gone; duplicated helpers are shared.
+
 ### Tasks heal themselves from infrastructure failures
 
 Sixteen of the last thirty days' nineteen escalations were plumbing, and each
