@@ -10,7 +10,11 @@ red because a provider is slow, teaches people to ignore it.
 
 Nothing here returns a secret's value -- only whether one is configured. The
 endpoint is public (a monitoring box has no session), so every field has to be
-safe to read from outside.
+safe to read from outside. That includes failures: a failing check carries a
+stable `reason` code and a fixed sentence, never the exception's own text,
+which can echo a DSN fragment, a host name or a library version to anyone who
+asks. The exception goes to the server log, where the operator reads it
+(and `scripts/doctor.py` gives the long form on the box itself).
 """
 
 from __future__ import annotations
@@ -40,14 +44,16 @@ async def _check_postgres(pool) -> dict:
     Without this the agent can serve its own dashboard while every task,
     session and memory read fails."""
     if pool is None:
-        return {"ok": False, "detail": "no pool on app.state (still starting up?)"}
+        return {"ok": False, "reason": "postgres_starting", "detail": "no pool on app.state (still starting up?)"}
     try:
         async with asyncio.timeout(_TIMEOUT_S):
             async with pool.connection() as conn:
                 await conn.execute("SELECT 1")
         return {"ok": True}
-    except Exception as e:  # noqa: BLE001 -- the reason is the payload
-        return {"ok": False, "detail": f"{type(e).__name__}: {str(e)[:160]}"}
+    except Exception:  # noqa: BLE001 -- a failure is the payload, its text is the log's
+        logger.warning("health: postgres check failed", exc_info=True)
+        return {"ok": False, "reason": "postgres_unreachable",
+                "detail": "Postgres did not answer; the server log has the error"}
 
 
 def router_liveness_url(base_url: str) -> str:
@@ -69,9 +75,13 @@ async def _check_router(base_url: str) -> dict:
             r = await client.get(url)
         if r.status_code == 200:
             return {"ok": True}
-        return {"ok": False, "detail": f"HTTP {r.status_code} from {url}"}
-    except Exception as e:  # noqa: BLE001
-        return {"ok": False, "detail": f"{type(e).__name__}: {str(e)[:160]}"}
+        logger.warning("health: router liveness at %s answered HTTP %s", url, r.status_code)
+        return {"ok": False, "reason": "router_unhealthy",
+                "detail": f"the model router answered HTTP {r.status_code}"}
+    except Exception:  # noqa: BLE001
+        logger.warning("health: router liveness at %s failed", url, exc_info=True)
+        return {"ok": False, "reason": "router_down",
+                "detail": "the model router did not answer; the server log has the error"}
 
 
 def _image_present() -> bool:
@@ -85,14 +95,18 @@ async def _check_sandbox_image() -> dict:
     fail one tool call in, after the planning spend."""
     global _image_cache
     now = time.monotonic()
+    missing = {"ok": False, "reason": "sandbox_image_missing",
+               "detail": f"{SANDBOX_IMAGE} not built -- run docker/agent-sandbox/build.sh"}
     if _image_cache and now - _image_cache[0] < _IMAGE_CACHE_TTL_S:
-        return {"ok": _image_cache[1], "detail": None if _image_cache[1] else f"{SANDBOX_IMAGE} not built (cached)"}
+        return {"ok": True} if _image_cache[1] else missing
     try:
         present = await asyncio.to_thread(_image_present)
-    except Exception as e:  # noqa: BLE001 -- docker missing or not answering
-        return {"ok": False, "detail": f"docker unavailable: {type(e).__name__}: {str(e)[:120]}"}
+    except Exception:  # noqa: BLE001 -- docker missing or not answering
+        logger.warning("health: docker image lookup failed", exc_info=True)
+        return {"ok": False, "reason": "docker_unavailable",
+                "detail": "docker did not answer; the server log has the error"}
     _image_cache = (now, present)
-    return {"ok": present, "detail": None if present else f"{SANDBOX_IMAGE} not built -- run docker/agent-sandbox/build.sh"}
+    return {"ok": True} if present else missing
 
 
 def _check_review_secret() -> dict:
@@ -100,7 +114,8 @@ def _check_review_secret() -> dict:
     end of a task that has already been paid for."""
     if os.environ.get("REVIEW_CONTROL_SECRET"):
         return {"ok": True}
-    return {"ok": False, "detail": "REVIEW_CONTROL_SECRET unset: merge and deploy calls will be refused"}
+    return {"ok": False, "reason": "review_secret_unset",
+            "detail": "REVIEW_CONTROL_SECRET unset: merge and deploy calls will be refused"}
 
 
 async def collect(pool, router_base_url: str, projects: dict) -> dict:

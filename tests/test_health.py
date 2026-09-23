@@ -124,7 +124,16 @@ def test_postgres_down_is_caught_rather_than_raising(all_good):
     payload = _collect(pool=FakePool(fail=True))
     assert payload["ok"] is False
     assert payload["checks"]["postgres"]["ok"] is False
-    assert "pool exhausted" in payload["checks"]["postgres"]["detail"]
+    assert payload["checks"]["postgres"]["reason"] == "postgres_unreachable"
+
+
+def test_a_failure_never_publishes_the_exceptions_own_text(all_good, caplog):
+    """The route is public. An exception's text can carry a DSN fragment or a
+    host name; it belongs in the log, not the payload."""
+    with caplog.at_level("WARNING", logger="tektonix"):
+        payload = _collect(pool=FakePool(fail=True))
+    assert "pool exhausted" not in str(payload)
+    assert "pool exhausted" in caplog.text
 
 
 def test_a_missing_pool_during_startup_is_a_failure_not_a_crash(all_good):
@@ -170,6 +179,8 @@ def test_a_router_that_answers_wrong_is_a_failure(all_good, monkeypatch):
     payload = _collect()
     assert payload["ok"] is False
     assert "503" in payload["checks"]["router"]["detail"]
+    assert payload["checks"]["router"]["reason"] == "router_unhealthy"
+    assert "127.0.0.1" not in payload["checks"]["router"]["detail"]   # no internal address
 
 
 def test_the_endpoint_needs_no_session_and_503s_when_unhealthy(all_good, monkeypatch):
