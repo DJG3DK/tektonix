@@ -56,7 +56,7 @@ from agent import github_inbox, github_settings
 from agent import audit
 from agent import live_state
 from agent.backends import backend_for_dsn
-from agent.store_paging import recent_items
+from agent.store_paging import all_items
 from agent import health as health_checks
 from agent import episode_vectors, history_index
 from agent import log_stream
@@ -110,12 +110,29 @@ async def _apply_transition(graph, thread_config: dict, patch: dict, as_node: st
         await graph.aupdate_state(thread_config, patch, as_node=as_node)
 
 
+async def _tasks_in(repo: str, statuses: tuple[str, ...]) -> list:
+    """Every task record of `repo` whose status is one of `statuses`.
+
+    The whole namespace, filtered -- NOT the newest N. The machinery that acts
+    on parked or orphaned tasks (the supervisor, startup auto-resume, the
+    inbox's "is this item still being handled" check) used a window of the
+    newest 50 or 100 of everything, so on a project with a long history an
+    escalated task just outside it was invisible: never healed, never
+    resumed, and -- for the inbox -- read as finished, so its alert was
+    proposed again as new work (2026-09-23 follow-up review, F5). The HTTP
+    task list is a page for a person and keeps its own limit.
+    """
+    items = await all_items(app.state.store, ("tasks", repo))
+    return [it for it in items if (it.value or {}).get("status") in statuses]
+
+
 async def _supervisor_deps():
     """The supervisor's view of this server. See agent/supervisor.py."""
     from agent import supervisor
 
     async def list_tasks(repo: str) -> list[dict]:
-        items = await recent_items(app.state.store, ("tasks", repo), 50)
+        # Only what the sweep acts on, from the whole namespace -- see _tasks_in.
+        items = await _tasks_in(repo, ("escalated", "awaiting_merge"))
         return [{**item.value, "task_id": item.value.get("task_id") or item.key} for item in items]
 
     async def read_state(task_id: str):
@@ -182,7 +199,8 @@ async def _auto_resume_orphaned_tasks(startup_delay: float = 5.0) -> None:
     graph = app.state.graph
     for repo in PROJECTS:
         try:
-            items = await recent_items(app.state.store, ("tasks", repo), 50)
+            # Every running/queued record, not the newest 50 -- see _tasks_in.
+            items = await _tasks_in(repo, ("running", "queued"))
         except Exception:  # noqa: BLE001 -- one repo's failure must not strand the others
             logger.exception("auto-resume: task scan failed for %s", repo)
             continue
@@ -871,9 +889,8 @@ def _audit_store():
 async def _github_open_auto_count(repo: str) -> int:
     """Auto-created tasks that are still running or parked on a human."""
     n = 0
-    for it in await recent_items(app.state.store, ("tasks", repo), 100):
-        v = it.value
-        if v.get("origin") == "github" and v.get("status") in ("running", "escalated", "awaiting_approval", "awaiting_merge"):
+    for it in await _tasks_in(repo, ("running", "escalated", "awaiting_approval", "awaiting_merge")):
+        if it.value.get("origin") == "github":
             n += 1
     return n
 
@@ -910,10 +927,10 @@ async def _github_live_tasks(repo: str) -> set[str]:
     None, which is why a failure here re-raises rather than pretending.
     """
     live = set()
-    for it in await recent_items(app.state.store, ("tasks", repo), 100):
-        v = it.value
-        if v.get("status") in _TASK_HANDLED_STATUSES:
-            live.add(v.get("task_id") or it.key)
+    # The whole namespace (see _tasks_in): a task outside a newest-N window is
+    # still handling its item, and reading it as finished re-proposes the work.
+    for it in await _tasks_in(repo, _TASK_HANDLED_STATUSES):
+        live.add(it.value.get("task_id") or it.key)
     return live
 
 

@@ -5,6 +5,7 @@ to 2026-09-23 (shas normalised): sixteen plumbing, three the task's own.
 """
 import asyncio
 import subprocess
+from types import SimpleNamespace
 
 import pytest
 
@@ -304,3 +305,44 @@ def test_old_work_already_on_main_is_still_concluded():
     """Closing is safe at any age; only reviving is limited."""
     w = World(landed=True)
     assert _sweep(w, now=sv.MAX_AGE_S * 30)[0]["action"] == "concluded"
+
+
+# ── the whole project, not the newest 50 (2026-09-23 follow-up, F5) ─────────
+
+class _PagedStore:
+    """A store that pages like Postgres: offset honoured, newest first."""
+
+    def __init__(self, metas):
+        self.rows = [SimpleNamespace(namespace=("tasks", "proj"), key=m["task_id"], value=m,
+                                     updated_at=None) for m in metas]
+
+    async def asearch(self, ns, limit=10, offset=0, **kw):
+        return self.rows[offset:offset + limit]
+
+
+def _metas(n_live, parked_status="escalated"):
+    """n_live running tasks, newest first, and ONE parked task older than all of them."""
+    live = [{"task_id": f"live-{i:03d}", "status": "done"} for i in range(n_live)]
+    return live + [{"task_id": "parked-old", "status": parked_status}]
+
+
+def test_the_sweep_sees_a_parked_task_older_than_the_newest_fifty(monkeypatch):
+    import agent.server as server
+    monkeypatch.setattr(server.app.state, "store", _PagedStore(_metas(60)), raising=False)
+
+    async def go():
+        deps = await server._supervisor_deps()
+        return await deps.list_tasks("proj")
+
+    listed = asyncio.run(go())
+    assert [m["task_id"] for m in listed] == ["parked-old"]   # and only what the sweep acts on
+
+
+def test_startup_resume_and_the_inbox_see_the_whole_project_too(monkeypatch):
+    import agent.server as server
+    monkeypatch.setattr(server.app.state, "store", _PagedStore(_metas(150, "running")), raising=False)
+    running = asyncio.run(server._tasks_in("proj", ("running", "queued")))
+    assert [it.key for it in running] == ["parked-old"]
+    # The inbox's "still being handled" set: a task outside any newest-N
+    # window that is still running must not read as finished.
+    assert "parked-old" in asyncio.run(server._github_live_tasks("proj"))
