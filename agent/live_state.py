@@ -45,6 +45,11 @@ running_planning_turns: dict[str, asyncio.Task] = {}
 # will write.
 task_recorders: dict[str, planning_log.Recorder] = {}
 
+# session_id -> the same, for a planning session being streamed. Here rather
+# than in server.py for the same reason as the rest: the planning routes that
+# pop it on delete live in agent/routers/planning.py.
+planning_recorders: dict[str, planning_log.Recorder] = {}
+
 # Fire-and-forget work that must not be garbage collected mid-run. asyncio
 # keeps only a WEAK reference to a bare create_task, so a background refresh
 # could vanish halfway and silently never happen.

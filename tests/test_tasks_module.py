@@ -19,7 +19,8 @@ from agent.classify import TaskClassification
 import pytest
 
 
-@pytest.mark.parametrize("module", ["agent.tasks", "agent.task_runtime"])
+@pytest.mark.parametrize("module", ["agent.tasks", "agent.task_runtime",
+                                    "agent.routers.tasks", "agent.routers.planning"])
 def test_the_seam_modules_do_not_import_the_server(module):
     """If one did, a router importing it would be the import cycle the seams
     exist to avoid."""
