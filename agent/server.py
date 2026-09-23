@@ -3116,6 +3116,12 @@ _REVIEW_SERVICE_BASE_URL = "http://127.0.0.1:4100"
 
 @app.get("/api/router-balance")
 async def get_router_balance(user: User = Depends(require_full_auth)):
+    # Admin-only, as /api/stats and /api/consolidation/status are: it is the
+    # operator's spend and remaining credit. It required only a session until
+    # 2026-09-23, so a restricted account could read both -- while BalanceStrip
+    # already rendered nothing for non-admins, "because the endpoint is
+    # admin-only". Now it is.
+    auth.require_admin(user)
     async with httpx.AsyncClient(timeout=10.0) as client:
         resp = await client.get(f"{_REVIEW_SERVICE_BASE_URL}/api/router/balance")
         resp.raise_for_status()
