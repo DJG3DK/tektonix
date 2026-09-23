@@ -24,6 +24,24 @@ from agent import paths
 SECRET = "test-control-secret-0123456789abcdef"
 
 
+def _agent_review_deps_installed() -> bool:
+    out = subprocess.run(["node", "-e", "require.resolve('express')"],
+                         cwd=str(paths.REPO_ROOT / "services" / "agent-review"), capture_output=True)
+    return out.returncode == 0
+
+
+# A fresh clone without the dashboard's npm dependencies skips, with the
+# command that fixes it; CI installs them and sets REQUIRE_SERVICE_TESTS, so
+# there a skip is a failure -- the same rule as REQUIRE_MOUNT_TESTS, because a
+# gate that silently skips its only proof proves nothing.
+if not _agent_review_deps_installed():
+    if os.environ.get("REQUIRE_SERVICE_TESTS") == "1":
+        raise RuntimeError("services/agent-review has no node_modules; "
+                           "run: npm ci --prefix services/agent-review --omit=dev")
+    pytest.skip("services/agent-review dependencies not installed "
+                "(npm ci --prefix services/agent-review --omit=dev)", allow_module_level=True)
+
+
 def _free_port() -> int:
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))

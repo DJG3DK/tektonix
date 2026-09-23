@@ -57,6 +57,7 @@ The exact five jobs CI runs, in order, from a clean clone:
 #    The planner's repo search shells out to ripgrep, so its tests need `rg`.
 #    The model router is its own service; its tests and lint run here too.
 python3 -m venv .venv && .venv/bin/pip install -q -r requirements.txt
+npm ci --prefix services/agent-review --omit=dev --no-audit --no-fund
 .venv/bin/python -m pytest -q
 .venv/bin/ruff check .
 .venv/bin/python -m pytest -q services/model-router/tests

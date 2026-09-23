@@ -70,6 +70,10 @@ jobs:
           # The planner's repo search (agent/tools/planning_tools.py) shells
           # out to ripgrep; its tests run the real binary.
           sudo apt-get update -qq && sudo apt-get install -y -qq ripgrep
+          # tests/test_review_services_gated.py starts the review dashboard
+          # for real, and it needs express. Without this it would skip -- see
+          # REQUIRE_SERVICE_TESTS on the pytest step, which makes that a failure.
+          npm ci --prefix services/agent-review --omit=dev --no-audit --no-fund
 
       - name: Lint (ruff)
         # ruff config landed with the source's ~65 existing noqa codes, which
@@ -89,6 +93,9 @@ jobs:
           # it isolates itself in a per-run scratch schema -- see the file's
           # docstring. Every other test stays offline.
           AGENT_TEST_PG_DSN: postgresql://postgres:parity@localhost:5432/parity
+          # The review-service gate test starts real services; on a laptop
+          # without their npm dependencies it skips, here it must run.
+          REQUIRE_SERVICE_TESTS: "1"
 
       # The model router is its own service with its own venv in production,
       # but its tests import only fastapi/httpx/pyyaml, which this environment
