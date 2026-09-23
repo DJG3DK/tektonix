@@ -1,0 +1,28 @@
+id: node-csv-quoted
+fixture: nodeapp
+category: bug-fix
+budget_usd: 2.5
+goal: |
+  The CSV importer breaks on real exports. `parseCSV()` in src/csv.js splits
+  on every comma and newline, so a quoted field like `"Smith, J"` becomes two
+  columns, a note with a line break in it becomes two rows, and files from
+  Windows keep a stray `\r` on the last column.
+
+  Make it handle quoting the standard way: a field wrapped in double quotes
+  may contain commas and newlines, and `""` inside it is a literal `"`. Lines
+  may end in `\n` or `\r\n`. Empty fields are kept as empty strings, and a
+  trailing newline at the end of the file does not make an extra row. Add
+  tests.
+assert:
+  - checks_pass: true
+  - command:
+      - node
+      - -e
+      - |
+        const { parseCSV } = require('./src/csv');
+        const assert = require('assert');
+        assert.deepStrictEqual(parseCSV('name,note\r\n"Smith, J","said ""hi""\nthen left"\r\nx,\r\n'),
+          [['name', 'note'], ['Smith, J', 'said "hi"\nthen left'], ['x', '']]);
+        assert.deepStrictEqual(parseCSV('a,b\n1,2\n'), [['a', 'b'], ['1', '2']]);
+        assert.deepStrictEqual(parseCSV('"",x\n'), [['', 'x']]);
+  - diff_touches: ["src/csv.js", "test/**"]

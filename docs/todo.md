@@ -399,6 +399,18 @@ while meaning "do not weaken the tests"; the agent had added eight edge-case
 tests and touched no existing line. The guard is now `file_matches` on the
 functions that must survive, and the honest score for that run is 12/12.
 
+**Second run, 2026-09-23:** 12/12, $0.24, 24 minutes, 100% first-pass, 0
+escalations: a regression check after that day's lifecycle, supervisor,
+workspace and router-split changes.
+
+**30 tasks, and on the dashboard, 2026-09-23.** Two back-end fixtures
+(`pyservice`, `nodeapp`) add 18 tasks: security, concurrency, time zones,
+money, performance, refactors, and two test-writing tasks scored by mutation.
+Each was checked both ways: it fails on the pristine fixture (`--verify`), and
+a hand-written correct fix passes it (that check caught one assertion no
+correct answer could pass). Analytics → Golden suite runs it detached, with
+progress, Stop, history, per-task diffs and a copyable scorecard.
+
 Worth keeping because it is the failure mode a benchmark is most prone to: a
 spec that is stricter than its own intent marks good work as a regression,
 and the number looks like a result. It only surfaced because the failing task

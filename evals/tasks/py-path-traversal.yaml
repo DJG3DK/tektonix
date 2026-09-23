@@ -1,0 +1,41 @@
+id: py-path-traversal
+fixture: pyservice
+category: security
+budget_usd: 2.0
+goal: |
+  `read_asset()` in src/assets.py will serve any file on the machine:
+  `read_asset("../config/secret.txt")` returns the database password, and an
+  absolute path works too.
+
+  Make it refuse -- raise ValueError -- for any name that resolves outside the
+  assets/ folder, whether by `..`, by an absolute path, or through a symlink
+  that points out of it. Names in sub-folders, like "icons/star.txt", keep
+  working. Add tests for it.
+assert:
+  - checks_pass: true
+  - command:
+      - python3
+      - -c
+      - |
+        import os, sys; sys.path.insert(0, '.')
+        from src import assets
+        for bad in ('../config/secret.txt', '/etc/passwd', 'icons/../../config/secret.txt'):
+            try:
+                assets.read_asset(bad)
+            except ValueError:
+                continue
+            raise SystemExit(f'served {bad!r}')
+        link = os.path.join('assets', 'escape.txt')
+        os.symlink(os.path.abspath('config/secret.txt'), link)
+        try:
+            try:
+                assets.read_asset('escape.txt')
+            except ValueError:
+                pass
+            else:
+                raise SystemExit('followed a symlink out of assets/')
+        finally:
+            os.unlink(link)
+        assert assets.read_asset('icons/star.txt') == b'star\n'
+        assert assets.read_asset('logo.txt') == b'logo\n'
+  - diff_touches: ["src/assets.py", "tests/**"]

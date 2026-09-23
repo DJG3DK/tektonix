@@ -1,0 +1,39 @@
+id: py-dedupe-perf
+fixture: pyservice
+category: performance
+budget_usd: 2.0
+goal: |
+  `dedupe()` in src/customers.py is quadratic -- it compares every customer
+  with every one kept so far -- and the nightly import of 50,000 customers now
+  takes minutes.
+
+  Make it linear. Its behaviour must not change at all: emails match
+  case-insensitively, the FIRST record for each address is kept, and the
+  survivors stay in input order.
+assert:
+  - checks_pass: true
+  - command:
+      - python3
+      - -c
+      - |
+        import sys, time; sys.path.insert(0, '.')
+        from src.customers import dedupe
+        rows = [{'email': f'user{i}@shop.test', 'n': i} for i in range(10000)]
+        rows += [{'email': f'USER{i}@Shop.Test', 'n': -i} for i in range(10000)]
+        start = time.perf_counter()
+        out = dedupe(rows)
+        took = time.perf_counter() - start
+        assert [r['n'] for r in out] == list(range(10000)), 'the result changed'
+        assert took < 1.0, f'took {took:.2f}s for 20,000 rows'
+  - command:
+      - python3
+      - -c
+      - |
+        import sys; sys.path.insert(0, '.')
+        from src.customers import dedupe
+        rows = [{'email': 'a@x.com', 'n': 1}, {'email': 'B@x.com', 'n': 2}, {'email': 'A@X.com', 'n': 3}]
+        assert [r['n'] for r in dedupe(rows)] == [1, 2]
+        assert dedupe([]) == []
+    guard: true
+    why: a faster dedupe that keeps the wrong record is not a fix
+  - diff_touches: ["src/customers.py"]

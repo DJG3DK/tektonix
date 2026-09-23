@@ -1,0 +1,45 @@
+id: node-rate-limiter
+fixture: nodeapp
+category: feature
+budget_usd: 2.5
+goal: |
+  Add a rate limiter for the login endpoint, as a new module src/ratelimit.js
+  exporting `createRateLimiter({ limit, windowMs, now })`.
+
+  `limiter.hit(key)` records one request from `key` and returns
+  `{ allowed, remaining, retryAfterMs }`: a key may make at most `limit`
+  requests in any sliding window of `windowMs` milliseconds; a request stops
+  counting exactly `windowMs` after it was made (one at t=0 with a 1000ms
+  window no longer counts at t=1000). A request over
+  the limit is refused (and not counted); `retryAfterMs` is how long until the
+  oldest counted request leaves the window, and 0 when allowed. `remaining` is
+  how many more requests the key may make right now. Keys are independent.
+  `now` is an optional clock function (defaulting to Date.now) so tests can
+  control time. Add tests.
+assert:
+  - checks_pass: true
+  - command:
+      - node
+      - -e
+      - |
+        const assert = require('assert');
+        const { createRateLimiter } = require('./src/ratelimit');
+        let t = 1000;
+        const rl = createRateLimiter({ limit: 3, windowMs: 1000, now: () => t });
+        assert.deepStrictEqual(rl.hit('a'), { allowed: true, remaining: 2, retryAfterMs: 0 });
+        t = 1100; assert.strictEqual(rl.hit('a').remaining, 1);
+        t = 1200; assert.deepStrictEqual(rl.hit('a'), { allowed: true, remaining: 0, retryAfterMs: 0 });
+        t = 1500; const refused = rl.hit('a');
+        assert.strictEqual(refused.allowed, false);
+        assert.strictEqual(refused.remaining, 0);
+        assert.strictEqual(refused.retryAfterMs, 500);
+        assert.strictEqual(rl.hit('b').allowed, true);           // keys are independent
+        t = 2000; assert.strictEqual(rl.hit('a').allowed, true);  // the 1000ms hit has left
+        t = 2050; assert.strictEqual(rl.hit('a').allowed, false); // 1100, 1200, 2000 still in
+        t = 2100; assert.strictEqual(rl.hit('a').allowed, true);
+        const real = createRateLimiter({ limit: 1, windowMs: 60000 });
+        assert.strictEqual(real.hit('x').allowed, true);
+        assert.strictEqual(real.hit('x').allowed, false);
+  - file_matches:
+      path: test/ratelimit.test.js
+      pattern: "ratelimit"

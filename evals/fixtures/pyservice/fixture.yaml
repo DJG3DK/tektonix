@@ -1,0 +1,22 @@
+name: pyservice
+description: >
+  A small shop back-end in pure Python: a sqlite product catalog, static asset
+  serving, money arithmetic, an in-process cache, customer data, order dates
+  and request validation. Stands in for the part of a real service where the
+  security bugs, the rounding bugs and the timezone bugs live.
+stack: python
+
+# Dependency-free, like every fixture: sqlite3, decimal, datetime and unittest
+# all ship with Python, so a run needs no package index and no network.
+review:
+  checks:
+    - name: test
+      dir: "."
+      cmd: python3
+      args: ["-m", "unittest", "discover", "-s", "tests", "-q"]
+      timeoutMs: 120000
+    - name: compile
+      dir: "."
+      cmd: python3
+      args: ["-m", "compileall", "-q", "src", "tests"]
+      timeoutMs: 60000

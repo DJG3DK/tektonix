@@ -1,0 +1,37 @@
+id: py-money-rounding
+fixture: pyservice
+category: bug-fix
+budget_usd: 2.0
+goal: |
+  Order totals are sometimes a cent off. `order_total()` in src/pricing.py does
+  its arithmetic in binary floats and rounds with `round()`, which rounds half
+  to even -- so a $1.005 line comes out as $1.00, and $2.675 as $2.67.
+  Customers are charged half-up, to the cent.
+
+  Make `order_total()` return a `decimal.Decimal`: exact arithmetic, rounded
+  half-up to two places. Prices, quantities and the tax rate may arrive as
+  str, int, float or Decimal; treat a float as the decimal it prints as (1.005
+  means 1.005). Callers compare the result with plain numbers, so that must
+  keep working. Add tests.
+assert:
+  - checks_pass: true
+  - command:
+      - python3
+      - -c
+      - |
+        import sys; sys.path.insert(0, '.')
+        from decimal import Decimal
+        from src.pricing import order_total as t
+        assert t([{'price': '1.005', 'qty': 1}], 0) == Decimal('1.01')
+        assert t([{'price': 2.675, 'qty': 1}], 0) == Decimal('2.68')
+        assert t([{'price': '19.99', 'qty': 3}], '0.0825') == Decimal('64.92')
+        r = t([{'price': 0.1, 'qty': 3}], 0)
+        assert isinstance(r, Decimal) and r == Decimal('0.30'), r
+        assert str(t([{'price': 10, 'qty': 2}], '0.1')) == '22.00'
+        assert t([{'price': 10, 'qty': 2}], 0.1) == 22.0
+  - diff_touches: ["src/pricing.py", "tests/**"]
+  - file_matches:
+      path: tests/test_pricing.py
+      pattern: "def test_simple_order"
+    guard: true
+    why: the existing callers' expectation is kept, not rewritten

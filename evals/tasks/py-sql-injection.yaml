@@ -1,0 +1,35 @@
+id: py-sql-injection
+fixture: pyservice
+category: security
+budget_usd: 2.0
+goal: |
+  Product search is open to SQL injection. `search()` in src/catalog.py builds
+  its query by pasting the search term into the SQL, so a search for
+  `' OR '1'='1` returns the whole catalog -- and a product with an apostrophe
+  in its name (O'Brien's Lamp) cannot be searched for at all; it raises.
+
+  Fix `search()` so no search term can change the query. Everything else about
+  it stays: a substring match on the name, cheapest first, (name, price_cents)
+  rows. Add a test that would have caught this.
+assert:
+  - checks_pass: true
+  - command:
+      - python3
+      - -c
+      - |
+        import sys; sys.path.insert(0, '.')
+        from src import catalog
+        c = catalog.connect()
+        catalog.add_product(c, 'Desk Lamp', 'lighting', 3500)
+        catalog.add_product(c, "O'Brien's Lamp", 'lighting', 1200)
+        catalog.add_product(c, 'Oak Desk', 'furniture', 42000)
+        assert catalog.search(c, "' OR '1'='1") == [], 'the injection returned rows'
+        assert catalog.search(c, "Lamp' UNION SELECT name, 0 FROM products --") == []
+        assert catalog.search(c, "O'Brien") == [("O'Brien's Lamp", 1200)]
+        assert catalog.search(c, 'Lamp') == [("O'Brien's Lamp", 1200), ('Desk Lamp', 3500)]
+  - diff_touches: ["src/catalog.py", "tests/**"]
+  - file_matches:
+      path: tests/test_catalog.py
+      pattern: "def test_search_finds_by_name_cheapest_first"
+    guard: true
+    why: the existing search test survives the fix

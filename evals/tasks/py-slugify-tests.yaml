@@ -1,0 +1,50 @@
+id: py-slugify-tests
+fixture: pyservice
+category: tests
+budget_usd: 2.0
+goal: |
+  `slugify()` in src/text.py has no tests at all. Write a thorough unittest
+  suite for it in tests/test_text.py that pins every rule its docstring
+  states -- accent folding, lower-casing, collapsing any run of other
+  characters to a single hyphen, no leading or trailing hyphen, and the empty
+  result -- so that breaking any one of those rules fails a test.
+
+  Do not change src/text.py: the function is right, it is just unguarded.
+assert:
+  - checks_pass: true
+  - file_matches:
+      path: tests/test_text.py
+      pattern: "def test_"
+  # The real test of a test suite: break the code on purpose, one rule at a
+  # time, and require the suite to notice every time. A suite of assertions
+  # that assert nothing passes the checks above and fails this.
+  - command:
+      - python3
+      - -c
+      - |
+        import os, pathlib, shutil, subprocess, sys
+        src = pathlib.Path('src/text.py')
+        original = src.read_text()
+        mutants = {
+            'accent folding': ('unicodedata.normalize("NFKD", title).encode("ascii", "ignore").decode("ascii")', 'title'),
+            'lower-casing': ('lowered = folded.lower()', 'lowered = folded'),
+            'collapsing runs': ('r"[^a-z0-9]+"', 'r"[^a-z0-9]"'),
+            'trimming hyphens': ('return hyphenated.strip("-")', 'return hyphenated'),
+        }
+        env = {**os.environ, 'PYTHONDONTWRITEBYTECODE': '1'}
+        survivors = []
+        try:
+            for rule, (old, new) in mutants.items():
+                assert old in original, f'fixture drifted: {rule}'
+                src.write_text(original.replace(old, new))
+                shutil.rmtree('src/__pycache__', ignore_errors=True)
+                r = subprocess.run([sys.executable, '-B', '-m', 'unittest', 'discover', '-s', 'tests', '-q'],
+                                   capture_output=True, env=env)
+                if r.returncode == 0:
+                    survivors.append(rule)
+        finally:
+            src.write_text(original)
+        assert not survivors, 'the tests did not notice breaking: ' + ', '.join(survivors)
+  - diff_excludes: ["src/text.py"]
+    guard: true
+    why: the goal ruled it out; changing the code to fit the tests is the opposite task

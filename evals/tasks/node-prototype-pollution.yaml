@@ -1,0 +1,29 @@
+id: node-prototype-pollution
+fixture: nodeapp
+category: security
+budget_usd: 2.0
+goal: |
+  `deepMerge()` in src/merge.js is open to prototype pollution. It is used to
+  merge user-submitted JSON settings into defaults, and a body like
+  `{"__proto__": {"isAdmin": true}}` sets `isAdmin` on EVERY object in the
+  process.
+
+  Make it skip `__proto__`, `constructor` and `prototype` keys at every
+  level, so no input can reach Object.prototype -- through `__proto__` or
+  through `constructor.prototype`. Ordinary merging (nested objects merge,
+  arrays and other values replace) must not change. Add tests.
+assert:
+  - checks_pass: true
+  - command:
+      - node
+      - -e
+      - |
+        const { deepMerge } = require('./src/merge');
+        deepMerge({}, JSON.parse('{"__proto__": {"polluted": "yes"}}'));
+        deepMerge({}, JSON.parse('{"a": {"__proto__": {"polluted2": "yes"}}}'));
+        deepMerge({}, JSON.parse('{"constructor": {"prototype": {"polluted3": "yes"}}}'));
+        const probe = {};
+        if (probe.polluted || probe.polluted2 || probe.polluted3) { console.error('Object.prototype was polluted'); process.exit(1); }
+        const merged = deepMerge({ a: { x: 1 }, list: [1] }, { a: { y: 2 }, list: [2], n: 3 });
+        if (JSON.stringify(merged) !== JSON.stringify({ a: { x: 1, y: 2 }, list: [2], n: 3 })) process.exit(2);
+  - diff_touches: ["src/merge.js", "test/**"]

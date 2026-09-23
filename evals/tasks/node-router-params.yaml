@@ -1,0 +1,32 @@
+id: node-router-params
+fixture: nodeapp
+category: feature
+budget_usd: 2.5
+goal: |
+  The router in src/router.js only matches exact paths. Teach it path
+  parameters: a segment written `:name` in a route matches any one non-empty
+  path segment, and `match()` returns it URL-decoded in `params`.
+
+  A static route beats a parameter route for the same path, whichever was
+  added first (`/users/me` must win over `/users/:id`). A trailing slash on
+  the request path is ignored. A path that matches nothing still returns
+  null. Add tests.
+assert:
+  - checks_pass: true
+  - command:
+      - node
+      - -e
+      - |
+        const assert = require('assert');
+        const { createRouter } = require('./src/router');
+        const show = () => 'show', me = () => 'me', post = () => 'post', home = () => 'home';
+        const r = createRouter().add('GET', '/users/:id', show).add('GET', '/users/me', me)
+          .add('GET', '/posts/:post/comments/:n', post).add('GET', '/', home);
+        assert.deepStrictEqual(r.match('GET', '/users/42'), { handler: show, params: { id: '42' } });
+        assert.strictEqual(r.match('GET', '/users/me').handler, me);
+        assert.deepStrictEqual(r.match('GET', '/posts/hello%20world/comments/7/').params, { post: 'hello world', n: '7' });
+        assert.strictEqual(r.match('GET', '/users/'), null);
+        assert.strictEqual(r.match('GET', '/users/1/extra'), null);
+        assert.strictEqual(r.match('POST', '/users/42'), null);
+        assert.strictEqual(r.match('GET', '/').handler, home);
+  - diff_touches: ["src/router.js", "test/**"]

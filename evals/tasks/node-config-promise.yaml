@@ -1,0 +1,34 @@
+id: node-config-promise
+fixture: nodeapp
+category: refactor
+budget_usd: 2.0
+goal: |
+  `loadConfig()` in src/config.js only takes a callback, and every new caller
+  wants to `await` it. Make it return a Promise for the parsed config when it
+  is called without a callback -- rejecting when the file is missing or is not
+  valid JSON -- while calls that pass a callback keep working exactly as they
+  do now. Add tests for both styles.
+assert:
+  - checks_pass: true
+  - command:
+      - node
+      - -e
+      - |
+        const assert = require('assert');
+        const path = require('path');
+        const { loadConfig } = require('./src/config');
+        const good = path.join(process.cwd(), 'config', 'app.json');
+        (async () => {
+          const cfg = await loadConfig(good);
+          assert.strictEqual(cfg.port, 8080);
+          await assert.rejects(loadConfig(path.join(process.cwd(), 'config', 'missing.json')));
+          await assert.rejects(loadConfig(path.join(process.cwd(), 'package.json.nope')));
+          await new Promise((resolve, reject) => loadConfig(good, (err, c) => (err || c.port !== 8080 ? reject(err || new Error('bad')) : resolve())));
+          await new Promise((resolve) => loadConfig('/no/such/file.json', (err) => { assert.ok(err); resolve(); }));
+        })().catch((e) => { console.error(e); process.exit(1); });
+  - file_matches:
+      path: test/config.test.js
+      pattern: "loads a config with a callback"
+    guard: true
+    why: the callback style keeps its test; this is a refactor, not a replacement
+  - diff_touches: ["src/config.js", "test/**"]

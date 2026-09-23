@@ -1,0 +1,48 @@
+id: node-duration-tests
+fixture: nodeapp
+category: tests
+budget_usd: 2.0
+goal: |
+  `parseDuration()` in src/duration.js has no tests. Write a thorough
+  `node:test` suite for it in test/duration.test.js that pins every rule in
+  its doc comment -- each unit's size, whitespace between parts, parts adding
+  up, and each kind of input it must reject with a TypeError -- so that
+  breaking any one rule fails a test.
+
+  Do not change src/duration.js: it is right, it is just unguarded.
+assert:
+  - checks_pass: true
+  - file_matches:
+      path: test/duration.test.js
+      pattern: "parseDuration"
+  # Break the code one rule at a time; the suite has to notice every time.
+  - command:
+      - node
+      - -e
+      - |
+        const fs = require('fs');
+        const { spawnSync } = require('child_process');
+        const file = 'src/duration.js';
+        const original = fs.readFileSync(file, 'utf8');
+        const mutants = {
+          'minutes': ['m: 60_000', 'm: 6_000'],
+          'whitespace': [`text.replace(/\\s+/g, '')`, 'text'],
+          'parts add up': ['total += Number', 'total = Number'],
+          'rejects leftovers': ['if (consumed !== compact.length) throw', 'if (false) throw'],
+          'rejects empty': [`text.trim() === ''`, 'false'],
+        };
+        const survivors = [];
+        try {
+          for (const [rule, [from, to]] of Object.entries(mutants)) {
+            if (!original.includes(from)) { console.error('fixture drifted: ' + rule); process.exit(2); }
+            fs.writeFileSync(file, original.replace(from, to));
+            const r = spawnSync(process.execPath, ['--test'], { encoding: 'utf8' });
+            if (r.status === 0) survivors.push(rule);
+          }
+        } finally {
+          fs.writeFileSync(file, original);
+        }
+        if (survivors.length) { console.error('the tests did not notice breaking: ' + survivors.join(', ')); process.exit(1); }
+  - diff_excludes: ["src/duration.js"]
+    guard: true
+    why: the goal ruled it out; bending the code to the tests is the opposite task

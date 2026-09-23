@@ -1,0 +1,32 @@
+id: py-paginate
+fixture: pyservice
+category: feature
+budget_usd: 2.0
+goal: |
+  Add pagination for the product listing: a `paginate(items, page,
+  per_page=20)` function in a new module, src/paging.py.
+
+  It returns a dict with "items" (the slice for that page), "page",
+  "per_page", "total" (how many items there are altogether) and "pages" (how
+  many pages that makes -- 0 when there are no items). Pages count from 1. A
+  page past the end gives an empty "items" list, not an error. A `page` or
+  `per_page` below 1 raises ValueError. Test it.
+assert:
+  - checks_pass: true
+  - command:
+      - python3
+      - -c
+      - |
+        import sys; sys.path.insert(0, '.')
+        from src.paging import paginate as p
+        assert p(list(range(45)), 3, 20) == {'items': list(range(40, 45)), 'page': 3, 'per_page': 20, 'total': 45, 'pages': 3}
+        assert p(list(range(40)), 2, 20)['pages'] == 2
+        assert p([], 1) == {'items': [], 'page': 1, 'per_page': 20, 'total': 0, 'pages': 0}
+        assert p(list(range(5)), 9, 2)['items'] == []
+        for page, per in ((0, 20), (1, 0), (-1, 5)):
+            try:
+                p([1, 2], page, per)
+            except ValueError:
+                continue
+            raise SystemExit(f'accepted page={page} per_page={per}')
+  - diff_touches: ["src/paging.py", "tests/**"]

@@ -1,0 +1,34 @@
+id: node-queue-concurrency
+fixture: nodeapp
+category: bug-fix
+budget_usd: 2.5
+goal: |
+  The job queue runs more jobs at once than it is allowed to. A queue created
+  with `createQueue(2)` in src/queue.js has been seen running three
+  thumbnail jobs at a time, which is what is exhausting the image workers.
+
+  Find the bug and fix it, so a queue never runs more than its concurrency
+  at once -- while still running up to that many, and still running every
+  job and returning its result. Add a test that measures the peak.
+assert:
+  - checks_pass: true
+  - command:
+      - node
+      - -e
+      - |
+        const { createQueue } = require('./src/queue');
+        async function peak(limit, n) {
+          const q = createQueue(limit);
+          let running = 0, max = 0;
+          const job = (i) => async () => { running++; max = Math.max(max, running); await new Promise((r) => setTimeout(r, 15)); running--; return i; };
+          const out = await Promise.all(Array.from({ length: n }, (_, i) => q.push(job(i))));
+          return { max, out };
+        }
+        (async () => {
+          const two = await peak(2, 8);
+          if (two.max !== 2) { console.error('peak ' + two.max + ' with a limit of 2'); process.exit(1); }
+          if (two.out.join() !== '0,1,2,3,4,5,6,7') process.exit(2);
+          const one = await peak(1, 4);
+          if (one.max !== 1) { console.error('peak ' + one.max + ' with a limit of 1'); process.exit(3); }
+        })();
+  - diff_touches: ["src/queue.js", "test/**"]

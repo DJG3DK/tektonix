@@ -1,0 +1,31 @@
+id: py-lru-recency
+fixture: pyservice
+category: bug-fix
+budget_usd: 2.0
+goal: |
+  The product cache evicts the wrong entries. `LRUCache` in src/cache.py is
+  meant to be least-recently-USED, but reading an entry does not count as
+  using it, and putting a new value for a key that is already there does not
+  either -- so the busiest products are the first to be thrown out.
+
+  Fix both. Keep the capacity rule and the existing interface (`get` with a
+  default, `put`, `len`, `in`), and add tests.
+assert:
+  - checks_pass: true
+  - command:
+      - python3
+      - -c
+      - |
+        import sys; sys.path.insert(0, '.')
+        from src.cache import LRUCache
+        c = LRUCache(2)
+        c.put('a', 1); c.put('b', 2)
+        assert c.get('a') == 1
+        c.put('c', 3)
+        assert 'a' in c and 'b' not in c and 'c' in c, 'a read did not count as a use'
+        d = LRUCache(2)
+        d.put('a', 1); d.put('b', 2); d.put('a', 9); d.put('c', 3)
+        assert d.get('a') == 9 and 'b' not in d, 'a re-put did not count as a use'
+        e = LRUCache(1)
+        assert e.get('missing', 'dflt') == 'dflt' and 'missing' not in e and len(e) == 0
+  - diff_touches: ["src/cache.py", "tests/**"]

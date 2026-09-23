@@ -1,0 +1,8 @@
+{
+  "name": "pyservice",
+  "private": true,
+  "description": "Eval fixture (Python). The package.json only names the checks; there is nothing to install.",
+  "scripts": {
+    "test": "python3 -m unittest discover -s tests -q"
+  }
+}

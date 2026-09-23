@@ -1,0 +1,10 @@
+{
+  "name": "nodeapp",
+  "private": true,
+  "type": "commonjs",
+  "description": "Eval fixture. No dependencies on purpose: node --test ships with the runtime.",
+  "scripts": {
+    "test": "node --test",
+    "lint": "node scripts/check-syntax.js"
+  }
+}

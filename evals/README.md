@@ -17,6 +17,9 @@ scripts/run_evals.py               # the real thing, real money
 scripts/run_evals.py --only py-median --ceiling 5
 ```
 
+Or from the dashboard: **Analytics → Golden suite → Run suite** (admins
+only). See [Running it from the dashboard](#running-it-from-the-dashboard).
+
 ## What a run actually does
 
 It drives the **same compiled graph a production task runs** — the real work
@@ -72,11 +75,36 @@ no goal assertion at all is refused at load.
 passes: `verify_and_ship` only increments it in `_loop_back`, so `0` means it
 landed first time.
 
-## Fixtures
+## Fixtures and tasks
 
-Three, under `fixtures/`: `pylib` (Python), `nodelib` (Node), `webui` (a
-component and its stylesheet, so the ui-styling category — which lands on a
-different coder seat — is actually exercised).
+Five fixtures under `fixtures/`, thirty tasks under `tasks/`:
+
+| fixture | what it stands in for | tasks |
+| --- | --- | --- |
+| `pylib` | a small Python reporting library | 6 |
+| `nodelib` | a small Node utility library | 4 |
+| `webui` | a component and its stylesheet, so the ui-styling category — which lands on a different coder seat — is actually exercised | 2 |
+| `pyservice` | a Python shop back-end: sqlite catalog, static assets, money, a cache, order dates, request validation | 9 |
+| `nodeapp` | a Node web back-end: HTML rendering, object merging, CSV import, a job queue, a router, config loading | 9 |
+
+The tasks span nine categories: bug-fix, feature, ui-styling, performance,
+investigation, security, refactor, tests and other. The two back-end fixtures
+are where the harder ones live: SQL injection, path traversal (including
+through a symlink), XSS, prototype pollution, a concurrency off-by-one, a
+time-zone bug reported only by its symptom, half-up money rounding, and two
+"write the tests" tasks scored by **mutation**: the assertion breaks the code
+one documented rule at a time, and the agent's new suite has to fail every
+time. A test suite that passes against broken code does not count.
+
+Every one of the eighteen back-end tasks was also checked the other way
+round before it went in: a hand-written correct fix, scored with the task's
+own assertions, passes. `--verify` proves a task is not green before the agent
+starts; that proves it can be green at all. It caught one assertion that
+expected the wrong order and would have failed every correct answer.
+
+Performance tasks time a workload the original code needs seconds for and a
+linear version finishes in milliseconds — a margin of 100× or more, so the
+result does not depend on how busy the box is.
 
 They carry **no dependencies**. Checks are `python3 -m unittest` and
 `node --test`, both already in the sandbox image, so a run needs no npm
@@ -119,6 +147,10 @@ First full run, 2026-09-22: **11/12 passed, $0.28, 67 minutes** — and the one
 failure turned out to be this suite's fault, not the agent's (see below), so
 the honest score is 12/12.
 
+Second run, 2026-09-23, as a regression check after a day of lifecycle,
+supervisor, workspace and router changes: **12/12, $0.24, 24 minutes**, every
+review READY first time, no escalations.
+
 | | measured |
 | --- | --- |
 | cost per task | $0.01 – $0.05 (median ~$0.02) |
@@ -131,12 +163,41 @@ run costs pennies — but it takes over an hour, and one task (`node-chunk-zero`
 took 25 minutes on its own. That makes this an overnight or CI tool rather
 than something to run between two edits. Use `--only` while iterating.
 
+The ceiling is $25 and the thirty tasks' caps add up to $64.50, so
+`--dry-run` marks the later ones `room?`. That is the worst case, every task
+spending its whole cap. A real run checks the actual spend so far plus the
+next task's cap, and at a few cents a task it never gets near $25.
+
 The ceiling still exists and still matters: it bounds a suite that grows, or a
 task that loops. The suite tracks cumulative spend and **stops before**
 starting a task that could cross it, reporting what it has rather than
 continuing quietly. The bound is actual spend so far plus the next task's cap
 — a true hard bound, and one that uses the budget rather than reserving caps
 tasks never reach.
+
+## Running it from the dashboard
+
+Analytics → **Golden suite**, visible to admins. It shows the latest full
+run as a scorecard (pass rate, first-pass rate, cost and time per task, by
+category), what regressed or got fixed since the run before, every run's
+history, and each task with its failing assertions and diff. **Copy
+scorecard** puts a one-line summary on the clipboard.
+
+**Run suite** asks for a note (what changed, so the history says why a
+number moved) and shows what the last run cost and took, scaled to the
+current suite. The run is `scripts/run_evals.py --status-file`, started
+**detached** (`setsid --fork`). A full run takes about an hour, and a deploy restarts
+the server: pm2 kills a restarting process's whole tree, so a run started as
+a child of the server would die with every deploy. The runner writes its
+progress to `logs/evals/status.json` and the panel reads that, so progress
+survives a restart and is correct whoever started the run, from the dashboard
+or from a shell with `--status-file`.
+
+Only one run at a time. A click is claimed in the status file **before** the
+child exists, so a double click in the second it takes to start cannot start
+two. **Stop** sends SIGINT to the run's session, which the runner turns into
+an orderly stop: its reviewer pair shut down, its working tree removed, the
+report written with what it has.
 
 ## Reports
 
@@ -185,7 +246,10 @@ failing task was investigated rather than believed.
    break.
 3. `scripts/run_evals.py --verify` — it must report the goal assertions
    correctly failing and the guards holding.
-4. `scripts/run_evals.py --only <id>` to run just that one.
+4. Check it is passable: apply a correct fix by hand to a copy of the fixture
+   and run the task's `command` assertions against it. An assertion no
+   correct answer satisfies fails the agent for the suite's mistake.
+5. `scripts/run_evals.py --only <id>` to run just that one.
 
 Prefer goals with one right answer. A golden task is compared across months;
 one whose correct output is a matter of taste produces a number that moves for

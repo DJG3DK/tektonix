@@ -1,0 +1,30 @@
+id: py-validation-all-errors
+fixture: pyservice
+category: refactor
+budget_usd: 2.5
+goal: |
+  `validate_order()` in src/validation.py stops at the first problem, so a
+  client that sends an order with three mistakes has to discover them one
+  round trip at a time.
+
+  Change it to return a list of every problem, in field order (sku, then qty,
+  then coupon), with the exact messages it uses today -- and `[]` for a valid
+  order. Update `create_order()` in src/api.py to answer
+  `{"ok": False, "errors": [...]}` for an invalid order (a list, under
+  "errors"); its success response does not change. Update the tests to match.
+assert:
+  - checks_pass: true
+  - command:
+      - python3
+      - -c
+      - |
+        import sys; sys.path.insert(0, '.')
+        from src.validation import validate_order as v
+        from src.api import create_order as c
+        assert v({}) == ['sku is required', 'qty must be a positive integer'], v({})
+        assert v({'sku': 'A', 'qty': 1}) == []
+        assert v({'sku': ' ', 'qty': True, 'coupon': 5}) == [
+            'sku is required', 'qty must be a positive integer', 'coupon must be a string']
+        assert c({'sku': 'A', 'qty': 0}) == {'ok': False, 'errors': ['qty must be a positive integer']}
+        assert c({'sku': 'A', 'qty': 2}) == {'ok': True, 'sku': 'A', 'qty': 2}
+  - diff_touches: ["src/validation.py", "src/api.py"]

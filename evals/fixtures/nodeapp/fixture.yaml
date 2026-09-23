@@ -1,0 +1,22 @@
+name: nodeapp
+description: >
+  A small dependency-free Node web back-end: HTML rendering, object merging,
+  CSV import, a job queue, a router, config loading, durations and tag stats.
+  Stands in for the service half of a real project -- including the places
+  where XSS, prototype pollution and concurrency bugs live.
+stack: node
+
+# Dependency-free: `node --test` discovers test/*.test.js with nothing
+# installed, so a run needs no registry.
+review:
+  checks:
+    - name: test
+      dir: "."
+      cmd: node
+      args: ["--test"]
+      timeoutMs: 120000
+    - name: syntax
+      dir: "."
+      cmd: node
+      args: ["scripts/check-syntax.js"]
+      timeoutMs: 60000

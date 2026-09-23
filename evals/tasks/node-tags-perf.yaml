@@ -1,0 +1,36 @@
+id: node-tags-perf
+fixture: nodeapp
+category: performance
+budget_usd: 2.0
+goal: |
+  `uniqueTags()` in src/tags.js checks each tag against the whole list found
+  so far, so it is quadratic, and building the tag cloud for the full archive
+  now takes several seconds per request.
+
+  Make it linear. Its output must not change: every distinct tag, in the
+  order it is first seen.
+assert:
+  - checks_pass: true
+  - command:
+      - node
+      - -e
+      - |
+        const { uniqueTags } = require('./src/tags');
+        const posts = [];
+        for (let i = 0; i < 50000; i++) posts.push({ tags: ['t' + i, 't' + (i % 97), 't' + ((i * 7) % 50000)] });
+        const t0 = process.hrtime.bigint();
+        const out = uniqueTags(posts);
+        const ms = Number(process.hrtime.bigint() - t0) / 1e6;
+        if (out.length !== 50000 || out[0] !== 't0' || out[1] !== 't1' || out[2] !== 't7') { console.error('result changed'); process.exit(2); }
+        if (ms > 300) { console.error(`took ${ms.toFixed(0)}ms`); process.exit(1); }
+  - command:
+      - node
+      - -e
+      - |
+        const assert = require('assert');
+        const { uniqueTags } = require('./src/tags');
+        assert.deepStrictEqual(uniqueTags([{ tags: ['b', 'a'] }, { tags: ['a', 'c', 'b'] }, { tags: [] }]), ['b', 'a', 'c']);
+        assert.deepStrictEqual(uniqueTags([]), []);
+    guard: true
+    why: a faster version in a different order is a different function
+  - diff_touches: ["src/tags.js"]

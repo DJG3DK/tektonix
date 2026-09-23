@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+### The golden suite on the dashboard, and 30 tasks instead of 12
+
+Analytics has a **Golden suite** panel for admins: the latest full run as a
+scorecard (pass rate, first-pass rate, cost and time per task, by category),
+what regressed or got fixed since the run before, the run history, and each
+task's failing assertions and diff. **Run suite** starts a run from the
+browser, detached so a deploy does not kill it, with live progress and a
+Stop button; **Copy scorecard** gives a one-line summary to paste.
+
+The suite grew from 12 tasks on 3 fixtures to 30 on 5. The two new back-end
+fixtures bring security (SQL injection, path traversal, XSS, prototype
+pollution), concurrency, time zones, money rounding, performance and refactor
+tasks, plus two test-writing tasks scored by mutation. Each new task was
+checked both ways: it fails on the untouched code, and a hand-written correct
+fix passes it.
+
 ### The review's follow-up, worked through
 
 `docs/review-2026-09-23-followup.md` has a resolution table. The ones that

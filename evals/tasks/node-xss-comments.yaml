@@ -1,0 +1,27 @@
+id: node-xss-comments
+fixture: nodeapp
+category: security
+budget_usd: 2.0
+goal: |
+  Comments are an XSS hole. `renderComment()` in src/comments.js pastes the
+  author and the body straight into HTML, so a comment whose body is
+  `<script>...</script>` runs in every reader's browser.
+
+  Escape both the author and the body -- `&`, `<`, `>`, `"` and `'` -- so any
+  text renders as text. The markup around them does not change, and a plain
+  comment renders exactly as it does today. Add tests.
+assert:
+  - checks_pass: true
+  - command:
+      - node
+      - -e
+      - |
+        const { renderComment, renderThread } = require('./src/comments');
+        const evil = renderComment({ author: '<img src=x onerror=alert(1)>', body: `<script>alert("x")</script> & 'q'` });
+        if (evil.includes('<script>') || evil.includes('<img')) { console.error(evil); process.exit(1); }
+        for (const s of ['&lt;script&gt;', '&lt;img', '&amp;', '&quot;x&quot;']) if (!evil.includes(s)) { console.error('missing ' + s + ' in ' + evil); process.exit(2); }
+        if (!/&#39;q&#39;|&#x27;q&#x27;|&apos;q&apos;/.test(evil)) { console.error('quote not escaped: ' + evil); process.exit(3); }
+        if (renderComment({ author: 'ann', body: 'hello' }) !== '<li class="comment"><b>ann</b>: hello</li>') process.exit(4);
+        if (renderThread([{ author: 'a', body: '<b>' }]).includes('<b>:')) process.exit(5);
+        if (!renderThread([{ author: 'a', body: '<b>' }]).includes('&lt;b&gt;')) process.exit(6);
+  - diff_touches: ["src/comments.js", "test/**"]
