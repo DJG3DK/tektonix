@@ -3304,6 +3304,10 @@ async def resume_task(task_id: str, req: ResumeTaskRequest, user: User = Depends
             )
             if req.message:
                 resume_note += f"\n\nOperator note: {req.message}"
+            # The work this sends it to will be a new commit; an approval of
+            # the old one must not survive to ship it (verify_and_ship's fast
+            # path keys on merge_approved_sha == committed_sha).
+            patch["merge_approved_sha"] = None
             patch["escalated"] = False
             patch["escalation_reason"] = None
             patch["pending_feedback"] = resume_note
@@ -3327,6 +3331,7 @@ async def resume_task(task_id: str, req: ResumeTaskRequest, user: User = Depends
             # "done, no changes needed" verdict before the nudge had a real
             # chance to land.
             patch["pending_feedback"] = f"Operator note: {req.message}"
+            patch["merge_approved_sha"] = None  # same as the escalated branch
             patch["no_diff_streak"] = 0
             await graph.aupdate_state(thread_config, patch, as_node="verify_and_ship")
         else:

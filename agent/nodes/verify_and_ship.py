@@ -47,6 +47,7 @@ from agent.config import Config, PROJECTS
 from agent.episodes import write_episode
 from agent.tools.checks import run_all_checks
 from agent.tools.git import (
+    _git,
     current_sha,
     ensure_task_branch,
     git_commit,
@@ -316,7 +317,13 @@ async def _verify_and_ship_inner(state: AgentState, repo: str, repo_root: str,
     # and the merge proceeds in seconds.
     approved = state.get("merge_approved_sha")
     if approved and approved == state.get("committed_sha") and not state.get("pending_feedback"):
-        return {**await _review_and_deploy(state, repo, approved), "incomplete_plan_streak": 0}
+        # Only when there is nothing newer in the tree. A work pass after the
+        # approval means new work, and shipping the approved commit past it
+        # is how a resumed task on 2026-09-23 tried to land its OLD commit
+        # and died on "cannot rebase: You have unstaged changes".
+        dirty = await _git("status --porcelain", repo_root, timeout=15)
+        if dirty["ok"] and not dirty["output"].strip():
+            return {**await _review_and_deploy(state, repo, approved), "incomplete_plan_streak": 0}
 
     # Announce the check phase BEFORE it runs. The suite takes 6-8 minutes on
     # a large project and emits nothing while it grinds, which reads in the dashboard as

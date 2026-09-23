@@ -346,6 +346,26 @@ async def work_node(state: AgentState, app_config: Config, checkpointer, pg_stor
             print(f"[work] {repo}: WORKSPACE NOT SYNCED ({sync.get('reason')}) "
                   f"-- this task starts from whatever HEAD was already at")
 
+    workspace_note = None
+    if not (state["iteration_count"] == 0 and not state.get("committed_sha")) and not state.get("approval_decision"):
+        # Any later pass -- a loop-back, or a resume after other tasks have
+        # had the workspace. Not under a pending approval decision: that
+        # resumes a paused turn mid-thought, and the tree is its own.
+        from agent.tools.git import restore_task_workspace
+        from agent.config import PROJECTS
+
+        restored = await restore_task_workspace(PROJECTS[repo]["sandbox"], task_id)
+        print(f"[work] {repo}: workspace restore -> {restored}")
+        if restored.get("reset_onto_base"):
+            workspace_note = (
+                "Main moved on since your last commit, and your commit conflicts with it in:\n\n"
+                + "\n".join(f"  - {f}" for f in restored["conflicts"]) + "\n\n"
+                f"Your branch has been reset onto the current main, so the workspace now holds "
+                f"main's code. Re-apply your change on top of it -- read the current files first. "
+                f"Your previous version is kept at `{restored['backup']}` "
+                f"(`git show {restored['backup']}` to read it); do not try to merge or check it out."
+            )
+
     agent, tracker, last_failed_edit_ref = await build_deep_agent(
         app_config,
         repo,
@@ -381,6 +401,8 @@ async def work_node(state: AgentState, app_config: Config, checkpointer, pg_stor
     )
     inner_config = inner_thread_config(task_id, repo, state.get("inner_thread_generation", 0))
     pending_feedback = state.get("pending_feedback")
+    if workspace_note:
+        pending_feedback = workspace_note + (f"\n\n{pending_feedback}" if pending_feedback else "")
     approval_decision = state.get("approval_decision")
 
     if approval_decision:

@@ -447,6 +447,73 @@ async def rebase_onto_base(repo_root: str, base_ref: str = "main") -> dict:
     }
 
 
+async def restore_task_workspace(repo_root: str, task_id: str, base_ref: str = "main") -> dict:
+    """Put a RESUMED task back on its own branch, on the current base, before it edits.
+
+    sync_workspace_to_base runs only on a task's first pass. A task resumed
+    after other tasks have used the workspace found it wherever the last one
+    left it -- on 2026-09-23 a resumed task woke on a detached, three-hour-old
+    main, could not check anything out (the agent's git dir is read-only), and
+    hand-copied main's files over the stale tree to do its work.
+
+    In order:
+      * a dirty tree that is not this task's own uncommitted work on its own
+        branch is stashed, recoverably, exactly as the first-pass sync does;
+      * a task with no branch yet has never committed, so it syncs like a
+        fresh pass;
+      * otherwise its branch is checked out and rebased onto the base. If
+        that conflicts, the branch is reset onto the base and the old commit
+        kept as `<branch>-pre-rebase-backup`: the agent cannot resolve a
+        rebase (no git writes), but it can re-apply its change to the current
+        code, reading the old version with `git show`. Leaving the branch on
+        the stale base instead makes every later rebase conflict again.
+
+    Never raises.
+    """
+    branch = task_branch_name(task_id)
+    exists = (await _git(f"rev-parse --verify --quiet refs/heads/{branch}", repo_root, timeout=15))["ok"]
+    cur = await _git("rev-parse --abbrev-ref HEAD", repo_root, timeout=15)
+    on_branch = cur["ok"] and cur["output"].strip() == branch
+    status = await _git("status --porcelain", repo_root, timeout=15)
+    if not status["ok"]:
+        return {"ok": False, "reason": f"status failed: {status['output'][:200]}"}
+
+    out: dict = {"ok": True, "branch": branch}
+    if status["output"].strip():
+        owner = await _workspace_owner(repo_root)
+        if owner == task_id and (on_branch or not exists):
+            return {**out, "restored": False, "reason": "tree dirty -- this task's own uncommitted work"}
+        whose = owner or "an unknown task"
+        stash = await _git(
+            f'stash push --include-untracked -m "tektonix: workspace left dirty by {whose}"',
+            repo_root, timeout=120)
+        if not stash["ok"]:
+            return {"ok": False, "reason": f"tree dirty and could not be stashed: {stash['output'][:200]}"}
+        out["salvaged_from"] = whose
+
+    if not exists:
+        return {**out, **await sync_workspace_to_base(repo_root, base_ref, task_id=task_id)}
+
+    if not on_branch:
+        r = await _git(f"checkout {branch}", repo_root, timeout=30)
+        if not r["ok"]:
+            return {**out, "ok": False, "reason": f"could not check out {branch}: {r['output'][:200]}"}
+    await _claim_workspace(repo_root, task_id)
+
+    rb = await rebase_onto_base(repo_root, base_ref)
+    if not rb.get("conflicts"):
+        return {**out, "restored": True, "rebase": rb}
+
+    old = (await _git("rev-parse HEAD", repo_root, timeout=15))["output"].strip()
+    backup = f"{branch}-pre-rebase-backup"
+    await _git(f"branch -f {backup} {old}", repo_root, timeout=15)
+    r = await _git(f"checkout -B {branch} {base_ref}", repo_root, timeout=30)
+    if not r["ok"]:
+        return {**out, "ok": False, "reason": f"could not reset {branch} onto {base_ref}: {r['output'][:200]}"}
+    return {**out, "restored": True, "reset_onto_base": True, "conflicts": rb["conflicts"],
+            "backup": backup, "previous_sha": old}
+
+
 def _digest(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8", "replace")).hexdigest()
 
