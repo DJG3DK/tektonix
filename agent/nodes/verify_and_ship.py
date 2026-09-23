@@ -39,6 +39,7 @@ retry/resume with no new diff correctly resumes polling review for that
 existing commit instead of stranding a real, unreviewed change.
 """
 
+import os
 import time
 
 from langgraph.store.base import BaseStore
@@ -117,6 +118,62 @@ def _escalate(reason: str) -> dict:
             "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ"),
         }],
     }
+
+
+async def _apply_operator_edits(state: AgentState, repo_root: str, edits: dict) -> dict:
+    """Write the operator's edited files onto the task branch's checkout.
+
+    Refuses rather than guesses: the branch must still be at the sha the
+    operator was editing, and every path must resolve inside the workspace,
+    outside .git, and not through a symlink.
+    """
+    from agent.task_diff import valid_edit_path
+    from agent.tools.git import task_branch_name
+
+    branch = task_branch_name(state["task_id"])
+    tip = await _git(f"rev-parse --verify --quiet refs/heads/{branch}", repo_root, timeout=15)
+    if not tip["ok"] or tip["output"].strip() != edits.get("base_sha"):
+        return {"ok": False, "reason": "the task's branch moved after the editor was opened -- reopen it"}
+
+    cur = await _git("rev-parse --abbrev-ref HEAD", repo_root, timeout=15)
+    status = await _git("status --porcelain", repo_root, timeout=15)
+    if status["output"].strip():
+        # Parked tasks leave a clean tree; anything here belongs to whoever
+        # used the workspace since. Kept, not discarded.
+        stash = await _git('stash push --include-untracked -m "tektonix: set aside for an operator edit"',
+                           repo_root, timeout=120)
+        if not stash["ok"]:
+            return {"ok": False, "reason": f"workspace is dirty and could not be stashed: {stash['output'][:200]}"}
+    if cur["output"].strip() != branch:
+        co = await _git(f"checkout {branch}", repo_root, timeout=30)
+        if not co["ok"]:
+            return {"ok": False, "reason": f"could not check out {branch}: {co['output'][:200]}"}
+
+    # Claimed, so that if the checks send this back to the agent, its next
+    # pass reads the edit as this task's own uncommitted work and keeps it
+    # instead of stashing it as another task's debris.
+    from agent.tools.git import _claim_workspace
+    await _claim_workspace(repo_root, state["task_id"])
+
+    root = os.path.realpath(repo_root)
+    for f in edits.get("files") or []:
+        rel = valid_edit_path(f.get("path", ""))
+        if rel is None:
+            return {"ok": False, "reason": f"refused path {f.get('path')!r}"}
+        full = os.path.join(root, rel)
+        # Every existing component, not just the leaf: a symlinked directory
+        # would carry the write out of the workspace just as well.
+        probe = root
+        for part in rel.split("/"):
+            probe = os.path.join(probe, part)
+            if os.path.islink(probe):
+                return {"ok": False, "reason": f"refused {rel}: it goes through a symlink"}
+        if os.path.commonpath([root, os.path.realpath(full)]) != root:
+            return {"ok": False, "reason": f"refused {rel}: outside the workspace"}
+        os.makedirs(os.path.dirname(full), exist_ok=True)
+        with open(full, "w", encoding="utf-8", newline="") as fh:
+            fh.write(f.get("content", ""))
+    return {"ok": True}
 
 
 def _unfinished_todos(state: AgentState) -> list[str]:
@@ -280,6 +337,25 @@ async def _verify_and_ship(state: AgentState, config: Config, store: BaseStore |
 
     repo = state["repo"]
     repo_root = PROJECTS[repo]["sandbox"]
+
+    if state.get("operator_edits"):
+        # Applied here and nowhere else: this node runs inside the task's own
+        # graph run, which holds the project lock. From here it is ordinary
+        # uncommitted work -- committed, checked and reviewed like the
+        # agent's, and parked again for the operator's final look.
+        edits = state["operator_edits"]
+        try:
+            applied = await _apply_operator_edits(state, repo_root, edits)
+        except Exception as e:  # noqa: BLE001
+            applied = {"ok": False, "reason": str(e)}
+        if not applied["ok"]:
+            return {**_escalate(f"operator edit not applied: {applied['reason']}"), "operator_edits": None}
+        state = {**state, "operator_edits": None, "_operator_edit": edits}
+        try:
+            out = await _verify_and_ship_inner(state, repo, repo_root, store)
+        except Exception as e:  # noqa: BLE001 -- same conversion as below
+            out = _escalate(f"verify_and_ship failed: {e}")
+        return {**out, "operator_edits": None}
 
     try:
         return await _verify_and_ship_inner(state, repo, repo_root, store)
@@ -570,7 +646,7 @@ async def _verify_and_ship_inner(state: AgentState, repo: str, repo_root: str,
     # working code uncommitted forever.
     unfinished = _unfinished_todos(state)
     plan_streak = state.get("incomplete_plan_streak", 0)
-    if unfinished and plan_streak < INCOMPLETE_PLAN_LIMIT:
+    if unfinished and plan_streak < INCOMPLETE_PLAN_LIMIT and not state.get("_operator_edit"):
         remaining = "\n".join(f"- {item}" for item in unfinished[:12])
         feedback = (
             "Checks pass and you have real changes, but your own plan still has unfinished "
@@ -596,6 +672,11 @@ async def _verify_and_ship_inner(state: AgentState, repo: str, repo_root: str,
     # (committed_sha gets overwritten below, in _review_and_deploy).
     goal = state["goal"]
     commit_message = f"{goal}\n\n(shipped via deepagents-based agent)"
+    operator_edit = state.get("_operator_edit")
+    if operator_edit:
+        note = (operator_edit.get("note") or "").strip()
+        commit_message += (f"\n\nIncludes a hand edit by {operator_edit.get('by') or 'the operator'}"
+                           + (f": {note}" if note else "") + ".")
 
     # Commit onto a per-task branch, never the sandbox's `main`. `main` stays a
     # pure mirror the refresh cron can fast-forward, and the reviewer gets a

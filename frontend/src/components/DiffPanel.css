@@ -101,3 +101,25 @@
 .diff-btn-warn { background: var(--amber, #d9a441); color: #140f04; }
 .diff-btn-secondary { background: var(--surface-hover); color: var(--text-dim); }
 .diff-btn-approve:disabled, .diff-btn-warn:disabled, .diff-btn-secondary:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* Hand edits. The panel widens while a file is open: a side-by-side diff in
+   720px is two 360px columns, which is not an editor. */
+.diff-panel--editing { width: min(1400px, 98vw); }
+.diff-file-header-row { display: flex; align-items: stretch; background: var(--surface-raised); }
+.diff-file-header-row .diff-file-header { flex: 1; min-width: 0; }
+.diff-file-edit {
+  flex-shrink: 0; border: 0; border-left: 1px solid var(--border);
+  background: var(--surface-raised); color: var(--accent); cursor: pointer;
+  font: inherit; font-size: 12px; font-weight: 700; padding: 0 var(--s3);
+}
+.diff-file-edit:hover { background: var(--surface-hover); }
+.diff-badge-edited { color: var(--accent); border: 1px solid var(--accent); padding: 0 6px; border-radius: 999px; }
+.diff-editor-wrap { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.diff-editor-bar {
+  display: flex; align-items: center; gap: var(--s3);
+  padding: var(--s2) var(--s3); border-bottom: 1px solid var(--border);
+}
+.diff-editor-bar .diff-file-path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.diff-editor-back { min-height: 32px; padding: 6px 12px; font-size: 12px; }
+.code-editor { flex: 1; min-height: 0; }
+.diff-edit-note { min-height: 0; }

@@ -329,6 +329,44 @@ export async function getTaskDiff(taskId: string): Promise<import("./types").Tas
   return res.json();
 }
 
+export interface TaskFile {
+  path: string;
+  /** Before the task touched it ("" for a file the task created). */
+  original: string;
+  /** As the task's branch has it now. */
+  modified: string;
+  /** The branch commit this was read from -- sent back on save, so an edit
+   * can never land on a newer commit than the one it was made against. */
+  sha: string;
+  base: string;
+}
+
+export async function getTaskFile(taskId: string, path: string): Promise<TaskFile> {
+  const res = await apiFetch(`${API_BASE}/tasks/${taskId}/file?path=${encodeURIComponent(path)}`);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.detail || `could not open ${path}: ${res.status}`);
+  }
+  return res.json();
+}
+
+export async function saveOperatorEdits(
+  taskId: string,
+  baseSha: string,
+  files: { path: string; content: string }[],
+  note?: string,
+): Promise<void> {
+  const res = await apiFetch(`${API_BASE}/tasks/${taskId}/edits`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ base_sha: baseSha, files, note }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.detail || `saving the edit failed: ${res.status}`);
+  }
+}
+
 export async function submitMergeDecision(
   taskId: string,
   decision: "approve" | "request_changes",

@@ -96,9 +96,51 @@ def parse_numstat(numstat_text: str) -> dict[str, tuple[int | None, int | None]]
     return out
 
 
-async def collect_task_diff(repo: str, base_ref: str = "main") -> dict:
+def _file_entries(numstat: str, patch: str) -> list[dict]:
+    counts = parse_numstat(numstat)
+    patches = split_patch(patch)
+    files = []
+    for path, (adds, dels) in counts.items():
+        text = patches.get(path, "")
+        truncated = len(text) > MAX_PATCH_CHARS
+        files.append({
+            "path": path,
+            "additions": adds,
+            "deletions": dels,
+            "binary": adds is None,
+            "untracked": False,
+            "patch": "" if truncated else text,
+            "truncated": truncated,
+        })
+    return files
+
+
+async def _branch_diff(root: str, repo: str, branch: str, tip: str, base_ref: str) -> dict:
+    """A task branch's committed work, read from git rather than the tree.
+
+    For a task whose workspace another task has since used: the shared
+    worktree then holds someone else's checkout, and diffing it showed the
+    operator the wrong task's changes on the very screen where they approve a
+    merge.
+    """
+    rc_mb, merge_base = await _git(root, "merge-base", tip, base_ref)
+    base = merge_base.strip() if rc_mb == 0 and merge_base.strip() else base_ref
+    _, numstat = await _git(root, "diff", "--numstat", base, tip)
+    _, patch = await _git(root, "diff", "--patch", "--no-color", base, tip)
+    files = sorted(_file_entries(numstat, patch), key=lambda f: f["path"])
+    return {
+        "repo": repo, "base": base, "head": tip, "branch": branch, "files": files,
+        "total_additions": sum(f["additions"] or 0 for f in files),
+        "total_deletions": sum(f["deletions"] or 0 for f in files),
+    }
+
+
+async def collect_task_diff(repo: str, base_ref: str = "main", task_branch: str | None = None) -> dict:
     """Everything the workspace holds that `base_ref` does not -- committed
-    AND uncommitted, plus untracked files -- as one structured payload."""
+    AND uncommitted, plus untracked files -- as one structured payload.
+
+    With `task_branch`, and the workspace NOT on that branch, the branch's
+    committed work instead (see _branch_diff)."""
     project = PROJECTS.get(repo)
     if not project:
         raise KeyError(f"unknown repo {repo!r}")
@@ -106,6 +148,10 @@ async def collect_task_diff(repo: str, base_ref: str = "main") -> dict:
 
     rc, head = await _git(root, "rev-parse", "HEAD")
     rc_b, branch = await _git(root, "rev-parse", "--abbrev-ref", "HEAD")
+    if task_branch and (rc_b != 0 or branch.strip() != task_branch):
+        rc_tb, tip = await _git(root, "rev-parse", "--verify", "--quiet", f"refs/heads/{task_branch}")
+        if rc_tb == 0 and tip.strip():
+            return await _branch_diff(root, repo, task_branch, tip.strip(), base_ref)
 
     # Diff against the BRANCH POINT, not the base branch's tip. The workspace
     # worktree can sit behind main between tasks (it's only fast-forwarded when
@@ -122,22 +168,7 @@ async def collect_task_diff(repo: str, base_ref: str = "main") -> dict:
     # numstat and patches.
     _, numstat = await _git(root, "diff", "--numstat", base_ref)
     _, patch = await _git(root, "diff", "--patch", "--no-color", base_ref)
-    counts = parse_numstat(numstat)
-    patches = split_patch(patch)
-
-    files = []
-    for path, (adds, dels) in counts.items():
-        text = patches.get(path, "")
-        truncated = len(text) > MAX_PATCH_CHARS
-        files.append({
-            "path": path,
-            "additions": adds,
-            "deletions": dels,
-            "binary": adds is None,
-            "untracked": False,
-            "patch": "" if truncated else text,
-            "truncated": truncated,
-        })
+    files = _file_entries(numstat, patch)
 
     # Untracked files are invisible to `git diff <ref>` but are real work the
     # agent produced -- synthesize an all-additions patch for each.
@@ -185,3 +216,69 @@ async def collect_task_diff(repo: str, base_ref: str = "main") -> dict:
         "total_additions": sum(f["additions"] or 0 for f in files),
         "total_deletions": sum(f["deletions"] or 0 for f in files),
     }
+
+
+# ── Operator edits ──────────────────────────────────────────────────────────
+# The final-look panel lets the operator fix something by hand. These are the
+# read half and the path rule; verify_and_ship applies the write, inside the
+# task's own run and so under its project lock.
+
+MAX_EDIT_FILE_BYTES = 1_000_000
+MAX_EDIT_FILES = 50
+
+
+def valid_edit_path(path: str) -> str | None:
+    """The normalized repo-relative path, or None if it may not be edited.
+
+    Checked on the way in (endpoint) and again on the way to disk
+    (verify_and_ship, which also resolves symlinks against the real tree).
+    """
+    if not isinstance(path, str) or not path or len(path) > 1024 or "\x00" in path or "\\" in path:
+        return None
+    if path.startswith("/"):
+        return None
+    parts = [p for p in path.split("/") if p not in ("", ".")]
+    if not parts or any(p == ".." for p in parts) or parts[0] == ".git" or ".git" in parts:
+        return None
+    return "/".join(parts)
+
+
+async def read_task_file(repo: str, task_branch: str, path: str, base_ref: str = "main") -> dict:
+    """One file of a task, as its branch has it and as it was before the task.
+
+    Read from git objects, never the working tree: the tree may belong to
+    another task by now (see _branch_diff), and git takes the path as an
+    object name, so nothing here touches the filesystem by it.
+    """
+    project = PROJECTS.get(repo)
+    if not project:
+        raise KeyError(f"unknown repo {repo!r}")
+    clean = valid_edit_path(path)
+    if clean is None:
+        raise ValueError("that path cannot be edited")
+    root = project["sandbox"]
+    rc, tip = await _git(root, "rev-parse", "--verify", "--quiet", f"refs/heads/{task_branch}")
+    if rc != 0 or not tip.strip():
+        raise LookupError("this task has no committed branch to edit")
+    tip = tip.strip()
+    rc_mb, mb = await _git(root, "merge-base", tip, base_ref)
+    base = mb.strip() if rc_mb == 0 and mb.strip() else base_ref
+
+    async def blob(ref: str) -> str | None:
+        rc_s, size = await _git(root, "cat-file", "-s", f"{ref}:{clean}")
+        if rc_s != 0:
+            return None
+        if int(size.strip() or 0) > MAX_EDIT_FILE_BYTES:
+            raise ValueError(f"{clean} is larger than {MAX_EDIT_FILE_BYTES // 1000} KB -- edit it in the repo")
+        rc_c, text = await _git(root, "show", f"{ref}:{clean}")
+        if rc_c != 0:
+            return None
+        if "\x00" in text:
+            raise ValueError(f"{clean} is binary")
+        return text
+
+    modified = await blob(tip)
+    if modified is None:
+        raise LookupError(f"{clean} does not exist on this task's branch")
+    return {"path": clean, "original": await blob(base) or "", "modified": modified,
+            "sha": tip, "base": base}

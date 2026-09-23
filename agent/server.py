@@ -3364,7 +3364,100 @@ async def get_task_diff(task_id: str, user: User = Depends(require_full_auth)):
         raise HTTPException(404, "task not found")
     check_repo_access(user, repo)
     from agent.task_diff import collect_task_diff
-    return await collect_task_diff(repo)
+    from agent.tools.git import task_branch_name
+    return await collect_task_diff(repo, task_branch=task_branch_name(task_id))
+
+
+@app.get("/api/tasks/{task_id}/file")
+async def get_task_file(task_id: str, path: str, user: User = Depends(require_full_auth)):
+    """One file as the task's branch has it, and as it was before the task --
+    the two sides of the final-look editor. Read from git objects; `path` is
+    validated and only ever used as an object name."""
+    repo = await _resolve_task_repo(task_id)
+    if not repo:
+        raise HTTPException(404, "task not found")
+    check_repo_access(user, repo)
+    from agent.task_diff import read_task_file
+    from agent.tools.git import task_branch_name
+    try:
+        return await read_task_file(repo, task_branch_name(task_id), path)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except LookupError as e:
+        raise HTTPException(404, str(e))
+
+
+class OperatorEditFile(BaseModel):
+    path: str
+    content: str
+
+
+class OperatorEditRequest(BaseModel):
+    base_sha: str
+    files: list[OperatorEditFile]
+    note: str | None = None
+
+
+@app.post("/api/tasks/{task_id}/edits")
+async def submit_operator_edits(task_id: str, req: OperatorEditRequest, user: User = Depends(require_full_auth)):
+    """The operator's hand fix from the final-look panel.
+
+    Only for a task parked on awaiting_merge, and only against the exact sha
+    they were shown. Nothing is written here: the edit goes into state and the
+    task's own run applies it under the project lock (see
+    AgentState.operator_edits), then commits, checks, reviews and parks for
+    approval again -- a hand edit passes the same gate as the agent's.
+    """
+    from agent.task_diff import MAX_EDIT_FILE_BYTES, MAX_EDIT_FILES, valid_edit_path
+
+    if not req.files:
+        raise HTTPException(400, "no files to save")
+    if len(req.files) > MAX_EDIT_FILES:
+        raise HTTPException(400, f"at most {MAX_EDIT_FILES} files per save")
+    files = []
+    for f in req.files:
+        clean = valid_edit_path(f.path)
+        if clean is None:
+            raise HTTPException(400, f"that path cannot be edited: {f.path!r}")
+        if len(f.content.encode("utf-8")) > MAX_EDIT_FILE_BYTES:
+            raise HTTPException(400, f"{clean} is too large to save from the editor")
+        files.append({"path": clean, "content": f.content})
+
+    with _claim_run_slot(_running_tasks, task_id, "task is already running"):
+        graph = app.state.graph
+        thread_config = {"configurable": {"thread_id": task_id}}
+        checkpoint = await graph.aget_state(thread_config)
+        if not checkpoint or not checkpoint.values:
+            raise HTTPException(404, "task not found")
+        values = checkpoint.values
+        check_repo_access(user, values["repo"])
+
+        pending = values.get("pending_merge_approval")
+        if not pending:
+            raise HTTPException(409, "edits can only be saved while the task is waiting for your final look")
+        if req.base_sha != pending.get("sha"):
+            raise HTTPException(409, "the task has a newer commit than the one you edited -- reopen the file")
+
+        note = (req.note or "").strip()[:500] or None
+        patch = {
+            "operator_edits": {"base_sha": req.base_sha, "files": files, "note": note, "by": user.email},
+            "pending_merge_approval": None,
+            "merge_approved_sha": None,
+            "no_diff_streak": 0,
+            "stale_pending_review_streak": 0,
+        }
+        # as_node="work": the next node is verify_and_ship, which applies the
+        # edit and runs the gate -- no model call in between.
+        await graph.aupdate_state(thread_config, patch, as_node="work")
+        await audit.record(
+            app.state.store, actor=user.email, action="task.operator_edit",
+            target=f'{values["repo"]}/{task_id[:8]}',
+            detail=", ".join(f["path"] for f in files)[:200],
+        )
+        _running_tasks[task_id] = asyncio.create_task(
+            _stream_graph(task_id, values["repo"], values["goal"], values.get("budget_usd", 0.0), None)
+        )
+        return {"ok": True, "files": [f["path"] for f in files]}
 
 
 class MergeDecisionRequest(BaseModel):

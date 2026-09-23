@@ -182,6 +182,14 @@ class AgentState(TypedDict):
     # operator actually looked at.
     merge_approved_sha: str | None
 
+    # A hand edit from the final-look panel, waiting to be applied:
+    # {base_sha, files: [{path, content}], note, by}. Carried in state rather
+    # than written by the endpoint so the write happens inside the task's own
+    # run, under its project lock -- the workspace is shared, and a request
+    # handler writing into it could land in the middle of another task.
+    # verify_and_ship applies it, commits, and runs the full gate again.
+    operator_edits: dict | None
+
     # Which OTHER projects this task may read, for "use the one in X as a
     # template". Resolved at creation from the creator's own access -- always
     # a concrete list, never None-means-everything, so a task resumed from a
@@ -233,5 +241,6 @@ def initial_state(
         require_merge_review=require_merge_review,
         pending_merge_approval=None,
         merge_approved_sha=None,
+        operator_edits=None,
         reference_repos=list(reference_repos or []),
     )
