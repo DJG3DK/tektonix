@@ -1102,7 +1102,12 @@ async function cleanupWorktree(cfg, worktreePath) {
 // Where agent-authored code runs. Everything below that executes something
 // the agent could have written -- checks, the build -- goes through this
 // rather than calling runSealed directly, so there is ONE answer to "is this
-// contained" instead of one per call site.
+// contained" instead of one per call site. That answer has three outcomes,
+// by deployment: a host install runs it in a sandbox container; the compose
+// bundle runs it in this process, which is already a container (a different
+// isolation, NOT a fall-back to the host); anything else refuses. The one
+// exception is runDatabaseCheck's three commands -- SECURITY.md, "The
+// database checks, which stay on the host".
 //
 // sealedEnv is still applied inside the container: it stops secrets reaching
 // the command, which containment does not do on its own.

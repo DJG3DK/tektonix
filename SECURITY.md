@@ -247,6 +247,24 @@ task still goes through the review gate and, with final merge review on, stops
 for a person before anything merges; the budget is the project's inbox budget.
 Treat an alert link like the alert: it is for the person it was sent to.
 
+### Signing in
+
+- **Two-factor is required for admins and optional for everyone else.** An
+  admin cannot reach the API past a forced setup screen until it is on, and
+  cannot turn it off. A restricted user may turn it on in Settings → Account;
+  if they do not, their password alone opens every repository they can see.
+  That is a reasonable default for a household box and a weak one the moment
+  a second account belongs to someone outside it.
+- **CSRF protection is the session cookie's `SameSite=strict`.** There are no
+  CSRF tokens, because a strict cookie is never sent on a request another site
+  starts. Loosening it — for an embed, an OAuth return, a subdomain — makes
+  tokens or a `Sec-Fetch-Site` check on every mutating route required in the
+  same change.
+- **Login rate limits live in the process's memory.** They reset on restart,
+  and would multiply by the worker count if the API ran more than one
+  (`agent/rate_limit.py` says what raising that requires). If the limiter
+  itself fails, it lets the request through and logs that it did.
+
 ## Deploying this safely
 
 - **Never expose the dashboard directly to the internet.** It is an operator
