@@ -793,7 +793,12 @@ async def _review_and_deploy(state: AgentState, repo: str, sha: str) -> dict:
     # opened is simply untrue -- nothing merged, nothing deployed, and the one
     # thing the operator needs is the link, which was buried in a stringified
     # dict.
-    if not deployed["ok"]:
+    if not deployed["ok"] and deployed.get("reason") == "diverged":
+        # Not a failure: the base moved, and the next few lines rebase onto it
+        # and review again. Calling it FAILED sent an operator looking for a
+        # problem while the system was busy fixing one.
+        ship_summary = "the base moved on — rebasing onto it and reviewing again"
+    elif not deployed["ok"]:
         ship_summary = "merge/deploy FAILED" if ship_mode != "pr" else "could not open a pull request"
     elif deployed.get("shipped") == "pull_request":
         ship_summary = f"pull request opened: {deployed.get('pull_request', '')}"
@@ -808,12 +813,18 @@ async def _review_and_deploy(state: AgentState, repo: str, sha: str) -> dict:
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
     if not deployed["ok"] and deployed.get("reason") == "diverged":
-        # Live moved between the review and the merge, so --ff-only is no
-        # longer possible. That rule is the whole guarantee that what merges is
-        # what was reviewed, so the branch moves instead: rebase onto the new
-        # tip and go round the review once more. Before this, a reviewed and
-        # approved commit simply had nowhere to land and the task stopped,
-        # having already been paid for.
+        # Live moved between the review and the ship. On the merge path
+        # --ff-only then makes landing impossible, and that rule is the whole
+        # guarantee that what merges is what was reviewed -- so the branch
+        # moves instead: rebase onto the new tip and go round the review once
+        # more. Before this, a reviewed and approved commit simply had nowhere
+        # to land and the task stopped, having already been paid for.
+        #
+        # The pull-request path reaches here too, since 2026-09-22. It never
+        # fast-forwards, so it never reported anything wrong -- it just pushed
+        # the branch exactly as cut and opened a PR that was already behind,
+        # and where the changes overlapped, one that would not merge at all.
+        # Same base moving, same answer.
         repo_root = PROJECTS[repo]["sandbox"]
         rb = await rebase_onto_base(repo_root)
         if rb.get("conflicts"):

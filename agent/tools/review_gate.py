@@ -406,6 +406,38 @@ async def ship_as_pull_request(project: str, branch: str, sha: str, title: str) 
                          "`pull_requests: write` -- set one in Settings > GitHub for this "
                          "project, or GITHUB_TOKEN in the environment"}
 
+    # Has the base moved out from under this branch?
+    #
+    # The merge path is --ff-only, so a moved base stops it dead with
+    # `diverged`, and verify_and_ship answers that by rebasing the branch and
+    # going round the review once more. A pull request never fast-forwards,
+    # so it never hit that check -- and the branch was pushed exactly as cut,
+    # producing a PR that is behind before anyone looks at it and, where the
+    # changes overlap, one that will not merge at all. Nothing self-healed it
+    # because nothing reported anything wrong.
+    #
+    # Reported the same way the merge does, so the SAME self-heal runs: this
+    # returns `diverged`, verify_and_ship rebases onto the new tip, and the
+    # rebased sha comes back through here. The rule that what ships is what
+    # was reviewed holds either way -- the review runs again on the new sha,
+    # because the old verdict genuinely no longer applies to it.
+    behind = await _git(f"rev-list --count {branch}..{base}", live, timeout=30)
+    try:
+        moved_by = int(behind["output"].strip()) if behind["ok"] else 0
+    except ValueError:
+        # Cannot tell, so do not block the ship on it. A missing or unreadable
+        # count is not evidence the base moved, and refusing on "unknown"
+        # would turn an unrelated git hiccup into a task that cannot finish.
+        moved_by = 0
+    if moved_by > 0:
+        return {
+            "ok": False, "stage": "ship", "reason": "diverged",
+            "error": f"{base} has moved on by {moved_by} commit(s) since this branch forked, "
+                     f"so a pull request from it would open behind. Rebasing onto {base} and "
+                     f"reviewing again.",
+            "liveSha": (await _git(f"rev-parse {base}", live, timeout=15))["output"].strip(),
+        }
+
     remote = await _git("remote get-url origin", live, timeout=15)
     slug = github_tools.repo_slug_from_remote(remote["output"].strip()) if remote["ok"] else None
     if not slug:
