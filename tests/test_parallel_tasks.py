@@ -338,3 +338,22 @@ def test_the_merge_takes_the_named_branch_and_clears_only_its_verdict(tmp_path):
     finally:
         proc.kill()
         proc.wait()
+
+
+def test_the_reviewer_clears_worktrees_left_by_an_interrupted_review(tmp_path):
+    """At startup nothing is being reviewed, so every review worktree is left
+    over -- and one left by a restart mid-review can hold a live-data mount."""
+    import subprocess as sp
+    live = tmp_path / "live"
+    live.mkdir()
+    _git(["init", "-q", "-b", "main"], live)
+    _git(["commit", "-q", "--allow-empty", "-m", "base"], live)
+    root = tmp_path / "worktrees"
+    root.mkdir()
+    _git(["worktree", "add", "-q", "--detach", str(root / "p-abc123"), "main"], live)
+    (root / "unowned-dir").mkdir()
+    swept = _node(f"r.sweepLeftoverWorktrees({json.dumps(str(root))}, "
+                  f"{{p: {{live: {json.dumps(str(live))}}}}})", tmp_path)
+    assert sorted(swept) == ["p-abc123", "unowned-dir"]
+    assert list(root.iterdir()) == []
+    assert "p-abc123" not in sp.run(["git", "worktree", "list"], cwd=live, capture_output=True, text=True).stdout

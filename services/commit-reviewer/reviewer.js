@@ -2321,10 +2321,49 @@ function startControlServer(routerKey) {
   server.listen(CONTROL_PORT, bind, () => log(`control server listening on ${bind}:${CONTROL_PORT}`));
 }
 
+// Review worktrees left by a review that never reached its cleanup -- a
+// restart mid-review is the usual way. setupWorktree heals one only when the
+// SAME commit is reviewed again, so the rest stayed forever, some still
+// holding a read-only mount of live data (one found 2026-09-23). At startup no
+// review is running, so everything here is left over. Unmounted deepest-first,
+// and never deleted while anything is still mounted in it: a delete through a
+// bind mount deletes what the mount shows.
+async function sweepLeftoverWorktrees(root = WORKTREE_ROOT, projects = currentProjects()) {
+  let names = [];
+  try { names = fs.readdirSync(root); } catch { return []; }
+  const swept = [];
+  for (const name of names) {
+    const dir = path.join(root, name);
+    let mounts = [];
+    try {
+      mounts = fs.readFileSync('/proc/self/mounts', 'utf8').split('\n')
+        .map((l) => l.split(' ')[1]).filter((m) => m && (m === dir || m.startsWith(dir + '/')))
+        .sort((a, b) => b.length - a.length);
+    } catch { /* no /proc: nothing we can see is mounted */ }
+    for (const m of mounts) await run('umount', [m], '/');
+    const still = fs.readFileSync('/proc/self/mounts', 'utf8').split('\n')
+      .map((l) => l.split(' ')[1]).filter((m) => m && (m === dir || m.startsWith(dir + '/')));
+    if (still.length) {
+      log(`  leaving ${dir}: still mounted at ${still.join(', ')}`);
+      continue;
+    }
+    const owner = Object.entries(projects).find(([p]) => name.startsWith(`${p}-`));
+    if (owner && owner[1].live) {
+      await run('git', ['worktree', 'remove', '--force', dir], owner[1].live);
+    }
+    fs.rmSync(dir, { recursive: true, force: true });
+    if (owner && owner[1].live) await run('git', ['worktree', 'prune'], owner[1].live);
+    swept.push(name);
+  }
+  if (swept.length) log(`removed ${swept.length} review worktree(s) left by earlier runs: ${swept.join(', ')}`);
+  return swept;
+}
+
 async function main() {
   fs.mkdirSync(WORKTREE_ROOT, { recursive: true });
   const routerKey = getOpenRouterKey();
   log('commit-reviewer started');
+  await sweepLeftoverWorktrees();
 
   const tick = async () => {
     // Re-read per tick: a project onboarded since the last tick is polled on
@@ -2357,5 +2396,5 @@ module.exports = {
   detectNewCommit, reviewWithSonnet, buildAgentMessage, applyBaseline, TASK_BRANCH_RE,
   classifyInfrastructureFailures, packagesNeedingOwnInstall, baselineKey,
   detectNodeModulesDirs, NM_BUILD_CACHES,
-  branchRecord, withBranchRecord, computeFileChurn, queueReview, pendingReviews,
+  branchRecord, withBranchRecord, computeFileChurn, queueReview, pendingReviews, sweepLeftoverWorktrees,
 };
