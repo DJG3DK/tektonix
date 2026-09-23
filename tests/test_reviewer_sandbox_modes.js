@@ -99,10 +99,26 @@ test('nothing executes agent code through runSealed any more', () => {
     // Its definition, and exactly one call: the bundle branch inside
     // runAgentCode. Any other call site is agent-authored code running
     // wherever this process happens to be, which is the hole being closed.
-    const calls = (src.match(/[^\w]runSealed\(/g) || []).length;
+    //
+    // With ONE documented exception, counted separately: runDatabaseCheck,
+    // whose three commands stay on the host because they need loopback
+    // Postgres and Redis (SECURITY.md, "The database checks, which stay on
+    // the host"). They use runSealed rather than run() since 2026-09-23 --
+    // run() spread the reviewer's whole environment into them -- so that
+    // function is cut out before counting, and its own calls are pinned.
+    const dbStart = src.indexOf('async function runDatabaseCheck(');
+    const dbEnd = src.indexOf('\n}\n', dbStart);
+    assert.ok(dbStart > 0 && dbEnd > dbStart, 'runDatabaseCheck not found');
+    const dbCheck = src.slice(dbStart, dbEnd);
+    const rest = src.slice(0, dbStart) + src.slice(dbEnd);
+    const calls = (rest.match(/[^\w]runSealed\(/g) || []).length;
     assert.equal(calls, 2,
-        `runSealed appears ${calls} times (expect its definition + one call); `
+        `runSealed appears ${calls} times outside runDatabaseCheck (expect its definition + one call); `
         + 'agent-authored code must go through runAgentCode');
+    // Inside it: the psql helper and the three project commands, and no run()
+    // of a project command at all.
+    assert.equal((dbCheck.match(/[^\w]runSealed\(/g) || []).length, 4);
+    assert.ok(!/await run\(dc\./.test(dbCheck), 'a database check went back to run(), which inherits process.env');
 });
 
 (async () => {
