@@ -31,6 +31,14 @@ def _run(args, cwd):
     return subprocess.run(["git", *args], cwd=str(cwd), capture_output=True, text=True, check=True)
 
 
+def _identify(repo):
+    """In the repo, not the environment: the agent's git runner does not pass
+    GIT_* variables through, so a rebase it runs sees only repo config -- and
+    CI has no global identity to fall back on."""
+    _run(["config", "user.email", "t@x"], repo)
+    _run(["config", "user.name", "t"], repo)
+
+
 def _commit(repo, files, msg):
     for name, body in files.items():
         (repo / name).write_text(body)
@@ -44,6 +52,7 @@ def repo(tmp_path):
     live = tmp_path / "live"
     live.mkdir()
     _run(["init", "-q", "-b", "main"], live)
+    _identify(live)
     _commit(live, {"app.py": "v1\n", "other.py": "o1\n"}, "base")
     ws = tmp_path / "ws"
     _run(["worktree", "add", "-q", str(ws), "-b", BRANCH], live)
@@ -110,6 +119,7 @@ async def test_a_task_that_never_committed_syncs_like_a_fresh_one(tmp_path):
     live = tmp_path / "live"
     live.mkdir()
     _run(["init", "-q", "-b", "main"], live)
+    _identify(live)
     _commit(live, {"app.py": "v1\n"}, "one")
     ws = tmp_path / "ws"
     _run(["worktree", "add", "-q", "--detach", str(ws), "HEAD"], live)
