@@ -189,6 +189,28 @@ def dry_run(tasks, ceiling: float) -> int:
     return 0
 
 
+async def live_runtime_settings(live_config, open_store) -> str:
+    """Load production's runtime settings, read-only, before the run switches
+    to its own store.
+
+    They live in the task store, and the run's store is a fresh SQLite file,
+    so without this every run used the built-in defaults -- a 180s model-call
+    timeout against production's 300s, among others -- and the suite measured
+    an agent configured unlike the one it stands for. 2026-09-23: that
+    difference failed a task whose test-writer calls ran for 4-9 minutes.
+    Nothing is written; a store that cannot be read leaves the defaults and
+    says so.
+    """
+    from agent import runtime_settings as rs
+    try:
+        async with open_store(live_config) as store:
+            await rs.load(store)
+    except Exception as e:  # noqa: BLE001 -- no live store (CI, a fresh box) is an answer
+        return f"defaults (live store unreadable: {type(e).__name__})"
+    return "production's (" + ", ".join(f"{k}={v:g}" for k, v in sorted(rs.all_values().items())
+                                        if k.endswith("timeout_s")) + ")"
+
+
 async def run(tasks, args, root: Path, status_path: Path | None = None) -> int:
     # --- 1. the fixtures, and the projects.json that is the ONLY one this run
     # can see. Written before anything reads AGENT_PROJECTS_JSON.
@@ -215,7 +237,10 @@ async def run(tasks, args, root: Path, status_path: Path | None = None) -> int:
         from agent.graph import open_checkpointer, open_store
         from agent.outer_graph import build_outer_graph
 
-        config = eval_config(load_config(), root)
+        live = load_config()
+        settings_note = await live_runtime_settings(live, open_store)
+        print(f"  runtime settings: {settings_note}")
+        config = eval_config(live, root)
         print(f"  store: {config.dsn}  (the live store is untouched)")
 
         def announce(r):
@@ -235,7 +260,9 @@ async def run(tasks, args, root: Path, status_path: Path | None = None) -> int:
                                     run_command=_sandboxed, on_task=announce)
 
         previous = ev_report.latest_report()
-        report = ev_report.build(suite, cost_ceiling_usd=args.ceiling, notes=args.notes, only=args.only)
+        from agent import runtime_settings as rs
+        report = ev_report.build(suite, cost_ceiling_usd=args.ceiling, notes=args.notes, only=args.only,
+                                 runtime_settings=rs.all_values())
         path = ev_report.write(report)
         args._report_path = str(path)
         print(ev_report.render(report))

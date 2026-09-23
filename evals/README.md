@@ -129,6 +129,7 @@ silent — the run would succeed while corrupting something else.
 | reviewer spend | `REVIEW_USAGE_LOG` — the dashboard's figure is summed from the live one |
 | review worktrees | `REVIEW_WORKTREE_ROOT` |
 | **which projects exist at all** | `REVIEW_ONLY_PROJECTS_JSON=1` |
+| runtime settings | the **opposite**: production's, read once from the live store before the run switches to its own, and recorded in the report. They live in the task store, so a fresh one meant the defaults -- a 180s model-call timeout against production's 300s -- and a task failed that production would have finished |
 
 That last one is not obvious, and the first smoke run of
 `agent/evals/reviewer.py` is why it exists. Pointing `AGENT_PROJECTS_JSON` at

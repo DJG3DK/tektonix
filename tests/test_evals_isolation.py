@@ -191,3 +191,59 @@ def test_the_entry_script_sets_the_env_before_importing_the_agent():
     import_agent = source.index("from agent.outer_graph import build_outer_graph")
     assert set_projects < import_agent
     assert set_ports < import_agent
+
+
+# --- the run is configured like production --------------------------------
+
+def _run_evals_module():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "run_evals_under_test", paths.REPO_ROOT / "scripts" / "run_evals.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+@pytest.mark.asyncio
+async def test_the_run_takes_productions_runtime_settings(monkeypatch):
+    """They live in the task store and the run's store is a fresh file, so a
+    run used the built-in defaults: a 180s model-call timeout against
+    production's 300s, which failed a task production would have finished."""
+    import contextlib
+    from types import SimpleNamespace
+
+    from agent import runtime_settings as rs
+
+    monkeypatch.setattr(rs, "_values", dict(rs._values))
+    stored = {"model_call_timeout_s": 300.0}
+
+    class Store:
+        async def aget(self, ns, key):
+            return SimpleNamespace(value=stored)
+
+    @contextlib.asynccontextmanager
+    async def open_store(_cfg):
+        yield Store()
+
+    note = await _run_evals_module().live_runtime_settings(object(), open_store)
+    assert rs.value("model_call_timeout_s") == 300.0
+    assert "model_call_timeout_s=300" in note
+
+
+@pytest.mark.asyncio
+async def test_no_live_store_leaves_the_defaults_and_says_so(monkeypatch):
+    import contextlib
+
+    from agent import runtime_settings as rs
+
+    monkeypatch.setattr(rs, "_values", dict(rs._values))
+    before = rs.all_values()
+
+    @contextlib.asynccontextmanager
+    async def open_store(_cfg):
+        raise ConnectionError("no database here")
+        yield
+
+    note = await _run_evals_module().live_runtime_settings(object(), open_store)
+    assert note.startswith("defaults")
+    assert rs.all_values() == before

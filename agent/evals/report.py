@@ -78,7 +78,7 @@ def as_episodes(suite: SuiteRun) -> list[dict]:
 
 
 def build(suite: SuiteRun, *, cost_ceiling_usd: float, notes: str = "",
-          only: list[str] | None = None) -> dict:
+          only: list[str] | None = None, runtime_settings: dict | None = None) -> dict:
     attempted = suite.attempted
     # "error" is the harness failing and "blocked" is a task that never
     # started; neither says anything about the agent, and counting either as
@@ -99,6 +99,10 @@ def build(suite: SuiteRun, *, cost_ceiling_usd: float, notes: str = "",
         # headlines the latest FULL run, and a one-task diagnostic run must
         # not become "the score".
         "only": list(only or []),
+        # The dashboard's runtime knobs the agent ran under (timeouts, loop
+        # limits). A score is only comparable with another taken under the
+        # same ones.
+        "runtime_settings": dict(runtime_settings or {}),
         "cost_ceiling_usd": cost_ceiling_usd,
         "total_cost_usd": round(suite.total_cost, 4),
         "stopped_early": suite.stopped_early,
