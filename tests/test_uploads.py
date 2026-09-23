@@ -73,3 +73,40 @@ def test_attachments_note_covers_all_kinds():
     assert "spec.pdf.txt" in note
     assert "read tool" in note
     assert "never commit" in note
+
+
+def test_a_traversal_filename_lands_inside_its_batch(monkeypatch, tmp_path):
+    """`Path(name).name` is what keeps a client-chosen filename from walking
+    out of .uploads/<batch>/. Pinned (2026-09-23 review, finding 4.8)."""
+    client, repo = _client(monkeypatch, tmp_path)
+    r = client.post("/api/uploads?repo=test-repo",
+                    files=[("files", ("../../../etc/passwd.csv", b"a,b\n", "text/csv"))])
+    assert r.status_code == 200
+    entry = r.json()["files"][0]
+    parts = entry["path"].split("/")
+    assert parts[0] == ".uploads" and len(parts) == 3 and parts[2] == "passwd.csv"
+    written = (repo / entry["path"]).resolve()
+    assert written.is_relative_to((repo / ".uploads").resolve())
+    assert not (tmp_path / "etc").exists()
+
+
+def test_the_batch_folder_is_the_servers_choice(monkeypatch, tmp_path):
+    """No batch id comes from the request, so there is none to aim at another
+    upload or another repo."""
+    client, _ = _client(monkeypatch, tmp_path)
+    paths = [client.post("/api/uploads?repo=test-repo",
+                         files=[("files", ("a.csv", b"x\n", "text/csv"))]).json()["files"][0]["path"]
+             for _ in range(2)]
+    batches = {p.split("/")[1] for p in paths}
+    assert len(batches) == 2 and all(len(b) == 8 for b in batches)
+
+
+def test_a_user_without_the_repo_cannot_upload_into_it(monkeypatch, tmp_path):
+    client, repo = _client(monkeypatch, tmp_path)
+    other = User(id=2, email="u@example.com", role="user", allowed_repos=["other-repo"],
+                 totp_enabled=True, must_change_password=False)
+    monkeypatch.setitem(srv.app.dependency_overrides, srv.require_full_auth, lambda: other)
+    r = client.post("/api/uploads?repo=test-repo",
+                    files=[("files", ("a.csv", b"x\n", "text/csv"))])
+    assert r.status_code == 403
+    assert not (repo / ".uploads").exists() or not any((repo / ".uploads").iterdir())
