@@ -32,16 +32,18 @@ import time
 from collections import defaultdict
 from pathlib import Path
 
+from agent import tool_events
+
 logger = logging.getLogger("tektonix")
 
 ROUTING_LOG = Path(
     os.environ.get("MODEL_ROUTER_LEDGER")
     or (Path(__file__).resolve().parents[1] / "services" / "model-router" / "logs" / "routing.jsonl")
 )
-TOOL_EVENTS_LOG = Path(
-    os.environ.get("AGENT_TOOL_EVENTS_LOG")
-    or (Path(__file__).resolve().parents[1] / "logs" / "tool_events.jsonl")
-)
+# The writer's own path, not a second resolution of the same env var: two
+# copies of "AGENT_TOOL_EVENTS_LOG or logs/tool_events.jsonl" can drift, and a
+# reader pointed somewhere the writer is not reports zero tool calls.
+TOOL_EVENTS_LOG = tool_events.LOG_PATH
 
 
 def _rows(path: Path, since: float) -> list[dict]:

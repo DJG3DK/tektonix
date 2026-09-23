@@ -18,6 +18,7 @@ import type { AgentModelUsage, Analytics, Benchmarks, RouterBalance, ToolReliabi
 import { BenchmarkPanel } from "./BenchmarkPanel";
 import { repoColor } from "../repoColor";
 import "./AnalyticsView.css";
+import { modelColor, shortModel } from "../format";
 
 // Fixed order + color per agent/classify.py's own taxonomy -- a category
 // never shifts color as the mix of tasks changes.
@@ -44,25 +45,6 @@ function formatTokenCount(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
   return String(n);
-}
-
-const MODEL_FAMILY_COLORS: [RegExp, string][] = [
-  [/claude|anthropic/i, "#d97757"],
-  [/gpt|openai|codex/i, "#74c99a"],
-  [/deepseek/i, "#5d8bf4"],
-  [/qwen/i, "#a56ef5"],
-  [/glm|z-ai/i, "#3fb9a5"],
-  [/grok|x-ai/i, "#c9cdd6"],
-  [/kimi|moonshot/i, "#e3702e"],
-  [/nova|amazon/i, "#e3a72e"],
-  [/gemini|google/i, "#6ea8f5"],
-];
-function modelColor(model: string): string {
-  for (const [re, color] of MODEL_FAMILY_COLORS) if (re.test(model)) return color;
-  return "#8b93a1";
-}
-function shortModel(model: string): string {
-  return (model.split("/").pop() ?? model).replace(/-\d{4,8}$/, "");
 }
 
 // No model names here, deliberately -- the actual model each role is

@@ -8,7 +8,8 @@ import { archivePlanningSession, createPlanningSession, createProject, decideNew
 import type { NewProjectProposal, PlanningLogEntry, PlanningSessionMeta } from "../types";
 import { usePlanningStream } from "../usePlanningStream";
 import { AutoGrowTextarea } from "./AutoGrowTextarea";
-import { cleanText, ModelBadge, parseToolCalls, relativeTime, renderWithColorSwatches, TOOL_ICONS } from "./ChatMessage";
+import { cleanText, ModelBadge, parseToolCalls, renderWithColorSwatches, TOOL_ICONS } from "./ChatMessage";
+import { relativeTime } from "../format";
 import { StepList } from "./StepList";
 import "./ChatMessage.css";
 import "./TaskView.css";

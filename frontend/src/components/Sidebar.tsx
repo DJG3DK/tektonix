@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { relativeTime } from "../format";
 import { deletePlanningSession, deleteTask } from "../api";
 import type { CurrentUser, PlanningSessionMeta, TaskMeta } from "../types";
 import { CATEGORY_LABELS, CATEGORY_ORDER } from "../categories";
@@ -9,17 +10,6 @@ import "./Sidebar.css";
 import logoUrl from "../assets/tektonix-logo.png";
 import { Icon } from "./Icon";
 import { useGitHubInboxCount } from "../useGitHubInboxCount";
-
-function relativeTime(ts: number): string {
-  const diffMs = Date.now() - ts * 1000;
-  const s = Math.max(0, Math.floor(diffMs / 1000));
-  if (s < 60) return `${s}s`;
-  const m = Math.floor(s / 60);
-  if (m < 60) return `${m}m`;
-  const h = Math.floor(m / 60);
-  if (h < 24) return `${h}h`;
-  return `${Math.floor(h / 24)}d`;
-}
 
 function categoryOf(t: TaskMeta): string {
   return t.category && CATEGORY_ORDER.includes(t.category) ? t.category : "other";

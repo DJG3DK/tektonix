@@ -2098,7 +2098,6 @@ async def _run_task(
                         route=route, route_reason=route_reason)
 
 
-_read_with_retry = read_with_retry
 
 
 async def _resolve_task_repo(task_id: str) -> str | None:
@@ -2354,7 +2353,7 @@ async def list_planning_sessions(repo: str | None = None, user: User = Depends(r
         repos = [r for r in PROJECTS if user.can_access(r)]
     items = []
     for r in repos:
-        results = await _read_with_retry(lambda r=r: store.asearch(("planning", r), limit=100))
+        results = await read_with_retry(lambda r=r: store.asearch(("planning", r), limit=100))
         items.extend(item.value for item in results)
     items.sort(key=lambda s: s.get("updated_at", 0), reverse=True)
     return items
@@ -3097,7 +3096,7 @@ async def list_tasks(repo: str | None = None, user: User = Depends(require_full_
         repos = [r for r in PROJECTS if user.can_access(r)]
     items = []
     for r in repos:
-        results = await _read_with_retry(lambda r=r: store.asearch(("tasks", r), limit=50))
+        results = await read_with_retry(lambda r=r: store.asearch(("tasks", r), limit=50))
         items.extend(item.value for item in results)
     items.sort(key=lambda t: t.get("created_at", 0), reverse=True)
     return items
@@ -3112,7 +3111,11 @@ async def list_tasks(repo: str | None = None, user: User = Depends(require_full_
 # than an error), so the balance just vanished from the sidebar with no
 # visible cause. This passthrough re-uses this app's own auth instead, so
 # the balance only ever depends on being logged into Tektonix itself.
-_REVIEW_SERVICE_BASE_URL = "http://127.0.0.1:4100"
+#
+# The address is review_gate's, as the /_review/ proxy's is: a hardcoded
+# 127.0.0.1:4100 here ignored REVIEW_SERVICE_HOST, so in the compose bundle
+# the balance asked a loopback where nothing listens while the gate and the
+# proxy reached the review container.
 
 
 @app.get("/api/router-balance")
@@ -3124,7 +3127,8 @@ async def get_router_balance(user: User = Depends(require_full_auth)):
     # admin-only". Now it is.
     auth.require_admin(user)
     async with httpx.AsyncClient(timeout=10.0) as client:
-        resp = await client.get(f"{_REVIEW_SERVICE_BASE_URL}/api/router/balance")
+        from agent.tools.review_gate import REVIEW_SERVICE_HOST, REVIEW_SERVICE_PORT  # noqa: PLC0415
+        resp = await client.get(f"http://{REVIEW_SERVICE_HOST}:{REVIEW_SERVICE_PORT}/api/router/balance")
         resp.raise_for_status()
         return resp.json()
 
@@ -3491,11 +3495,11 @@ async def approve_task(task_id: str, req: ApprovalRequest, user: User = Depends(
 async def get_task(task_id: str, repo: str, user: User = Depends(require_full_auth)):
     check_repo_access(user, repo)
     store = app.state.store
-    meta = await _read_with_retry(lambda: store.aget(("tasks", repo), task_id))
+    meta = await read_with_retry(lambda: store.aget(("tasks", repo), task_id))
     if not meta:
         raise HTTPException(404, "task not found")
     thread_config = {"configurable": {"thread_id": task_id}}
-    checkpoint = await _read_with_retry(lambda: app.state.graph.aget_state(thread_config))
+    checkpoint = await read_with_retry(lambda: app.state.graph.aget_state(thread_config))
     values = checkpoint.values if checkpoint else None
     # Same "orphaned" condition resume_task already accepts (store says
     # "running" but nothing is actually driving it -- e.g. a backend restart

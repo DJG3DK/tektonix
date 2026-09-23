@@ -1,4 +1,5 @@
 import { memo, useState } from "react";
+import { modelColor, relativeTime, shortModel } from "../format";
 import type { LogEntry } from "../types";
 import { TektonixMark } from "./TektonixMark";
 import "./ChatMessage.css";
@@ -118,48 +119,6 @@ function verdictTone(summary: string): "good" | "bad" | "warn" | "info" {
   if (s.includes("escalated") || s.includes("failed")) return "bad";
   if (s.includes("needs_fixes") || s.includes("nudging") || s.includes("awaiting")) return "warn";
   return "info";
-}
-
-export function relativeTime(iso: string): string {
-  const diffMs = Date.now() - new Date(iso).getTime();
-  const s = Math.max(0, Math.floor(diffMs / 1000));
-  if (s < 60) return `${s}s`;
-  const m = Math.floor(s / 60);
-  if (m < 60) return `${m}m`;
-  return `${Math.floor(m / 60)}h`;
-}
-
-
-/** Family-based color so different pool models are visually distinct at a
- * glance (the router picks per call -- one alias, many real models). */
-const MODEL_FAMILY_COLORS: [RegExp, string][] = [
-  [/claude|anthropic/i, "#d97757"],
-  [/gpt|openai|codex/i, "#74c99a"],
-  [/deepseek/i, "#5d8bf4"],
-  [/qwen/i, "#a56ef5"],
-  [/glm|z-ai/i, "#3fb9a5"],
-  [/grok|x-ai/i, "#c9cdd6"],
-  [/kimi|moonshot/i, "#e3702e"],
-  [/nova|amazon/i, "#e3a72e"],
-  [/gemini|google/i, "#6ea8f5"],
-];
-
-export function modelColor(model: string): string {
-  for (const [re, color] of MODEL_FAMILY_COLORS) if (re.test(model)) return color;
-  return "#8b93a1";
-}
-
-/** "deepseek/deepseek-v4-pro-0813" -> "deepseek-v4-pro" (short, no provider
- * prefix, no date suffix -- the badge has to stay compact). The backend
- * (agent/nodes/work.py) already resolves a pinned role's bare alias
- * ("agent-investigator") to the real underlying model before this ever
- * reaches the frontend -- reading current pins from config.yaml itself
- * every time, not a hardcoded map here that would silently go stale the
- * moment an operator changes a pin. This only ever shortens an
- * already-real model id for display. */
-export function shortModel(model: string): string {
-  const base = model.split("/").pop() ?? model;
-  return base.replace(/-\d{4,8}$/, "").replace(/-v\d$/, (m) => m);
 }
 
 /** Role badge beside the model badge. Two roles can pin the SAME model
