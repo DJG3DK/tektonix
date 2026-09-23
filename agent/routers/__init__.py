@@ -1,6 +1,6 @@
 """Per-seam route modules, included by agent/server.py.
 
-`server.py` is still the pile (4,688 lines on 2026-09-23, after six seams and
+`server.py` is still the pile (4,705 lines on 2026-09-23, after six seams and
 task creation came out), split one seam at a time. docs/playbooks/README.md forbids flattening
 it in one pass, and `tests/test_route_inventory.py` is the reason that rule is
 safe to follow: it pins every route's path, method and auth dependency, so a

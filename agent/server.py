@@ -447,7 +447,7 @@ if config.cors_allow_origins:
         allow_headers=["*"],
     )
 
-# Per-seam routers (agent/routers/). server.py is past 5,600 lines and is
+# Per-seam routers (agent/routers/). server.py is 4,705 lines (2026-09-23) and is
 # being split one seam at a time, never in one pass -- see docs/todo.md and
 # docs/playbooks/README.md. tests/test_route_inventory.py is what makes each
 # move safe: it pins every route's path, method and auth dependency, so a

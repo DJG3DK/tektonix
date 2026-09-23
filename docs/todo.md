@@ -74,7 +74,7 @@ what proves the injection reached it.
 ## Split `agent/server.py` along the seams that already exist
 
 **Status:** started, 2026-09-21. Six seams out (`server.py` was 5,659 lines
-before them and is 4,688 on 2026-09-23):
+before them and is 4,705 on 2026-09-23):
 `push`, `analytics`, `env_config`, `settings` (with the audit log it is
 interleaved with), `model_config`, and `github` (the inbox and approve links,
 2026-09-23, once task creation had moved). Do not flatten the rest in one pass.

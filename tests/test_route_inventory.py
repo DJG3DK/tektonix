@@ -1,6 +1,6 @@
 """A snapshot of every route and the guard protecting it.
 
-agent/server.py is 4,688 lines (2026-09-23) and holds most of the app's 98
+agent/server.py is 4,705 lines (2026-09-23) and holds most of the app's 98
 routes in one namespace, and the intended fix is to extract it into per-domain routers (docs/todo.md). The
 danger in that refactor is not that it breaks loudly -- it is that a route
 quietly loses its authentication, or disappears, and the existing tests

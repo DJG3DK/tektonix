@@ -28,7 +28,7 @@ what a stolen session would want, so there is no button for it that a session
 alone can press.
 
 ```bash
-cd /home/3d-agent
+cd "${AGENT_HOME:-/home/3d-agent}"   # wherever install.sh put the agent -- see README.md
 set -a; . ./.env; set +a
 EMAIL='person@example.com'
 psql "$LANGGRAPH_PG_DSN" -v email="$EMAIL" <<'SQL'

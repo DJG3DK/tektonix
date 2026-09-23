@@ -324,7 +324,7 @@ async def read_with_retry(fn):
     own checkout check but before/during the call itself (a real race, just
     a narrow one). Deliberately scoped to read-only calls only -- retrying a
     write here would mean thinking hard about idempotency per call site, and
-    the writes in _stream_graph/_run_task (the live task-execution path)
+    the writes in server._stream_graph / tasks.run_task (the live task-execution path)
     don't need it: they go through the exact same pool and get the same
     checkout validation for free.
     """
