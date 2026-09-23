@@ -230,10 +230,12 @@ PLANNING_SUMMARIZATION_KEEP = ("tokens", 70_000)
 # an empty trim on the same failure shape, because the sole HumanMessage can
 # sit further back than any finite budget reaches if the tool-heavy stretch
 # after it is long enough. The trim step exists to bound the summarizer
-# call's own input size -- but SUMMARIZATION_TRIGGER already bounds the
-# untrimmed batch to roughly its own threshold (the OR trigger fires the
-# instant either clause is met, so total tokens at fire time can't run away
-# past that), comfortably inside any modern model's context window. So the
+# call's own input size -- but the trigger already bounds the untrimmed batch
+# to roughly its own threshold (it is tokens-only, see summarization_trigger,
+# and fires the moment the token count crosses it, so total tokens at fire
+# time can't run away past that), comfortably inside any modern model's
+# context window. That bound depends on the trigger staying tokens-only: the
+# message-count clause removed after task 828ca1d9 must not return. So the
 # trim step is redundant for our shape and only adds a failure mode --
 # disable it outright (None skips trimming entirely) rather than trying to
 # out-guess a budget that has no safe value for an unbounded-distance-to-
