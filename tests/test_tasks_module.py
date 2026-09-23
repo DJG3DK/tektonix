@@ -16,14 +16,26 @@ from agent import live_state, tasks
 from agent.classify import TaskClassification
 
 
-def test_tasks_does_not_import_the_server():
-    """If it did, a router importing it would be the import cycle the seams
+import pytest
+
+
+@pytest.mark.parametrize("module", ["agent.tasks", "agent.task_runtime"])
+def test_the_seam_modules_do_not_import_the_server(module):
+    """If one did, a router importing it would be the import cycle the seams
     exist to avoid."""
     out = subprocess.run(
-        [sys.executable, "-c", "import sys, agent.tasks; print('agent.server' in sys.modules)"],
+        [sys.executable, "-c", f"import sys, {module}; print('agent.server' in sys.modules)"],
         capture_output=True, text=True, timeout=60)
     assert out.returncode == 0, out.stderr
     assert out.stdout.strip() == "False"
+
+
+def test_the_servers_run_state_names_are_task_runtimes_objects():
+    from agent import task_runtime
+    assert srv._publish is task_runtime.publish
+    assert srv._live_task_log is task_runtime.live_task_log
+    assert srv._task_event_seq is task_runtime.task_event_seq
+    assert srv._claim_run_slot is task_runtime.claim_run_slot
 
 
 def test_the_servers_names_are_the_same_objects():

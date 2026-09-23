@@ -118,10 +118,23 @@ def test_current_reports_the_last_id_without_consuming_one():
     assert seq.next("a") == 3, "current() broke the sequence"
 
 
+def _fresh_stream_state(monkeypatch, max_keys=None):
+    """Fresh buffers, in agent/task_runtime.py where publish() reads them AND
+    on server.py's aliases, so both sides still hold the same objects."""
+    from agent import live_state, task_runtime
+    fresh = {"_live_task_log": {}, "_task_event_seq": log_stream.SeqCounter()}
+    monkeypatch.setattr(task_runtime, "live_task_log", fresh["_live_task_log"])
+    monkeypatch.setattr(task_runtime, "task_event_seq", fresh["_task_event_seq"])
+    for name, obj in fresh.items():
+        monkeypatch.setattr(srv, name, obj)
+    monkeypatch.setattr(live_state, "subscribers", {})
+    monkeypatch.setattr(srv, "_subscribers", live_state.subscribers)
+    if max_keys is not None:
+        monkeypatch.setattr(task_runtime, "LIVE_LOG_MAX_KEYS", max_keys)
+
+
 def test_publishing_stamps_entries_and_numbers_events(monkeypatch):
-    monkeypatch.setattr(srv, "_live_task_log", {})
-    monkeypatch.setattr(srv, "_task_event_seq", log_stream.SeqCounter())
-    monkeypatch.setattr(srv, "_subscribers", {})
+    _fresh_stream_state(monkeypatch)
 
     event = {"execution_log": [entry("t1", "a")]}
     srv._publish("task-1", event)
@@ -148,10 +161,7 @@ def test_publishing_stamps_entries_and_numbers_events(monkeypatch):
 def test_the_counter_is_forgotten_with_the_live_log_it_belongs_to(monkeypatch):
     """One counter per task, kept for the life of the process, is a leak: the
     live log evicts at a cap and the counter did not."""
-    monkeypatch.setattr(srv, "_live_task_log", {})
-    monkeypatch.setattr(srv, "_task_event_seq", log_stream.SeqCounter())
-    monkeypatch.setattr(srv, "_subscribers", {})
-    monkeypatch.setattr(srv, "_LIVE_LOG_MAX_KEYS", 3)
+    _fresh_stream_state(monkeypatch, max_keys=3)
 
     for i in range(5):
         srv._publish(f"task-{i}", {"execution_log": [entry(f"t{i}", f"entry {i}")]})

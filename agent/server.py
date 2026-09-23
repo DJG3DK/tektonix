@@ -39,6 +39,7 @@ from agent.config import PROJECTS, load_config, require_server_config
 from agent.observability import install_langsmith
 from agent import lifecycle
 from agent import tasks
+from agent import task_runtime
 from agent.outer_graph import build_outer_graph, open_checkpointer, open_store, project_lock
 from agent.graph import read_with_retry
 from agent.routers import env_config as env_config_routes
@@ -59,7 +60,6 @@ from agent.backends import backend_for_dsn
 from agent.store_paging import all_items
 from agent import health as health_checks
 from agent import episode_vectors, history_index
-from agent import log_stream
 from agent import plan_progress
 from agent import planning_log
 from agent.middleware.budget_guard import BudgetExceededError
@@ -1393,25 +1393,12 @@ class SendMessageRequest(BaseModel):
 # Ceiling on a single resume top-up. Not a policy about total spend --
 # just a bound on one request, so a typo or a hostile value cannot remove
 # the budget ceiling in one call.
-_MAX_BUDGET_TOPUP_USD = 100.0
+
 
 
 class ResumeTaskRequest(BaseModel):
     additional_budget_usd: float
     message: str | None = None
-
-
-def _check_budget_topup(delta: float) -> None:
-    """Reject a resume top-up outside [0, _MAX_BUDGET_TOPUP_USD]. Zero is a
-    valid delta: the dashboard's resume panel only shows the budget field when
-    the task is nearly out of money and sends 0 otherwise (a merge failure or
-    an operator Stop has nothing to do with cost), and the escalated branch of
-    resume_task already words its note for "no budget added". Rejecting 0
-    (as this did until 2026-09-09) left every such resume stuck on a 400 with
-    no field on screen to fix."""
-    if not (0 <= delta <= _MAX_BUDGET_TOPUP_USD):
-        raise HTTPException(
-            400, f"additional_budget_usd must be between 0 and ${_MAX_BUDGET_TOPUP_USD:.2f}")
 
 
 class ApprovalRequest(BaseModel):
@@ -1429,163 +1416,28 @@ class PlanningMessageRequest(BaseModel):
     attachments: list[dict] | None = None  # manifest entries from /api/uploads
 
 
-_SUBSCRIBER_QUEUE_MAX = 2000
-
-
-def _publish(task_id: str, event: dict) -> None:
-    # Every entry carries a content-derived id and every event a monotonic
-    # seq (agent/log_stream.py). Together they let the browser open its
-    # socket before hydrating, buffer what arrives meanwhile, and merge the
-    # two sources afterwards without losing or duplicating a line.
-    if event.get("execution_log"):
-        event["execution_log"] = log_stream.stamp(event["execution_log"])
-        # The event counter is per task and lives as long as the task's live
-        # log does: evicting one without the other leaks a counter per task
-        # for the life of the process.
-        _live_log_append(_live_task_log, task_id, event["execution_log"],
-                         on_evict=_task_event_seq.forget)
-        # ...and the durable copy, batched (see planning_log.Recorder).
-        rec = _task_recorders.get(task_id)
-        if rec is not None:
-            due = False
-            for entry in event["execution_log"]:
-                due = rec.add(entry) or due
-            if due:
-                _flush_task_log_bg(rec)
-    if event.get("type") != "ping":
-        event["seq"] = _task_event_seq.next(task_id)
-    for q, _ws in _subscribers.get(task_id, []):
-        try:
-            q.put_nowait(event)
-        except asyncio.QueueFull:
-            # audit M-34: a reader this far behind is effectively gone; drop
-            # rather than grow memory without bound. Its socket teardown will
-            # remove it shortly.
-            logger.warning("dropping event for a stalled task %s subscriber", task_id)
-
-
-# The outer graph's own AgentState has no `plan` key at all -- write_todos (deepagents' own planning tool, living in the inner
-# deep-agent thread) is the plan, and `latest_todos` (a plain snapshot copied
-# into the outer state at the end of each "work" pass, see work.py) is the
-# closest equivalent. Translated here into the PlanStep[] shape the
-# frontend's PlanTracker renders. `result`/`verified` have no todo-level
-# equivalent in this design (verify_and_ship gates the whole task, not a
-# per-step independently-checked claim) -- always False/None; the frontend
-# doesn't currently render either field regardless.
-_TODO_STATUS_MAP = {"pending": "pending", "in_progress": "in_progress", "completed": "done"}
-
-
-def _todos_to_plan(todos: list | None) -> list[dict] | None:
-    if todos is None:
-        return None
-    return [
-        {
-            "id": str(i),
-            "description": t.get("content", ""),
-            "status": _TODO_STATUS_MAP.get(t.get("status"), "pending"),
-            "result": None,
-            "verified": False,
-        }
-        for i, t in enumerate(todos)
-    ]
-
-
-def _state_snapshot_for_frontend(values: dict) -> dict:
-    """Used by get_task's REST snapshot (the hydrate path useTaskStream.ts
-    calls on every connect/reconnect) -- without this translation, a page
-    load/reconnect would show an empty plan until the next live "todos"
-    custom event happened to arrive, since the raw checkpoint dict has
-    `latest_todos`, not `plan`, and the frontend only reads the latter.
-    """
-    # No current_step_index: it belonged to the legacy plan->execute graph,
-    # was always None here, and nothing read it (removed 2026-09-23).
-    return {**values, "plan": _todos_to_plan(values.get("latest_todos"))}
-
-
-def _apply_plan_fallback(snapshot: dict | None, meta_value: dict) -> dict | None:
-    """The plan strip reads the LIVE mirror when there is one. The checkpoint's
-    latest_todos is written only when a work pass RETURNS; the todos handler
-    mirrors every todos event into the task meta as it happens. So mid-pass
-    the mirror is never older than the checkpoint, and after a pass ends the
-    two agree -- there is no moment at which the checkpoint is fresher.
-
-    Two live reports drove this. 2026-08-28: mid-pass the checkpoint had no
-    list yet and the strip vanished on every refresh, so the mirror was added
-    as a fallback. 2026-09-09: a resumed task's coordinator wrote a new
-    3-item list, the strip showed it, and a refresh snapped back to the
-    15-item list from the pass before -- because "a checkpointed plan always
-    wins" preferred the stale one. Mirror first, checkpoint when there is no
-    mirror (tasks from before the mirror existed)."""
-    if snapshot is None:
-        return None
-    mirrored = meta_value.get("latest_todos")
-    if mirrored:
-        return {**snapshot, "plan": _todos_to_plan(mirrored)}
-    return snapshot
-
-
-def _final_status(values: dict) -> str:
-    """Terminal task status once a _stream_graph run's own astream loop
-    ends -- "awaiting_approval" is a real third resting state alongside
-    escalated/done (see deep_agent.py's INTERRUPT_ON, outer_graph.py's
-    _route_after_verify), checked before the escalated/done fallback since
-    a task can be both not-escalated and not-done: paused on a human-in-
-    the-loop decision.
-    """
-    if values.get("escalated"):
-        return "escalated"
-    if values.get("pending_approval"):
-        return "awaiting_approval"
-    if values.get("pending_merge_approval"):
-        # Review READY, merge parked on the operator's final look at the diff.
-        return "awaiting_merge"
-    return "done"
-
-
-@contextlib.contextmanager
-def _claim_run_slot(registry: dict, key: str, already_running: str):
-    """Reserve a slot in a run registry BEFORE the handler's awaits.
-
-    The registries below are plain dicts guarded by `if key in registry:
-    raise 409`. That check sat at the top of each handler and the real
-    assignment came several awaits later -- and the event loop switches at
-    every await, so two concurrent requests could both pass the check and
-    both create a driver for the same thread. The unconditional
-    `registry.pop(key)` in the driver's finally then orphaned whichever one
-    survived.
-
-    A dict write with no await between it and the check IS atomic here, so
-    the fix is to reserve immediately: place a None placeholder, then let the
-    handler replace it with the real Task. Both consumers of these registries
-    do `registry.get(key)` and treat a falsy value as "not running", which is
-    exactly right for the reservation window -- there is genuinely nothing to
-    cancel yet.
-
-    The slot is released if the handler raises, or if it returns without ever
-    assigning a task; otherwise a rejected request would strand the key and
-    the task could never be started again.
-    """
-    if registry.get(key) is not None or key in registry:
-        raise HTTPException(409, already_running)
-    registry[key] = None
-    try:
-        yield
-    except BaseException:
-        registry.pop(key, None)
-        raise
-    if registry.get(key) is None:
-        registry.pop(key, None)
-
-
-async def _read_task_meta(store, repo: str, task_id: str):
-    """The stored meta, or None. Swallows a read failure on purpose: every
-    caller here is mirroring display state, and a store hiccup must not break
-    the stream it is decorating."""
-    try:
-        return await store.aget(("tasks", repo), task_id)
-    except Exception:  # noqa: BLE001
-        logger.exception("task meta read failed for %s", task_id)
-        return None
+# The live run state moved to agent/task_runtime.py (2026-09-23) so the task
+# and planning routes can leave this file. Same objects under the old names.
+_SUBSCRIBER_QUEUE_MAX = task_runtime.SUBSCRIBER_QUEUE_MAX
+_publish = task_runtime.publish
+_TODO_STATUS_MAP = task_runtime.TODO_STATUS_MAP
+_todos_to_plan = task_runtime.todos_to_plan
+_state_snapshot_for_frontend = task_runtime.state_snapshot_for_frontend
+_apply_plan_fallback = task_runtime.apply_plan_fallback
+_final_status = task_runtime.final_status
+_claim_run_slot = task_runtime.claim_run_slot
+_read_task_meta = task_runtime.read_task_meta
+_MAX_BUDGET_TOPUP_USD = task_runtime.MAX_BUDGET_TOPUP_USD
+_check_budget_topup = task_runtime.check_budget_topup
+_LIVE_LOG_MAX_ENTRIES = task_runtime.LIVE_LOG_MAX_ENTRIES
+_LIVE_LOG_MAX_KEYS = task_runtime.LIVE_LOG_MAX_KEYS
+_live_task_log = task_runtime.live_task_log
+_flush_task_log_bg = task_runtime.flush_task_log_bg
+_task_event_seq = task_runtime.task_event_seq
+_live_planning_log = task_runtime.live_planning_log
+_live_log_append = task_runtime.live_log_append
+_fuller_log = task_runtime.fuller_log
+_task_recorders = live_state.task_recorders   # see agent/live_state.py
 
 
 # Moved to agent/tasks.py with task creation; the same object, so every
@@ -1960,29 +1812,6 @@ def list_repos(user: User = Depends(require_full_auth)):
 # ---------------------------------------------------------------------------
 
 
-# Live-log buffers (2026-08-28): the detailed stream entries (chat bubbles,
-# tool chips) previously existed ONLY as in-flight WS events -- the durable
-# sources hold much less (a task's checkpoint keeps per-pass summaries; a
-# planning thread's messages get REWRITTEN by summarization), so a refresh or
-# task switch mid-run swapped a rich live view for a skeleton. Each publisher
-# now also appends its log entries here, and the hydrate endpoints return
-# whichever source is fuller. In-process by design: it makes refresh/switch
-# lossless while the server lives, costs no store churn, and after a backend
-# restart the durable sources are still the fallback they always were.
-_LIVE_LOG_MAX_ENTRIES = 3000   # matches the frontend's MAX_LOG_ENTRIES cap
-_LIVE_LOG_MAX_KEYS = 12        # LRU-ish: enough for every concurrently-viewed run
-_live_task_log: dict[str, list] = {}
-
-# The durable half of that buffer. `_live_task_log` dies with the process, and
-# on 2026-09-14 that is exactly what happened when the operator asked why a
-# task "got lost": the answer needed the transcript, and all that survived was
-# a 123-character stub in execution_log plus a clean worktree. Planning
-# sessions got this on 2026-09-12 (agent/planning_log.py); build tasks are the
-# ones that run for two hours and delegate seven subagents, so they needed it
-# more.
-_task_recorders = live_state.task_recorders   # see agent/live_state.py
-
-
 def _start_task_recorder(task_id: str, repo: str) -> None:
     """Created where the repo is actually known -- _publish only has a task id,
     and a transcript filed under the wrong project is worse than none."""
@@ -1992,43 +1821,6 @@ def _start_task_recorder(task_id: str, repo: str) -> None:
     _task_recorders[task_id] = planning_log.Recorder(
         repo, task_id, store, namespace=planning_log.TASK_NAMESPACE,
         detail_cap=planning_log.TASK_DETAIL_CAP)
-
-
-def _flush_task_log_bg(rec: "planning_log.Recorder") -> None:
-    """Fire and forget: a transcript must never delay the run it describes."""
-    try:
-        task = asyncio.create_task(rec.flush())
-        task.add_done_callback(lambda t: t.exception())
-    except Exception:  # noqa: BLE001
-        pass
-# Monotonic per-task event ids for the socket-first hydrate (log_stream.py).
-_task_event_seq = log_stream.SeqCounter()
-_live_planning_log: dict[str, list] = {}
-
-
-def _live_log_append(book: dict, key: str, entries: list, on_evict=None) -> None:
-    buf = book.get(key)
-    if buf is None:
-        while len(book) >= _LIVE_LOG_MAX_KEYS:
-            evicted = next(iter(book))
-            book.pop(evicted)
-            if on_evict is not None:
-                on_evict(evicted)
-        buf = book[key] = []
-    buf.extend(entries)
-    if len(buf) > _LIVE_LOG_MAX_ENTRIES:
-        del buf[: len(buf) - _LIVE_LOG_MAX_ENTRIES]
-
-
-def _fuller_log(buffered: list | None, durable: list | None) -> list:
-    """The hydrate rule: MERGE the two sources by entry id, durable first.
-
-    This was "whichever list is longer", which cannot merge: a durable list
-    that is longer but older replaced newer live entries, and a shorter one
-    was discarded even when it held entries the buffer never had (everything
-    before this process started). Identity comes from the entry's own content
-    -- see agent/log_stream.py."""
-    return log_stream.merge(durable, buffered)
 
 
 # Last Telegram-alerted (status, detail) per task, in-process: a resumed task

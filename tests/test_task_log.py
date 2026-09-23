@@ -136,6 +136,6 @@ def test_the_server_records_hydrates_and_forgets():
     import agent.server as srv
 
     assert "_start_task_recorder(task_id, repo)" in inspect.getsource(srv._stream_graph)
-    assert "_task_recorders.get(task_id)" in inspect.getsource(srv._publish)
+    assert "task_recorders.get(task_id)" in inspect.getsource(srv._publish)   # agent/task_runtime.py
     assert "planning_log.TASK_NAMESPACE" in inspect.getsource(srv.get_task)
     assert "planning_log.forget" in inspect.getsource(srv.delete_task)
