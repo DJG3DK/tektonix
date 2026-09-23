@@ -3277,7 +3277,21 @@ async def resume_task(task_id: str, req: ResumeTaskRequest, user: User = Depends
         # created after task_id was added to AgentState -- this closes the gap
         # for older tasks that predate that field.
         patch = {"task_id": task_id, "budget_usd": new_budget, "max_iterations": new_max_iterations}
-        if was_escalated:
+        approved = values.get("merge_approved_sha")
+        if was_escalated and approved and approved == values.get("committed_sha") and not req.message:
+            # Approved, committed, and escalated only on the way out -- the
+            # review service timing out, a push failing. The work is finished,
+            # so this does not go back to work: no pending_feedback, and
+            # _route_after_verify takes the approved-merge path straight into
+            # verify_and_ship's fast path (re-review, then merge or PR). The
+            # generic branch below sent five such tasks on 2026-09-23 into a
+            # paid work pass that redid committed changes. An operator message
+            # still means "do more", and still goes to work.
+            patch["escalated"] = False
+            patch["escalation_reason"] = None
+            patch["stale_pending_review_streak"] = 0
+            await graph.aupdate_state(thread_config, patch, as_node="verify_and_ship")
+        elif was_escalated:
             budget_note = (
                 f"Additional budget granted -- ${req.additional_budget_usd:.2f} more, ${new_budget:.2f} total now. "
                 if req.additional_budget_usd > 0
