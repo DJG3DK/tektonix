@@ -93,6 +93,7 @@ EXPECTED = [
     ('DELETE', '/api/projects/{name}/deploy-key', 'require_admin'),
     ('DELETE', '/api/tasks/{task_id}', 'check_repo_access'),
     ('GET', '/api/analytics', 'require_admin'),
+    ('GET', '/api/evals/runs/{name}', 'require_admin'),   # a run name, not a project; admin-only
     ('GET', '/api/github/inbox', 'check_repo_access'),
     ('GET', '/api/planning/sessions', 'check_repo_access'),
     ('GET', '/api/planning/sessions/{session_id}', 'check_repo_access'),

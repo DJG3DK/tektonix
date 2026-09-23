@@ -60,6 +60,8 @@ ACTIONS: dict[str, str] = {
     "merge.approve": "approved a merge",
     "merge.request_changes": "sent a merge back for changes",
     "task.operator_edit": "edited a task's files by hand before merge",
+    "evals.run": "started a golden eval run",
+    "evals.stop": "stopped a golden eval run",
     "settings.auto_approve": "changed auto-approve of commands",
     "settings.merge_review": "changed the final merge review",
     "settings.auto_approve_repos": "changed which projects auto-approve covers",
