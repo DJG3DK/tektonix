@@ -154,22 +154,31 @@ def _read_outcome(state: dict) -> tuple[str, str | None]:
 
 
 async def run_task(task: TaskSpec, *, graph, config, eval_root: Path,
-                   run_command=None) -> TaskRun:
-    """One task: rebuild its fixture, run the graph, score the result."""
+                   run_command=None, mf=None) -> TaskRun:
+    """One task: rebuild its fixture, run the graph, score the result.
+
+    With `mf`, the fixture is already built and shared with other tasks
+    running at the same time (run_suite's parallel mode): each task works on
+    its own branch in its own workspace, and nothing merges, so they cannot
+    see each other -- the same isolation parallel tasks on a real project get.
+    """
     from agent.evals.spec import load_fixture
 
     task_id = str(uuid.uuid4())
     run = TaskRun(task=task, task_id=task_id)
     started = time.monotonic()
 
-    spec = load_fixture(task.fixture)
-    mf = fx.materialize(spec, eval_root / "work")
-    # projects.json is rewritten per task because the fixture directories are
-    # recreated per task -- the reviewer reads it fresh on every poll tick, so
-    # it picks the new paths up without a restart.
-    fx.write_projects_json(eval_root / "projects.json", [mf])
-    from agent.config import reload_projects
-    reload_projects()
+    if mf is None:
+        spec = load_fixture(task.fixture)
+        mf = fx.materialize(spec, eval_root / "work")
+        # projects.json is rewritten per task because the fixture directories
+        # are recreated per task -- the reviewer reads it fresh on every poll
+        # tick, so it picks the new paths up without a restart.
+        fx.write_projects_json(eval_root / "projects.json", [mf])
+        from agent.config import reload_projects
+        reload_projects()
+    else:
+        spec = mf.spec
 
     route, route_reason = _derive_route(task)
     from agent.outer_state import initial_state
@@ -227,9 +236,12 @@ async def run_task(task: TaskSpec, *, graph, config, eval_root: Path,
     # checks_pass as None is what makes its assertions read as undetermined,
     # which scores as a failure rather than a quiet pass.
 
-    run.changed_paths = fx.changed_paths(mf, fx.task_branch_name(task_id))
+    # Scored where the task worked: its own workspace since 2026-09-23
+    # (agent/workspaces.py), the project's before that or if none was made.
+    worktree = fx.task_workspace(mf, task_id) or mf.sandbox
+    run.changed_paths = fx.changed_paths(mf, fx.task_branch_name(task_id), worktree)
     run.assertions = await evaluate(task.assertions, AssertionContext(
-        worktree=mf.sandbox,
+        worktree=worktree,
         changed_paths=run.changed_paths,
         checks_pass=run.checks_pass,
         review_verdict=run.review_verdict,
@@ -238,16 +250,24 @@ async def run_task(task: TaskSpec, *, graph, config, eval_root: Path,
         project=spec.name,
     ))
     if not run.passed:
-        run.diff = fx.changed_diff(mf, fx.task_branch_name(task_id))
+        run.diff = fx.changed_diff(mf, fx.task_branch_name(task_id), worktree)
     run.duration_s = time.monotonic() - started
     return run
 
 
 async def run_suite(tasks: list[TaskSpec], *, graph, config, eval_root: Path,
                     cost_ceiling_usd: float, run_command=None,
-                    on_task=None) -> SuiteRun:
-    """Every task in order, until they run out or the money does."""
+                    on_task=None, parallel: int = 1) -> SuiteRun:
+    """Every task in order, until they run out or the money does.
+
+    `parallel` above one runs that many tasks at once -- the harness doing
+    what parallel_tasks_per_project lets a real project do, so the suite
+    measures the agent under it (and finishes sooner)."""
     suite = SuiteRun(started_at=time.time(), window_label=time.strftime("%Y-%m-%dT%H:%M:%SZ"))
+    if parallel > 1:
+        return await _run_suite_parallel(tasks, suite, graph=graph, config=config, eval_root=eval_root,
+                                         cost_ceiling_usd=cost_ceiling_usd, run_command=run_command,
+                                         on_task=on_task, parallel=parallel)
     for task in tasks:
         if task.skip:
             suite.runs.append(TaskRun(task=task, task_id="", outcome="skipped",
@@ -267,6 +287,59 @@ async def run_suite(tasks: list[TaskSpec], *, graph, config, eval_root: Path,
         suite.total_cost += run.cost_usd
         if on_task:
             on_task(run)
+    return suite
+
+
+async def _run_suite_parallel(tasks, suite: SuiteRun, *, graph, config, eval_root: Path,
+                              cost_ceiling_usd: float, run_command, on_task, parallel: int) -> SuiteRun:
+    """Up to `parallel` tasks at a time, each fixture built once and shared.
+
+    The ceiling counts what is IN FLIGHT: a task starts only if the spend so
+    far plus the caps of every running task plus its own stays under it --
+    the serial rule, with the tasks not yet finished counted at their worst."""
+    import asyncio
+
+    from agent.config import reload_projects
+    from agent.evals.spec import load_fixture
+
+    runnable = [t for t in tasks if not t.skip]
+    mfs = {name: fx.materialize(load_fixture(name), eval_root / "work")
+           for name in sorted({t.fixture for t in runnable})}
+    fx.write_projects_json(eval_root / "projects.json", list(mfs.values()))
+    reload_projects()
+
+    gate = asyncio.Semaphore(parallel)
+    results: dict[int, TaskRun] = {}
+    reserved = 0.0
+
+    async def one(index: int, task: TaskSpec) -> None:
+        nonlocal reserved
+        async with gate:
+            if suite.stopped_early:
+                return
+            if suite.total_cost + reserved + task.budget_usd > cost_ceiling_usd:
+                suite.stopped_early = (
+                    f"stopped before {task.id}: ${suite.total_cost:.2f} spent, ${reserved:.2f} "
+                    f"committed to running tasks, and this task may spend ${task.budget_usd:.2f}, "
+                    f"which could cross the ${cost_ceiling_usd:.2f} ceiling")
+                return
+            reserved += task.budget_usd
+            try:
+                run = await run_task(task, graph=graph, config=config, eval_root=eval_root,
+                                     run_command=run_command, mf=mfs[task.fixture])
+            finally:
+                reserved -= task.budget_usd
+            results[index] = run
+            suite.total_cost += run.cost_usd
+            if on_task:
+                on_task(run)
+
+    await asyncio.gather(*(one(i, t) for i, t in enumerate(tasks) if not t.skip))
+    for i, task in enumerate(tasks):
+        if task.skip:
+            suite.runs.append(TaskRun(task=task, task_id="", outcome="skipped", error=task.skip))
+        elif i in results:
+            suite.runs.append(results[i])
     return suite
 
 

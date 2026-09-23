@@ -46,6 +46,8 @@ def _parse_args(argv=None):
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--only", nargs="*", metavar="TASK_ID",
                    help="run only these tasks (default: all of them)")
+    p.add_argument("--parallel", type=int, default=1, metavar="N",
+                   help="run N tasks at once, each in its own workspace (default 1)")
     p.add_argument("--ceiling", type=float, default=DEFAULT_CEILING_USD,
                    help=f"stop once spend would cross this many dollars (default {DEFAULT_CEILING_USD})")
     p.add_argument("--dry-run", action="store_true",
@@ -253,16 +255,18 @@ async def run(tasks, args, root: Path, status_path: Path | None = None) -> int:
         async with open_checkpointer(config) as checkpointer, open_store(config) as store:
             graph = build_outer_graph(config, checkpointer, store).compile(
                 checkpointer=checkpointer, store=store)
-            print(f"\nrunning {len(tasks)} task(s), ceiling ${args.ceiling:.2f}")
+            print(f"\nrunning {len(tasks)} task(s), {max(1, args.parallel)} at a time, "
+                  f"ceiling ${args.ceiling:.2f}")
             print("=" * 64)
             suite = await run_suite(tasks, graph=graph, config=config, eval_root=root,
                                     cost_ceiling_usd=args.ceiling,
-                                    run_command=_sandboxed, on_task=announce)
+                                    run_command=_sandboxed, on_task=announce,
+                                    parallel=max(1, args.parallel))
 
         previous = ev_report.latest_report()
         from agent import runtime_settings as rs
         report = ev_report.build(suite, cost_ceiling_usd=args.ceiling, notes=args.notes, only=args.only,
-                                 runtime_settings=rs.all_values())
+                                 runtime_settings=rs.all_values(), parallel=max(1, args.parallel))
         path = ev_report.write(report)
         args._report_path = str(path)
         print(ev_report.render(report))

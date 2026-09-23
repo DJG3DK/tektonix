@@ -25,6 +25,12 @@
   width: 100%; box-sizing: border-box; padding: 8px 10px; border-radius: 6px;
   border: 1px solid var(--border); background: var(--surface-sunken); color: var(--text); font: inherit;
 }
+.evals-parallel { display: flex; align-items: center; gap: 8px; margin-top: 10px; color: var(--text-dim); flex-wrap: wrap; }
+.evals-parallel select {
+  padding: 4px 8px; border-radius: 6px; border: 1px solid var(--border);
+  background: var(--surface-sunken); color: var(--text); font: inherit;
+}
+.evals-parallel span { font-size: 12px; }
 .evals-confirm-row { display: flex; justify-content: flex-end; gap: 10px; margin-top: 10px; }
 
 .evals-progress-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; }

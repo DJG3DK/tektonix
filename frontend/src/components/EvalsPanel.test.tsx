@@ -91,7 +91,15 @@ describe("EvalsPanel", () => {
     expect(screen.getByRole("dialog")).toHaveTextContent("$0.10");
     await userEvent.type(screen.getByPlaceholderText(/what changed/i), "new prompt");
     await userEvent.click(screen.getByRole("button", { name: /start run/i }));
-    expect(startEvalRun).toHaveBeenCalledWith("new prompt");
+    expect(startEvalRun).toHaveBeenCalledWith("new prompt", undefined, 1);
+  });
+
+  it("can run several tasks at once", async () => {
+    render(<EvalsPanel />);
+    await userEvent.click(await screen.findByRole("button", { name: /run the golden suite/i }));
+    await userEvent.selectOptions(screen.getByRole("combobox", { name: /tasks at once/i }), "3");
+    await userEvent.click(screen.getByRole("button", { name: /start run/i }));
+    expect(startEvalRun).toHaveBeenCalledWith("", undefined, 3);
   });
 
   it("a running suite shows its progress and can be stopped", async () => {

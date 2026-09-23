@@ -464,6 +464,8 @@ export interface EvalRunSummary {
   total_cost_usd: number | null;
   stopped_early: boolean;
   full: boolean;
+  /** Tasks run at once, each in its own workspace. */
+  parallel?: number;
   by_category: Record<string, { tasks: number; passed: number }>;
   benchmarks: Partial<BenchmarkWindow> | null;
   failed: string[];

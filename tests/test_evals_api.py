@@ -103,6 +103,13 @@ def test_starting_a_run_hands_the_runner_the_shell_command(client):
     assert cmd[2:] == ["--status-file", "--notes", "before the prompt change", "--only", "t1", "t3"]
 
 
+def test_a_run_can_ask_for_several_tasks_at_once(client):
+    r = client.post("/api/evals/run", json={"notes": "n", "parallel": 3})
+    assert r.status_code == 202
+    assert client.spawned[0][2:] == ["--status-file", "--notes", "n", "--parallel", "3"]
+    assert client.post("/api/evals/run", json={"parallel": 9}).status_code == 422
+
+
 def test_a_second_run_is_refused_while_one_is_claimed_or_running(client):
     assert client.post("/api/evals/run", json={}).status_code == 202        # claimed, no pid yet
     assert client.post("/api/evals/run", json={}).status_code == 409

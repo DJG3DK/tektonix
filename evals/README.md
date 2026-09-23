@@ -15,6 +15,7 @@ scripts/run_evals.py --verify      # free: are the fixtures and specs sound?
 scripts/run_evals.py --dry-run     # free: what would run, and what would it cost?
 scripts/run_evals.py               # the real thing, real money
 scripts/run_evals.py --only py-median --ceiling 5
+scripts/run_evals.py --parallel 3               # three tasks at once
 ```
 
 Or from the dashboard: **Analytics → Golden suite → Run suite** (admins
@@ -114,6 +115,16 @@ on whether a registry was up that morning is not a benchmark.
 Each is **rebuilt per task, not reset**. A reset that misses a stray file does
 not fail — it contaminates the next task, and the number that comes out is
 wrong in a way nobody can see.
+
+**`--parallel N`** runs N tasks at once, the way a project with
+`parallel_tasks_per_project` set above one runs them. Each fixture is then
+built once and shared by its tasks, which is safe for the same reason it is
+safe on a real project: every task has its own workspace on its own branch
+(`agent/workspaces.py`), and nothing merges. They meet only at the reviewer,
+which reviews one branch of a project at a time and queues the rest -- the
+path a real project with parallel tasks takes. The report records `parallel`,
+because a pass rate is only comparable with one taken the same way; if the
+per-task isolation is right, it should not move.
 
 ## Isolation
 

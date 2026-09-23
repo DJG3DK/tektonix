@@ -78,7 +78,8 @@ def as_episodes(suite: SuiteRun) -> list[dict]:
 
 
 def build(suite: SuiteRun, *, cost_ceiling_usd: float, notes: str = "",
-          only: list[str] | None = None, runtime_settings: dict | None = None) -> dict:
+          only: list[str] | None = None, runtime_settings: dict | None = None,
+          parallel: int = 1) -> dict:
     attempted = suite.attempted
     # "error" is the harness failing and "blocked" is a task that never
     # started; neither says anything about the agent, and counting either as
@@ -103,6 +104,9 @@ def build(suite: SuiteRun, *, cost_ceiling_usd: float, notes: str = "",
         # limits). A score is only comparable with another taken under the
         # same ones.
         "runtime_settings": dict(runtime_settings or {}),
+        # How many tasks ran at once. Each has its own workspace, so this
+        # should not move the pass rate -- which is exactly why it is recorded.
+        "parallel": parallel,
         "cost_ceiling_usd": cost_ceiling_usd,
         "total_cost_usd": round(suite.total_cost, 4),
         "stopped_early": suite.stopped_early,

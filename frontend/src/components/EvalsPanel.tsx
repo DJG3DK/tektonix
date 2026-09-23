@@ -25,6 +25,7 @@ export function EvalsPanel() {
   const [error, setError] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
   const [notes, setNotes] = useState("");
+  const [parallel, setParallel] = useState(1);
   const [busy, setBusy] = useState<null | "start" | "stop">(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
@@ -76,7 +77,7 @@ export function EvalsPanel() {
     setBusy("start");
     setActionError(null);
     try {
-      await startEvalRun(notes.trim());
+      await startEvalRun(notes.trim(), undefined, parallel);
       setConfirming(false);
       setNotes("");
       wasRunning.current = true;
@@ -160,7 +161,8 @@ export function EvalsPanel() {
             {data.estimate.cost_usd != null && (
               <>
                 {" "}Estimated <strong>{usd(data.estimate.cost_usd)}</strong> and{" "}
-                <strong>{minutes(data.estimate.duration_s)}</strong>, from the last run.
+                <strong>about {minutes(data.estimate.duration_s != null ? data.estimate.duration_s / parallel : null)}</strong>,
+                from the last run.
               </>
             )}
           </p>
@@ -171,6 +173,13 @@ export function EvalsPanel() {
             maxLength={300}
             onChange={(e) => setNotes(e.target.value)}
           />
+          <label className="evals-parallel">
+            Tasks at once
+            <select value={parallel} onChange={(e) => setParallel(Number(e.target.value))}>
+              {[1, 2, 3, 4].map((n) => <option key={n} value={n}>{n}</option>)}
+            </select>
+            <span>each in its own workspace — more at once finishes sooner and should score the same</span>
+          </label>
           <div className="evals-confirm-row">
             <button type="button" className="evals-btn-secondary" onClick={() => setConfirming(false)} disabled={busy !== null}>
               Cancel
@@ -297,7 +306,8 @@ export function EvalsPanel() {
                 </span>
                 <span className="evals-history-cost">{usd(r.total_cost_usd)}</span>
                 <span className="evals-history-notes">
-                  {!r.full && <em className="evals-partial">partial</em>} {r.notes}
+                  {!r.full && <em className="evals-partial">partial</em>}
+                  {(r.parallel ?? 1) > 1 && <em className="evals-partial">{r.parallel} at once</em>} {r.notes}
                 </span>
               </button>
             ))}

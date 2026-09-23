@@ -1334,11 +1334,13 @@ export async function getEvalRun(name: string): Promise<import("./types").EvalRe
   return evalsJson(await apiFetch(`${API_BASE}/evals/runs/${encodeURIComponent(name)}`), "loading the run");
 }
 
-export async function startEvalRun(notes: string, only?: string[]): Promise<{ ok: boolean; tasks: number }> {
+export async function startEvalRun(
+  notes: string, only?: string[], parallel = 1,
+): Promise<{ ok: boolean; tasks: number }> {
   return evalsJson(await apiFetch(`${API_BASE}/evals/run`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ notes, only: only && only.length ? only : null }),
+    body: JSON.stringify({ notes, only: only && only.length ? only : null, parallel }),
   }), "starting the run");
 }
 

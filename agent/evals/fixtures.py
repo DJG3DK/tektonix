@@ -128,7 +128,8 @@ def write_projects_json(path: Path, fixtures: list[MaterializedFixture]) -> None
     path.write_text(json.dumps(payload, indent=2) + "\n")
 
 
-def changed_paths(mf: MaterializedFixture, task_branch: str | None) -> tuple[str, ...]:
+def changed_paths(mf: MaterializedFixture, task_branch: str | None,
+                  worktree: Path | None = None) -> tuple[str, ...]:
     """What the agent actually changed, repo-relative and posix-separated.
 
     Two sources, because a task can end in either state. If it committed, the
@@ -145,7 +146,9 @@ def changed_paths(mf: MaterializedFixture, task_branch: str | None) -> tuple[str
                 return tuple(sorted(paths))
         except FixtureError:
             pass  # branch never created: fall through to the worktree
-    out = _git(["status", "--porcelain", "--untracked-files=all"], mf.sandbox)
+    # The task's own workspace when it had one (agent/workspaces.py) --
+    # that is where an uncommitted task's work is.
+    out = _git(["status", "--porcelain", "--untracked-files=all"], worktree or mf.sandbox)
     paths = []
     for line in out.splitlines():
         if len(line) > 3:
@@ -160,7 +163,8 @@ def changed_paths(mf: MaterializedFixture, task_branch: str | None) -> tuple[str
 MAX_DIFF_CHARS = 20_000
 
 
-def changed_diff(mf: MaterializedFixture, task_branch: str | None) -> str:
+def changed_diff(mf: MaterializedFixture, task_branch: str | None,
+                 worktree: Path | None = None) -> str:
     """The actual diff, for a task whose assertions failed.
 
     The first full run is why this exists. py-top-n-heap failed a guard that
@@ -182,10 +186,21 @@ def changed_diff(mf: MaterializedFixture, task_branch: str | None) -> str:
             except FixtureError:
                 pass
         # Uncommitted work, for a task that escalated before committing.
-        out = _git(["diff", "HEAD"], mf.sandbox)
+        out = _git(["diff", "HEAD"], worktree or mf.sandbox)
         return out[:MAX_DIFF_CHARS]
     except FixtureError:
         return ""
+
+
+def task_workspace(mf: MaterializedFixture, task_id: str) -> Path | None:
+    """The task's own workspace, if the run made one -- where its finished
+    tree is, and so what its assertions run against."""
+    from agent.workspaces import task_workspace_path  # noqa: PLC0415
+    try:
+        path = Path(task_workspace_path(mf.name, task_id))
+    except Exception:  # noqa: BLE001 -- the fixture is not registered; there is none
+        return None
+    return path if (path / ".git").exists() else None
 
 
 def task_branch_name(task_id: str) -> str:

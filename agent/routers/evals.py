@@ -79,6 +79,7 @@ def summary(name: str, report: dict) -> dict:
         # A full run is one that asked for every task. Reports from before
         # `only` was recorded were full when they ran the original twelve.
         "full": (not report["only"]) if "only" in report else (report.get("tasks_total") or 0) >= 12,
+        "parallel": int(report.get("parallel") or 1),
         "failed": [t["id"] for t in tasks if not t.get("passed")],
         "results": {t["id"]: bool(t.get("passed")) for t in tasks},
     }
@@ -146,6 +147,8 @@ async def get_eval_run(name: str, user: User = Depends(require_full_auth)):
 class StartEvalRequest(BaseModel):
     notes: str = Field(default="", max_length=300)
     only: list[str] | None = None
+    # Tasks at once, each in its own workspace (scripts/run_evals.py --parallel).
+    parallel: int = Field(default=1, ge=1, le=4)
 
 
 def _spawn(cmd: list[str]) -> None:
@@ -175,6 +178,8 @@ async def start_eval_run(req: StartEvalRequest, request: Request, user: User = D
         raise HTTPException(400, f"no such task(s): {', '.join(unknown)}")
     notes = req.notes.strip() or f"started from the dashboard by {user.email}"
     cmd = [sys.executable, str(RUNNER), "--status-file", "--notes", notes]
+    if req.parallel > 1:
+        cmd += ["--parallel", str(req.parallel)]
     if only:
         cmd += ["--only", *only]
     # Claimed BEFORE the child exists, so a second click in the second or two
