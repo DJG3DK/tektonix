@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### The agent can show you images, and logo work starts from your logo
+
+A new `show_images` tool puts images in the conversation -- an SVG the agent
+wrote, or an image in the repo -- stored per project and served only to
+someone who may see that project. Planning and build tasks both have it.
+Until now every render went to a vision model and came back as words: asked to
+"show me examples of the logo", a planning session drew sixteen versions,
+approved its own, and showed the operator none.
+
+Planning is told to do logo work in order: start from the project's existing
+logo (trace it, keep its look) unless a new one is asked for, show the options,
+let the operator choose, and only then put the agreed SVG in the plan; the
+build task exports that SVG rather than redesigning it. `logo_render` renders
+on white by default and its `background` now actually sits behind the logo --
+it filled only resize padding, so "check it on dark" had been judging a
+transparent image.
+
 ### A merged dependency fix now reaches the running site
 
 A merge that bumps a lockfile installs nothing by itself, and a deploy only

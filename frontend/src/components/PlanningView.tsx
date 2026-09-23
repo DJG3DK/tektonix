@@ -8,7 +8,7 @@ import { archivePlanningSession, createPlanningSession, createProject, decideNew
 import type { NewProjectProposal, PlanningLogEntry, PlanningSessionMeta } from "../types";
 import { usePlanningStream } from "../usePlanningStream";
 import { AutoGrowTextarea } from "./AutoGrowTextarea";
-import { cleanText, ModelBadge, parseToolCalls, renderWithColorSwatches, TOOL_ICONS } from "./ChatMessage";
+import { cleanText, ModelBadge, parseToolCalls, renderWithColorSwatches, RichText, TOOL_ICONS, ToolResultImages } from "./ChatMessage";
 import { relativeTime } from "../format";
 import { StepList } from "./StepList";
 import "./ChatMessage.css";
@@ -103,6 +103,7 @@ function PlanningEntry({ entry }: { entry: PlanningLogEntry }) {
           <span className="chat-time">{relativeTime(entry.timestamp)}</span>
           <code className="chat-tool-result-preview">{body.replace(/\s+/g, " ").slice(0, 90)}</code>
         </div>
+        <ToolResultImages body={body} />
         {open && <pre className="chat-tool-result-body">{body}</pre>}
       </div>
     );
@@ -138,7 +139,7 @@ function PlanningEntry({ entry }: { entry: PlanningLogEntry }) {
           <span className="chat-time">{relativeTime(entry.timestamp)}</span>
         </div>
         <div className="chat-bubble chat-bubble--agent">
-          <div className="chat-text">{renderWithColorSwatches(text)}</div>
+          <div className="chat-text"><RichText text={text} /></div>
         </div>
       </div>
     </div>

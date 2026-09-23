@@ -317,3 +317,15 @@
   cursor: pointer;
 }
 .chat-show-earlier:hover { color: var(--text); border-color: var(--border-strong, #555); }
+
+/* Images the agent showed the operator (agent/tools/show_tools.py). */
+.chat-images { display: flex; flex-wrap: wrap; gap: 12px; margin: 8px 0 4px; }
+.chat-image { margin: 8px 0; display: inline-flex; flex-direction: column; gap: 6px; max-width: 100%; }
+.chat-images .chat-image { margin: 0; flex: 1 1 280px; max-width: 480px; }
+.chat-image img {
+  display: block; max-width: 100%; height: auto; border-radius: 8px;
+  border: 1px solid var(--border);
+  /* A checkerboard, so a transparent logo reads as transparent on any theme. */
+  background: repeating-conic-gradient(#e8e8e8 0% 25%, #ffffff 0% 50%) 50% / 16px 16px;
+}
+.chat-image figcaption { font-size: 12px; color: var(--text-dim); }

@@ -254,3 +254,24 @@ def test_the_whole_pipeline_produces_a_kit_in_the_project(tmp_path):
     assert len(written) >= 20, written
     # and the summary tells the operator what just landed in their repo
     assert "binary assets" in out and "brand/" in out
+
+
+@needs_logoloom
+def test_a_render_on_a_background_is_on_that_background():
+    """`background` used to fill only resize() padding, so a logo already the
+    target's shape came back transparent, and "check it on dark" judged it on
+    whatever the vision model assumed -- a wordmark nearly invisible on dark
+    was called legible (2026-09-23)."""
+    import base64
+    import io
+
+    from PIL import Image
+
+    svg = ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 100">'
+           '<rect x="80" y="30" width="40" height="40" fill="#7c3aed"/></svg>')
+    dark = _bridge("render_png", {"svg": svg, "width": 400, "height": 200, "background": "#1e1338"})
+    im = Image.open(io.BytesIO(base64.b64decode(dark["pngBase64"]))).convert("RGBA")
+    assert im.getpixel((5, 5)) == (30, 19, 56, 255)
+    bare = _bridge("render_png", {"svg": svg, "width": 400, "height": 200})
+    im = Image.open(io.BytesIO(base64.b64decode(bare["pngBase64"]))).convert("RGBA")
+    assert im.getpixel((5, 5))[3] == 0, "no background asked for: still transparent"

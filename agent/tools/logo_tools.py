@@ -194,8 +194,11 @@ def make_logo_tools(root_for_writes=None, *, can_export: bool = True) -> list:
 
         `svg` is the markup itself. `question` narrows the description -- ask
         about the thing you are unsure of ("is the monogram centred?", "does
-        the wordmark overlap the icon?"). `background` is a hex colour for
-        checking a mark against dark and light; empty means transparent.
+        the wordmark overlap the icon?"). `background` is the hex colour it is
+        rendered ON -- white when empty. Check a mark on a dark colour too.
+
+        This is for YOU to check your work. It shows the operator nothing:
+        to put a design in front of them, use show_images.
 
         Returns a description of the rendered image.
         """
@@ -204,8 +207,9 @@ def make_logo_tools(root_for_writes=None, *, can_export: bool = True) -> list:
             return bad
         args = {"svg": svg, "width": max(16, min(int(width or 512), 2048)),
                 "height": max(16, min(int(height or 512), 2048))}
-        if background:
-            args["background"] = background
+        # White unless told otherwise: a transparent render is judged against
+        # whatever background the vision model assumes, which is not an answer.
+        args["background"] = background or "#ffffff"
         r = await _call("render_png", args)
         err = _fmt("render_png", r)
         if err:

@@ -124,15 +124,21 @@ async function run(op, args) {
       // gap preview_app closed for a running page: sharp is already here to
       // rasterise, and the caller turns this into something it can look at.
       const sharp = (await import('sharp')).default;
-      const png = await sharp(Buffer.from(args.svg, 'utf8'), { density: args.density || 144 })
+      // `background` goes BEHIND the logo, via flatten. It used to be passed
+      // only to resize(), where it fills the letterbox padding and nothing
+      // else -- so with a logo already the target's shape, every "how does it
+      // look on dark / on white" render came back transparent and the vision
+      // model judged it on a background of its own choosing. Found 2026-09-23:
+      // a wordmark all but invisible on dark was described as legible.
+      let img = sharp(Buffer.from(args.svg, 'utf8'), { density: args.density || 144 })
         .resize({
           width: args.width || 512,
           height: args.height || 512,
           fit: 'contain',
-          background: args.background || { r: 255, g: 255, b: 255, alpha: 0 },
-        })
-        .png()
-        .toBuffer();
+          background: { r: 0, g: 0, b: 0, alpha: 0 },
+        });
+      if (args.background) img = img.flatten({ background: args.background });
+      const png = await img.png().toBuffer();
       return { success: true, pngBase64: png.toString('base64'), bytes: png.length };
     }
     default:

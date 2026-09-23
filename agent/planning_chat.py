@@ -225,14 +225,24 @@ actually go anywhere real. You cannot write to /org-memory/ at all.
 - browse_page: load a real webpage and read it -- pass screenshot=True to also get a description of what \
 it actually looks like (layout, colors, typography), which is exactly what you need when the user wants to \
 reference or compare a design/competitor site.
-- logo_render(svg, question=""): render an SVG and get told what it actually shows. You write SVG \
-blind otherwise -- this is how you find out whether your coordinates add up to a mark or to \
-overlapping shapes. Render every concept before you offer it.
+- show_images(images): PUT IMAGES IN FRONT OF THE OPERATOR, in this chat -- each an "svg" you wrote \
+or a "path" to an image in the repo, with a "caption" (and a "background" to show it on dark or light). \
+It is the only tool that shows them anything: logo_render, describe_image, browse_page and preview_app \
+tell YOU what something looks like and show them nothing. When they ask to see something, or a choice \
+is theirs to make by looking, show it -- and repeat the image lines it returns in your reply.
+- logo_render(svg, question="", background=""): render an SVG and get told what it actually shows, on \
+white unless you name a background. You write SVG blind otherwise -- this is how you check your own \
+work before you show it. It is a check for you, not an approval: only the operator approves a design.
 - logo_text_to_path(svg), logo_optimize_svg(svg), logo_trace_image(image_path): outline the type in a \
 wordmark so it does not depend on the viewer's fonts, clean up the markup, and vectorise an existing \
-PNG/JPG logo. Nothing here DESIGNS a logo -- you write the SVG; these handle everything after that. \
-Exporting the full brand kit (PNGs, favicons, social images, BRAND.md) belongs to the build task, not \
-to this conversation: put the finished SVG in the plan and say where the kit should go.
+PNG/JPG logo. Nothing here DESIGNS a logo -- you write the SVG; these handle everything after that.
+- Logo work happens HERE, in planning, and in this order. (1) If the project already has a logo, it is \
+the starting point: "make the logo a proper SVG" means THAT logo, vectorised and refined -- \
+logo_trace_image it, clean the result, keep its look -- not a new design, unless they ask for one. \
+(2) Show the options with show_images -- the current logo beside your versions, on the site's real \
+backgrounds -- and ask which they want. (3) Iterate on what they say, showing each round. (4) Only \
+once they have chosen, put that exact, final SVG in the plan, with where the files go. Exporting the \
+brand kit (PNGs, favicons, social images, BRAND.md) is the build task's job, from that SVG.
 - preview_app(repo, command, port, path="/", question=""): run one of the operator's projects in a sandbox \
 and LOOK at it in a real browser. Use it when the question is about how something LOOKS -- a restyle, a \
 layout, "what does this page do now", or comparing one project's UI against another's. The CSS tells you \
@@ -364,6 +374,10 @@ async def build_planning_agent(
     logo_tools = make_logo_tools(
         lambda: (PROJECTS.get(repo) or {}).get("sandbox") or "", can_export=False,
     )
+    # And showing the operator what it made (agent/tools/show_tools.py): the
+    # logo tools only let the planner look, and a design is chosen by looking.
+    from agent.tools.show_tools import make_show_images_tool  # noqa: PLC0415
+    show_tools = [make_show_images_tool(repo, lambda: (PROJECTS.get(repo) or {}).get("sandbox") or "")]
 
     # What past tasks ran into (agent/tools/history_tools.py). The planner is
     # the seat this is worth most to: "we tried that in June and it
@@ -433,7 +447,7 @@ async def build_planning_agent(
         planning_model_role = "agent-planning-chat-hard" if difficulty == "HARD" else "agent-planning-chat"
     agent = create_deep_agent(
         model=llm_for_role(config, planning_model_role, reasoning_effort="high", timeout=_rs.as_int("planning_model_call_timeout_s")),
-        tools=[tool_by_name["describe_image"], *planning_tools, *github_tools, *logo_tools,
+        tools=[tool_by_name["describe_image"], *planning_tools, *github_tools, *logo_tools, *show_tools,
                *history_tools, *memory_tools],
         system_prompt=PLANNING_SYSTEM_PROMPT.format(
             repo=repo,

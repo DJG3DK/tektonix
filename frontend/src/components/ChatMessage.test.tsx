@@ -14,6 +14,32 @@ describe("ChatMessage", () => {
     expect(container.textContent).toBe("");
   });
 
+  it("draws an image the agent showed, in place in its reply", () => {
+    const url = "/api/artifacts/demo/0123456789abcdef0123456789abcdef";
+    const text = `Here is option A:\n![A: traced from your logo](${url})\nWhich do you prefer?`;
+    const entry = { node: "planner", summary: text, detail: text, timestamp: new Date().toISOString() } as unknown as LogEntry;
+    render(<ChatMessage entry={entry} />);
+    const img = screen.getByRole("img", { name: "A: traced from your logo" });
+    expect(img.getAttribute("src")).toBe(url);
+    expect(screen.getByText(/Which do you prefer/)).toBeTruthy();
+  });
+
+  it("never turns an outside URL into an image", () => {
+    const text = "![pixel](https://tracker.example/p.gif) ![x](/api/artifacts/demo/not-an-id)";
+    const entry = { node: "planner", summary: text, detail: text, timestamp: new Date().toISOString() } as unknown as LogEntry;
+    const { container } = render(<ChatMessage entry={entry} />);
+    expect(container.querySelector("img")).toBeNull();
+    expect(container.textContent).toContain("tracker.example");
+  });
+
+  it("shows a tool result's images without opening the output", () => {
+    const url = "/api/artifacts/demo/0123456789abcdef0123456789abcdef";
+    const entry = { node: "work", summary: "tool result: shown", detail: `![Current logo](${url})\n\nShown in the chat.`,
+                    timestamp: new Date().toISOString() } as unknown as LogEntry;
+    render(<ChatMessage entry={entry} />);
+    expect(screen.getByRole("img", { name: "Current logo" })).toBeTruthy();
+  });
+
   it("still renders an ordinary agent line", () => {
     const entry = { node: "planner", summary: "Reading the map", detail: "Reading the map", timestamp: new Date().toISOString() } as unknown as LogEntry;
     const { container } = render(<ChatMessage entry={entry} />);

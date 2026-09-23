@@ -1081,6 +1081,11 @@ def _make_run_checks_tool(repo_root: str, repo: str):
 # the repo) before it stumbles onto /workspace via bash trial-and-error.
 _LOGO_GUIDANCE = """MAKING A LOGO OR A BRAND KIT:
 
+If the plan you were given carries an agreed SVG, THAT is the logo: the \
+design was chosen in planning, by the operator, by looking at it. Export it \
+(steps 3-5 below); do not redesign it. And if the project already has a logo \
+and nobody asked for a new one, start from it with `logo_trace_image`.
+
 You write the SVG yourself -- nothing here designs one for you. The logo \
 tools do the parts after that, and the order matters:
 
@@ -1102,6 +1107,11 @@ tools do the parts after that, and the order matters:
 `logo_trace_image` turns an existing PNG or JPG logo into paths, for a \
 rebrand where the mark already exists. A trace is a starting point, not a \
 finished logo.
+
+`logo_render` is a check for you and shows the operator nothing. \
+`show_images` puts images in the task's log for them to see -- use it for \
+the finished mark, and whenever what you made is something they judge by \
+looking.
 
 The exported files are binary assets in the repo: commit them with the \
 change that uses them, and say in your final summary that they are there.
@@ -1737,7 +1747,10 @@ async def build_deep_agent(
     from agent.tools.logo_tools import make_logo_tools  # noqa: PLC0415
 
     logo_tools = make_logo_tools(lambda: repo_root)
-    project_tools = [*project_tools, *logo_tools]
+    # Showing the operator an image -- a render, a screenshot, the exported
+    # logo -- in the task's log (agent/tools/show_tools.py).
+    from agent.tools.show_tools import make_show_images_tool  # noqa: PLC0415
+    project_tools = [*project_tools, *logo_tools, make_show_images_tool(repo, lambda: repo_root)]
 
     # What past tasks ran into (agent/tools/history_tools.py). Empty when the
     # installation has no history index, so no seat carries a pair of tools

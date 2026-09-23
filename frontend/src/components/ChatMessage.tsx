@@ -1,5 +1,6 @@
 import { memo, useState } from "react";
 import { modelColor, relativeTime, shortModel } from "../format";
+import { artifactImages, splitArtifactImages } from "../artifactImages";
 import type { LogEntry } from "../types";
 import { TektonixMark } from "./TektonixMark";
 import "./ChatMessage.css";
@@ -94,6 +95,43 @@ export function renderWithColorSwatches(text: string): React.ReactNode {
   }
   if (lastIndex < text.length) nodes.push(text.slice(lastIndex));
   return nodes.length > 1 ? nodes : text;
+}
+
+export function ArtifactImage({ caption, url }: { caption: string; url: string }) {
+  return (
+    <figure className="chat-image">
+      <a href={url} target="_blank" rel="noopener noreferrer" title="Open full size">
+        <img src={url} alt={caption} loading="lazy" />
+      </a>
+      {caption && <figcaption>{caption}</figcaption>}
+    </figure>
+  );
+}
+
+/** Prose with the agent's shown images drawn in place, and colour swatches
+ * in the text between them. */
+export function RichText({ text }: { text: string }) {
+  const parts = splitArtifactImages(text);
+  if (parts.length === 1 && parts[0].kind === "text") return <>{renderWithColorSwatches(text)}</>;
+  return (
+    <>
+      {parts.map((p, i) => p.kind === "image"
+        ? <ArtifactImage key={i} caption={p.caption} url={p.url} />
+        : p.text.trim() ? <span key={i}>{renderWithColorSwatches(p.text)}</span> : null)}
+    </>
+  );
+}
+
+/** The images in a tool result, shown without opening the output -- they are
+ * the point of the call. */
+export function ToolResultImages({ body }: { body: string }) {
+  const images = artifactImages(body);
+  if (!images.length) return null;
+  return (
+    <div className="chat-images">
+      {images.map((im) => <ArtifactImage key={im.url} caption={im.caption} url={im.url} />)}
+    </div>
+  );
 }
 
 /** "calling: bash({'command': 'ls -la'})" -> [{name: "bash", args: "..."}] */
@@ -285,6 +323,7 @@ function ChatMessageImpl({ entry, prevEntry }: { entry: LogEntry; prevEntry?: Lo
           <span className="chat-time">{relativeTime(entry.timestamp)}</span>
           <code className="chat-tool-result-preview">{body.replace(/\s+/g, " ").slice(0, 90)}</code>
         </ExpandToggle>
+        <ToolResultImages body={body} />
         {open && <pre className="chat-tool-result-body">{body}</pre>}
       </div>
     );
@@ -323,7 +362,7 @@ function ChatMessageImpl({ entry, prevEntry }: { entry: LogEntry; prevEntry?: Lo
           </div>
         )}
         <div className="chat-bubble chat-bubble--agent">
-          <div className="chat-text">{renderWithColorSwatches(text)}</div>
+          <div className="chat-text"><RichText text={text} /></div>
         </div>
       </div>
     </div>
