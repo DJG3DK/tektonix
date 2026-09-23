@@ -74,7 +74,7 @@ what proves the injection reached it.
 ## Split `agent/server.py` along the seams that already exist
 
 **Status:** started, 2026-09-21. Five seams out (`server.py` was 5,659 lines
-before them and is 4,918 on 2026-09-23):
+before them and is 4,869 on 2026-09-23):
 `push`, `analytics`, `env_config`, `settings` (with the audit log it is
 interleaved with), `model_config`. Do not flatten the rest in one pass.
 
@@ -93,8 +93,10 @@ default, the recorder and the graph stream. Exposing the narrow function on
 inbox routes share -- reaches it too, and lifting that helper drags the chain
 across.
 
-**So: extract `_start_task` and `_run_task` into `agent/tasks.py` first**,
-the way the registries came out. Then `github`, `tasks` and `planning` are
+**`_start_task` and `_run_task` are now in `agent/tasks.py`** (2026-09-23),
+the way the registries came out: `start_task(app, ...)` / `run_task(app, ...)`,
+reaching the graph stream through `app.state.stream_graph`, and importing
+nothing from `server.py` (`tests/test_tasks_module.py` pins that). Then `github`, `tasks` and `planning` are
 ordinary cuts. Do not extract `provisioning.py`. An automated lift that
 follows undefined names WILL follow this chain into most of server.py --
 that is how this was found, and it is why the cut waits for the move.
@@ -130,7 +132,8 @@ by `__name__` and every test overriding auth is keyed on identity.
 
 `agent/server.py` still holds the `github`, `tasks`, `planning`, auth and
 uploads seams and the review proxy, and every one of them waits on the same
-move: `_start_task` / `_run_task` into `agent/tasks.py` (above). The repo
+move, and that move is done: `_start_task` / `_run_task` are in `agent/tasks.py`
+(above). The repo
 check inside each handler is now pinned too — `tests/test_repo_scope.py`
 snapshots every repo-scoped route with the check that guards it, so a seam
 that moves and loses `check_repo_access` fails CI (2026-09-23).
