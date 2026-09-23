@@ -44,6 +44,11 @@ class _FakeAsyncClient:
 
 
 def test_router_balance_proxies_the_review_service_through_this_apps_own_auth(monkeypatch):
+    from agent.tools import review_gate
+    # The headers are review_gate's, computed from REVIEW_CONTROL_SECRET at
+    # import. Set explicitly: CI runs with no .env, where they are empty, and
+    # this asserts the route passes them on -- not what this box's secret is.
+    monkeypatch.setattr(review_gate, "_CONTROL_HEADERS", {"X-Review-Secret": "the-secret"})
     monkeypatch.setitem(srv.app.dependency_overrides, srv.require_full_auth, lambda: _FAKE_USER)
     monkeypatch.setattr(srv.httpx, "AsyncClient", _FakeAsyncClient)
     client = TestClient(srv.app)
@@ -56,7 +61,7 @@ def test_router_balance_proxies_the_review_service_through_this_apps_own_auth(mo
     # review_gate's address, not a copy of it (2026-09-23 review, 8.1), and the
     # control secret, which the review service's reads now require (3.1).
     assert _FakeAsyncClient.last_url == f"http://{REVIEW_SERVICE_HOST}:{REVIEW_SERVICE_PORT}/api/router/balance"
-    assert "X-Review-Secret" in _FakeAsyncClient.last_headers
+    assert _FakeAsyncClient.last_headers == {"X-Review-Secret": "the-secret"}
 
 
 def test_router_balance_requires_login(monkeypatch):
