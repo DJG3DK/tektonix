@@ -121,5 +121,6 @@ def test_resuming_after_an_approval_reclaims_first():
 
     from agent.nodes import work
     src = inspect.getsource(work.work_node)
-    branch = src[src.index('if state.get("approval_decision"):'):src.index("elif not (state[\\"iteration_count\\"]")]
+    start = src.index('if state.get("approval_decision"):')
+    branch = src[start:src.index("elif not (", start)]
     assert "reclaim_own_stash" in branch
