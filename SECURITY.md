@@ -212,6 +212,26 @@ the fix, and it is not built.
 - **A project with no checks** is reviewed without running anything, so none
   of this applies to it.
 
+## Sessions, links and second factors
+
+### Approve links
+
+A GitHub inbox alert on Telegram or email carries a link that can start a task
+with nobody signed in — the person is on a phone with no session. The token in
+it is the credential: HMAC-signed, bound to one inbox item, valid for 48 hours,
+and single-use. Opening it (`GET`) only shows what would happen and a button;
+messengers fetch links for previews, so a `GET` never acts. The button posts
+the token in the form body, and that `POST` is refused cross-site (the same
+`Sec-Fetch-Site` rule as the review dashboard) and rate-limited per address.
+Both pages are `no-store`, and every response is `Referrer-Policy: no-referrer`.
+
+What stays is that the token is in the link's URL, because a link is what an
+alert can carry. Anywhere the URL is recorded before it is used — a proxy log,
+a chat backup, a screenshot — someone holding it can start that one task. The
+task still goes through the review gate and, with final merge review on, stops
+for a person before anything merges; the budget is the project's inbox budget.
+Treat an alert link like the alert: it is for the person it was sent to.
+
 ## Deploying this safely
 
 - **Never expose the dashboard directly to the internet.** It is an operator

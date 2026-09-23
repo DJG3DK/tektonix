@@ -1032,9 +1032,24 @@ button{font:inherit;font-weight:700;border:0;border-radius:8px;padding:12px 18px
 <body><div class="card">{body}</div></body></html>"""
 
 
-def _approve_html(body: str) -> Response:
+def _approve_html(body: str, status_code: int = 200) -> Response:
     from fastapi.responses import HTMLResponse
-    return HTMLResponse(_APPROVE_PAGE.replace("{body}", body))
+    # no-store: the confirmation page carries a live token in its form, and
+    # the GET's own URL carries it too. Referrer-Policy: no-referrer is set on
+    # every response already, so it does not leak onward; this keeps it out of
+    # proxy and browser caches as well.
+    return HTMLResponse(_APPROVE_PAGE.replace("{body}", body), status_code=status_code,
+                        headers={"Cache-Control": "no-store"})
+
+
+def _approve_is_cross_site(request: Request) -> bool:
+    """The same rule the review dashboard's mutating routes use
+    (services/agent-review/server.js): a browser marks where a request came
+    from, and only its own page (same-origin) or a direct navigation (none)
+    may act. Absent means a non-browser client, which the token alone
+    governs -- as it always has."""
+    sfs = request.headers.get("sec-fetch-site")
+    return bool(sfs) and sfs not in ("same-origin", "none")
 
 
 # Fixed wording, looked up by reason: nothing an exception carries reaches
@@ -1090,6 +1105,19 @@ async def github_approve_page(t: str = ""):
 
 @app.post("/api/github/approve")
 async def github_approve_submit(request: Request):
+    """The approve link's one acting request. Its token is the credential and
+    it is single-use; on top of that, a page elsewhere cannot submit it (the
+    cross-site check) and nobody can try tokens quickly (the rate limit).
+    What stays is that the token sits in the GET's URL -- SECURITY.md, "Approve
+    links"."""
+    if _approve_is_cross_site(request):
+        return _approve_html("<h1>Not done</h1><p class=err>This link must be confirmed from its own "
+                             "page. Open it again and press the button there.</p>", 403)
+    try:
+        rate_limit.check_rate_limit(request, "github-approve")
+    except HTTPException:
+        return _approve_html("<h1>Slow down</h1><p class=err>Too many attempts from here. "
+                             "Try again in a few minutes.</p>", 429)
     form = await request.form()
     t = str(form.get("t") or "")
     try:

@@ -29,6 +29,10 @@ _LIMITS = {
     "verify-2fa": (5, 60, 300),
     "reset-password": (5, 300, 900),
     "reset-request": (3, 300, 900),
+    # The approve link's POST (agent/server.py): unauthenticated by design --
+    # the token is the credential -- so it gets the same brake as a password
+    # guess. Each token is single-use; this bounds how fast anyone can try.
+    "github-approve": (10, 60, 300),
 }
 
 # (ip, action) -> list[timestamp]  and  (ip, action) -> locked_until
