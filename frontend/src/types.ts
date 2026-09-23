@@ -449,3 +449,77 @@ export interface PlanningStreamEvent {
    *  card appears without waiting for the sidebar's next poll. */
   new_project?: NewProjectProposal | null;
 }
+
+/* The golden eval suite (agent/routers/evals.py, evals/README.md). */
+export interface EvalRunSummary {
+  name: string;
+  started_at: string | null;
+  finished_at: string | null;
+  duration_s: number | null;
+  notes: string;
+  tasks_total: number | null;
+  tasks_attempted: number | null;
+  tasks_passed: number | null;
+  pass_rate: number | null;
+  total_cost_usd: number | null;
+  stopped_early: boolean;
+  full: boolean;
+  by_category: Record<string, { tasks: number; passed: number }>;
+  benchmarks: Partial<BenchmarkWindow> | null;
+  failed: string[];
+  results: Record<string, boolean>;
+}
+
+export interface EvalStatus {
+  running: boolean;
+  pid: number | null;
+  started_at: number | null;
+  finished_at: number | null;
+  notes: string;
+  only: string[];
+  tasks_total: number;
+  done: number;
+  passed: number;
+  spent_usd: number;
+  results: { id: string; passed: boolean; cost_usd: number; outcome: string }[];
+  exit_code: number | null;
+  report: string | null;
+  stopped_by?: string;
+}
+
+export interface EvalsOverview {
+  runs: EvalRunSummary[];
+  status: EvalStatus | null;
+  suite: { tasks: number; by_category: Record<string, number>; ids: string[]; error?: string };
+  estimate: { cost_usd: number | null; duration_s: number | null; from_run: string | null };
+}
+
+export interface EvalAssertionRow {
+  kind: string;
+  describe: string;
+  ok: boolean;
+  undetermined: boolean;
+  detail: string;
+}
+
+export interface EvalTaskRow {
+  id: string;
+  fixture: string;
+  category: string;
+  passed: boolean;
+  outcome: string;
+  escalation_reason: string | null;
+  review_verdict: string | null;
+  iterations: number;
+  cost_usd: number;
+  duration_s: number;
+  changed_paths: string[];
+  diff?: string;
+  assertions: EvalAssertionRow[];
+  error: string;
+}
+
+export interface EvalReport {
+  tasks: EvalTaskRow[];
+  summary: EvalRunSummary;
+}

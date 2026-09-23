@@ -1,0 +1,103 @@
+/* Golden suite panel. Frame, cards and headings come from .analytics-section
+   and .analytics-card like every section on the page; this styles only what
+   the panel adds: the scorecard, the run controls, the history and tasks. */
+
+.evals-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.evals-head h2 { margin-bottom: 4px; }
+
+.evals-run-btn, .evals-btn-secondary {
+  border: 0; border-radius: 8px; padding: 9px 16px; min-height: 38px;
+  font: inherit; font-size: 13px; font-weight: 700; cursor: pointer; white-space: nowrap;
+}
+/* Dark text on the accent, as the theme's own primary buttons use: every
+   theme's accent is a light-on-dark colour (theme.css). */
+.evals-run-btn { background: var(--accent); color: #0a0d12; }
+.evals-run-btn:hover:not(:disabled) { filter: brightness(1.08); }
+.evals-btn-secondary { background: var(--surface-hover); color: var(--text-dim); }
+.evals-run-btn:disabled, .evals-btn-secondary:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.evals-confirm, .evals-progress {
+  margin: 12px 0; padding: 14px 16px; border: 1px solid var(--border);
+  border-radius: 10px; background: var(--surface-raised); font-size: 13px; line-height: 1.5;
+}
+.evals-confirm p { margin: 0 0 10px; color: var(--text-dim); }
+.evals-notes {
+  width: 100%; box-sizing: border-box; padding: 8px 10px; border-radius: 6px;
+  border: 1px solid var(--border); background: var(--surface-sunken); color: var(--text); font: inherit;
+}
+.evals-confirm-row { display: flex; justify-content: flex-end; gap: 10px; margin-top: 10px; }
+
+.evals-progress-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.evals-bar { display: block; height: 6px; border-radius: 999px; background: var(--surface-sunken); overflow: hidden; margin-top: 10px; }
+.evals-bar-fill { display: block; height: 100%; background: var(--green, #3fb950); transition: width 0.4s ease; }
+.evals-bar--mini { margin: 0; width: 80px; flex-shrink: 0; }
+.evals-live { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+
+.evals-chip {
+  display: inline-flex; align-items: center; gap: 4px; padding: 2px 9px; border-radius: 999px;
+  font-size: 11.5px; font-weight: 600; border: 1px solid var(--border); white-space: nowrap;
+}
+.evals .is-pass { color: var(--green, #3fb950); }
+.evals .is-fail { color: var(--red, #f85149); }
+.evals-chip.is-pass { border-color: color-mix(in srgb, var(--green, #3fb950) 45%, transparent); }
+.evals-chip.is-fail { border-color: color-mix(in srgb, var(--red, #f85149) 45%, transparent); }
+
+.evals-scorecard {
+  display: flex; align-items: center; gap: 24px; flex-wrap: wrap; margin: 14px 0;
+  padding: 18px 20px; border: 1px solid var(--border-strong); border-radius: 12px;
+  background: linear-gradient(135deg, color-mix(in srgb, var(--green, #3fb950) 10%, var(--surface-raised)), var(--surface-raised));
+}
+.evals-score { display: flex; flex-direction: column; }
+.evals-score-big { font-size: 40px; font-weight: 800; line-height: 1; font-variant-numeric: tabular-nums; }
+.evals-score-label { color: var(--text-dim); font-size: 13px; margin-top: 4px; }
+.evals-score-meta { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--text-dim); flex: 1; min-width: 220px; }
+.evals-score-notes { font-style: italic; }
+.evals-cats { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.evals-copy { align-self: flex-start; }
+
+.evals-subhead { font-size: 13px; margin: 18px 0 8px; color: var(--text-dim); font-weight: 700; }
+.evals-compare { font-weight: 400; }
+
+.evals-history { display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+.evals-history-row {
+  display: flex; align-items: center; gap: 12px; padding: 8px 12px; border: 0; border-bottom: 1px solid var(--border);
+  background: none; color: var(--text); font: inherit; font-size: 12.5px; text-align: left; cursor: pointer;
+}
+.evals-history-row:last-child { border-bottom: 0; }
+.evals-history-row:hover { background: var(--surface-hover); }
+.evals-history-row.is-current { background: var(--surface-raised); }
+.evals-history-date { font-variant-numeric: tabular-nums; width: 118px; flex-shrink: 0; color: var(--text-dim); }
+.evals-history-score { width: 48px; flex-shrink: 0; font-weight: 700; font-variant-numeric: tabular-nums; }
+.evals-history-cost { width: 52px; flex-shrink: 0; color: var(--text-dim); font-variant-numeric: tabular-nums; }
+.evals-history-notes { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-dim); }
+.evals-partial { font-style: normal; font-size: 11px; padding: 1px 6px; border-radius: 999px; border: 1px solid var(--border); margin-right: 4px; }
+
+.evals-tasks { display: flex; flex-direction: column; gap: 4px; }
+.evals-task { border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.evals-task.is-fail { border-color: color-mix(in srgb, var(--red, #f85149) 40%, var(--border)); }
+.evals-task-row {
+  width: 100%; display: flex; align-items: center; gap: 10px; padding: 8px 12px;
+  border: 0; background: var(--surface-raised); color: var(--text); font: inherit; font-size: 12.5px; text-align: left; cursor: pointer;
+}
+.evals-task-row:hover { background: var(--surface-hover); }
+.evals-task-mark { width: 14px; font-weight: 800; }
+.evals-task.is-pass .evals-task-mark { color: var(--green, #3fb950); }
+.evals-task.is-fail .evals-task-mark { color: var(--red, #f85149); }
+.evals-task-id { font-family: var(--mono, ui-monospace, monospace); }
+.evals-task-cat { color: var(--text-dim); font-size: 11.5px; }
+.evals-task-meta { margin-left: auto; color: var(--text-dim); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.evals-badge { font-size: 10.5px; font-weight: 700; padding: 1px 7px; border-radius: 999px; border: 1px solid currentColor; }
+.evals-task-detail { padding: 10px 14px 12px; font-size: 12.5px; display: flex; flex-direction: column; gap: 6px; }
+.evals-task-line { color: var(--text-dim); }
+.evals-assert { font-family: var(--mono, ui-monospace, monospace); font-size: 11.5px; word-break: break-word; }
+.evals-assert-detail { color: var(--text-dim); margin: 2px 0 0 16px; white-space: pre-wrap; }
+.evals-diff {
+  margin: 4px 0 0; max-height: 320px; overflow: auto; padding: 10px; border-radius: 6px;
+  background: var(--surface-sunken); font-size: 11.5px; line-height: 1.45;
+}
+
+@media (max-width: 700px) {
+  .evals-head { flex-direction: column; }
+  .evals-history-cost, .evals-bar--mini { display: none; }
+  .evals-task-meta { display: none; }
+}

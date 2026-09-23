@@ -1312,3 +1312,36 @@ export async function pollGitHubNow(): Promise<{ results: GitHubInboxResponse["l
   if (!res.ok) throw new Error(await errText(res));
   return res.json();
 }
+
+// ---------------------------------------------------------------------------
+// The golden eval suite (admin). A run is a detached process on the server;
+// these read its history and progress and start or stop one.
+// ---------------------------------------------------------------------------
+
+async function evalsJson<T>(res: Response, what: string): Promise<T> {
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.detail || `${what} failed: ${res.status}`);
+  }
+  return res.json();
+}
+
+export async function getEvals(): Promise<import("./types").EvalsOverview> {
+  return evalsJson(await apiFetch(`${API_BASE}/evals`), "loading evals");
+}
+
+export async function getEvalRun(name: string): Promise<import("./types").EvalReport> {
+  return evalsJson(await apiFetch(`${API_BASE}/evals/runs/${encodeURIComponent(name)}`), "loading the run");
+}
+
+export async function startEvalRun(notes: string, only?: string[]): Promise<{ ok: boolean; tasks: number }> {
+  return evalsJson(await apiFetch(`${API_BASE}/evals/run`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ notes, only: only && only.length ? only : null }),
+  }), "starting the run");
+}
+
+export async function stopEvalRun(): Promise<void> {
+  await evalsJson(await apiFetch(`${API_BASE}/evals/stop`, { method: "POST" }), "stopping the run");
+}
