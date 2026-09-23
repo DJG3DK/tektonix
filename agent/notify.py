@@ -158,6 +158,8 @@ _STATUS_LINES = {
     "done":              "✅ Task DONE",
     "error":             "🔴 Task ERROR",
     "auto_resumed":      "🔄 Task auto-resumed after a restart",
+    "auto_healed":       "🩹 Task auto-healed — back through the gate",
+    "auto_concluded":    "✅ Task's work is already on main — marked done",
     "planning_error":    "🔴 Planning turn FAILED",
 }
 

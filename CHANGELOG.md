@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### Tasks heal themselves from infrastructure failures
+
+Sixteen of the last thirty days' nineteen escalations were plumbing, and each
+was fixed by clicking Resume once the cause had gone. A **supervisor** now does
+that: every minute it closes tasks whose work is already on main, and puts a
+task escalated by an infrastructure failure back through the gate once the
+cause has cleared — with backoff, a cap (`auto_heal_attempts`, 0 = off), and
+never for an escalation older than a day or one that is the task's own
+failure. Every heal lands in the task's log and as an alert.
+
+Behind it, the **task lifecycle is one tested table** (`agent/lifecycle.py`):
+every action, the states it may start from, and the exact state it writes,
+with every state × action pair walked in CI. The ship step also always runs on
+the task's own branch now, whoever used the workspace last.
+
 ### The reviewer stopped approving checks it never ran
 
 A project that added CI after onboarding had its linters and bundler living in

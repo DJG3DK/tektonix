@@ -310,6 +310,21 @@ KNOBS: dict[str, dict] = {
         "env": None,
         "group": "Model & sandbox timeouts",
     },
+    "auto_heal_attempts": {
+        "label": "Auto-heal attempts per task",
+        "help": (
+            "How many times the supervisor may put a task escalated by an infrastructure "
+            "failure (the reviewer not answering, main moving under a merge, a dropped "
+            "connection) back through the gate on its own, once the cause has cleared. "
+            "Failures of the task itself are never healed. 0 turns healing off."
+        ),
+        "unit": "attempts",
+        "default": 3,
+        "min": 0,
+        "max": 10,
+        "env": "AUTO_HEAL_ATTEMPTS",
+        "group": "Budgets & loop limits",
+    },
 }
 
 # Seeded from env at import so a deployment that configured these the old way

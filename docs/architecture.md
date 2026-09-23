@@ -137,11 +137,36 @@ its checkpoint. Nothing is lost and every one of them is resumable:
 |---|---|---|
 | `pending_approval` | a gated action needs a yes, or `ask_user` asked a question | the operator answers (`POST /api/tasks/{id}/approve`) |
 | `pending_merge_approval` | the review passed; the final look is the operator's | the operator decides (`POST /api/tasks/{id}/merge-decision`) |
-| `escalated` | the agent cannot proceed (budget, a loop, a merge failure) | the operator resumes, optionally with more budget |
+| `escalated` | the agent cannot proceed (budget, a loop, a merge failure) | the operator resumes, optionally with more budget — or the supervisor heals it (below) |
 | `done` / `error` | settled | a resume, which is allowed and needs a message |
 
 A task is never a dead end: every state above can be resumed from the
 dashboard or `POST /api/tasks/{id}/resume`.
+
+**Every move between them is in one table.** `agent/lifecycle.py` holds each
+action (resume, approve or send back a merge, answer a gated command, save a
+hand edit, heal, conclude), the states it may start from, and the exact state
+patch it writes. The endpoints only do the I/O. `tests/test_lifecycle.py`
+walks every state × action and checks the invariants — an old approval never
+survives new work, the agent is never sent to work without an instruction,
+leaving `escalated` clears it — so a broken transition fails in CI rather than
+live.
+
+**The supervisor** (`agent/supervisor.py`) sweeps parked tasks every minute:
+
+- a task whose commit is already on main (merged, or rebased and landed by
+  someone else) is marked done;
+- a task escalated by an *infrastructure* failure — the reviewer not answering,
+  main moving under a merge, a dropped connection — is put back through the
+  gate once the cause has cleared, with backoff (1, 3, 10, 30 min), at most
+  `auto_heal_attempts` times (a runtime setting; 0 turns it off), and only if
+  it escalated within the last day;
+- anything else — budget, a loop, a review that will not converge, or a reason
+  it does not recognise — is left for the operator.
+
+A gate heal needs no model call; a work pass cut off mid-flight goes back to
+work with a note. Every heal is written into the task's log and sent as an
+alert.
 
 **One task per project.** Held as a Postgres *advisory* lock keyed by the
 project name (`agent/graph.py`), not an in-process lock — so a second worker

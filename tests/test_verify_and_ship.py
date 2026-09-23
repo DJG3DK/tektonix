@@ -35,6 +35,14 @@ def _stub_task_branch(monkeypatch):
 
     monkeypatch.setattr(vs, "ensure_task_branch", _ok)
 
+    # Same reason, for the ship step putting a task with a commit back on its
+    # own branch (restore_task_workspace, rebase=False).
+    async def _restored(repo_root, task_id, base_ref="main", rebase=True):
+        return {"ok": True, "branch": f"agent/{task_id}", "restored": True}
+
+    import agent.tools.git as _g
+    monkeypatch.setattr(_g, "restore_task_workspace", _restored)
+
 
 @pytest.fixture(autouse=True)
 def autodetect_calls(monkeypatch):

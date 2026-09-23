@@ -447,7 +447,8 @@ async def rebase_onto_base(repo_root: str, base_ref: str = "main") -> dict:
     }
 
 
-async def restore_task_workspace(repo_root: str, task_id: str, base_ref: str = "main") -> dict:
+async def restore_task_workspace(repo_root: str, task_id: str, base_ref: str = "main",
+                                 rebase: bool = True) -> dict:
     """Put a RESUMED task back on its own branch, on the current base, before it edits.
 
     sync_workspace_to_base runs only on a task's first pass. A task resumed
@@ -467,6 +468,10 @@ async def restore_task_workspace(repo_root: str, task_id: str, base_ref: str = "
         rebase (no git writes), but it can re-apply its change to the current
         code, reading the old version with `git show`. Leaving the branch on
         the stale base instead makes every later rebase conflict again.
+
+    rebase=False is the ship step's use (verify_and_ship_node): put the task
+    back on its own branch and stop there. That node rebases at its own
+    moments, and a branch with no commit yet is left exactly as it is.
 
     Never raises.
     """
@@ -492,6 +497,8 @@ async def restore_task_workspace(repo_root: str, task_id: str, base_ref: str = "
         out["salvaged_from"] = whose
 
     if not exists:
+        if not rebase:
+            return {**out, "restored": False, "reason": "no task branch yet"}
         return {**out, **await sync_workspace_to_base(repo_root, base_ref, task_id=task_id)}
 
     if not on_branch:
@@ -499,6 +506,8 @@ async def restore_task_workspace(repo_root: str, task_id: str, base_ref: str = "
         if not r["ok"]:
             return {**out, "ok": False, "reason": f"could not check out {branch}: {r['output'][:200]}"}
     await _claim_workspace(repo_root, task_id)
+    if not rebase:
+        return {**out, "restored": True}
 
     rb = await rebase_onto_base(repo_root, base_ref)
     if not rb.get("conflicts"):

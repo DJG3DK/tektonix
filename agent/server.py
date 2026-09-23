@@ -38,6 +38,7 @@ from agent import paths
 from agent import rate_limit
 from agent.config import PROJECTS, load_config, require_server_config
 from agent.observability import install_langsmith
+from agent import lifecycle
 from agent.outer_graph import build_outer_graph, initial_state, open_checkpointer, open_store, project_lock
 from agent.graph import read_with_retry
 from agent.routers import env_config as env_config_routes
@@ -97,6 +98,61 @@ def _log_warm_rates_failure(task: "asyncio.Task") -> None:
     exc = task.exception()
     if exc is not None:
         logger.error("CRITICAL: model-rate warm failed -- the budget ceiling has no rates: %r", exc)
+
+
+async def _apply_transition(graph, thread_config: dict, patch: dict, as_node: str | None) -> None:
+    """Write a lifecycle.Transition to the checkpoint. as_node=None leaves the
+    checkpoint's own next node in place (see agent/lifecycle.py)."""
+    if as_node is None:
+        await graph.aupdate_state(thread_config, patch)
+    else:
+        await graph.aupdate_state(thread_config, patch, as_node=as_node)
+
+
+async def _supervisor_deps():
+    """The supervisor's view of this server. See agent/supervisor.py."""
+    from agent import supervisor
+
+    async def list_tasks(repo: str) -> list[dict]:
+        items = await recent_items(app.state.store, ("tasks", repo), 50)
+        return [{**item.value, "task_id": item.value.get("task_id") or item.key} for item in items]
+
+    async def read_state(task_id: str):
+        snap = await app.state.graph.aget_state({"configurable": {"thread_id": task_id}})
+        if not snap or not snap.values:
+            return None, ""
+        return snap.values, (snap.config or {}).get("configurable", {}).get("checkpoint_id", "")
+
+    async def apply(task_id: str, values: dict, t, start: bool) -> bool:
+        # The same run-slot claim the endpoints use, so a heal and an
+        # operator's own click on the same task cannot both start a run.
+        try:
+            with _claim_run_slot(_running_tasks, task_id, "task is already running"):
+                await _apply_transition(app.state.graph, {"configurable": {"thread_id": task_id}},
+                                        t.patch, t.as_node)
+                if start:
+                    _running_tasks[task_id] = asyncio.create_task(_stream_graph(
+                        task_id, values["repo"], values["goal"], values.get("budget_usd", 0.0), None))
+            return True
+        except HTTPException:
+            return False
+
+    def notify(kind: str, repo: str, detail: str, values: dict) -> None:
+        _notify_bg(task_alert(kind, repo, values.get("goal", ""), values.get("cost_so_far"), detail), repo=repo)
+
+    return supervisor.Deps(
+        projects=PROJECTS,
+        list_tasks=list_tasks,
+        read_state=read_state,
+        is_running=lambda task_id: _running_tasks.get(task_id) is not None,
+        apply=apply,
+        write_meta=lambda repo, task_id, **u: write_task_meta(app.state.store, repo, task_id, **u),
+        notify=notify,
+        reviewer_up=supervisor.review_services_up,
+        live_clean=supervisor.live_is_clean,
+        landed=supervisor.commit_landed,
+        max_attempts=lambda: runtime_settings.as_int("auto_heal_attempts"),
+    )
 
 
 async def _auto_resume_orphaned_tasks(startup_delay: float = 5.0) -> None:
@@ -304,6 +360,10 @@ async def lifespan(app: FastAPI):
         # Reconnect any build task a restart orphaned -- see the function's
         # own docstring. Backgrounded so startup never blocks on it.
         auto_resume_task = asyncio.create_task(_auto_resume_orphaned_tasks())
+        # Heals infrastructure escalations and closes tasks whose work is
+        # already on main -- agent/supervisor.py.
+        from agent import supervisor
+        supervisor_task = asyncio.create_task(supervisor.run_forever(await _supervisor_deps()))
         # Service-restart alerts (operator request 2026-08-28): a router or
         # bot restarting mid-task is exactly the kind of event that used to
         # be discovered by watching a silent screen. The agent backend
@@ -319,6 +379,7 @@ async def lifespan(app: FastAPI):
         github_poll_task.cancel()
         service_watch_task.cancel()
         auto_resume_task.cancel()
+        supervisor_task.cancel()
         # Drain in-flight planning turns BEFORE this `async with` block exits
         # and closes the Postgres pools. Left to the runtime, these tasks are
         # cancelled during asyncio.run() cleanup -- AFTER the pools are gone --
@@ -3221,129 +3282,20 @@ async def resume_task(task_id: str, req: ResumeTaskRequest, user: User = Depends
 
         meta = await app.state.store.aget(("tasks", values["repo"]), task_id)
         store_status = meta.value.get("status") if meta else None
-        was_escalated = bool(values.get("escalated"))
-        # "done" is resumable too, not fully terminal like any other completion:
-        # the "two consecutive no-diff passes -> done, no changes needed"
-        # safeguard in verify_and_ship.py (built to stop genuinely-finished
-        # investigations from looping forever) can't always tell a real
-        # conclusion apart from the model dropping a tool call mid-investigation.
-        # An operator who judges a "done" verdict premature needs a way back in,
-        # the same as an escalation -- there's no substitute for a human catching
-        # a wrong "done" and saying "no, keep going."
-        was_done = (not was_escalated) and store_status == "done"
-        # "running" here means orphaned (Store says running, nothing actually
-        # driving it) rather than genuinely running, since the endpoint itself
-        # already 409s above when task_id is truly in _running_tasks.
-        # "stopped" is the operator's own Stop button (/stop below) -- same
-        # "nothing lost, just paused" situation as an orphaned task, so it's
-        # resumable through the exact same non-replanning path.
-        # audit H-20: "error" is resumable too. verify_and_ship's catch-all exists
-        # specifically to route around an unresumable error status, but anything
-        # raising outside that handler still lands with an intact checkpoint the
-        # endpoint used to refuse -- contradicting "a task is never a dead end."
-        # The checkpoint is intact, so a resume continues from the last good state.
-        resumable = was_escalated or was_done or store_status in ("running", "stopped", "error")
-        if not resumable:
-            raise HTTPException(409, f"task status is {store_status!r} -- nothing to resume")
-        if was_done and not req.message:
-            # Unlike an escalation (which always has a real reason to restate),
-            # a "done" task has nothing to nudge with on its own -- silently
-            # reopening it with no instruction would just re-run the same
-            # investigation and likely land on the same premature conclusion.
-            raise HTTPException(400, "resuming a done task requires a message telling it what to do next")
-
-        # A bare float let a negative value shrink the ceiling below what has
-        # already been spent (making the guard fire immediately and look like a
-        # crash) and let an enormous one defeat the budget entirely. Bound it to a
-        # sane top-up range; the field is a *delta*, not a new total. Zero is a
-        # valid delta: the dashboard's resume panel only shows the budget field
-        # when the task is nearly out of money and sends 0 otherwise (a merge
-        # failure or an operator Stop has nothing to do with cost), and the
-        # escalated branch below already words the note for "no budget added".
-        # Rejecting 0 left every such resume stuck on a 400 with no field to fix.
+        # Bounds the top-up before anything else: the field is a delta, and a
+        # negative or enormous one is refused rather than applied.
         _check_budget_topup(req.additional_budget_usd)
-        new_budget = values["budget_usd"] + req.additional_budget_usd
-        # max_iterations is set once at task creation (40) and, unlike
-        # budget_usd, was never bumped on resume -- every work<->verify_and_ship
-        # cycle across the task's entire lifetime counts against that same fixed
-        # cap, no matter how many times it's legitimately been resumed (backend
-        # restarts, manual stop/resume, operator nudges). Without growing it on
-        # each resume, a task resumed several times over one long session could
-        # hit iteration_count == max_iterations with cost_so_far nowhere near
-        # budget_usd -- an iteration-count artifact, not real futility. +40 per
-        # resume mirrors how budget_usd already grows here.
-        new_max_iterations = values.get("max_iterations", 40) + 40
-        # Explicit even though initial_state() already sets this for any task
-        # created after task_id was added to AgentState -- this closes the gap
-        # for older tasks that predate that field.
-        patch = {"task_id": task_id, "budget_usd": new_budget, "max_iterations": new_max_iterations}
-        approved = values.get("merge_approved_sha")
-        if was_escalated and approved and approved == values.get("committed_sha") and not req.message:
-            # Approved, committed, and escalated only on the way out -- the
-            # review service timing out, a push failing. The work is finished,
-            # so this does not go back to work: no pending_feedback, and
-            # _route_after_verify takes the approved-merge path straight into
-            # verify_and_ship's fast path (re-review, then merge or PR). The
-            # generic branch below sent five such tasks on 2026-09-23 into a
-            # paid work pass that redid committed changes. An operator message
-            # still means "do more", and still goes to work.
-            patch["escalated"] = False
-            patch["escalation_reason"] = None
-            patch["stale_pending_review_streak"] = 0
-            await graph.aupdate_state(thread_config, patch, as_node="verify_and_ship")
-        elif was_escalated:
-            budget_note = (
-                f"Additional budget granted -- ${req.additional_budget_usd:.2f} more, ${new_budget:.2f} total now. "
-                if req.additional_budget_usd > 0
-                else "No additional budget added. "
-            )
-            resume_note = (
-                f"Resumed by operator after escalation (was: {values.get('escalation_reason') or 'unknown reason'}). "
-                f"{budget_note}"
-                "Continue the task from where you left off."
-            )
-            if req.message:
-                resume_note += f"\n\nOperator note: {req.message}"
-            # The work this sends it to will be a new commit; an approval of
-            # the old one must not survive to ship it (verify_and_ship's fast
-            # path keys on merge_approved_sha == committed_sha).
-            patch["merge_approved_sha"] = None
-            patch["escalated"] = False
-            patch["escalation_reason"] = None
-            patch["pending_feedback"] = resume_note
-            patch["no_diff_streak"] = 0  # fresh attempt -- don't inherit a streak from before the escalation
-            # Same reasoning as no_diff_streak: an operator resume is a fresh
-            # attempt. Without this, a task escalated for a maxed stale streak
-            # resumes with that streak still at the limit and re-escalates on
-            # its very first quiet pass -- zero real runway.
-            patch["stale_pending_review_streak"] = 0
-            await graph.aupdate_state(thread_config, patch, as_node="verify_and_ship")
-        elif was_done:
-            # Same as_node-forces-re-routing mechanism as the escalated branch --
-            # _route_after_verify checks escalated (False here) then
-            # pending_approval (None) then pending_feedback, so a truthy
-            # pending_feedback alone is enough to route back to "work".
-            # no_diff_streak must reset to 0: it's sitting at 2 (that's exactly
-            # what triggered "done" in the first place) -- without resetting it,
-            # a work pass that produces no diff for any reason (including the
-            # agent legitimately needing one more read-only turn before it can
-            # act on the operator's note) would immediately re-trigger the same
-            # "done, no changes needed" verdict before the nudge had a real
-            # chance to land.
-            patch["pending_feedback"] = f"Operator note: {req.message}"
-            patch["merge_approved_sha"] = None  # same as the escalated branch
-            patch["no_diff_streak"] = 0
-            await graph.aupdate_state(thread_config, patch, as_node="verify_and_ship")
-        else:
-            # Orphaned/stopped resume -- an operator message here goes through
-            # the same mailbox work_node already drains on its own next pass
-            # (see agent/messages.py, work.py), not baked into this patch --
-            # unlike the escalated branch, there's no synthetic pending_feedback
-            # already being constructed here to fold it into, and routing must
-            # stay untouched (see this function's own docstring).
-            if req.message:
-                add_message(task_id, req.message)
-            await graph.aupdate_state(thread_config, patch)
+        try:
+            t = lifecycle.resume(values, store_status, message=req.message,
+                                 additional_budget=req.additional_budget_usd)
+        except lifecycle.Refused as e:
+            raise HTTPException(e.status, e.detail)
+        new_budget = t.extra["new_budget_usd"]
+        new_max_iterations = t.extra["new_max_iterations"]
+        if t.mailbox_message:
+            add_message(task_id, t.mailbox_message)
+        # task_id explicitly: tasks checkpointed before the field existed.
+        await _apply_transition(graph, thread_config, {**t.patch, "task_id": task_id}, t.as_node)
 
         _running_tasks[task_id] = asyncio.create_task(
             _stream_graph(task_id, values["repo"], values["goal"], new_budget, None)
@@ -3432,23 +3384,15 @@ async def submit_operator_edits(task_id: str, req: OperatorEditRequest, user: Us
         values = checkpoint.values
         check_repo_access(user, values["repo"])
 
-        pending = values.get("pending_merge_approval")
-        if not pending:
-            raise HTTPException(409, "edits can only be saved while the task is waiting for your final look")
-        if req.base_sha != pending.get("sha"):
-            raise HTTPException(409, "the task has a newer commit than the one you edited -- reopen the file")
-
         note = (req.note or "").strip()[:500] or None
-        patch = {
-            "operator_edits": {"base_sha": req.base_sha, "files": files, "note": note, "by": user.email},
-            "pending_merge_approval": None,
-            "merge_approved_sha": None,
-            "no_diff_streak": 0,
-            "stale_pending_review_streak": 0,
-        }
+        try:
+            t = lifecycle.operator_edit(values, None, base_sha=req.base_sha, files=files,
+                                        note=note, by=user.email)
+        except lifecycle.Refused as e:
+            raise HTTPException(e.status, e.detail)
         # as_node="work": the next node is verify_and_ship, which applies the
         # edit and runs the gate -- no model call in between.
-        await graph.aupdate_state(thread_config, patch, as_node="work")
+        await _apply_transition(graph, thread_config, t.patch, t.as_node)
         await audit.record(
             app.state.store, actor=user.email, action="task.operator_edit",
             target=f'{values["repo"]}/{task_id[:8]}',
@@ -3489,33 +3433,12 @@ async def merge_decision(task_id: str, req: MergeDecisionRequest, user: User = D
         values = checkpoint.values
         check_repo_access(user, values["repo"])
 
-        pending = values.get("pending_merge_approval")
-        if not pending:
-            raise HTTPException(409, "task is not awaiting a merge decision")
-
-        if req.decision == "approve":
-            patch = {
-                "merge_approved_sha": pending["sha"],
-                "pending_merge_approval": None,
-            }
-        elif req.decision == "request_changes":
-            if not (req.message or "").strip():
-                raise HTTPException(400, "request_changes requires a message -- the agent needs to know what to change")
-            patch = {
-                "pending_merge_approval": None,
-                "merge_approved_sha": None,
-                "pending_feedback": (
-                    "The operator reviewed the final diff and sent it back for more work "
-                    "before it may merge. Their notes:\n\n" + req.message.strip()
-                ),
-                # Fresh attempt, same reasoning as resume_task's escalated branch.
-                "no_diff_streak": 0,
-                "stale_pending_review_streak": 0,
-            }
-        else:
-            raise HTTPException(400, "decision must be 'approve' or 'request_changes'")
-
-        await graph.aupdate_state(thread_config, patch, as_node="verify_and_ship")
+        try:
+            t = lifecycle.merge_decision(values, None, req.decision, req.message)
+        except lifecycle.Refused as e:
+            raise HTTPException(e.status, e.detail)
+        pending = values["pending_merge_approval"]
+        await _apply_transition(graph, thread_config, t.patch, t.as_node)
         await audit.record(
             app.state.store, actor=user.email,
             action="merge.approve" if req.decision == "approve" else "merge.request_changes",
@@ -3572,38 +3495,13 @@ async def approve_task(task_id: str, req: ApprovalRequest, user: User = Depends(
         values = checkpoint.values
         check_repo_access(user, values["repo"])
 
-        pending = values.get("pending_approval")
-        if not pending:
-            raise HTTPException(409, "task has no pending approval request")
-
-        action_count = len(pending.get("action_requests") or [])
-        if req.decision == "approve":
-            decisions = [{"type": "approve"} for _ in range(action_count)]
-        elif req.decision == "respond":
-            # ask_user answers: the operator's text IS the tool result (the
-            # library's native "ask user"-style-tool pattern -- see deep_agent's
-            # INTERRUPT_ON["ask_user"]). A respond without text is meaningless.
-            if not (req.message or "").strip():
-                raise HTTPException(400, "respond decision requires a message (the answer)")
-            decisions = [{"type": "respond", "message": req.message} for _ in range(action_count)]
-        else:
-            reject = {"type": "reject"}
-            if req.message:
-                reject["message"] = req.message
-            decisions = [dict(reject) for _ in range(action_count)]
-
-        patch = {
-            "task_id": task_id,
-            "pending_approval": None,
-            "approval_decision": decisions,
-            # Placeholder text, never actually sent to the model -- work_node's
-            # graph_input logic checks approval_decision first and uses that
-            # instead whenever it's set (see work.py case 0). This exists
-            # purely so _route_after_verify's existing "pending_feedback set ->
-            # route to work" check fires, reusing that already-proven mechanism.
-            "pending_feedback": "[operator submitted an approval decision]",
-        }
-        await graph.aupdate_state(thread_config, patch, as_node="verify_and_ship")
+        try:
+            t = lifecycle.command_decision(values, None, req.decision, req.message)
+        except lifecycle.Refused as e:
+            raise HTTPException(e.status, e.detail)
+        pending = values["pending_approval"]
+        action_count = t.extra["count"]
+        await _apply_transition(graph, thread_config, {**t.patch, "task_id": task_id}, t.as_node)
 
         # What was approved matters as much as that it was: the first action
         # request's tool and a short form of its arguments, so a later reader

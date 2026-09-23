@@ -338,6 +338,18 @@ async def _verify_and_ship(state: AgentState, config: Config, store: BaseStore |
     repo = state["repo"]
     repo_root = PROJECTS[repo]["sandbox"]
 
+    if state.get("committed_sha") and not state.get("operator_edits"):
+        # A task with a commit ships from its own branch, whoever used the
+        # workspace last. Every path below -- the approved fast path, the
+        # rebase on a moved base, the no-diff re-review -- reads or moves
+        # the CHECKOUT, and a heal or a resume reaches this node without a
+        # work pass to put it there first. (A hand edit does its own, with a
+        # stricter check -- see _apply_operator_edits.)
+        from agent.tools.git import restore_task_workspace
+        restored = await restore_task_workspace(repo_root, state["task_id"], rebase=False)
+        if not restored.get("ok"):
+            return _escalate(f"could not put the workspace on this task's branch: {restored.get('reason')}")
+
     if state.get("operator_edits"):
         # Applied here and nowhere else: this node runs inside the task's own
         # graph run, which holds the project lock. From here it is ordinary
