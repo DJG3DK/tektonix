@@ -93,7 +93,8 @@ def test_normalize_override(value, expected):
 
 
 def test_roles_are_the_router_aliases():
-    assert CODER_ROLE == {"frontend": "agent-coder-frontend", "general": "agent-coder"}
+    assert CODER_ROLE == {"frontend": "agent-coder-frontend", "general": "agent-coder",
+                          "fallback": "agent-coder-fallback"}
 
 
 # ---------------------------------------------------------------------------

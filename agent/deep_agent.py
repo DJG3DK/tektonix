@@ -751,6 +751,20 @@ def interrupt_on_for(auto_approve_commands: bool, repo_root: str | None = None) 
     }
 
 
+def approval_gates(repo: str, auto_approve_commands: bool, repo_root: str | None = None) -> dict:
+    """What stops for a person in this task.
+
+    A benchmark project has nobody to ask: no approvals at all -- not a
+    deletion, not a question (ask_user then answers with its own "proceed on
+    your best judgment" fallback). Its workspace is a throwaway copy and every
+    change is in the diff the reviewer reads. Only benchmark projects: every
+    other project keeps its gates, whatever auto-approve says (operator's
+    rule, 2026-09-24)."""
+    if (PROJECTS.get(repo) or {}).get("benchmark"):
+        return {}
+    return interrupt_on_for(auto_approve_commands, repo_root)
+
+
 def llm_for_role(config: Config, model_name: str, reasoning_effort: str | None = None,
                  timeout: int | None = None, callbacks: list | None = None,
                  task_id: str | None = None, session_id: str | None = None) -> ChatOpenAI:
@@ -1691,7 +1705,7 @@ async def build_deep_agent(
     # carries the full bash tool too, so a laxer gate there would be a hole.
     # repo_root so auto mode can tell repo content from the agent's own
     # scratch when it judges a delete (see _bash_deletes_real_work).
-    interrupt_on = interrupt_on_for(auto_approve_commands, repo_root)
+    interrupt_on = approval_gates(repo, auto_approve_commands, repo_root)
     tracker = BudgetTracker(budget_usd=budget_usd, starting_cost=starting_cost)
     backend = build_memory_backend(repo, store)
 
@@ -1839,9 +1853,12 @@ async def build_deep_agent(
     # the task's spend.
     coordinator_model = llm_for_role(config, coder_role, task_id=task_id)
     planner_model = llm_for_role(config, "agent-planner", task_id=task_id)
-    investigator_model = llm_for_role(config, coder_role if route == "frontend" else "agent-investigator",
+    investigator_model = llm_for_role(config, coder_role if route in ("frontend", "fallback") else "agent-investigator",
                                      task_id=task_id)
-    test_writer_model = llm_for_role(config, "agent-test-writer", task_id=task_id)
+    # On the loop fallback every seat that acts moves: the loop that ended the
+    # pass was as often in a subagent as in the coordinator.
+    test_writer_model = llm_for_role(config, coder_role if route == "fallback" else "agent-test-writer",
+                                     task_id=task_id)
 
     project_memory = await load_project_memory(repo, store, task_id=task_id)
     project_memory_content = project_memory.content

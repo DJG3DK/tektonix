@@ -15,6 +15,7 @@ const ROLE_ORDER = [
   "agent-planner",
   "agent-coder",
   "agent-coder-frontend",
+  "agent-coder-fallback",
   "agent-investigator",
   "agent-test-writer",
   "agent-summarizer",

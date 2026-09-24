@@ -175,3 +175,49 @@ async def test_non_api_error_escalates_immediately_without_retry(monkeypatch):
     assert result["escalated"] is True
     assert "real bug" in result["escalation_reason"]
     assert fake_agent.calls == 1, "must NOT retry a non-API error"
+
+
+# ── a model stuck in a loop hands the pass to the fallback seat ─────────────
+
+async def test_a_loop_moves_the_pass_to_the_fallback_seat_on_the_same_conversation(monkeypatch):
+    """2026-09-24: two benchmark tasks ended "escalated -- resume on a
+    different seat" with nobody there to press resume."""
+    from langchain_core.messages import HumanMessage
+    from agent.middleware.repeat_guard import RepeatLoopError
+
+    builds, agents = [], []
+
+    def fake_build(*a, route="general", **k):
+        builds.append(route)
+        loop = route != "fallback"
+        agent = _FakeAgent(fail_times=1 if loop else 0, exc_factory=lambda: RepeatLoopError(
+            "stuck in a tool loop: `bash` with identical arguments requested 12 times in a row. The model is no longer steering"))
+        agents.append(agent)
+        return _fake_build_deep_agent_result(agent)
+
+    monkeypatch.setattr(work_module, "build_deep_agent", fake_build)
+    graph = _build_mini_graph(MemorySaver())
+    state = initial_state(task_id="t1", goal="do the thing", repo="test-repo", budget_usd=10.0)
+    result = await graph.ainvoke(state, config={"configurable": {"thread_id": "t1"}})
+    assert result["escalated"] is False
+    assert builds == ["general", "fallback"]
+    handover = agents[1].inputs[0]["messages"][0]
+    assert isinstance(handover, HumanMessage) and "different model taking over" in handover.content
+    assert "`bash` with identical arguments" in handover.content
+    assert result.get("route", "general") != "fallback", "the next pass is back on the task's own seat"
+
+
+async def test_if_the_fallback_loops_too_the_task_is_handed_back(monkeypatch):
+    from agent.middleware.repeat_guard import RepeatLoopError
+    builds = []
+
+    def fake_build(*a, route="general", **k):
+        builds.append(route)
+        return _fake_build_deep_agent_result(_FakeAgent(fail_times=99, exc_factory=lambda: RepeatLoopError("stuck in a tool loop")))
+
+    monkeypatch.setattr(work_module, "build_deep_agent", fake_build)
+    graph = _build_mini_graph(MemorySaver())
+    state = initial_state(task_id="t1", goal="do the thing", repo="test-repo", budget_usd=10.0)
+    result = await graph.ainvoke(state, config={"configurable": {"thread_id": "t1"}})
+    assert builds == ["general", "fallback"]
+    assert result["escalated"] is True and "fallback seat got stuck as well" in result["escalation_reason"]

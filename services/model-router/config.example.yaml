@@ -275,6 +275,19 @@ model_list:
     model_info:
       input_cost_per_token: 0.000003
       output_cost_per_token: 0.000015
+  - model_name: agent-coder-fallback
+    params:
+      # The seat a task moves to when the loop guard ends a pass
+      # (agent/middleware/repeat_guard.py): the model on the regular seat
+      # kept repeating one refused call, so the rest of that pass runs on a
+      # different model. Pinned 2026-09-24 to qwen3.8-flash, operator's call.
+      # Falls back to the general coder so an outage here never ends a task.
+      model: openrouter/qwen/qwen3.8-flash
+      api_key: os.environ/OPENROUTER_API_KEY
+      extra_body: {"provider": {"require_parameters": true}}
+    model_info:
+      input_cost_per_token: 0.00000015
+      output_cost_per_token: 0.00000047
   - model_name: agent-investigator
     params:
       model: openrouter/deepseek/deepseek-v4.1-flash
@@ -629,6 +642,7 @@ router_settings:
     # Frontend tiers (2026-09-09) fall back to the general seats they replace.
     - agent-planning-chat-frontend: ["agent-planning-chat-hard"]
     - agent-coder-frontend: ["agent-coder"]
+    - agent-coder-fallback: ["agent-coder"]
     # agent-planner is ALSO gemini-3.7-flash and coordinates every task's work
     # pass -- the same upstream shared-pool 429s that killed a planning turn
     # can kill a work pass mid-task. Same remedy: fail over to the proven

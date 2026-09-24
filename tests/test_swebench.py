@@ -266,3 +266,17 @@ def test_old_release_tags_are_history_but_anything_after_the_task_is_refused(tmp
     _git(["checkout", "-q", "main"], repo)
     assert sb.future_commits(repo, base) == [stray], "newer than the base, however it is connected"
     assert root
+
+
+def test_only_a_benchmark_project_runs_with_no_approvals(monkeypatch):
+    """A benchmark task has nobody to ask, so nothing may stop for a person --
+    it parked forever on deleting a generated file. Every other project keeps
+    its gates, auto-approve or not."""
+    from agent.deep_agent import INTERRUPT_ON, approval_gates
+    monkeypatch.setitem(PROJECTS, "bench", {"sandbox": "/tmp/bench", "benchmark": True})
+    monkeypatch.setitem(PROJECTS, "real", {"sandbox": "/tmp/real"})
+    assert approval_gates("bench", auto_approve_commands=False) == {}
+    assert approval_gates("bench", auto_approve_commands=True, repo_root="/tmp/bench") == {}
+    assert approval_gates("real", auto_approve_commands=False) is INTERRUPT_ON
+    auto = approval_gates("real", auto_approve_commands=True, repo_root="/tmp/real")
+    assert "bash" in auto and "ask_user" in auto, "auto-approve on a real project still asks before losing work"

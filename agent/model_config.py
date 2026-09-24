@@ -31,6 +31,7 @@ MANAGED_ROLES = {
     "agent-planner": "Planner",
     "agent-coder": "Coder",
     "agent-coder-frontend": "Coder (Frontend)",
+    "agent-coder-fallback": "Coder (Loop fallback)",
     "agent-investigator": "Investigator",
     "agent-test-writer": "Test Writer",
     "agent-summarizer": "Summarizer",
@@ -99,6 +100,12 @@ ROLE_REQUIREMENTS: dict[str, dict] = {
         "note": "The coder seat for frontend work (route: category ui-styling, mostly-frontend paths, "
                 "or the operator's toggle -- agent/frontend_route.py). Also serves as that task's "
                 "investigator; the test-writer stays on its own pin. Pinned for polish, not price.",
+    },
+    "agent-coder-fallback": {
+        "tools": True, "structured": False, "strict": False,
+        "note": "Takes over a pass when the loop guard ends it: the regular coder kept repeating "
+                "one refused call. Also serves that pass's investigator and test-writer. A "
+                "different model is the point -- pin something other than the coder.",
     },
     "agent-investigator": {
         "tools": True, "structured": False, "strict": False,

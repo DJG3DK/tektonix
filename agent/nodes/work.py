@@ -75,6 +75,8 @@ from langgraph.config import get_stream_writer
 from langgraph.types import Command
 
 from agent.config import Config
+from agent.frontend_route import FALLBACK
+from agent.middleware.repeat_guard import RepeatLoopError
 from agent.deep_agent import build_deep_agent
 from agent.message_text import content_text
 from agent import plan_progress
@@ -443,39 +445,43 @@ async def work_node(state: AgentState, app_config: Config, checkpointer, pg_stor
                 f"(`git show {restored['backup']}` to read it); do not try to merge or check it out."
             )
 
-    agent, tracker, last_failed_edit_ref = await build_deep_agent(
-        app_config,
-        repo,
-        budget_usd=state["budget_usd"],
-        checkpointer=checkpointer,
-        store=pg_store,
-        starting_cost=_reconciled_cost(state),
-        # Stamped onto every model call this pass makes, so the router's own
-        # ledger can total the task (see _reconciled_cost).
-        task_id=task_id,
-        # The edit-repeat guard (agent_tools.py) is scoped to this
-        # build_deep_agent call's own closure, which is fresh every pass --
-        # round-tripping its final state through AgentState (the same
-        # mechanism used for committed_sha/no_diff_streak) is what makes it
-        # catch a repeat that spans multiple separate work<->verify_and_ship
-        # loop-backs, not just repeats within one uninterrupted pass.
-        starting_last_failed_edit=state.get("last_failed_edit_signature"),
-        # Captured at task creation (see outer_state.py) -- a task runs under
-        # the gate its creator had at the time, not whatever is set now.
-        auto_approve_commands=state.get("auto_approve_commands", False),
-        # So the prompts can name the files this task is meant to CREATE --
-        # their absence is the expected starting state, not a blocker
-        # (agent/new_files.py).
-        goal=state.get("goal") or "",
-        # Frontend work runs on the Kimi coder seat (agent/frontend_route.py);
-        # decided at creation, carried in state so a resume keeps it.
-        route=state.get("route", "general"),
-        # The other projects this task may READ, for "use the one in X as a
-        # template". Captured at creation from its creator's access; absent
-        # on a task checkpointed before this existed, which then reads
-        # nothing but its own repo (agent/tools/reference_tools.py).
-        reference_repos=state.get("reference_repos") or [],
-    )
+    async def _build(route: str, starting_cost: float, last_failed_edit):
+        return await build_deep_agent(
+            app_config,
+            repo,
+            budget_usd=state["budget_usd"],
+            checkpointer=checkpointer,
+            store=pg_store,
+            starting_cost=starting_cost,
+            # Stamped onto every model call this pass makes, so the router's own
+            # ledger can total the task (see _reconciled_cost).
+            task_id=task_id,
+            # The edit-repeat guard (agent_tools.py) is scoped to this
+            # build_deep_agent call's own closure, which is fresh every pass --
+            # round-tripping its final state through AgentState (the same
+            # mechanism used for committed_sha/no_diff_streak) is what makes it
+            # catch a repeat that spans multiple separate work<->verify_and_ship
+            # loop-backs, not just repeats within one uninterrupted pass.
+            starting_last_failed_edit=last_failed_edit,
+            # Captured at task creation (see outer_state.py) -- a task runs under
+            # the gate its creator had at the time, not whatever is set now.
+            auto_approve_commands=state.get("auto_approve_commands", False),
+            # So the prompts can name the files this task is meant to CREATE --
+            # their absence is the expected starting state, not a blocker
+            # (agent/new_files.py).
+            goal=state.get("goal") or "",
+            # Frontend work runs on the Kimi coder seat (agent/frontend_route.py);
+            # decided at creation, carried in state so a resume keeps it.
+            route=route,
+            # The other projects this task may READ, for "use the one in X as a
+            # template". Captured at creation from its creator's access; absent
+            # on a task checkpointed before this existed, which then reads
+            # nothing but its own repo (agent/tools/reference_tools.py).
+            reference_repos=state.get("reference_repos") or [],
+        )
+
+    agent, tracker, last_failed_edit_ref = await _build(
+        state.get("route", "general"), _reconciled_cost(state), state.get("last_failed_edit_signature"))
     inner_config = inner_thread_config(task_id, repo, state.get("inner_thread_generation", 0))
     pending_feedback = state.get("pending_feedback")
     if workspace_note:
@@ -545,6 +551,7 @@ async def work_node(state: AgentState, app_config: Config, checkpointer, pg_stor
     stream_input = graph_input
     model_failures = 0
     rejected = 0
+    on_fallback = False
     try:
         while True:
             try:
@@ -556,7 +563,7 @@ async def work_node(state: AgentState, app_config: Config, checkpointer, pg_stor
                     seen_ids: set = set()
 
                     # Bound per attempt: a resumed stream starts its own set.
-                    async def _consume_subagents(seen_ids: set = seen_ids) -> None:
+                    async def _consume_subagents(seen_ids: set = seen_ids, tracker=tracker) -> None:
                         async for handle in run.subagents:
                             label = f"work:{handle.name or 'subagent'}"
                             subagent_tasks.append(
@@ -613,6 +620,31 @@ async def work_node(state: AgentState, app_config: Config, checkpointer, pg_stor
                                task_id, what, delay, model_failures, MODEL_RETRIES_PER_PASS)
                 await asyncio.sleep(delay)
                 stream_input = None
+            except RepeatLoopError as e:
+                # The model kept repeating one call the guard had refused. A
+                # different model takes over the rest of this pass, on the
+                # same conversation -- the step an operator used to take by
+                # hand ("resume on a different seat"). Once per pass; if the
+                # fallback loops too, it is handed back.
+                for t in subagent_tasks:
+                    if not t.done():
+                        t.cancel()
+                if subagent_tasks:
+                    await asyncio.gather(*subagent_tasks, return_exceptions=True)
+                subagent_tasks.clear()
+                if on_fallback or state.get("route") == FALLBACK:
+                    escalated = True
+                    escalation_reason = f"{e} The fallback seat got stuck as well."
+                    break
+                on_fallback = True
+                logger.warning("task %s: %s -- continuing on the fallback seat", task_id, str(e)[:200])
+                agent, tracker, last_failed_edit_ref = await _build(
+                    FALLBACK, tracker.total_cost, last_failed_edit_ref.get("signature"))
+                stream_input = {"messages": [HumanMessage(content=(
+                    "[harness] The model working on this task got stuck: " + str(e).split(". The model")[0]
+                    + ". You are a different model taking over mid-task. Read the todo list and the recent "
+                    "conversation, check what has actually changed (`git status`, `git diff`), then carry on "
+                    "with a DIFFERENT approach. Do not repeat that call."))]}
             except openai.APIError as e:
                 # The provider refused the request itself -- most often a
                 # malformed tool-call generation, which a fresh generation

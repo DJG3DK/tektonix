@@ -117,6 +117,9 @@ START → work → verify_and_ship ──(findings / unfinished plan)──→ w
   same commands the gate will run — so it finds its own breakage rather than learning about it a
   full round-trip later. On a frontend-routed task the coordinator and investigator sit on
   `agent-coder-frontend`; the test-writer keeps its own pin (see [Frontend routing](#frontend-routing)).
+  If a model gets stuck repeating a call the loop guard has refused, the rest of that pass moves to
+  `agent-coder-fallback`, a different model, on the same conversation. The task is handed back only
+  if that model gets stuck too.
   With a GitHub token it can also **read a pull request** host-side (`github_pull_request`) — the
   sandbox never sees the token.
 - **`verify_and_ship`** (`agent/nodes/verify_and_ship.py`) is the actual gate. It always re-runs the
@@ -526,7 +529,7 @@ and it's shared across every task and planning session for that project. A secon
 ## Model routing
 
 Every model the agent uses is a named alias (`agent-planner`, `agent-coder`,
-`agent-coder-frontend`, `agent-investigator`, `agent-test-writer`, `agent-summarizer`, `agent-vision`,
+`agent-coder-frontend`, `agent-coder-fallback`, `agent-investigator`, `agent-test-writer`, `agent-summarizer`, `agent-vision`,
 `agent-consolidator`, `agent-cartographer`, `agent-classifier`, `agent-planning-chat`,
 `agent-planning-chat-hard`, `agent-planning-chat-frontend`,
 `agent-demo-chat`, `agent-reviewer`) pinned in the router's config. They're edited from the **Models** tab in the dashboard

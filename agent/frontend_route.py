@@ -43,7 +43,10 @@ FRONTEND, GENERAL = "frontend", "general"
 
 # Roles the two routes resolve to. The aliases live in the router's
 # config.yaml; the operator pins whatever model they like behind them.
-CODER_ROLE = {FRONTEND: "agent-coder-frontend", GENERAL: "agent-coder"}
+# FALLBACK is never chosen at creation: a pass moves to it when the loop
+# guard ends the pass (agent/nodes/work.py), for the rest of that pass.
+FALLBACK = "fallback"
+CODER_ROLE = {FRONTEND: "agent-coder-frontend", GENERAL: "agent-coder", FALLBACK: "agent-coder-fallback"}
 PLANNING_ROLE = {FRONTEND: "agent-planning-chat-frontend"}
 
 FRONTEND_CATEGORIES = frozenset({"ui-styling"})
