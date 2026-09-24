@@ -79,8 +79,9 @@ def test_an_empty_path_is_returned_unchanged(monkeypatch):
 # ---------------------------------------------------------------------------
 
 def test_every_bind_mount_source_goes_through_the_map():
-    """Four `-v` sources: the workspace for a command and again for a preview,
-    the live .git of a worktree, and the borrowed node_modules. A new one
+    """Five `-v` sources: the workspace for a command and again for a preview,
+    the workspace at a project's extra mount points (sandbox_mounts: /testbed
+    for SWE-bench), the live .git of a worktree, and the borrowed node_modules. A new one
     added without the map is the silent bug this whole module exists to
     prevent -- the host daemon resolves the source, so a container-only path
     mounts an empty directory and says nothing.
@@ -90,7 +91,7 @@ def test_every_bind_mount_source_goes_through_the_map():
     import inspect
     src = inspect.getsource(sandbox)
     mounts = [ln for ln in src.split("\n") if '"-v"' in ln]
-    assert len(mounts) == 4, f"a bind mount was added or removed: {mounts}"
+    assert len(mounts) == 5, f"a bind mount was added or removed: {mounts}"
     for ln in mounts:
         assert "host_path(" in ln, f"bind mount source not mapped: {ln.strip()}"
 

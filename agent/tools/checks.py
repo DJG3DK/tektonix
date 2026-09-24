@@ -155,11 +155,52 @@ async def run_frontend_build(repo_root: str) -> dict:
     return {"ran": True, "ok": r["ok"], "output": r["output"][-4000:]}
 
 
+def _declared_checks(repo_name: str) -> list[dict] | None:
+    """A project's own gate commands, when projects.json declares them.
+
+    The gate was npm scripts only, so a repository with no package.json
+    failed it before a line was checked -- every Python project, and every
+    SWE-bench repository. `checks` is a list of {name, cmd, timeout_s}: shell
+    commands run in the project's sandbox (its image, its environment, no
+    network), from the workspace root."""
+    try:
+        from agent.config import PROJECTS
+    except Exception:  # noqa: BLE001
+        return None
+    declared = (PROJECTS.get(repo_name) or {}).get("checks")
+    if not isinstance(declared, list) or not declared:
+        return None
+    out = []
+    for c in declared:
+        if isinstance(c, dict) and isinstance(c.get("cmd"), str) and c["cmd"].strip():
+            out.append({"name": str(c.get("name") or f"check {len(out) + 1}")[:60], "cmd": c["cmd"],
+                        "timeout_s": int(c.get("timeout_s") or _rs.as_int("check_test_timeout_s"))})
+    return out or None
+
+
+async def _run_declared(repo_root: str, declared: list[dict]) -> dict:
+    checks = {}
+    for c in declared:
+        r = await run_shell_sandboxed(c["cmd"], repo_root, timeout=c["timeout_s"], network="none")
+        output = r["output"][-4000:]
+        checks[c["name"]] = {"ran": True, "ok": r["ok"],
+                             "output": output if r["ok"] else _annotate_offline_failure(output)}
+    all_ok = all(c["ok"] for c in checks.values())
+    summary = "\n".join(f"{name}: {'PASSED' if c['ok'] else 'FAILED'}\n{c['output']}" for name, c in checks.items())
+    return {"all_ok": all_ok, "checks": checks, "summary": summary}
+
+
 async def run_all_checks(repo_root: str, repo_name: str) -> dict:
     """The full gate: typecheck + lint + test. Used by both the agent-facing
     tool and the outer verify_and_ship node so there's exactly one
     definition of "all checks passed" in this system.
+
+    A project that declares its own `checks` in projects.json runs those
+    instead (_declared_checks).
     """
+    declared = _declared_checks(repo_name)
+    if declared:
+        return await _run_declared(repo_root, declared)
     typecheck = await run_typecheck(repo_root)
     lint = await run_lint(repo_root)
     test = await run_test(repo_root, repo_name)

@@ -1715,8 +1715,14 @@ async def build_deep_agent(
     # GitHub PR tools (read-only, host-side, only when a token is configured):
     # the coordinator, the investigator and the general-purpose seat all read
     # PRs; the test-writer has no use for them.
-    github_tools = make_github_tools(token_source(config))
-    github_tools = [*github_tools, make_github_inbox_tool(store)]
+    # A benchmark project (projects.json `benchmark: true`) runs with nothing
+    # that reaches outside its own repository: no GitHub, no web pages, no
+    # other projects. A benchmark task's real fix is public -- on GitHub, in
+    # the upstream repo -- and a result reached by looking it up is not a
+    # result. Its sandbox has no network either (sandbox_network).
+    benchmark = bool((PROJECTS.get(repo) or {}).get("benchmark"))
+    github_tools = [] if benchmark else make_github_tools(token_source(config))
+    github_tools = github_tools if benchmark else [*github_tools, make_github_inbox_tool(store)]
     project_tools = [*project_tools, *github_tools]
 
     # Seeing the work. A frontend task used to be done blind -- edit the CSS,
@@ -1728,7 +1734,7 @@ async def build_deep_agent(
     from agent.tools.planning_tools import make_browse_page_tool  # noqa: PLC0415
     from agent.tools.preview import make_preview_tool  # noqa: PLC0415
 
-    visual_tools = [make_browse_page_tool(), make_preview_tool(lambda: repo_root)]
+    visual_tools = [] if benchmark else [make_browse_page_tool(), make_preview_tool(lambda: repo_root)]
     project_tools = [*project_tools, *visual_tools]
 
     # Reading the operator's OTHER projects, for "use the one in X as a
@@ -1739,7 +1745,7 @@ async def build_deep_agent(
     # task may read, so the seat is not offered tools that can only refuse.
     from agent.tools.reference_tools import make_reference_tools  # noqa: PLC0415
 
-    reference_tools = make_reference_tools(repo, reference_repos)
+    reference_tools = [] if benchmark else make_reference_tools(repo, reference_repos)
     project_tools = [*project_tools, *reference_tools]
 
     # Designing a mark and exporting a brand kit (agent/tools/logo_tools.py).
@@ -1748,12 +1754,12 @@ async def build_deep_agent(
     from agent.tools.logo_tools import make_logo_tools, new_show_state  # noqa: PLC0415
 
     show_state = new_show_state()
-    logo_tools = make_logo_tools(lambda: repo_root, show_state=show_state, repo=repo)
+    logo_tools = [] if benchmark else make_logo_tools(lambda: repo_root, show_state=show_state, repo=repo)
     # Showing the operator an image -- a render, a screenshot, the exported
     # logo -- in the task's log (agent/tools/show_tools.py).
     from agent.tools.show_tools import make_show_images_tool  # noqa: PLC0415
     project_tools = [*project_tools, *logo_tools,
-                     make_show_images_tool(repo, lambda: repo_root, show_state=show_state)]
+                     *([] if benchmark else [make_show_images_tool(repo, lambda: repo_root, show_state=show_state)])]
 
     # What past tasks ran into (agent/tools/history_tools.py). Empty when the
     # installation has no history index, so no seat carries a pair of tools

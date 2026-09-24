@@ -192,6 +192,38 @@ def sandbox_image_for(cwd: str) -> str:
     return sandbox_environment_for(cwd)[0]
 
 
+_MOUNT_POINT = __import__("re").compile(r"^/[A-Za-z0-9._/-]{1,200}$")
+
+
+def sandbox_layout_for(cwd: str) -> dict:
+    """Project options for WHERE and HOW a command runs, from projects.json.
+
+    For a project whose image expects its code somewhere in particular --
+    SWE-bench's images have it installed, editable, at /testbed, with compiled
+    parts built there -- and an environment to switch on first:
+
+      sandbox_mounts:     further container paths the workspace is mounted at
+                          (it is always at /workspace)
+      sandbox_shell_init: run before every command, e.g. activating a conda env
+      sandbox_network:    forced for every command, e.g. "none" -- for a
+                          benchmark, where a shell with the internet can look
+                          up the published fix
+
+    Server-owned config, never the workspace's: a mount point is validated as
+    an absolute path and may not shadow the container's own system paths."""
+    found = _project_of(cwd)
+    cfg = found[1] if found else {}
+    forbidden = ("/", "/bin", "/sbin", "/usr", "/lib", "/lib64", "/etc", "/proc", "/sys", "/dev",
+                 "/root", "/opt", "/workspace", "/tmp", "/var")
+    mounts = [m for m in (cfg.get("sandbox_mounts") or [])
+              if isinstance(m, str) and _MOUNT_POINT.match(m) and ".." not in m
+              and m.rstrip("/") not in forbidden]
+    init = cfg.get("sandbox_shell_init") or ""
+    network = cfg.get("sandbox_network") or None
+    return {"mounts": mounts, "init": str(init) if isinstance(init, str) else "",
+            "network": str(network) if network in ("none", "bridge") else None}
+
+
 def _shell(cmd: str) -> list[str]:
     """bash where the image has it, sh where it does not.
 
@@ -281,6 +313,11 @@ async def run_shell_sandboxed(
     """
     container_name = f"lga-{uuid.uuid4().hex[:12]}"
     image, toolchain_env = sandbox_environment_for(cwd)
+    layout = sandbox_layout_for(cwd)
+    if layout["network"]:
+        network = layout["network"]          # the project's rule wins over the call site's
+    if layout["init"]:
+        cmd = f"{layout['init']}\n{cmd}"
     env_args = []
     for k, v in {"CI": "true", "DEBIAN_FRONTEND": "noninteractive", **toolchain_env,
                  **(extra_env or {})}.items():
@@ -331,6 +368,7 @@ async def run_shell_sandboxed(
     docker_args = [
         "docker", "run", "--rm", "--name", container_name,
         "-v", f"{host_path(cwd)}:/workspace",
+        *[a for m in layout["mounts"] for a in ("-v", f"{host_path(cwd)}:{m}")],
         *git_mount_args,
         *nm_mount_args,
         *net_args,
