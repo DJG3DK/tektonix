@@ -307,3 +307,20 @@ def test_every_batch_s_projects_are_the_ones_the_agent_sees(tmp_path, monkeypatc
     finally:
         cfg.PROJECTS.clear()
         cfg.PROJECTS.update(saved)
+
+
+def test_every_batch_s_tasks_call_that_batch_s_reviewer():
+    """The review gate reads its ports once, at import: the second batch's
+    tasks called the first batch's reviewer, long gone, and waited."""
+    from agent.tools import review_gate
+    mod = _runner()
+    before = (review_gate.REVIEW_SERVICE_PORT, review_gate.REVIEW_CONTROL_PORT)
+    try:
+        review_gate._CHECKS_CACHE["all"] = {"stale": True}
+        mod.point_agent_at_reviewer({"REVIEW_SERVICE_PORT": "45001", "REVIEW_CONTROL_PORT": "45002"})
+        assert (review_gate.REVIEW_SERVICE_PORT, review_gate.REVIEW_CONTROL_PORT) == (45001, 45002)
+        assert "all" not in review_gate._CHECKS_CACHE
+        mod.point_agent_at_reviewer({"REVIEW_SERVICE_PORT": "46001", "REVIEW_CONTROL_PORT": "46002"})
+        assert review_gate.REVIEW_SERVICE_PORT == 46001, "the next batch moves it again"
+    finally:
+        review_gate.REVIEW_SERVICE_PORT, review_gate.REVIEW_CONTROL_PORT = before

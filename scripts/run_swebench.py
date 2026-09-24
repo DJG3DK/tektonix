@@ -148,6 +148,22 @@ def publish_projects(path: Path, projects: dict) -> Path:
     return path
 
 
+def point_agent_at_reviewer(overrides: dict[str, str]) -> None:
+    """This batch's reviewer pair, where the agent calls it.
+
+    agent/tools/review_gate.py reads its ports once, when first imported, so
+    the environment alone only reaches the FIRST batch: the second batch's
+    tasks kept calling the first batch's pair, stopped with it, and waited
+    on a reviewer that was gone (2026-09-24). The module's own values are
+    set too, and its cached project checks dropped."""
+    os.environ.update(overrides)
+    gate = sys.modules.get("agent.tools.review_gate")
+    if gate is not None:
+        gate.REVIEW_SERVICE_PORT = int(overrides["REVIEW_SERVICE_PORT"])
+        gate.REVIEW_CONTROL_PORT = int(overrides["REVIEW_CONTROL_PORT"])
+        gate._CHECKS_CACHE.clear()
+
+
 def disk_used_pct(path: str = "/var/lib/docker") -> float:
     """How full the disk the images land on is, the way df reports it."""
     try:
@@ -183,7 +199,7 @@ async def _run(args, instances: list[dict], root: Path, run_dir: Path, spent_bef
 
     # --- 2. an isolated reviewer pair and store, production's settings
     rev = await ev_reviewer.start(projects_json, root / "reviewer")
-    os.environ.update(rev.env_overrides)
+    point_agent_at_reviewer(rev.env_overrides)
     results: dict[str, dict] = {}
     predictions = run_dir / "predictions.jsonl"
     try:
