@@ -102,17 +102,123 @@ def load_services() -> list[dict]:
     return out
 
 
-def _probe(url: str) -> tuple[bool, str]:
-    """True when the probe answers 200. Never raises -- a watchdog that can
-    crash is a watchdog that stops watching."""
+_CODE_MARK = "\n__watchdog_http_code__="
+BODY_LIMIT = 64_000
+
+
+def _probe(url: str) -> tuple[bool, str, str]:
+    """(answered 200, the HTTP code, the body). Never raises -- a watchdog
+    that can crash is a watchdog that stops watching.
+
+    The body is kept because it is where a readiness endpoint says WHICH
+    dependency failed. Without it the alert could only guess, and guessed
+    "check Postgres" for a trading bot whose exchange feed had dropped
+    (2026-09-24) -- a service with no database check at all."""
     try:
         r = subprocess.run(
-            ["curl", "-s", "-o", "/dev/null", "-w", "%{http_code}", "-m", str(TIMEOUT_S), url],
-            capture_output=True, text=True, timeout=TIMEOUT_S + 5)
-        code = (r.stdout or "").strip()
-        return code == "200", code or "no-response"
+            ["curl", "-s", "-m", str(TIMEOUT_S), "-w", _CODE_MARK + "%{http_code}", url],
+            capture_output=True, text=True, timeout=TIMEOUT_S + 5, errors="replace")
+        body, _, code = (r.stdout or "").rpartition(_CODE_MARK)
+        code = code.strip()
+        if not code or code == "000":
+            return False, "no-response", ""
+        return code == "200", code, body[:BODY_LIMIT]
     except Exception as e:  # noqa: BLE001
-        return False, type(e).__name__
+        return False, type(e).__name__, ""
+
+
+# Keys a readiness body uses to describe itself, never a dependency.
+_NOT_A_CHECK = {"ok", "status", "degraded", "service", "timestamp", "time", "version", "uptime",
+                "info", "details", "error", "checks", "message"}
+_BAD = {"down", "error", "fail", "failed", "failing", "unhealthy", "unavailable", "timeout", "stale"}
+
+
+def _describe(value) -> str:
+    """A check's own fields, short: `connected=false, lastMsgAgeMs=65012`."""
+    if not isinstance(value, dict):
+        return "" if value in (False, None) or str(value).lower() in _BAD else str(value)[:120]
+    parts = []
+    for k, v in value.items():
+        if k in ("ok",) or (k == "status" and str(v).lower() in _BAD):
+            continue
+        if isinstance(v, (dict, list)):
+            continue
+        parts.append(f"{k}={json.dumps(v) if isinstance(v, str) else str(v).lower() if isinstance(v, bool) else v}")
+    return ", ".join(parts)[:200]
+
+
+def failing_checks(body: str) -> list[tuple[str, str]]:
+    """(check name, what it reports) for each failing check in a readiness
+    body, in the shapes these services use:
+
+      {"checks": {"tickers": {"ok": false, "count": 0}, ...}}     a checks map
+      {"status": "error", "error": {"database": {"status": "down", "message": ...}}}   NestJS terminus
+      {"status": "degraded", "database": "down"}                    flat
+
+    Empty when the body is not JSON or names nothing -- the alert then says
+    it does not know, rather than guessing."""
+    try:
+        data = json.loads(body)
+    except (TypeError, ValueError):
+        return []
+    if not isinstance(data, dict):
+        return []
+    out: list[tuple[str, str]] = []
+    checks = data.get("checks")
+    if isinstance(checks, dict):
+        for name, v in checks.items():
+            bad = (v is False or (isinstance(v, dict) and (v.get("ok") is False
+                   or str(v.get("status", "")).lower() in _BAD)))
+            if bad:
+                out.append((str(name), _describe(v)))
+    err = data.get("error")
+    if isinstance(err, dict):
+        for name, v in err.items():
+            if (str(name), _describe(v)) not in out:
+                out.append((str(name), _describe(v)))
+    for name, v in data.items():
+        if name in _NOT_A_CHECK:
+            continue
+        if v is False or (isinstance(v, str) and v.lower() in _BAD):
+            out.append((str(name), "" if v is False else str(v)))
+    if not out and isinstance(data.get("message"), str):
+        out.append(("", data["message"][:200]))
+    return out
+
+
+# What a failing check usually means, by what it is called. Matched on the
+# name, so a new service gets a useful hint without being listed here.
+_HINTS = (
+    (("database", "postgres", "prisma", "db", "sql", "pg"),
+     "Its database is not answering: check Postgres (`pg_lsclusters`) and the service's connection pool."),
+    (("redis", "cache", "queue", "bull"), "Its Redis/queue is not answering: check Redis."),
+    (("ws", "socket", "ticker", "candle", "feed", "exchange", "market", "stream", "upstream", "api"),
+     "An outside feed it depends on is not answering (an exchange, an upstream API). "
+     "That usually comes back on its own; if it does not, check the provider's status."),
+    (("worker", "pool"), "Its worker pool is short of workers."),
+    (("engine", "cycle", "loop", "scheduler"),
+     "Its main loop is not completing. If this does not clear by itself, read its logs: a stuck loop "
+     "is the one readiness failure a restart can fix."),
+    (("disk", "storage", "fs"), "It is short of disk: check `df -h`."),
+)
+
+
+def _hint(names: list[str]) -> str:
+    hints: list[str] = []
+    for name in names:
+        low = name.lower().replace("_", "-")
+        tokens = set(low.replace("-", " ").split())
+        for keys, text in _HINTS:
+            if any(k in tokens or low.startswith(k) for k in keys):
+                if text not in hints:
+                    hints.append(text)
+                break
+    return " ".join(hints)
+
+
+def _ago(seconds: float) -> str:
+    m = max(1, round(seconds / 60))
+    return f"{m} min" if m < 60 else f"{m // 60} h {m % 60} min"
 
 
 def _load_state() -> dict:
@@ -153,11 +259,18 @@ def check(svc: dict, state: dict, now: float, dry: bool) -> list[tuple[str, str]
     st = state.setdefault(key, {"live_fails": 0, "ready_fails": 0, "restarts": [], "last_alert": 0,
                                 "down": False})
     alerts: list[tuple[str, str]] = []
+    logs = f"`pm2 logs {svc['pm2']} --lines 50`"
 
-    live_ok, live_code = _probe(svc["live"])
+    live_ok, live_code, _ = _probe(svc["live"])
     # Only consult readiness when the process is actually up; a dead process
-    # fails both, and reporting "database down" then would be a lie.
-    ready_ok, ready_code = _probe(svc["ready"]) if live_ok else (False, "n/a")
+    # fails both, and reporting "database down" then would be a lie. A
+    # service with no readiness probe is ready whenever it is live.
+    if not live_ok:
+        ready_ok, ready_code, ready_body = False, "n/a", ""
+    elif svc.get("ready"):
+        ready_ok, ready_code, ready_body = _probe(svc["ready"])
+    else:
+        ready_ok, ready_code, ready_body = True, "200", ""
 
     if live_ok:
         st["live_fails"] = 0
@@ -167,10 +280,18 @@ def check(svc: dict, state: dict, now: float, dry: bool) -> list[tuple[str, str]
     if live_ok and ready_ok:
         st["ready_fails"] = 0
         if st["down"]:
+            was = st.get("failing") or []
+            since = st.get("since")
             st["down"] = False
             st["restarts"] = []
-            alerts.append((svc["repo"], f"✅ {key} recovered — liveness and readiness both green again."))
+            what = f" — {', '.join(was)} {'is' if len(was) == 1 else 'are'} answering again" if was else ""
+            took = f" after {_ago(now - since)}" if since else ""
+            alerts.append((svc["repo"], f"✅ {key} is healthy again{took}{what}. Nothing to do."))
+        st.pop("since", None)
+        st.pop("failing", None)
         return alerts
+
+    st.setdefault("since", now)
 
     # A service that has never alerted must alert NOW. Comparing the elapsed
     # time alone made the very first alert depend on the clock being larger
@@ -200,23 +321,37 @@ def check(svc: dict, state: dict, now: float, dry: bool) -> list[tuple[str, str]
         st["restarts"] = recent + [now]
         st["down"] = True
         st["last_alert"] = now
+        answer = f"no answer within {TIMEOUT_S}s" if live_code == "no-response" else f"HTTP {live_code}"
         alerts.append((svc["repo"], (
-            f"🔄 {key} liveness DOWN (HTTP {live_code}) for {st['live_fails']} consecutive checks "
-            f"— {'restarted' if ok else 'RESTART FAILED'} it automatically "
-            f"({len(recent) + 1}/{MAX_RESTARTS_PER_HOUR} this hour).\n{detail.strip()[:200]}")))
+            f"🔄 {key} stopped answering ({answer}) for {st['live_fails']} checks in a row — the process "
+            f"itself is stuck or gone, which is what a restart fixes. "
+            + (f"Restarted it ({len(recent) + 1}/{MAX_RESTARTS_PER_HOUR} this hour)."
+               if ok else f"The restart FAILED: {detail.strip()[:200]}")
+            + f"\n\nIf it happens again, the reason is in {logs}.")))
         return alerts
 
     # ── alive but not ready: a dependency is down. Restarting cannot help. ──
     st["ready_fails"] += 1
+    failing = failing_checks(ready_body)
+    names = [n for n, _ in failing if n]
+    st["failing"] = names
     if st["ready_fails"] >= CONSECUTIVE_FAILS and stale_alert:
         st["last_alert"] = now
         st["down"] = True
+        if failing:
+            lines = "\n".join(f"• {n or 'reason'}" + (f": {d}" if d else "") for n, d in failing[:6])
+            what = f"Failing:\n{lines}"
+            cannot = f"a restart cannot bring back {', '.join(names)}" if names else "a restart cannot fix this"
+        else:
+            what = "Its readiness answer does not say which check failed."
+            cannot = "a restart cannot fix a dependency"
+        hint = _hint(names)
         alerts.append((svc["repo"], (
-            f"🟠 {key} is ALIVE but NOT READY (readiness HTTP {ready_code}) for "
-            f"{st['ready_fails']} consecutive checks — its database probe is failing.\n\n"
-            f"Deliberately NOT restarting: the process is serving fine, the dependency is not, "
-            f"and a restart would drop warm connections and reconnect-storm a database that is "
-            f"already struggling. Check Postgres.")))
+            f"🟠 {key} is up but NOT READY (HTTP {ready_code}) for {_ago(now - st['since'])}.\n\n"
+            f"{what}\n\n"
+            + (f"{hint}\n\n" if hint else "")
+            + f"NOT restarting: the process is fine and {cannot}; it would only drop the connections "
+            f"that still work. You will get a message when it recovers. Logs: {logs}.")))
     return alerts
 
 
