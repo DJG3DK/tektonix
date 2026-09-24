@@ -84,7 +84,7 @@ def test_sync_path_matches_async_semantics():
 def test_guard_is_attached_to_every_build_seat_and_to_planning():
     import inspect
     src = inspect.getsource(da)
-    assert src.count("RepeatCallGuardMiddleware()") == 4, "coordinator + investigator + test-writer + general-purpose"
+    assert src.count("RepeatCallGuardMiddleware()") == 5, "coordinator + investigator + test-writer + general-purpose + verifier"
     assert "RepeatCallGuardMiddleware()" in inspect.getsource(pc)
 
 

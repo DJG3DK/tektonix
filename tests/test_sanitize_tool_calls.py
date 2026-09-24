@@ -134,7 +134,7 @@ def test_sync_path_matches():
 
 def test_sanitizer_sits_first_on_every_build_seat_and_on_planning():
     import inspect
-    assert inspect.getsource(da).count("SanitizeToolCallsMiddleware()") == 4
+    assert inspect.getsource(da).count("SanitizeToolCallsMiddleware()") == 5  # + the verifier
     assert inspect.getsource(pc).count("SanitizeToolCallsMiddleware()") == 1
 
 

@@ -6,9 +6,11 @@ keys) by the outer "work" node.
 
 import json
 import logging
+import os
 import subprocess
 import warnings
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from langchain.agents.middleware import (
     ModelCallLimitMiddleware,
@@ -47,6 +49,7 @@ from agent.middleware.sanitize_tool_calls import SanitizeToolCallsMiddleware
 from agent.middleware.budget_guard import BudgetMeterCallback, BudgetGuardMiddleware, BudgetTracker
 from agent.middleware.model_pin import PlanCodeModelMiddleware
 from agent.middleware.todo_nag import StaleTodoMiddleware
+from agent.middleware.step_back import StepBackMiddleware
 from agent.store_paging import all_items
 from agent.tools.agent_tools import make_agent_tools
 from agent.tools.project_db import make_project_db_tool
@@ -751,6 +754,32 @@ def interrupt_on_for(auto_approve_commands: bool, repo_root: str | None = None) 
     }
 
 
+SCRATCH_DIR = ".scratch"
+
+
+def exclude_scratch(repo_root: str | None) -> None:
+    """Keep /workspace/.scratch/ out of git for this repository -- the prompts
+    send probe scripts there. Written to the repo's own .git/info/exclude,
+    which every task worktree shares and no commit contains. Never raises."""
+    if not repo_root:
+        return
+    try:
+        common = subprocess.run(["git", "-C", repo_root, "rev-parse", "--git-common-dir"],
+                                capture_output=True, text=True, timeout=10).stdout.strip()
+        if not common:
+            return
+        exclude = Path(common if os.path.isabs(common) else os.path.join(repo_root, common)) / "info" / "exclude"
+        exclude.parent.mkdir(parents=True, exist_ok=True)
+        line = f"/{SCRATCH_DIR}/"
+        existing = exclude.read_text() if exclude.exists() else ""
+        if line not in existing.split("\n"):
+            with exclude.open("a") as fh:
+                fh.write(("" if existing.endswith("\n") or not existing else "\n")
+                         + f"# the agent's throwaway probes (agent/deep_agent.py)\n{line}\n")
+    except Exception:  # noqa: BLE001 -- a missing exclude is a hygiene loss, never a failed task
+        logger.warning("could not exclude %s in %s", SCRATCH_DIR, repo_root, exc_info=True)
+
+
 def approval_gates(repo: str, auto_approve_commands: bool, repo_root: str | None = None) -> dict:
     """What stops for a person in this task.
 
@@ -1270,6 +1299,29 @@ by blow of your own process -- a long, unfiltered report defeats the entire reas
 delegated to in the first place (keeping the coordinator's own context small)."""
 
 
+VERIFIER_SYSTEM_PROMPT = """You are an independent verifier. The coordinator has changed the \
+code to fix a reported bug and delegated to you to BREAK that fix before it ships. You run a \
+different model on purpose: do not take its word that the fix works.
+
+Work in /workspace. You cannot edit source files -- your tools do not include write or edit -- and \
+you must not change the repository with bash either. Write probe scripts and their output under \
+/workspace/.scratch/ only (git ignores it).
+
+1. Read the report you were given and the change itself (`git diff`, and `git diff` against the \
+   base commit if the change is committed: `git log --oneline -3`).
+2. Reproduce the report's own example against the fixed code. Does it behave the way the report \
+   says it should?
+3. Probe the neighbours: inputs longer, shorter and at the boundaries of the reported one; the same \
+   pattern followed by more content; repeated and combined occurrences; empty and None values; the \
+   sibling code paths the report mentions or the changed function obviously shares (the other \
+   parser branch, the other writer, the method next to it).
+4. Run the existing tests of the module that changed.
+
+Report back briefly: each case you tried that FAILS (the input, what happened, what the report \
+implies should happen), then any existing test that fails, then one line on what passed. If \
+everything passed, say so in one line. No raw dumps of output."""
+
+
 TEST_WRITER_SYSTEM_PROMPT = """You are a test-writing subagent for a live production codebase. \
 High-consequence logic (anything that moves money, mutates external state, or touches a \
 third-party API) must have REAL behavioral test coverage -- tests that actually invoke the \
@@ -1326,6 +1378,18 @@ of writing the tests yourself -- it runs a different model precisely to get an i
 eyes on test quality, and a test you author yourself to validate your own implementation is exactly \
 the blind spot it exists to remove. (Trivial mechanical fixes -- updating an expectation string, \
 renaming an import -- are fine to do directly.)
+
+BUG FIXES -- VERIFY PAST THE EXAMPLE: when the task fixes a bug, (1) reproduce it first with the \
+report's own example and see it fail; (2) after your change, run that reproduction AND its \
+neighbours -- longer, shorter and boundary inputs, the same pattern followed by more content, \
+repeated or combined occurrences, empty values -- plus the existing tests of the module you \
+changed; (3) then delegate to the `verifier` subagent with the report verbatim and a short summary \
+of your change, and fix what it finds (two rounds at most). A fix checked only on the report's own \
+example is how a half-fix ships: the next case over is where it breaks. Keep behaviour the report \
+does not ask to change exactly as it was, messages included.
+
+SCRATCH: throwaway probe scripts and their output go in /workspace/.scratch/ -- git ignores it, so \
+nothing there is ever committed. Never leave them elsewhere in the repository.
 
 """ + _FILESYSTEM_GUIDANCE + _VISUAL_GUIDANCE + _FINDING_GUIDANCE + """
 
@@ -1706,6 +1770,7 @@ async def build_deep_agent(
     # repo_root so auto mode can tell repo content from the agent's own
     # scratch when it judges a delete (see _bash_deletes_real_work).
     interrupt_on = approval_gates(repo, auto_approve_commands, repo_root)
+    exclude_scratch(repo_root)
     tracker = BudgetTracker(budget_usd=budget_usd, starting_cost=starting_cost)
     backend = build_memory_backend(repo, store)
 
@@ -1966,6 +2031,33 @@ async def build_deep_agent(
         "interrupt_on": interrupt_on,
     }
 
+    # The verifier: an independent seat that tries to break a bug fix before it
+    # ships -- the reproduction and its neighbours, run, not read. It reads
+    # and runs but cannot edit source, and sits on the test-writer's pin, a
+    # different model from the coder that wrote the fix (2026-09-24: two
+    # half-fixes passed a review that only read the diff).
+    verifier = {
+        "name": "verifier",
+        "description": (
+            "Delegate here after fixing a bug, BEFORE finishing: give it the bug report verbatim and a "
+            "short summary of your change. It independently tries to break the fix -- the reported "
+            "case, its neighbours, the module's existing tests -- and reports what still fails. It "
+            "changes no source."
+        ),
+        "system_prompt": VERIFIER_SYSTEM_PROMPT + "\n\n" + _FILESYSTEM_GUIDANCE,
+        "tools": [tool_by_name["read"], tool_by_name["bash"], run_checks_tool],
+        "model": test_writer_model,
+        "middleware": [
+            SanitizeToolCallsMiddleware(),
+            HiddenToolsMiddleware("glob", "grep", "execute", "delete"),
+            RepeatCallGuardMiddleware(),
+            BudgetGuardMiddleware(tracker),
+            ModelCallLimitMiddleware(run_limit=_rs.as_int("model_call_run_limit"), exit_behavior="error"),
+            ToolCallLimitMiddleware(run_limit=_rs.as_int("tool_call_run_limit"), exit_behavior="error"),
+        ],
+        "interrupt_on": interrupt_on,
+    }
+
     # Explicit general-purpose subagent: unless a spec with this exact name
     # exists, create_deep_agent auto-adds its own general-purpose subagent
     # carrying the coordinator's full tools and model but not its custom
@@ -2055,13 +2147,16 @@ async def build_deep_agent(
             # ...and a reminder when the model stops maintaining the list it
             # just wrote -- the 0/12-until-done plan strip of 2026-09-11.
             StaleTodoMiddleware(),
+            # Checkpoints at a third and two-thirds of the budget and 45/90
+            # minutes in: restate the goal and the evidence, or finish.
+            StepBackMiddleware(tracker),
             # Defense-in-depth backstop against a runaway loop -- see this
             # module's own comment on MODEL_CALL_RUN_LIMIT/TOOL_CALL_RUN_LIMIT
             # for why these are generous limits, not a normal-operation cap.
             ModelCallLimitMiddleware(run_limit=_rs.as_int("model_call_run_limit"), exit_behavior="error"),
             ToolCallLimitMiddleware(run_limit=_rs.as_int("tool_call_run_limit"), exit_behavior="error"),
         ],
-        subagents=[general_purpose, investigator, test_writer],
+        subagents=[general_purpose, investigator, test_writer, verifier],
         interrupt_on=interrupt_on,
         # No `memory=[...]` here -- see build_deep_agent's own docstring for
         # why: MemoryMiddleware's automatic loading is broken against

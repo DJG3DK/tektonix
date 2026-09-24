@@ -120,6 +120,12 @@ def ensure_image(instance_id: str, image: str | None = None) -> str:
 
 
 _JUNK = re.compile(r"(^|/)(__pycache__|\.pytest_cache|\.mypy_cache|\.tox)(/|$)|\.py[co]$")
+# A file the agent CREATED that is its own scratch, not part of the fix: a
+# hidden file (`.probe_out.txt`), anything at the top of the repository
+# (`debug_m2m.py` -- a fix lives in the package, not beside setup.py), and
+# probe/repro scripts anywhere. 2026-09-24: one prediction carried 870 KB of
+# these alongside a 2 KB fix.
+_SCRATCH = re.compile(r"(^|/)\.|^[^/]+$|(^|/)(probe|repro|reproduce|debug|scratch|tmp)[^/]*$|_tmp\.[a-z]+$")
 
 
 def materialize(instance: dict, root: Path) -> dict:
@@ -246,7 +252,7 @@ def prediction_patch(workspace: Path, base: str, live: Path) -> str:
     for line in _run(["git", "status", "--porcelain", "--untracked-files=all"], workspace).splitlines():
         if line.startswith("?? "):
             rel = line[3:]
-            if not _JUNK.search(rel) and not (live / rel).exists():
+            if not _JUNK.search(rel) and not _SCRATCH.search(rel) and not (live / rel).exists():
                 created.append(rel)
     if created:
         _run(["git", "add", "-N", "--", *created], workspace)

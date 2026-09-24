@@ -18,20 +18,21 @@ merges a subagent spec's middleware by name and appends the rest, so anything
 missing from a subagent's own list is simply absent there. That is how a
 general-purpose subagent once ran with no budget ceiling at all.
 
-| Middleware | What it forbids | coordinator | investigator | test-writer | general-purpose | planner | consolidation |
-|---|---|:-:|:-:|:-:|:-:|:-:|:-:|
-| `BudgetGuardMiddleware` | Spending past the task's dollar ceiling. Raises after each model call. | ● | ● | ● | ● | ● | ● |
-| `ModelCallLimitMiddleware` | More model calls in one run than the configured limit. | ● | ● | ● | ● | ● | ● |
-| `ToolCallLimitMiddleware` | More tool calls in one run than the configured limit. | ● | ● | ● | ● | ● | ● |
-| `SanitizeToolCallsMiddleware` | A malformed tool call in history reaching a provider. | ● | ● | ● | ● | ● | |
-| `HiddenToolsMiddleware` | Tools the factory adds unasked (`task`, `glob`, `grep`, `execute`, `delete`). | ● | ● | ● | ● | ● | |
-| `RepeatCallGuardMiddleware` | Running the same call with the same result a third time. | ● | ● | ● | ● | ● | |
-| `SummarizationMiddleware` | Unbounded context growth (library). | ● | | | | ● | |
-| `TodoListMiddleware` | — supplies `write_todos` (library). | ● | | | | | |
-| `StaleTodoMiddleware` | Letting a written plan go stale while work continues. | ● | | | | | | |
-| `PlanCodeModelMiddleware` | One model doing both planning and coding. | ● | | | | | |
-| `BriefFirstMiddleware` | Reading the repo before the request is written down. | | | | | ● | |
-| `PinnedBriefMiddleware` | Compaction dropping the operator's own request. | | | | | ● | |
+| Middleware | What it forbids | coordinator | investigator | test-writer | general-purpose | verifier | planner | consolidation |
+|---|---|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
+| `BudgetGuardMiddleware` | Spending past the task's dollar ceiling. Raises after each model call. | ● | ● | ● | ● | ● | ● | ● |
+| `ModelCallLimitMiddleware` | More model calls in one run than the configured limit. | ● | ● | ● | ● | ● | ● | ● |
+| `ToolCallLimitMiddleware` | More tool calls in one run than the configured limit. | ● | ● | ● | ● | ● | ● | ● |
+| `SanitizeToolCallsMiddleware` | A malformed tool call in history reaching a provider. | ● | ● | ● | ● | ● | ● | |
+| `HiddenToolsMiddleware` | Tools the factory adds unasked (`task`, `glob`, `grep`, `execute`, `delete`). | ● | ● | ● | ● | ● | ● | |
+| `RepeatCallGuardMiddleware` | Running the same call with the same result a third time. | ● | ● | ● | ● | ● | ● | |
+| `SummarizationMiddleware` | Unbounded context growth (library). | ● | | | | | ● | |
+| `TodoListMiddleware` | — supplies `write_todos` (library). | ● | | | | | | |
+| `StaleTodoMiddleware` | Letting a written plan go stale while work continues. | ● | | | | | | | |
+| `StepBackMiddleware` | Circling past a third or two-thirds of the budget, or 45/90 minutes into a pass, without restating the goal and the evidence. | ● | | | | | | |
+| `PlanCodeModelMiddleware` | One model doing both planning and coding. | ● | | | | | | |
+| `BriefFirstMiddleware` | Reading the repo before the request is written down. | | | | | | ● | |
+| `PinnedBriefMiddleware` | Compaction dropping the operator's own request. | | | | | | ● | |
 
 `HumanInTheLoopMiddleware` is not in any of those lists: deepagents builds it
 from the `interrupt_on` mapping that the coordinator and all three subagents
@@ -77,6 +78,12 @@ at 50k tokens of context.
 the plan it wrote. Without it a twelve-item task sat at 0/12 for two hours and
 snapped to 12/12 at the end; nothing was broken except that the list was never
 touched.
+
+**`StepBackMiddleware`** (`step_back.py`) — at a third and two-thirds of the
+task's budget, and 45 and 90 minutes into a pass, the coordinator's next call
+asks it to restate what should happen, what its change does and what evidence
+shows it works, and to finish if that evidence has stopped moving. The
+benchmark tasks that failed were the ones that circled for two hours.
 
 **`PlanCodeModelMiddleware`** (`model_pin.py`) — the coordinator's first turn
 of a thread runs on the planner model, every turn after on the coder model.

@@ -74,12 +74,16 @@ def test_the_prediction_is_the_source_change_only(tmp_path, monkeypatch):
     _git(["commit", "-qam", "fix"], ws)
     (ws / "pkg" / "new.py").write_text("y = 1\n")                     # created, uncommitted
     (ws / "tests" / "test_core.py").write_text("def test(): assert 0\n")
+    (ws / ".probe_out.txt").write_text("x" * 5000 + "\n")                # the agent's scratch
+    (ws / "debug_m2m.py").write_text("print(1)\n")
+    (ws / "pkg" / "repro_issue.py").write_text("print(2)\n")
     (ws / "pkg" / "__pycache__").mkdir()
     (ws / "pkg" / "__pycache__" / "core.cpython-39.pyc").write_bytes(b"\0")
     patch = sb.prediction_patch(ws, base, live)
     assert "pkg/core.py" in patch and "+x = 2" in patch
     assert "pkg/new.py" in patch and "+y = 1" in patch
-    for absent in ("tests/test_core.py", "build/lib.txt", "__pycache__"):
+    for absent in ("tests/test_core.py", "build/lib.txt", "__pycache__", ".probe_out.txt", "debug_m2m.py",
+                   "repro_issue.py"):
         assert absent not in patch
 
 
@@ -280,3 +284,26 @@ def test_only_a_benchmark_project_runs_with_no_approvals(monkeypatch):
     assert approval_gates("real", auto_approve_commands=False) is INTERRUPT_ON
     auto = approval_gates("real", auto_approve_commands=True, repo_root="/tmp/real")
     assert "bash" in auto and "ask_user" in auto, "auto-approve on a real project still asks before losing work"
+
+
+def test_every_batch_s_projects_are_the_ones_the_agent_sees(tmp_path, monkeypatch):
+    """The second batch reloaded a projects file deleted with the first,
+    fell back to the example projects, and the run crashed 20 tasks in."""
+    import agent.config as cfg
+    mod = _runner()
+    path = tmp_path / "run" / "projects.json"
+    path.parent.mkdir()
+    monkeypatch.setattr(cfg, "_PROJECTS_CONFIG_PATH", path)
+    saved = dict(cfg.PROJECTS)
+    try:
+        mod.publish_projects(path, {"batch1-task": {"sandbox": str(tmp_path / "s1")}})
+        assert "batch1-task" in cfg.PROJECTS
+        mod.publish_projects(path, {"batch2-task": {"sandbox": str(tmp_path / "s2")}})
+        assert "batch2-task" in cfg.PROJECTS and "batch1-task" not in cfg.PROJECTS
+        from agent import workspaces
+        assert workspaces.task_workspace_path("batch2-task", "t1").startswith(str(tmp_path))
+        with pytest.raises(RuntimeError, match="reads projects from"):
+            mod.publish_projects(tmp_path / "elsewhere.json", {"x": {"sandbox": "/tmp/x"}})
+    finally:
+        cfg.PROJECTS.clear()
+        cfg.PROJECTS.update(saved)

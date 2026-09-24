@@ -29,7 +29,7 @@ DOC = REPO / "docs" / "middleware.md"
 
 # Where each agent is built. The keys are the column names in the doc.
 _SOURCES = {
-    "agent/deep_agent.py": ("coordinator", "investigator", "test-writer", "general-purpose"),
+    "agent/deep_agent.py": ("coordinator", "investigator", "test-writer", "general-purpose", "verifier"),
     "agent/planning_chat.py": ("planner",),
     "agent/consolidation.py": ("consolidation",),
 }

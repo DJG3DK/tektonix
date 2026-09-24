@@ -127,6 +127,27 @@ def _router_ledger(task_id: str) -> tuple[dict, float]:
     return counts, billed
 
 
+def publish_projects(path: Path, projects: dict) -> Path:
+    """This batch's projects, where the agent reads them.
+
+    One file for the whole run, rewritten per batch. agent.config fixes the
+    path it reads when it is first imported; each batch writing into its own
+    temporary folder meant the second batch reloaded a file that had been
+    deleted with the first, fell back to the example projects, and crashed
+    on its first task (2026-09-24, 20 tasks in)."""
+    path.write_text(json.dumps({"projects": projects}, indent=1))
+    os.environ["AGENT_PROJECTS_JSON"] = str(path)
+    if "agent.config" in sys.modules:
+        import agent.config as cfg  # noqa: PLC0415
+        if Path(cfg._PROJECTS_CONFIG_PATH) != path:
+            raise RuntimeError(f"the agent reads projects from {cfg._PROJECTS_CONFIG_PATH}, not {path}")
+        cfg.reload_projects()
+        missing = [name for name in projects if name not in cfg.PROJECTS]
+        if missing:
+            raise RuntimeError(f"projects not visible to the agent after reload: {missing[:3]}")
+    return path
+
+
 def disk_used_pct(path: str = "/var/lib/docker") -> float:
     """How full the disk the images land on is, the way df reports it."""
     try:
@@ -157,13 +178,8 @@ async def _run(args, instances: list[dict], root: Path, run_dir: Path, spent_bef
     instances = [i for i in instances if i["instance_id"] in mfs]
     if not instances:
         return {"results": skipped, "runtime_settings": {}}
-    projects_json = root / "projects.json"
-    projects_json.write_text(json.dumps({"projects": {
-        mfs[i["instance_id"]]["name"]: sb.project_entry(i, mfs[i["instance_id"]]) for i in instances}}, indent=1))
-    os.environ["AGENT_PROJECTS_JSON"] = str(projects_json)
-    if "agent.config" in sys.modules:          # a later batch: the projects are new
-        from agent.config import reload_projects  # noqa: PLC0415
-        reload_projects()
+    projects_json = publish_projects(run_dir / "projects.json", {
+        mfs[i["instance_id"]]["name"]: sb.project_entry(i, mfs[i["instance_id"]]) for i in instances})
 
     # --- 2. an isolated reviewer pair and store, production's settings
     rev = await ev_reviewer.start(projects_json, root / "reviewer")
@@ -218,7 +234,10 @@ async def _run(args, instances: list[dict], root: Path, run_dir: Path, spent_bef
                     models, billed = _router_ledger(task_id)
                     cost = billed or float(final.get("cost_so_far") or 0.0)
                     spent += cost
-                    ws = Path(workspaces.task_workspace_path(mf["name"], task_id))
+                    try:
+                        ws = Path(workspaces.task_workspace_path(mf["name"], task_id))
+                    except Exception:  # noqa: BLE001 -- the prediction still comes from the template
+                        ws = Path(mf["sandbox"])
                     try:
                         patch = sb.prediction_patch(ws if (ws / ".git").exists() else mf["sandbox"], mf["base"], mf["live"])
                     except sb.SetupError as e:
@@ -343,8 +362,11 @@ def main(argv=None) -> int:
     try:
         return _batches(args, run_id, run_dir, ids, batches, results, resolved, graded_ids_so_far,
                         settings, write_summary, task_done)
-    except KeyboardInterrupt:
-        write_summary(graded=False, stopped="stopped by the operator", state="stopped")
+    except BaseException as e:
+        # Ctrl-C, a kill, or a crash: the summary says which, so the page does
+        # not show a dead run as running.
+        why = "stopped by the operator" if isinstance(e, KeyboardInterrupt) else f"crashed: {type(e).__name__}: {e}"
+        write_summary(graded=False, stopped=why[:500], state="stopped")
         raise
 
 
