@@ -525,3 +525,78 @@ export interface EvalReport {
   tasks: EvalTaskRow[];
   summary: EvalRunSummary;
 }
+
+/* SWE-bench Verified runs (agent/routers/swebench.py, evals/SWEBENCH.md). */
+export interface SwebenchRunSummary {
+  name: string;
+  /** full: all 500, the only advertisable number. sample: a seeded sample.
+   *  selected: chosen tasks. diagnostic: an experiment, never a score. */
+  kind: "full" | "sample" | "selected" | "diagnostic";
+  state: "running" | "done" | "stopped";
+  notes: string;
+  started_at: string | null;
+  finished_at: string | null;
+  duration_s: number | null;
+  total: number;
+  done: number;
+  graded: boolean;
+  /** Final when graded; while running, resolved among the batches graded so far. */
+  resolved: number | null;
+  graded_count: number;
+  resolved_rate: number | null;
+  total_cost_usd: number | null;
+  stopped_early: string | null;
+  parallel: number | null;
+  budget_usd: number | null;
+  models: Record<string, number>;
+}
+
+export interface SwebenchOverview {
+  runs: SwebenchRunSummary[];
+  dataset_size: number;
+  gold_check: { checked: number; reference_fails: string[] };
+}
+
+export interface SwebenchTests {
+  patch_applied: boolean | null;
+  fail_to_pass_failed: string[];
+  fail_to_pass_passed: number;
+  pass_to_pass_failed: string[];
+  pass_to_pass_passed: number;
+}
+
+export interface SwebenchTaskRow {
+  id: string;
+  repo: string;
+  outcome: string | null;
+  reason: string | null;
+  /** Absent until the official harness has graded it. */
+  resolved?: boolean | null;
+  cost_usd: number | null;
+  duration_s: number | null;
+  patch_bytes: number | null;
+  review_verdict: string | null;
+  models: Record<string, number>;
+  started: boolean;
+  reference_fails: boolean;
+  tests: SwebenchTests | null;
+  has_trajectory: boolean;
+}
+
+export interface SwebenchRun {
+  summary: SwebenchRunSummary;
+  tasks: SwebenchTaskRow[];
+}
+
+export interface SwebenchMessage {
+  role: string;
+  name: string | null;
+  text: string;
+  tool_calls: { name: string; args: string }[];
+}
+
+export interface SwebenchTaskDetail {
+  id: string;
+  patch: string | null;
+  conversation: { generation: number; namespace: string; messages: SwebenchMessage[] }[];
+}

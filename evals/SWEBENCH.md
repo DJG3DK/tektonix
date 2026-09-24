@@ -71,6 +71,11 @@ the tasks it never reached are recorded as `not_run` with the reason.
 for the whole run from its own logs of every batch (`--rewrite_reports`),
 without running anything again.
 
+The **SWE-bench Verified** section of the Analytics page shows every run as it
+goes, with each task's result, the tests the harness ran, the patch and the
+agent's whole conversation. A run whose id starts with `diag-` is labelled
+diagnostic and is never shown as a score.
+
 Everything goes to `logs/swebench/<run-id>/`:
 - `predictions.jsonl`: the submission, in the harness's format.
 - `tektonix.<run-id>.json`: the official harness's report (`resolved_ids`

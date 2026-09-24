@@ -162,9 +162,14 @@ def test_each_batch_is_graded_then_its_images_deleted_and_the_disk_stops_the_run
     # Two batches' worth of images fill the disk past the limit.
     monkeypatch.setattr(mod, "disk_used_pct", lambda path="/": 95 if len(spent_seen) >= 2 else 10)
 
-    async def fake_run(args, batch, root, run_dir, spent_before=0.0):
+    async def fake_run(args, batch, root, run_dir, spent_before=0.0, on_result=None):
         spent_seen.append(spent_before)
         events.append(("run", [i["instance_id"] for i in batch]))
+        for i in batch:
+            on_result(i["instance_id"], {"outcome": "done", "cost_usd": 1.0})
+            live = json.loads((tmp_path / "t" / "summary.json").read_text())
+            assert live["state"] == "running" and live["instances"][i["instance_id"]]["outcome"] == "done", \
+                "the dashboard sees each task as it finishes"
         return {"results": {i["instance_id"]: {"outcome": "done", "cost_usd": 1.0} for i in batch},
                 "runtime_settings": {"x": 1}}
 
@@ -190,6 +195,7 @@ def test_each_batch_is_graded_then_its_images_deleted_and_the_disk_stops_the_run
     assert summary["resolved"] == 2 and summary["total"] == 5 and summary["resolved_rate"] == 40.0
     assert "95%" in summary["stopped_early"]
     assert summary["instances"]["r__r-4"] == {"outcome": "not_run", "resolved": False}
+    assert summary["state"] == "stopped" and summary["runtime_settings"] == {"x": 1}
 
 
 def test_a_trajectory_is_every_message_each_conversation_held():

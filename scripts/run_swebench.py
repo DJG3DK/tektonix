@@ -132,7 +132,8 @@ def disk_used_pct(path: str = "/var/lib/docker") -> float:
     return 100.0 * u.used / (u.used + u.free)
 
 
-async def _run(args, instances: list[dict], root: Path, run_dir: Path, spent_before: float = 0.0) -> dict:
+async def _run(args, instances: list[dict], root: Path, run_dir: Path, spent_before: float = 0.0,
+               on_result=None) -> dict:
     # --- 1. every task's repository, out of its official image -- each pull
     # only while the disk has room for it.
     mfs, skipped = {}, {}
@@ -220,6 +221,8 @@ async def _run(args, instances: list[dict], root: Path, run_dir: Path, spent_bef
                                     "models": _models_used(task_id)}
                     print(f"  {iid:40} {outcome:10} ${cost:6.2f} {results[iid]['duration_s']:5}s "
                           f"patch {len(patch):6}B", flush=True)
+                    if on_result:
+                        on_result(iid, results[iid])
 
             print(f"\nrunning {len(instances)} task(s), {args.parallel} at a time, ${args.budget} each, "
                   f"ceiling ${args.ceiling}", flush=True)
@@ -260,7 +263,8 @@ def _gold_check(args, ids: list[str]) -> int:
     report = sb.grade(Path("gold"), ids, run_id, run_dir, max_workers=args.grade_workers, predictions_arg="gold")
     failing = sorted(set(ids) - set(report.get("resolved_ids") or []))
     (run_dir / "gold-check.json").write_text(json.dumps(
-        {"run_id": run_id, "dataset": sb.DATASET, "checked": len(ids), "reference_fails": failing,
+        {"run_id": run_id, "dataset": sb.DATASET, "checked": len(ids), "checked_ids": sorted(ids),
+         "reference_fails": failing,
          "harness": {k: report.get(k) for k in report if k.endswith("_instances")}}, indent=1))
     print(f"\nreference fix resolves {len(ids) - len(failing)}/{len(ids)}; fails on: {', '.join(failing) or 'none'}"
           f"\n  written to {run_dir}")
@@ -287,13 +291,19 @@ def main(argv=None) -> int:
     ids = [i["instance_id"] for i in instances]
     results: dict = {}
     resolved: set = set()
+    graded_ids_so_far: set = set()
     settings: dict = {}
     size = max(1, args.batch_size)
     batches = [instances[k:k + size] for k in range(0, len(instances), size)]
 
-    def write_summary(graded: bool, stopped: str | None = None) -> dict:
+    def write_summary(graded: bool, stopped: str | None = None, state: str = "running") -> dict:
+        """After every task, so the dashboard (agent/routers/swebench.py)
+        shows a run as it goes. `state` is running, done or stopped; `pid`
+        lets it tell a running run from one that died without saying so."""
         summary = {
             "run_id": run_id, "dataset": sb.DATASET, "notes": args.notes,
+            "state": state, "pid": os.getpid(),
+            "diagnostic": run_id.startswith("diag-"),
             "selection": {"instances": args.instances, "sample": args.sample, "seed": args.seed, "all": args.all},
             "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(started)),
             "finished_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -301,14 +311,36 @@ def main(argv=None) -> int:
             "task_timeout_min": args.task_timeout_min,
             "total": len(ids), "graded": graded, "stopped_early": stopped,
             "resolved": len(resolved) if graded else None,
+            "resolved_so_far": len(resolved), "graded_so_far": len(graded_ids_so_far),
             "resolved_rate": round(100 * len(resolved) / len(ids), 1) if graded and ids else None,
             "total_cost_usd": round(sum(r.get("cost_usd", 0) for r in results.values()), 4),
             "runtime_settings": settings,
-            "instances": {i: {**results.get(i, {"outcome": "not_run"}), **({"resolved": i in resolved} if graded else {})}
+            "instances": {i: {**results.get(i, {"outcome": "not_run"}),
+                              **({"resolved": i in resolved} if graded or i in graded_ids_so_far else {})}
                           for i in ids},
         }
-        (run_dir / "summary.json").write_text(json.dumps(summary, indent=1))
+        tmp = run_dir / "summary.json.tmp"
+        tmp.write_text(json.dumps(summary, indent=1))
+        tmp.replace(run_dir / "summary.json")      # never read half-written
         return summary
+
+    def task_done(iid: str, row: dict) -> None:
+        results[iid] = row
+        write_summary(graded=False)
+
+    write_summary(graded=False)
+    try:
+        return _batches(args, run_id, run_dir, ids, batches, results, resolved, graded_ids_so_far,
+                        settings, write_summary, task_done)
+    except KeyboardInterrupt:
+        write_summary(graded=False, stopped="stopped by the operator", state="stopped")
+        raise
+
+
+def _batches(args, run_id, run_dir, ids, batches, results, resolved, graded_ids_so_far,
+             settings, write_summary, task_done) -> int:
+    """Each batch run, graded, and its images deleted. The collections are
+    main()'s, updated in place, so its summary always sees the latest."""
 
     stopped = None
     for n, batch in enumerate(batches, 1):
@@ -321,18 +353,21 @@ def main(argv=None) -> int:
         root = Path(tempfile.mkdtemp(prefix="tektonix-swebench-"))
         try:
             out = asyncio.run(_run(args, batch, root, run_dir,
-                                   spent_before=sum(r.get("cost_usd", 0) for r in results.values())))
+                                   spent_before=sum(r.get("cost_usd", 0) for r in results.values()),
+                                   on_result=task_done))
         finally:
             if not args.keep:
                 shutil.rmtree(root, ignore_errors=True)
         results.update(out["results"])
-        settings = out["runtime_settings"] or settings
+        settings.update(out["runtime_settings"] or {})
         write_summary(graded=False)
         ran = [i["instance_id"] for i in batch if results.get(i["instance_id"], {}).get("outcome") != "not_run"]
         if ran and not args.skip_grade:
             # Graded now, while this batch's images are still here.
             report = sb.grade(run_dir / "predictions.jsonl", ran, run_id, run_dir, max_workers=args.grade_workers)
             resolved |= set(report.get("resolved_ids") or [])
+            graded_ids_so_far.update(ran)
+            write_summary(graded=False)
             print(f"  batch {n}: {len(set(ran) & resolved)}/{len(ran)} resolved; "
                   f"{len(resolved)} so far", flush=True)
         if not args.keep_images:
@@ -343,7 +378,7 @@ def main(argv=None) -> int:
             print(f"  batch {n}: images deleted, disk now {disk_used_pct():.0f}%", flush=True)
 
     if args.skip_grade:
-        write_summary(graded=False, stopped=stopped)
+        write_summary(graded=False, stopped=stopped, state="stopped" if stopped else "done")
         print(f"\nnot graded; predictions in {run_dir}. Grade with --grade-only {run_id}")
         return 0
     graded_ids = [i for i in ids if results.get(i, {}).get("outcome") not in (None, "not_run")]
@@ -352,8 +387,9 @@ def main(argv=None) -> int:
         # of every batch -- nothing is re-run.
         final = sb.grade(run_dir / "predictions.jsonl", graded_ids, run_id, run_dir,
                          max_workers=args.grade_workers, rewrite=True)
-        resolved = set(final.get("resolved_ids") or [])
-    summary = write_summary(graded=True, stopped=stopped)
+        resolved.clear()
+        resolved.update(final.get("resolved_ids") or [])
+    summary = write_summary(graded=True, stopped=stopped, state="stopped" if stopped else "done")
     print(f"\n{len(resolved)}/{len(ids)} resolved by the official harness ({summary['resolved_rate']}%)"
           f"  ${summary['total_cost_usd']:.2f}" + (f"\n  STOPPED EARLY: {stopped}" if stopped else "")
           + f"\n  written to {run_dir}")

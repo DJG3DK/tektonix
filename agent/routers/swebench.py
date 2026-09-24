@@ -1,0 +1,227 @@
+"""SWE-bench Verified runs, on the analytics page: the score, each task, its
+patch and the agent's whole conversation.
+
+Read-only. A run is `scripts/run_swebench.py`, started from a shell: it pulls
+gigabytes of images, runs for hours and spends real money, and what makes its
+number a SWE-bench number is spelled out in evals/SWEBENCH.md. This only reads
+what the runner leaves in logs/swebench/<run>/ -- summary.json (rewritten
+after every task, so a run shows as it goes), predictions.jsonl, the official
+harness's reports, and trajectories/<id>.json.
+
+Admin-only, like the golden suite: the trajectories hold every tool call and
+file the agent read.
+"""
+from __future__ import annotations
+
+import json
+import os
+import re
+from pathlib import Path
+
+from fastapi import APIRouter, Depends, HTTPException
+
+from agent import auth, paths
+from agent.auth import User, require_full_auth
+from agent.routers.evals import _parse_ts
+
+router = APIRouter(tags=["swebench"])
+
+RUNS_DIR = paths.REPO_ROOT / "logs" / "swebench"
+DATASET_SIZE = 500
+_RUN_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,120}$")
+_INSTANCE = re.compile(r"^[A-Za-z0-9_.-]+__[A-Za-z0-9_.-]+-\d+$")
+# A message's text and a tool call's arguments, cut to this for the page.
+# The file on disk keeps everything; this is for reading, not for the record.
+_TEXT_LIMIT = 6000
+
+
+def _load(path: Path) -> dict | None:
+    try:
+        return json.loads(path.read_text())
+    except (OSError, ValueError):
+        return None
+
+
+def _alive(pid) -> bool:
+    try:
+        os.kill(int(pid), 0)
+        return True
+    except (OSError, TypeError, ValueError):
+        return False
+
+
+def _run_dir(name: str) -> Path:
+    # Matched, not joined: the name becomes a path.
+    if not _RUN_NAME.match(name):
+        raise HTTPException(400, "not a run name")
+    d = RUNS_DIR / name
+    if not (d / "summary.json").is_file():
+        raise HTTPException(404, "no such run")
+    return d
+
+
+def _kind(s: dict) -> str:
+    sel = s.get("selection") or {}
+    if s.get("diagnostic") or str(s.get("run_id", "")).startswith("diag-"):
+        return "diagnostic"
+    if sel.get("all") and (s.get("total") or 0) >= DATASET_SIZE:
+        return "full"
+    if sel.get("sample"):
+        return "sample"
+    return "selected"
+
+
+def _state(s: dict) -> str:
+    """What the run is doing. A run from before `state` was recorded is done;
+    one that says running but whose process is gone died without saying so."""
+    state = s.get("state") or "done"
+    if state == "running" and not _alive(s.get("pid")):
+        return "stopped"
+    return state
+
+
+def summary(name: str, s: dict) -> dict:
+    instances = s.get("instances") or {}
+    started, finished = _parse_ts(s.get("started_at")), _parse_ts(s.get("finished_at"))
+    models: dict[str, int] = {}
+    for row in instances.values():
+        for model, n in (row.get("models") or {}).items():
+            models[model] = models.get(model, 0) + int(n)
+    done = sum(1 for r in instances.values() if r.get("task_id") or r.get("outcome") not in (None, "not_run"))
+    return {
+        "name": name,
+        "kind": _kind(s),
+        "state": _state(s),
+        "notes": s.get("notes") or "",
+        "started_at": s.get("started_at"),
+        "finished_at": s.get("finished_at"),
+        "duration_s": round(finished - started) if started and finished else None,
+        "total": s.get("total") or len(instances),
+        "done": done,
+        "graded": bool(s.get("graded")),
+        "resolved": s.get("resolved") if s.get("graded") else s.get("resolved_so_far"),
+        "graded_count": len(instances) if s.get("graded") else (s.get("graded_so_far") or 0),
+        "resolved_rate": s.get("resolved_rate"),
+        "total_cost_usd": s.get("total_cost_usd"),
+        "stopped_early": s.get("stopped_early"),
+        "parallel": s.get("parallel"),
+        "budget_usd": s.get("budget_usd"),
+        "models": dict(sorted(models.items(), key=lambda kv: -kv[1])),
+    }
+
+
+def _harness_tests(run_dir: Path, run_id: str, iid: str) -> dict | None:
+    """Which graded tests failed, from the official harness's own report."""
+    rep = _load(run_dir / "logs" / "run_evaluation" / run_id / "tektonix" / iid / "report.json")
+    if not rep or iid not in rep:
+        return None
+    ts = rep[iid].get("tests_status") or {}
+    return {
+        "patch_applied": rep[iid].get("patch_successfully_applied"),
+        "fail_to_pass_failed": (ts.get("FAIL_TO_PASS") or {}).get("failure") or [],
+        "fail_to_pass_passed": len((ts.get("FAIL_TO_PASS") or {}).get("success") or []),
+        "pass_to_pass_failed": (ts.get("PASS_TO_PASS") or {}).get("failure") or [],
+        "pass_to_pass_passed": len((ts.get("PASS_TO_PASS") or {}).get("success") or []),
+    }
+
+
+def _gold_checks() -> dict:
+    """Every reference-fix check on disk, merged: the tasks whose OFFICIAL fix
+    fails in the official image, which no agent can resolve."""
+    checked: set[str] = set()
+    fails: set[str] = set()
+    for path in sorted(RUNS_DIR.glob("*/gold-check.json")):
+        g = _load(path) or {}
+        checked.update(g.get("checked_ids") or [])
+        fails.update(g.get("reference_fails") or [])
+    return {"checked": len(checked | fails), "reference_fails": sorted(fails)}
+
+
+@router.get("/api/swebench")
+async def list_runs(user: User = Depends(require_full_auth)):
+    auth.require_admin(user)
+    runs = []
+    if RUNS_DIR.is_dir():
+        for d in RUNS_DIR.iterdir():
+            s = _load(d / "summary.json") if d.is_dir() else None
+            if s is not None:
+                runs.append(summary(d.name, s))
+    runs.sort(key=lambda r: r["started_at"] or "", reverse=True)
+    return {"runs": runs[:50], "dataset_size": DATASET_SIZE, "gold_check": _gold_checks()}
+
+
+@router.get("/api/swebench/runs/{name}")
+async def get_run(name: str, user: User = Depends(require_full_auth)):
+    auth.require_admin(user)
+    d = _run_dir(name)
+    s = _load(d / "summary.json") or {}
+    run_id = s.get("run_id") or name
+    fails = set(_gold_checks()["reference_fails"])
+    tasks = []
+    for iid, row in (s.get("instances") or {}).items():
+        repo = iid.rsplit("-", 1)[0].replace("__", "/")
+        tasks.append({
+            "id": iid, "repo": repo,
+            "outcome": row.get("outcome"), "reason": row.get("reason"),
+            "resolved": row.get("resolved"),
+            "cost_usd": row.get("cost_usd"), "duration_s": row.get("duration_s"),
+            "patch_bytes": row.get("patch_bytes"), "review_verdict": row.get("review_verdict"),
+            "models": row.get("models") or {},
+            "started": bool(row.get("task_id")) or row.get("outcome") not in (None, "not_run"),
+            "reference_fails": iid in fails,
+            "tests": _harness_tests(d, run_id, iid),
+            "has_trajectory": (d / "trajectories" / f"{iid}.json").is_file(),
+        })
+    return {"summary": summary(name, s), "tasks": tasks}
+
+
+def _text(content) -> str:
+    if isinstance(content, list):
+        content = "\n".join(p.get("text", "") if isinstance(p, dict) else str(p) for p in content)
+    return str(content or "")
+
+
+def _cut(text: str) -> str:
+    return text if len(text) <= _TEXT_LIMIT else text[:_TEXT_LIMIT] + f"\n… ({len(text) - _TEXT_LIMIT} more characters)"
+
+
+def _conversation(traj: dict) -> list[dict]:
+    """The saved trajectory (langchain's messages_to_dict), as rows a page can
+    show: who spoke, what they said, which tools they called with what."""
+    out = []
+    for thread in traj.get("threads") or []:
+        rows = []
+        for m in thread.get("messages") or []:
+            data = m.get("data") or {}
+            rows.append({
+                "role": m.get("type"),
+                "name": data.get("name"),
+                "text": _cut(_text(data.get("content"))),
+                "tool_calls": [{"name": c.get("name"), "args": _cut(json.dumps(c.get("args"), indent=1))}
+                               for c in data.get("tool_calls") or []],
+            })
+        out.append({"generation": thread.get("generation", 0), "namespace": thread.get("namespace") or "coordinator",
+                    "messages": rows})
+    return out
+
+
+@router.get("/api/swebench/runs/{name}/tasks/{instance_id}")
+async def get_task(name: str, instance_id: str, user: User = Depends(require_full_auth)):
+    auth.require_admin(user)
+    d = _run_dir(name)
+    if not _INSTANCE.match(instance_id):
+        raise HTTPException(400, "not an instance id")
+    patch = None
+    try:
+        with (d / "predictions.jsonl").open() as fh:
+            for line in fh:
+                try:
+                    p = json.loads(line)
+                except ValueError:
+                    continue
+                if p.get("instance_id") == instance_id:
+                    patch = p.get("model_patch") or ""
+    except OSError:
+        pass
+    traj = _load(d / "trajectories" / f"{instance_id}.json")
+    return {"id": instance_id, "patch": patch, "conversation": _conversation(traj) if traj else []}

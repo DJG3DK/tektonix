@@ -46,6 +46,7 @@ from agent.routers import github as github_routes
 from agent.routers import tasks as tasks_routes
 from agent.routers import planning as planning_routes
 from agent.routers import evals as evals_routes
+from agent.routers import swebench as swebench_routes
 from agent.routers import artifacts as artifact_routes
 from agent.routers import settings as settings_routes
 from agent.routers import model_config as model_config_routes
@@ -466,6 +467,7 @@ app.include_router(github_routes.router)
 app.include_router(tasks_routes.router)
 app.include_router(planning_routes.router)
 app.include_router(evals_routes.router)
+app.include_router(swebench_routes.router)
 app.include_router(artifact_routes.router)
 
 

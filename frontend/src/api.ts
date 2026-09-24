@@ -1347,3 +1347,18 @@ export async function startEvalRun(
 export async function stopEvalRun(): Promise<void> {
   await evalsJson(await apiFetch(`${API_BASE}/evals/stop`, { method: "POST" }), "stopping the run");
 }
+
+export async function getSwebench(): Promise<import("./types").SwebenchOverview> {
+  return evalsJson(await apiFetch(`${API_BASE}/swebench`), "loading SWE-bench runs");
+}
+
+export async function getSwebenchRun(name: string): Promise<import("./types").SwebenchRun> {
+  return evalsJson(await apiFetch(`${API_BASE}/swebench/runs/${encodeURIComponent(name)}`), "loading the run");
+}
+
+export async function getSwebenchTask(run: string, id: string): Promise<import("./types").SwebenchTaskDetail> {
+  return evalsJson(
+    await apiFetch(`${API_BASE}/swebench/runs/${encodeURIComponent(run)}/tasks/${encodeURIComponent(id)}`),
+    "loading the task",
+  );
+}

@@ -17,6 +17,7 @@ import { getAgentModelUsage, getAnalytics, getBenchmarks, getRouterBalance, getT
 import type { AgentModelUsage, Analytics, Benchmarks, RouterBalance, ToolReliability, TraceSummary } from "../types";
 import { BenchmarkPanel } from "./BenchmarkPanel";
 import { EvalsPanel } from "./EvalsPanel";
+import { SwebenchPanel } from "./SwebenchPanel";
 import { repoColor } from "../repoColor";
 import "./AnalyticsView.css";
 import { modelColor, shortModel } from "../format";
@@ -203,6 +204,7 @@ export function AnalyticsView() {
           or a model pin. Everything below it is the detail behind it. */}
       <BenchmarkPanel data={benchmarks} error={benchmarksError} />
       <EvalsPanel />
+      <SwebenchPanel />
 
       {/* Reviewer spend. Its own section, not folded into the totals above:
           the agent's budget and the gate's budget are different things, and
