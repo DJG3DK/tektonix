@@ -104,7 +104,9 @@ def goal_for(instance: dict) -> str:
         f"Resolve the following GitHub issue in the {instance['repo']} repository, which is "
         f"checked out in your workspace. Change the library's source code so the problem the "
         f"issue describes is fixed. Do not modify the existing tests; you may add new ones. "
-        f"You have no internet access.\n\n"
+        f"You have no internet access. The fix does not exist anywhere in this environment: the "
+        f"repository has no commits after this point, there is no newer package, and the tests that "
+        f"will grade the fix are not here. Do not search for them; work from the issue and the code.\n\n"
         f"<issue>\n{instance['problem_statement'].strip()}\n</issue>"
     )
 

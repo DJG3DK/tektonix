@@ -130,6 +130,7 @@ def make_agent_tools(
     repo_root: str,
     backend: BackendProtocol | None = None,
     initial_last_failed_edit: str | None = None,
+    benchmark: bool = False,
 ) -> tuple[list, dict]:
     """Returns ([bash, read, write, edit, describe_image], last_failed_edit_state)
     -- the agent's tools for reaching the real repo, scoped to `repo_root`,
@@ -278,6 +279,13 @@ def make_agent_tools(
             # unbounded value (or a nonsense one) lets a single confused turn
             # wedge the project for everyone else. 600s is well above any
             # legitimate build/test step.
+            if benchmark:
+                # A benchmark task does not go looking for the published fix
+                # or the grading tests (agent/tools/benchmark_guard.py).
+                from agent.tools.benchmark_guard import refusal  # noqa: PLC0415
+                refused = refusal(command)
+                if refused:
+                    return refused
             _BASH_TIMEOUT_CEILING = 600
             try:
                 timeout = int(timeout)

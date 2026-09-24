@@ -324,3 +324,50 @@ def test_every_batch_s_tasks_call_that_batch_s_reviewer():
         assert review_gate.REVIEW_SERVICE_PORT == 46001, "the next batch moves it again"
     finally:
         review_gate.REVIEW_SERVICE_PORT, review_gate.REVIEW_CONTROL_PORT = before
+
+
+@pytest.mark.parametrize("cmd", [
+    "cd /workspace && git cat-file --batch-all-objects --batch-check='%(objecttype)'",
+    "cd /workspace && git fsck --lost-found 2>&1 | head",
+    "cd /workspace && git log --all --oneline --grep=context",
+    "cd /workspace && pip download astropy==5.2 2>&1 | tail -2",
+    'curl -s "https://api.github.com/repos/astropy/astropy/pulls/14580/files"',
+    'cd / && grep -rl "division_of_units" --include=*.py / 2>/dev/null | head',
+    'find / -maxdepth 4 -iname "*eval*"',
+    "cat /tmp/tektonix-swebench-abc/work/live/x/.git/packed-refs",
+])
+def test_searching_for_the_published_fix_is_refused_on_a_benchmark(cmd):
+    """Answer-hunting was 15% of all shell commands in the first samples and
+    most of the budget of the tasks that failed; one curled GitHub for the
+    fix's own pull request."""
+    from agent.tools.benchmark_guard import refusal
+    msg = refusal(cmd)
+    assert msg and msg.startswith("REFUSED on a benchmark task") and "does not exist anywhere" in msg
+
+
+@pytest.mark.parametrize("cmd", [
+    "cd /workspace && python -m pytest astropy/timeseries/tests/test_sampled.py -q",
+    "cd /workspace && git log --oneline -5 -- astropy/io/fits/card.py",
+    "cd /workspace && git diff && git status --short",
+    'cd /workspace && grep -rn "is invalid - expected" astropy/',
+    "cd /workspace && find . -name '*.py' -path '*timeseries*'",
+    "ls /opt/miniconda3/envs/testbed/lib/python3.9/site-packages/numpy/core",
+    "cd /workspace && python .scratch/probe.py",
+])
+def test_ordinary_work_is_never_refused(cmd):
+    from agent.tools.benchmark_guard import refusal
+    assert refusal(cmd) is None
+
+
+def test_the_task_statement_says_the_fix_is_not_in_the_environment():
+    goal = sb.goal_for({"repo": "a/b", "problem_statement": "broken"})
+    assert "does not exist anywhere in this environment" in goal and "Do not search for them" in goal
+
+
+def test_only_a_benchmark_s_bash_carries_the_guard():
+    import inspect
+
+    from agent import deep_agent
+    from agent.tools import agent_tools
+    assert "if benchmark:" in inspect.getsource(agent_tools.make_agent_tools)
+    assert 'benchmark=bool((PROJECTS.get(repo) or {}).get("benchmark"))' in inspect.getsource(deep_agent.build_deep_agent)

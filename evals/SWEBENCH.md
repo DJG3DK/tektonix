@@ -17,6 +17,7 @@ statement. Changing any of them makes it a different benchmark.
 | attempts | one per task (pass@1) |
 | isolation | each task is its own project: no memory, episode or history is shared between tasks |
 | internet | none. The published fix is on GitHub, so a benchmark project has no GitHub, web-page or cross-project tools, and its sandbox runs with `--network none` |
+| no answer-hunting | the task statement says the fix and the grading tests are not in the environment, and a benchmark project's shell refuses searches for them (`git cat-file --batch-all-objects`, `git fsck`, `git log --all`, `pip download`, `curl`, filesystem-wide `find`/`grep`) with the same explanation (`agent/tools/benchmark_guard.py`). The first samples spent 15% of their shell commands on this, one curling the fix's own pull request. Only the sandbox's missing network stopped it |
 | grading | `swebench.harness.run_evaluation`, the official harness, in its own environment. Tektonix never grades itself |
 
 The repository is copied out of the task's image, not cloned. Several

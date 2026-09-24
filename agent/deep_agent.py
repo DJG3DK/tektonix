@@ -1776,6 +1776,7 @@ async def build_deep_agent(
 
     project_tools, last_failed_edit_ref = make_agent_tools(
         repo_root, backend=backend, initial_last_failed_edit=starting_last_failed_edit,
+        benchmark=bool((PROJECTS.get(repo) or {}).get("benchmark")),
     )
     # Read-only SQL against this project's own application database, when it
     # has one. The codebase describes the schema; only this shows what's
