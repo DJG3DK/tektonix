@@ -190,3 +190,30 @@ def test_each_batch_is_graded_then_its_images_deleted_and_the_disk_stops_the_run
     assert summary["resolved"] == 2 and summary["total"] == 5 and summary["resolved_rate"] == 40.0
     assert "95%" in summary["stopped_early"]
     assert summary["instances"]["r__r-4"] == {"outcome": "not_run", "resolved": False}
+
+
+def test_a_trajectory_is_every_message_each_conversation_held():
+    """The agent's `messages` is a DeltaChannel: its checkpoint holds only a
+    marker, and the first runs saved an empty trajectory for every task. The
+    conversation is rebuilt from the writes, including what summarization
+    later removed, each subagent's separately."""
+    from types import SimpleNamespace
+
+    from langchain_core.messages import AIMessage, HumanMessage, RemoveMessage, ToolMessage
+    mod = _runner()
+
+    def tup(cid, ns, writes):
+        return SimpleNamespace(config={"configurable": {"checkpoint_id": cid, "checkpoint_ns": ns}},
+                               checkpoint={"channel_values": {}}, pending_writes=writes)
+    goal, call = HumanMessage("fix it", id="h"), AIMessage("", id="a", tool_calls=[{"name": "read", "args": {}, "id": "c"}])
+    out = ToolMessage("file", tool_call_id="c", id="t")
+    sub = AIMessage("delegated work", id="s")
+    tuples = [
+        tup("3", "", [("x", "messages", [RemoveMessage(id="h")]), ("x", "todos", [])]),   # summarization
+        tup("1", "", [("x", "messages", [goal])]),
+        tup("2", "", [("x", "messages", [call, out]), ("x", "messages", [call])]),
+        tup("2", "tools:abc", [("y", "messages", sub)]),
+    ]
+    convs = mod.conversations(tuples)
+    assert [m.id for m in convs[""]] == ["h", "a", "t"]
+    assert [m.id for m in convs["tools:abc"]] == ["s"]

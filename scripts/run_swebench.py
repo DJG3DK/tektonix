@@ -31,7 +31,6 @@ from agent.evals import reviewer as ev_reviewer  # noqa: E402
 from agent.evals import swebench as sb  # noqa: E402
 
 RUNS = paths.REPO_ROOT / "logs" / "swebench"
-TASK_TIMEOUT_S = 60 * 60
 
 
 def _args(argv=None):
@@ -59,27 +58,50 @@ def _args(argv=None):
                         "is graded (default 20, about 60 GB of images at a time)")
     p.add_argument("--max-disk-pct", type=float, default=80.0,
                    help="never start a batch or pull an image with the disk this full (default 80)")
+    p.add_argument("--task-timeout-min", type=int, default=180,
+                   help="a guard against a hung task, not a limit on the work: SWE-bench sets no time "
+                        "limit, and --budget is what bounds a task (default 180)")
     p.add_argument("--keep-images", action="store_true", help="do not delete a batch's images afterwards")
     return p.parse_args(argv)
 
 
 async def _save_trajectory(checkpointer, task_id: str, repo: str, generations: int, out: Path) -> None:
     """The agent's own conversation for a task -- every message and tool call,
-    across fresh-thread generations -- written beside the predictions. The
-    leaderboard asks for trajectories, and the run's store is a temporary
-    file deleted at the end."""
+    the coordinator's and each subagent's, across fresh-thread generations --
+    written beside the predictions. The leaderboard asks for trajectories, and
+    the run's store is a temporary file deleted at the end."""
     from langchain_core.messages import messages_to_dict  # noqa: PLC0415
 
     from agent.nodes.work import inner_thread_config  # noqa: PLC0415
     threads = []
     for gen in range(generations + 1):
         cfg = inner_thread_config(task_id, repo, gen)
-        tup = await checkpointer.aget_tuple({"configurable": {**cfg["configurable"], "checkpoint_ns": ""}})
-        msgs = (tup.checkpoint.get("channel_values") or {}).get("messages") if tup else None
-        if msgs:
-            threads.append({"generation": gen, "messages": messages_to_dict(msgs)})
+        tuples = [t async for t in checkpointer.alist({"configurable": cfg["configurable"]})]
+        for ns, msgs in conversations(tuples).items():
+            threads.append({"generation": gen, "namespace": ns or "coordinator",
+                            "messages": messages_to_dict(msgs)})
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps({"task_id": task_id, "threads": threads}, indent=1, default=str))
+
+
+def conversations(tuples) -> dict[str, list]:
+    """Every message each namespace of a thread ever held, in order.
+
+    Rebuilt from the checkpoints' writes, not read off the last checkpoint:
+    the agent's `messages` is a DeltaChannel, whose checkpoint holds only a
+    marker (every trajectory of the first runs was empty), and summarization
+    removes old messages from the live state that a trajectory must keep."""
+    from langchain_core.messages import BaseMessage, RemoveMessage  # noqa: PLC0415
+    by_ns: dict[str, dict] = {}
+    for t in sorted(tuples, key=lambda t: t.config["configurable"].get("checkpoint_id", "")):
+        seen = by_ns.setdefault(t.config["configurable"].get("checkpoint_ns", ""), {})
+        for _task, channel, value in t.pending_writes or []:
+            if channel != "messages":
+                continue
+            for m in value if isinstance(value, list) else [value]:
+                if isinstance(m, BaseMessage) and not isinstance(m, RemoveMessage) and m.id not in seen:
+                    seen[m.id] = m
+    return {ns: list(msgs.values()) for ns, msgs in by_ns.items() if msgs}
 
 
 def _models_used(task_id: str) -> dict:
@@ -170,7 +192,7 @@ async def _run(args, instances: list[dict], root: Path, run_dir: Path, spent_bef
                            "tags": ["swebench", mf["name"]]}
                     error = None
                     try:
-                        await asyncio.wait_for(graph.ainvoke(state, cfg), timeout=TASK_TIMEOUT_S)
+                        await asyncio.wait_for(graph.ainvoke(state, cfg), timeout=args.task_timeout_min * 60)
                     except Exception as e:  # noqa: BLE001 -- one task must not stop the run
                         error = f"{type(e).__name__}: {e}"[:500]
                     final = await _final_state(graph, cfg)
@@ -271,6 +293,7 @@ def main(argv=None) -> int:
             "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(started)),
             "finished_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "parallel": args.parallel, "budget_usd": args.budget, "batch_size": size,
+            "task_timeout_min": args.task_timeout_min,
             "total": len(ids), "graded": graded, "stopped_early": stopped,
             "resolved": len(resolved) if graded else None,
             "resolved_rate": round(100 * len(resolved) / len(ids), 1) if graded and ids else None,
