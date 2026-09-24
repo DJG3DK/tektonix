@@ -101,6 +101,9 @@ class Attempt:
     usage: Usage = field(default_factory=Usage)
 
 
+DEFAULT_PROVIDER_SORT = "throughput"
+
+
 def build_body(body: dict, model: str, extra_body: dict) -> dict:
     """The request as OpenRouter will see it.
 
@@ -111,6 +114,11 @@ def build_body(body: dict, model: str, extra_body: dict) -> dict:
     out = {**extra_body, **body, "model": model}
     # Never forward our own routing metadata upstream.
     out.pop("metadata", None)
+    # Speed over price when nothing else says how to pick a host: the stand-in
+    # until router/fastest.py's own ranking arrives (see there for why).
+    provider = out.get("provider") if isinstance(out.get("provider"), dict) else {}
+    if not any(k in provider for k in ("order", "only", "sort")):
+        out["provider"] = {"sort": DEFAULT_PROVIDER_SORT, **provider}
     usage = out.get("usage")
     out["usage"] = {**usage, "include": True} if isinstance(usage, dict) else {"include": True}
     if out.get("stream"):

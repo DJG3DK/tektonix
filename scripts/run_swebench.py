@@ -17,6 +17,7 @@ import asyncio
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -268,6 +269,10 @@ def _gold_check(args, ids: list[str]) -> int:
 
 def main(argv=None) -> int:
     args = _args(argv)
+    # A stopped run (kill, pm2, a shutdown) unwinds like Ctrl-C, so its
+    # reviewer pair and temporary repositories go with it instead of
+    # outliving it.
+    signal.signal(signal.SIGTERM, signal.default_int_handler)
     if args.grade_only:
         _grade_into(RUNS / args.grade_only, args.grade_only, args.grade_workers)
         return 0

@@ -37,6 +37,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from router import ledger, upstream
 from router import stats as stats_mod
 from router.config import Registry
+from router.fastest import FastestProviders
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("model-router")
@@ -76,6 +77,7 @@ RETRIES_PER_DEPLOYMENT = int(os.environ.get("MODEL_ROUTER_RETRIES", "2"))
 BACKOFF_S = float(os.environ.get("MODEL_ROUTER_BACKOFF_S", "0.6"))
 
 registry = Registry()
+fastest = FastestProviders()
 
 
 @asynccontextmanager
@@ -158,7 +160,7 @@ async def stats(window_minutes: int = 60, authorization: str | None = Header(def
     """
     _authorise(authorization)
     window = max(1, min(int(window_minutes), 24 * 60)) * 60
-    return stats_mod.summarise(ledger.LOG_PATH, window)
+    return {**stats_mod.summarise(ledger.LOG_PATH, window), "fastest_providers": fastest.snapshot()}
 
 
 @app.get("/v1/models")
@@ -243,7 +245,8 @@ async def _buffered(client, table, alias, body, send, call_id, task_id, session_
         for retry in range(RETRIES_PER_DEPLOYMENT + 1):
             attempt_no += 1
             att = await send(client, OPENROUTER_KEY, body, dep.model,
-                             dep.extra_body, dep.timeout_s)
+                             fastest.extra_body_for(client, OPENROUTER_KEY, dep.model, dep.extra_body),
+                             dep.timeout_s)
             att.alias = name
             last = att
             ledger.record(
@@ -305,8 +308,9 @@ async def _streamed(client, table, alias, body, call_id, task_id, session_id, ca
                 emitted = False
                 t0 = time.monotonic()
                 try:
+                    extra = fastest.extra_body_for(client, OPENROUTER_KEY, dep.model, dep.extra_body)
                     async for chunk in upstream.stream_once(client, OPENROUTER_KEY, body, dep.model,
-                                                            dep.extra_body, dep.timeout_s, usage):
+                                                            extra, dep.timeout_s, usage):
                         emitted = True
                         yield chunk
                 except Exception as e:  # noqa: BLE001
