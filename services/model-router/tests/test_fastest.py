@@ -85,3 +85,30 @@ def test_a_stats_outage_touches_no_call():
             await asyncio.sleep(0.05)
             return f.extra_body_for(client, "k", "m", extra) is extra
     assert asyncio.run(go())
+
+
+def test_a_host_that_runs_away_is_charged_for_it():
+    """Fast on a typical answer, but 2% of its calls ran to the output cap:
+    the expected call is slower than on a steadier, slower host."""
+    eps = [ep("fast-but-flaky", 126, 480, name="Flaky"), ep("steady/fp8", 98, 1391, name="Steady")]
+    assert fastest.rank(eps, model="m")[0] == "fast-but-flaky", "no evidence yet: speed decides"
+    stats = {("m", "flaky"): (1639, 37), ("m", "steady"): (137, 0)}
+    assert fastest.rank(eps, model="m", stats=stats) == ["steady/fp8", "fast-but-flaky"], "still listed, as a fallback"
+    assert fastest.runaway_rate({("m", "new"): (1, 1)}, "m", "New") < 0.01, "one bad call does not condemn a new host"
+
+
+def test_runaways_are_counted_from_the_router_s_own_ledger(tmp_path):
+    import json
+    import time
+    now = time.time()
+    rows = [
+        {"ts": now, "routed_model": "m", "provider": "Flaky", "completion_tokens": 32768},
+        {"ts": now, "routed_model": "m", "provider": "Flaky", "completion_tokens": 900},
+        {"ts": now, "routed_model": "m", "provider": "Flaky", "completion_tokens": 131072, "error": True},
+        {"ts": now - 30 * 86400, "routed_model": "m", "provider": "Flaky", "completion_tokens": 131072},
+        {"ts": now, "routed_model": "m", "provider": "Steady", "completion_tokens": 400},
+    ]
+    path = tmp_path / "routing.jsonl"
+    path.write_text("\n".join(json.dumps(r) for r in rows) + "\nnot json\n")
+    assert fastest.ledger_stats(path, now) == {("m", "flaky"): (2, 1), ("m", "steady"): (1, 0)}
+    assert fastest.ledger_stats(tmp_path / "missing.jsonl") == {}

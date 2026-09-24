@@ -202,3 +202,14 @@ def test_a_legacy_litellm_params_entry_still_loads(tmp_path):
     cfg.write_text(yaml.safe_dump({"model_list": [
         {"model_name": "legacy", "litellm_params": {"model": "openrouter/x/y"}}]}))
     assert Registry(str(cfg)).table.deployments["legacy"].model == "x/y"
+
+
+def test_a_deployment_s_output_cap_is_sent(tmp_path):
+    """The vision bridge's `max_tokens: 1500` was read by the old proxy and
+    silently dropped by this loader until 2026-09-24."""
+    raw = {"model_list": [{"model_name": "agent-vision", "params": {
+        "model": "openrouter/q/vl", "max_tokens": 1500, "extra_body": {"provider": {"require_parameters": True}}}}]}
+    p = tmp_path / "config.yaml"
+    p.write_text(yaml.safe_dump(raw))
+    assert load(p).resolve("agent-vision").extra_body == {"max_tokens": 1500,
+                                                          "provider": {"require_parameters": True}}

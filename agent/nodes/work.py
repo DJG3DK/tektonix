@@ -88,6 +88,22 @@ from agent.tools.router_ledger import RouterLedger
 
 logger = logging.getLogger("tektonix")
 
+# A model call that timed out, lost its connection, was rate-limited, got a
+# 5xx, or stalled mid-stream is the provider's problem, not the task's. The
+# pass resumes the inner agent from its checkpoint after a pause, this many
+# times, before handing the task back (2026-09-24: a single runaway
+# generation outlasting the call timeout ended whole tasks as "error").
+TRANSIENT_MODEL_ERRORS = (
+    TimeoutError, openai.APITimeoutError, openai.APIConnectionError,
+    openai.RateLimitError, openai.InternalServerError,
+)
+MODEL_RETRIES_PER_PASS = 5
+MODEL_RETRY_BACKOFF_S = (15, 30, 60, 120, 240)
+# Any other API error is the provider refusing the request -- usually a
+# malformed tool-call generation. Retried quickly, then handed back.
+REJECTED_RETRIES_PER_PASS = 2
+REJECTED_RETRY_BACKOFF_S = 5
+
 
 def inner_thread_config(task_id: str, repo: str, generation: int = 0) -> dict:
     # metadata/tags -- standard RunnableConfig fields LangChain's tracer
@@ -522,70 +538,106 @@ async def work_node(state: AgentState, app_config: Config, checkpointer, pg_stor
     # subagent tasks running detached. `finally` guarantees every task gets
     # cancelled and drained on every exit path.
     subagent_tasks: list[asyncio.Task] = []
+    # The first attempt sends this pass's input; a retry after a transient
+    # model failure sends None, which resumes the inner thread from its last
+    # checkpoint -- the conversation, and the files it changed, carry on from
+    # where the failed call left them.
+    stream_input = graph_input
+    model_failures = 0
+    rejected = 0
     try:
-        async with await agent.astream_events(graph_input, config=inner_config, version="v3") as run:
-            root_seen: dict = {}
-            # One set for the whole run, every consumer. A per-consumer set
-            # replayed each projection's entire history every time a subagent
-            # handle arrived -- see this module's docstring.
-            seen_ids: set = set()
+        while True:
+            try:
+                async with await agent.astream_events(stream_input, config=inner_config, version="v3") as run:
+                    root_seen: dict = {}
+                    # One set for the whole run, every consumer. A per-consumer set
+                    # replayed each projection's entire history every time a subagent
+                    # handle arrived -- see this module's docstring.
+                    seen_ids: set = set()
 
-            async def _consume_subagents() -> None:
-                async for handle in run.subagents:
-                    label = f"work:{handle.name or 'subagent'}"
-                    subagent_tasks.append(
-                        asyncio.ensure_future(_consume_values(
-                            task_id, label, handle.values, writer, {}, tracker, seen_ids=seen_ids,
-                            final_text=final_text))
+                    # Bound per attempt: a resumed stream starts its own set.
+                    async def _consume_subagents(seen_ids: set = seen_ids) -> None:
+                        async for handle in run.subagents:
+                            label = f"work:{handle.name or 'subagent'}"
+                            subagent_tasks.append(
+                                asyncio.ensure_future(_consume_values(
+                                    task_id, label, handle.values, writer, {}, tracker, seen_ids=seen_ids,
+                                    final_text=final_text))
+                            )
+
+                    await asyncio.gather(
+                        _consume_values(task_id, "work", run.values, writer, root_seen, tracker,
+                                        seen_ids=seen_ids, final_text=final_text),
+                        _consume_subagents(),
                     )
+                    if subagent_tasks:
+                        await asyncio.gather(*subagent_tasks)
 
-            await asyncio.gather(
-                _consume_values(task_id, "work", run.values, writer, root_seen, tracker,
-                                seen_ids=seen_ids, final_text=final_text),
-                _consume_subagents(),
-            )
-            if subagent_tasks:
-                await asyncio.gather(*subagent_tasks)
+                    if root_seen.get("todos") is not None:
+                        latest_todos = root_seen["todos"]
 
-            if root_seen.get("todos") is not None:
-                latest_todos = root_seen["todos"]
-
-            # The values/subagents consumption above ends normally (no
-            # exception) both when the agent genuinely finished its turn and
-            # when it hit a HumanInTheLoopMiddleware interrupt() -- the
-            # stream just has nothing more to yield until a decision resumes
-            # it. run.interrupted()/interrupts() are what distinguish the
-            # two. See deep_agent.py's INTERRUPT_ON.
-            if await run.interrupted():
-                interrupts = await run.interrupts()
-                if interrupts:
-                    pending_approval = interrupts[0].value
+                    # The values/subagents consumption above ends normally (no
+                    # exception) both when the agent genuinely finished its turn and
+                    # when it hit a HumanInTheLoopMiddleware interrupt() -- the
+                    # stream just has nothing more to yield until a decision resumes
+                    # it. run.interrupted()/interrupts() are what distinguish the
+                    # two. See deep_agent.py's INTERRUPT_ON.
+                    if await run.interrupted():
+                        interrupts = await run.interrupts()
+                        if interrupts:
+                            pending_approval = interrupts[0].value
+                break
+            except TRANSIENT_MODEL_ERRORS as e:
+                model_failures += 1
+                # This attempt's subagent consumers belong to a stream that is gone.
+                for t in subagent_tasks:
+                    if not t.done():
+                        t.cancel()
+                if subagent_tasks:
+                    await asyncio.gather(*subagent_tasks, return_exceptions=True)
+                subagent_tasks.clear()
+                what = f"{type(e).__name__}: {str(e)[:200]}"
+                if model_failures > MODEL_RETRIES_PER_PASS:
+                    # Handed back, not crashed: an exception here used to end
+                    # the task as "error" after the graph's three quick
+                    # retries, with its work stranded. Escalated, it keeps its
+                    # workspace and branch, and resuming it carries on from
+                    # this checkpoint.
+                    escalated = True
+                    escalation_reason = (
+                        f"the model provider kept failing ({model_failures} times in a row, last: {what}). "
+                        f"The work so far is saved; resume the task to carry on from where it stopped.")
+                    break
+                delay = MODEL_RETRY_BACKOFF_S[min(model_failures, len(MODEL_RETRY_BACKOFF_S)) - 1]
+                logger.warning("task %s: model call failed (%s); resuming from the checkpoint in %ss (%d/%d)",
+                               task_id, what, delay, model_failures, MODEL_RETRIES_PER_PASS)
+                await asyncio.sleep(delay)
+                stream_input = None
+            except openai.APIError as e:
+                # The provider refused the request itself -- most often a
+                # malformed tool-call generation, which a fresh generation
+                # usually fixes. A couple of quick tries, then handed back.
+                rejected += 1
+                for t in subagent_tasks:
+                    if not t.done():
+                        t.cancel()
+                if subagent_tasks:
+                    await asyncio.gather(*subagent_tasks, return_exceptions=True)
+                subagent_tasks.clear()
+                what = f"{type(e).__name__}: {str(e)[:200]}"
+                if rejected > REJECTED_RETRIES_PER_PASS:
+                    escalated = True
+                    escalation_reason = (
+                        f"the model provider rejected the request {rejected} times in a row ({what}). "
+                        f"The work so far is saved; resume the task to carry on from where it stopped.")
+                    break
+                logger.warning("task %s: model request rejected (%s); resuming from the checkpoint (%d/%d)",
+                               task_id, what, rejected, REJECTED_RETRIES_PER_PASS)
+                await asyncio.sleep(REJECTED_RETRY_BACKOFF_S)
+                stream_input = None
     except BudgetExceededError as e:
         escalated = True
         escalation_reason = f"cost budget exhausted (${e.spent:.2f} >= ${e.budget:.2f})"
-    except TimeoutError:
-        # langchain-openai's StreamChunkTimeoutError (stream stalled --
-        # chunks stopped arriving mid-response) subclasses TimeoutError, not
-        # openai.APIError, so the branch below wouldn't catch it. Treated the
-        # same as APIError: a transient transport pathology, which is exactly
-        # what RetryPolicy exists for. outer_graph.py's retry_on accepts
-        # TimeoutError explicitly, since langgraph's default_retry_on refuses
-        # it (TimeoutError subclasses OSError, which is on its no-retry list).
-        raise
-    except openai.APIError:
-        # A malformed (non-JSON) tool-call-arguments generation from an
-        # underlying model can surface here as an APIError from the
-        # provider. Escalating the whole task on the very first occurrence
-        # would be excessive for what's very likely a one-off flaky
-        # generation from one model, since the router picks adaptively per
-        # call and a fresh retry has a real chance of landing on a
-        # different, non-flaky model entirely. Re-raising (instead of
-        # swallowing into an escalation) lets outer_graph.py's RetryPolicy on
-        # "work" retry the whole node automatically, fast, before ever
-        # bothering a human. Deliberately narrower than "any Exception":
-        # this only covers openai/API-layer failures (bad requests, rate
-        # limits, connection errors, 5xxs), not our own code's bugs.
-        raise
     except Exception as e:  # noqa: BLE001 -- any failure here must still surface as an escalation, not crash the outer graph
         escalated = True
         escalation_reason = f"work node failed: {e}"

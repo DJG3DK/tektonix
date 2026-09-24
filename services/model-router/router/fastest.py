@@ -13,6 +13,13 @@ stats (`/models/<model>/endpoints`, last 30 minutes), and names them in order
 with fallbacks allowed -- the fast hosts' shared pools do throw 429s, and the
 next one on the list is the answer to that, not the slowest.
 
+Speed is not only tokens per second. On 2026-09-24 the three fastest DeepSeek
+hosts ran to the output ceiling on 2-3% of calls -- seven-plus minutes of
+nothing, each -- while the slower ones never did, and a 50-task benchmark sat
+on two tasks for forty minutes. So each host is also charged its measured
+runaway rate, from this router's own ledger, times what a runaway costs at the
+output cap: the expected time of a call, not the typical one.
+
 Never on the request path: a call uses whatever ranking is cached, and a stale
 or missing one is refreshed in the background. Until the first ranking lands,
 build_body's `sort: "throughput"` default stands in.
@@ -21,10 +28,15 @@ build_body's `sort: "throughput"` default stands in.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
+from pathlib import Path
 
 import httpx
+
+from router import ledger
+from router.upstream import DEFAULT_MAX_OUTPUT_TOKENS
 
 logger = logging.getLogger("model-router")
 
@@ -35,6 +47,14 @@ TOP_N = 6
 # token plus this many tokens at the endpoint's median speed.
 TYPICAL_OUTPUT_TOKENS = 1000
 MIN_UPTIME_PCT = 98.0
+# A call that produced this many tokens is counted as a runaway. Real agent
+# answers stay under ~15k; runaways end at the cap.
+RUNAWAY_TOKENS = 30_000
+LEDGER_WINDOW_S = 7 * 86400
+# Every host starts as if it had made PRIOR_CALLS calls at the rate measured
+# across all hosts before the problem was seen (0.2%), so one unlucky call
+# does not condemn a new host and a few lucky ones do not clear a bad one.
+PRIOR_CALLS, PRIOR_RUNAWAYS = 200, 0.4
 
 
 def _p50(stat) -> float | None:
@@ -44,8 +64,43 @@ def _p50(stat) -> float | None:
     return None
 
 
-def rank(endpoints: list[dict], ignore: list[str] | None = None) -> list[str]:
-    """Endpoint tags, fastest first, for a typical answer.
+def runaway_rate(stats: dict | None, model: str, provider_name: str) -> float:
+    calls, runaways = (stats or {}).get((model, provider_name.lower()), (0, 0))
+    return (runaways + PRIOR_RUNAWAYS) / (calls + PRIOR_CALLS)
+
+
+def ledger_stats(path: Path | None = None, now: float | None = None) -> dict[tuple[str, str], tuple[int, int]]:
+    """(model, provider) -> (calls, runaways) over the last week of this
+    router's own ledger. Read in a thread; never raises."""
+    path = path or ledger.LOG_PATH
+    since = (now or time.time()) - LEDGER_WINDOW_S
+    out: dict[tuple[str, str], list[int]] = {}
+    try:
+        with open(path) as fh:
+            for line in fh:
+                if '"provider"' not in line:
+                    continue
+                try:
+                    r = json.loads(line)
+                except ValueError:
+                    continue
+                if r.get("error") or not r.get("provider") or (r.get("ts") or 0) < since:
+                    continue
+                key = (str(r.get("routed_model") or r.get("model") or ""), str(r["provider"]).lower())
+                row = out.setdefault(key, [0, 0])
+                row[0] += 1
+                if (r.get("completion_tokens") or 0) >= RUNAWAY_TOKENS:
+                    row[1] += 1
+    except OSError:
+        return {}
+    return {k: (v[0], v[1]) for k, v in out.items()}
+
+
+def rank(endpoints: list[dict], ignore: list[str] | None = None, model: str = "",
+         stats: dict | None = None) -> list[str]:
+    """Endpoint tags, fastest first, by the expected time of a call: the delay
+    before the first token, a typical answer at the median speed, and the
+    host's measured chance of a runaway times a runaway's length at the cap.
 
     Out: anything OpenRouter marks degraded (status < 0), under 98% uptime,
     without speed stats, or in the deployment's `ignore` list."""
@@ -65,7 +120,8 @@ def rank(endpoints: list[dict], ignore: list[str] | None = None) -> list[str]:
         tp, lat_ms = _p50(e.get("throughput_last_30m")), _p50(e.get("latency_last_30m"))
         if tp is None or lat_ms is None:
             continue
-        scored.append((lat_ms / 1000 + TYPICAL_OUTPUT_TOKENS / tp, tag))
+        runaway = runaway_rate(stats, model, e.get("provider_name") or slug)
+        scored.append((lat_ms / 1000 + (TYPICAL_OUTPUT_TOKENS + runaway * DEFAULT_MAX_OUTPUT_TOKENS) / tp, tag))
     scored.sort()
     out: list[str] = []
     for _, tag in scored:
@@ -111,7 +167,8 @@ class FastestProviders:
             r = await client.get(ENDPOINTS_URL.format(model=model),
                                  headers={"Authorization": f"Bearer {api_key}"}, timeout=15)
             r.raise_for_status()
-            order = rank((r.json().get("data") or {}).get("endpoints") or [], list(ignore))
+            stats = await asyncio.to_thread(ledger_stats)
+            order = rank((r.json().get("data") or {}).get("endpoints") or [], list(ignore), model, stats)
             if order:
                 if order != self._order.get(key):
                     logger.info("fastest providers for %s: %s", model, ", ".join(order))

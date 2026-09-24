@@ -132,7 +132,12 @@ def load(path: Path | None = None) -> Table:
         deployments[alias] = Deployment(
             alias=alias,
             model=_strip_provider_prefix(str(model)),
-            extra_body=dict(params.get("extra_body") or {}),
+            # `max_tokens` beside `model` is the deployment's output cap (the
+            # vision bridge's 1500). It was read by the old proxy and silently
+            # dropped by this loader until 2026-09-24; it travels in extra_body,
+            # under whatever a caller sends.
+            extra_body={**({"max_tokens": int(params["max_tokens"])} if params.get("max_tokens") else {}),
+                        **dict(params.get("extra_body") or {})},
             timeout_s=float(params.get("timeout") or DEFAULT_TIMEOUT_S),
             input_cost_per_token=info.get("input_cost_per_token"),
             output_cost_per_token=info.get("output_cost_per_token"),

@@ -102,6 +102,12 @@ class Attempt:
 
 
 DEFAULT_PROVIDER_SORT = "throughput"
+# An answer longer than this is a model that has lost the thread, not one
+# with more to say: DeepSeek ran to the provider's 131,072-token ceiling on
+# 2-3% of calls on some hosts (2026-09-24), seven-plus minutes each, while the
+# agent's real answers stayed under ~15k. A deployment's own `max_tokens` or
+# a caller's wins; embeddings carry no `messages` and are left alone.
+DEFAULT_MAX_OUTPUT_TOKENS = 32768
 
 
 def build_body(body: dict, model: str, extra_body: dict) -> dict:
@@ -119,6 +125,8 @@ def build_body(body: dict, model: str, extra_body: dict) -> dict:
     provider = out.get("provider") if isinstance(out.get("provider"), dict) else {}
     if not any(k in provider for k in ("order", "only", "sort")):
         out["provider"] = {"sort": DEFAULT_PROVIDER_SORT, **provider}
+    if "messages" in out and "max_tokens" not in out and "max_completion_tokens" not in out:
+        out["max_tokens"] = DEFAULT_MAX_OUTPUT_TOKENS
     usage = out.get("usage")
     out["usage"] = {**usage, "include": True} if isinstance(usage, dict) else {"include": True}
     if out.get("stream"):

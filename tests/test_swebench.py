@@ -170,8 +170,10 @@ def test_each_batch_is_graded_then_its_images_deleted_and_the_disk_stops_the_run
             live = json.loads((tmp_path / "t" / "summary.json").read_text())
             assert live["state"] == "running" and live["instances"][i["instance_id"]]["outcome"] == "done", \
                 "the dashboard sees each task as it finishes"
-        return {"results": {i["instance_id"]: {"outcome": "done", "cost_usd": 1.0} for i in batch},
-                "runtime_settings": {"x": 1}}
+        out = {i["instance_id"]: {"outcome": "done", "cost_usd": 1.0} for i in batch}
+        if "r__r-1" in out:       # its image could not be set up
+            out["r__r-1"] = {"outcome": "setup_error", "reason": "refusing to run"}
+        return {"results": out, "runtime_settings": {"x": 1}}
 
     def fake_grade(pred, ids, run_id, report_dir, max_workers=4, rewrite=False, **k):
         events.append(("rewrite" if rewrite else "grade", list(ids)))
@@ -186,16 +188,18 @@ def test_each_batch_is_graded_then_its_images_deleted_and_the_disk_stops_the_run
 
     assert mod.main(["--all", "--batch-size", "2", "--run-id", "t", "--max-disk-pct", "80"]) == 0
     assert events == [
-        ("run", ["r__r-0", "r__r-1"]), ("grade", ["r__r-0", "r__r-1"]), ("rmi", "img-0"), ("rmi", "img-1"),
+        ("run", ["r__r-0", "r__r-1"]), ("grade", ["r__r-0"]), ("rmi", "img-0"), ("rmi", "img-1"),
         ("run", ["r__r-2", "r__r-3"]), ("grade", ["r__r-2", "r__r-3"]), ("rmi", "img-2"), ("rmi", "img-3"),
-        ("rewrite", ["r__r-0", "r__r-1", "r__r-2", "r__r-3"]),
+        ("rewrite", ["r__r-0", "r__r-2", "r__r-3"]),
     ]
-    assert spent_seen == [0.0, 2.0], "the ceiling counts the whole run, not one batch"
+    assert spent_seen == [0.0, 1.0], "the ceiling counts the whole run, not one batch"
     summary = json.loads((tmp_path / "t" / "summary.json").read_text())
     assert summary["resolved"] == 2 and summary["total"] == 5 and summary["resolved_rate"] == 40.0
     assert "95%" in summary["stopped_early"]
     assert summary["instances"]["r__r-4"] == {"outcome": "not_run", "resolved": False}
     assert summary["state"] == "stopped" and summary["runtime_settings"] == {"x": 1}
+    assert summary["instances"]["r__r-1"]["outcome"] == "setup_error" and summary["instances"]["r__r-1"]["resolved"] is False, \
+        "a task that could not be set up is never graded, and never dropped from the total"
 
 
 def test_a_trajectory_is_every_message_each_conversation_held():
@@ -223,3 +227,42 @@ def test_a_trajectory_is_every_message_each_conversation_held():
     convs = mod.conversations(tuples)
     assert [m.id for m in convs[""]] == ["h", "a", "t"]
     assert [m.id for m in convs["tools:abc"]] == ["s"]
+
+
+def test_old_release_tags_are_history_but_anything_after_the_task_is_refused(tmp_path, monkeypatch):
+    """Several images carry old release tags on maintenance branches (the
+    matplotlib ones reach back to 0.91): history the task's authors had. A
+    later commit, on any branch or tag, is the future -- and the fix is in it."""
+    for k, v in {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@x", "GIT_COMMITTER_NAME": "t",
+                 "GIT_COMMITTER_EMAIL": "t@x", "GIT_CONFIG_GLOBAL": "/dev/null"}.items():
+        monkeypatch.setenv(k, v)
+    repo = tmp_path / "r"
+    repo.mkdir()
+
+    def commit(msg, when, *extra):
+        monkeypatch.setenv("GIT_COMMITTER_DATE", when)
+        monkeypatch.setenv("GIT_AUTHOR_DATE", when)
+        _git(["commit", "-q", "--allow-empty", "-m", msg, *extra], repo)
+        return _git(["rev-parse", "HEAD"], repo).strip()
+
+    _git(["init", "-q", "-b", "main"], repo)
+    root = commit("root", "2019-01-01T00:00:00")
+    _git(["checkout", "-q", "-b", "v3.0.x"], repo)
+    commit("REL: v3.0.3", "2019-02-25T00:00:00")            # an old maintenance release
+    _git(["tag", "v3.0.3"], repo)
+    _git(["checkout", "-q", "main"], repo)
+    base = commit("the task's base", "2019-04-18T00:00:00")
+    _git(["checkout", "-q", "-b", "later"], repo)
+    fix = commit("the fix", "2019-05-01T00:00:00")          # a descendant of the base
+    _git(["checkout", "-q", "main"], repo)
+    commit("SWE-bench", "2026-08-13T00:00:00")               # the image's own commit, HEAD
+    assert sb.future_commits(repo, base) == [fix]
+
+    _git(["branch", "-D", "later"], repo)
+    assert sb.future_commits(repo, base) == [], "old release tags are history, not the future"
+
+    _git(["checkout", "-q", "--orphan", "stray"], repo)
+    stray = commit("an unrelated newer commit", "2020-01-01T00:00:00")
+    _git(["checkout", "-q", "main"], repo)
+    assert sb.future_commits(repo, base) == [stray], "newer than the base, however it is connected"
+    assert root

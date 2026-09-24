@@ -129,3 +129,15 @@ def test_a_request_that_never_completed_is_retried():
 
 def test_no_status_and_no_error_is_not_retried():
     assert is_transient(None, None) is False
+
+
+def test_a_chat_call_is_capped_unless_someone_already_capped_it():
+    """DeepSeek ran to a 131,072-token ceiling on 2-3% of calls on some hosts
+    -- seven minutes of nothing each. Real answers stay under ~15k."""
+    from router.upstream import DEFAULT_MAX_OUTPUT_TOKENS
+    assert build_body({"model": "a", "messages": []}, "m", {})["max_tokens"] == DEFAULT_MAX_OUTPUT_TOKENS
+    assert build_body({"model": "a", "messages": []}, "m", {"max_tokens": 1500})["max_tokens"] == 1500
+    assert build_body({"model": "a", "messages": [], "max_tokens": 9}, "m", {"max_tokens": 1500})["max_tokens"] == 9
+    capped = build_body({"model": "a", "messages": [], "max_completion_tokens": 7}, "m", {})
+    assert "max_tokens" not in capped and capped["max_completion_tokens"] == 7
+    assert "max_tokens" not in build_body({"model": "e", "input": "text"}, "m", {}), "embeddings are left alone"

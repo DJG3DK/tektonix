@@ -105,10 +105,13 @@ def conversations(tuples) -> dict[str, list]:
     return {ns: list(msgs.values()) for ns, msgs in by_ns.items() if msgs}
 
 
-def _models_used(task_id: str) -> dict:
-    """Which models the router actually served this task, from its own ledger."""
+def _router_ledger(task_id: str) -> tuple[dict, float]:
+    """Which models the router served this task, and what it billed -- from
+    the router's own ledger, the only spend figure that matches the invoice.
+    The task's own cost_so_far is lost when a task ends in an exception."""
     ledger = paths.REPO_ROOT / "services" / "model-router" / "logs" / "routing.jsonl"
     counts: dict = {}
+    billed = 0.0
     try:
         with ledger.open() as fh:
             for line in fh:
@@ -118,9 +121,10 @@ def _models_used(task_id: str) -> dict:
                 if d.get("task_id") == task_id:
                     key = f"{d.get('alias')} -> {d.get('routed_model')}"
                     counts[key] = counts.get(key, 0) + 1
-    except OSError:
+                    billed += float(d.get("cost") or 0.0)
+    except (OSError, ValueError):
         pass
-    return counts
+    return counts, billed
 
 
 def disk_used_pct(path: str = "/var/lib/docker") -> float:
@@ -143,7 +147,13 @@ async def _run(args, instances: list[dict], root: Path, run_dir: Path, spent_bef
                                             "reason": f"disk at {disk_used_pct():.0f}% (limit {args.max_disk_pct:.0f}%)"}
             continue
         print(f"setting up {inst['instance_id']} ...", flush=True)
-        mfs[inst["instance_id"]] = sb.materialize(inst, root / "work")
+        try:
+            mfs[inst["instance_id"]] = sb.materialize(inst, root / "work")
+        except (sb.SetupError, subprocess.SubprocessError, OSError) as e:
+            # One task that cannot be set up is that task's failure, not the
+            # run's: it stays in the total, unresolved, with the reason.
+            print(f"  {inst['instance_id']}: SETUP FAILED -- {e}", flush=True)
+            skipped[inst["instance_id"]] = {"outcome": "setup_error", "reason": str(e)[:500]}
     instances = [i for i in instances if i["instance_id"] in mfs]
     if not instances:
         return {"results": skipped, "runtime_settings": {}}
@@ -205,7 +215,8 @@ async def _run(args, instances: list[dict], root: Path, run_dir: Path, spent_bef
                                                run_dir / "trajectories" / f"{iid}.json")
                     except Exception as e:  # noqa: BLE001 -- a missing log must not lose the prediction
                         print(f"  {iid}: trajectory not saved: {e}", flush=True)
-                    cost = float(final.get("cost_so_far") or 0.0)
+                    models, billed = _router_ledger(task_id)
+                    cost = billed or float(final.get("cost_so_far") or 0.0)
                     spent += cost
                     ws = Path(workspaces.task_workspace_path(mf["name"], task_id))
                     try:
@@ -218,7 +229,7 @@ async def _run(args, instances: list[dict], root: Path, run_dir: Path, spent_bef
                     results[iid] = {"task_id": task_id, "outcome": outcome, "reason": reason, "cost_usd": round(cost, 4),
                                     "duration_s": round(time.monotonic() - started), "patch_bytes": len(patch),
                                     "review_verdict": (final.get("review_gate_result") or {}).get("verdict"),
-                                    "models": _models_used(task_id)}
+                                    "models": models}
                     print(f"  {iid:40} {outcome:10} ${cost:6.2f} {results[iid]['duration_s']:5}s "
                           f"patch {len(patch):6}B", flush=True)
                     if on_result:
@@ -361,7 +372,8 @@ def _batches(args, run_id, run_dir, ids, batches, results, resolved, graded_ids_
         results.update(out["results"])
         settings.update(out["runtime_settings"] or {})
         write_summary(graded=False)
-        ran = [i["instance_id"] for i in batch if results.get(i["instance_id"], {}).get("outcome") != "not_run"]
+        ran = [i["instance_id"] for i in batch
+               if results.get(i["instance_id"], {}).get("outcome") not in ("not_run", "setup_error")]
         if ran and not args.skip_grade:
             # Graded now, while this batch's images are still here.
             report = sb.grade(run_dir / "predictions.jsonl", ran, run_id, run_dir, max_workers=args.grade_workers)
@@ -381,7 +393,7 @@ def _batches(args, run_id, run_dir, ids, batches, results, resolved, graded_ids_
         write_summary(graded=False, stopped=stopped, state="stopped" if stopped else "done")
         print(f"\nnot graded; predictions in {run_dir}. Grade with --grade-only {run_id}")
         return 0
-    graded_ids = [i for i in ids if results.get(i, {}).get("outcome") not in (None, "not_run")]
+    graded_ids = [i for i in ids if results.get(i, {}).get("outcome") not in (None, "not_run", "setup_error")]
     if graded_ids:
         # One official report for the whole run, from the harness's own logs
         # of every batch -- nothing is re-run.

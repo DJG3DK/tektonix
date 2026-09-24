@@ -1,4 +1,13 @@
-"""Covers the work-node retry policy: a malformed tool-call from an
+"""Covers the work-node retry policies.
+
+Transient provider failures -- a timeout, a dropped connection, a rate limit,
+a 5xx -- are retried INSIDE the pass: the inner agent resumes from its own
+checkpoint (input None), so nothing it did is repeated or lost, and if the
+provider is still failing after MODEL_RETRIES_PER_PASS the task is handed
+back escalated, work saved, never crashed. 2026-09-24: one runaway generation
+outlasting the call timeout ended whole tasks as "error".
+
+Everything below is the older, narrower case: a malformed tool-call from an
 underlying model can get rejected by the provider with a 400, surfacing as
 openai.BadRequestError. A blanket `except Exception` in work_node would
 catch it and escalate the whole task to a human on the very first
@@ -66,9 +75,11 @@ class _FakeAgent:
         self.fail_times = fail_times
         self.exc_factory = exc_factory
         self.calls = 0
+        self.inputs = []
 
     async def astream_events(self, graph_input, config, version):
         self.calls += 1
+        self.inputs.append(graph_input)
         if self.calls <= self.fail_times:
             raise self.exc_factory()
         return _FakeRun()
@@ -82,7 +93,16 @@ class _FakeTracker:
 
 
 def _openai_connection_error():
-    return openai.APIConnectionError(message="malformed tool call args", request=httpx.Request("POST", "http://test"))
+    return openai.APIConnectionError(message="connection dropped", request=httpx.Request("POST", "http://test"))
+
+
+def _openai_timeout():
+    return openai.APITimeoutError(request=httpx.Request("POST", "http://test"))
+
+
+def _bad_request():
+    return openai.BadRequestError("malformed tool call args", response=httpx.Response(
+        400, request=httpx.Request("POST", "http://test")), body=None)
 
 
 def _build_mini_graph(checkpointer):
@@ -102,6 +122,7 @@ def _build_mini_graph(checkpointer):
 
 
 async def _run(monkeypatch, fail_times: int, exc_factory=_openai_connection_error):
+    monkeypatch.setattr(work_module, "MODEL_RETRY_BACKOFF_S", (0,))
     fake_agent = _FakeAgent(fail_times=fail_times, exc_factory=exc_factory)
     monkeypatch.setattr(
         work_module, "build_deep_agent",
@@ -118,21 +139,31 @@ async def _fake_build_deep_agent_result(fake_agent):
     return fake_agent, _FakeTracker(), {"signature": None}
 
 
-async def test_transient_api_error_retries_and_recovers(monkeypatch):
-    """Fails twice (openai.APIConnectionError), succeeds on the 3rd attempt
-    -- within max_attempts=3, so the task must NOT escalate."""
-    result, fake_agent = await _run(monkeypatch, fail_times=2)
+@pytest.mark.parametrize("exc", [_openai_connection_error, _openai_timeout])
+async def test_a_transient_failure_resumes_from_the_checkpoint(monkeypatch, exc):
+    """Fails twice, then works: the pass carries on, and the retries resume
+    the inner thread (input None) rather than sending the goal again."""
+    result, fake_agent = await _run(monkeypatch, fail_times=2, exc_factory=exc)
     assert result["escalated"] is False
     assert fake_agent.calls == 3
+    assert fake_agent.inputs[0] is not None and fake_agent.inputs[1:] == [None, None]
 
 
-async def test_transient_api_error_exhausts_retries_and_escalates(monkeypatch):
-    """Fails on every attempt -- retries are exhausted, LangGraph's own
-    retry mechanism re-raises the original exception out of ainvoke()
-    rather than silently succeeding. This must surface as a real failure the
-    caller can see, not a silently-swallowed no-op."""
-    with pytest.raises(openai.APIConnectionError):
-        await _run(monkeypatch, fail_times=99)
+async def test_a_provider_that_keeps_failing_hands_the_task_back_never_crashes_it(monkeypatch):
+    result, fake_agent = await _run(monkeypatch, fail_times=99, exc_factory=_openai_timeout)
+    assert result["escalated"] is True
+    assert "model provider kept failing" in result["escalation_reason"]
+    assert "resume the task" in result["escalation_reason"]
+    assert fake_agent.calls == work_module.MODEL_RETRIES_PER_PASS + 1, "one pass, not three graph retries of it"
+
+
+async def test_a_rejected_request_is_retried_then_handed_back_never_crashed(monkeypatch):
+    monkeypatch.setattr(work_module, "REJECTED_RETRY_BACKOFF_S", 0)
+    result, fake_agent = await _run(monkeypatch, fail_times=2, exc_factory=_bad_request)
+    assert result["escalated"] is False and fake_agent.calls == 3
+    result, fake_agent = await _run(monkeypatch, fail_times=99, exc_factory=_bad_request)
+    assert result["escalated"] is True and "rejected the request" in result["escalation_reason"]
+    assert fake_agent.calls == work_module.REJECTED_RETRIES_PER_PASS + 1
 
 
 async def test_non_api_error_escalates_immediately_without_retry(monkeypatch):

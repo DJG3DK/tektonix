@@ -143,11 +143,12 @@ def materialize(instance: dict, root: Path) -> dict:
     if not (live / ".git").is_dir():
         raise SetupError(f"{image}: /testbed is not a git repository")
     head = _run(["git", "rev-parse", "HEAD"], live).strip()
-    # The image's history ends at the task; anything reachable beyond HEAD
-    # would be the fix. Checked, not assumed.
-    extra = _run(["git", "rev-list", "--all", "--not", "HEAD"], live).split()
-    if extra:
-        raise SetupError(f"{image}: {len(extra)} commit(s) reachable beyond HEAD -- refusing to run")
+    # Nothing from after the task may be reachable: the fix is in it.
+    # Checked, not assumed.
+    future = future_commits(live, instance.get("base_commit") or f"{head}~1")
+    if future:
+        raise SetupError(f"{image}: {len(future)} commit(s) from after the task are reachable "
+                         f"(first: {future[0][:12]}) -- refusing to run")
     for key, value in (("user.name", "Tektonix"), ("user.email", "agent@tektonix.local")):
         _run(["git", "config", key, value], live)
     if _run(["git", "branch", "--show-current"], live).strip() != "main":
@@ -173,6 +174,32 @@ def materialize(instance: dict, root: Path) -> dict:
         dst.parent.mkdir(parents=True, exist_ok=True)
         _run(["cp", "-a", str(src), str(dst)])
     return {"name": name, "live": live, "sandbox": sandbox, "image": image, "base": head}
+
+
+def future_commits(repo: Path, base: str) -> list[str]:
+    """Commits reachable in `repo` that come after the task: descendants of
+    its base commit other than HEAD (the image's own empty "SWE-bench"
+    commit), or anything committed later than the base.
+
+    Not simply "anything beyond HEAD": several images carry old release tags
+    on maintenance branches (matplotlib's reach back to 0.91), which are
+    history the task's authors had, not its future. A tag on a LATER release
+    is a descendant of the base, and is caught."""
+    base_sha = _run(["git", "rev-parse", f"{base}^{{commit}}"], repo).strip()
+    base_time = int(_run(["git", "log", "-1", "--format=%ct", base_sha], repo).strip())
+    head = _run(["git", "rev-parse", "HEAD"], repo).strip()
+    found: list[str] = []
+    # Descendants of the base, from every ref, except HEAD itself.
+    for sha in _run(["git", "rev-list", "--all", "--ancestry-path", f"^{base_sha}"], repo).split():
+        if sha != head:
+            found.append(sha)
+    # Anything else newer than the base, however it is connected.
+    for line in _run(["git", "rev-list", "--all", "--not", "HEAD", "--format=%H %ct",
+                      "--no-commit-header"], repo).splitlines():
+        sha, _, ts = line.partition(" ")
+        if ts.strip().isdigit() and int(ts) > base_time and sha not in found:
+            found.append(sha)
+    return found
 
 
 def checks_for(instance: dict, base: str) -> list[dict]:

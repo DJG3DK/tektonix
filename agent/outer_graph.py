@@ -71,21 +71,12 @@ def build_outer_graph(config: Config, checkpointer, store):
     # names are reserved by LangGraph's own node-kwarg auto-injection and
     # would silently override these partial-bound values.
     builder = StateGraph(AgentState)
-    # RetryPolicy(max_attempts=3): work_node re-raises openai.APIError
-    # instead of swallowing it into an immediate escalation (see work.py's
-    # own comment on that except clause), specifically so this retry policy
-    # gets a chance to recover fast and automatically -- a flaky one-off
-    # generation from one underlying model shouldn't cost a human's
-    # attention on the first occurrence. The default retry_on predicate
-    # (langgraph._internal._retry.default_retry_on) already covers this
-    # correctly: openai.APIError/BadRequestError aren't in its explicit
-    # never-retry blocklist (ValueError, TypeError, etc.), so they fall
-    # through to its default `return True`. Safe to retry work_node from
-    # scratch: work_node's own graph_input logic re-derives what to send the
-    # inner deep-agent thread from state each call (not accumulated
-    # in-memory), and the inner thread is itself checkpointed, so a retry
-    # resumes it exactly where the failed attempt left off rather than
-    # duplicating or restarting the conversation.
+    # Model failures no longer reach this policy: work_node retries them
+    # itself, resuming the inner agent from its checkpoint, and hands the task
+    # back escalated if the provider keeps failing (work.py,
+    # TRANSIENT_MODEL_ERRORS) -- a failure escaping here after three quick
+    # retries used to end the task as "error", work stranded. The policy stays
+    # as the last net for anything raised outside the model stream.
     builder.add_node(
         "work",
         partial(work_node, app_config=config, checkpointer=checkpointer, pg_store=store),
