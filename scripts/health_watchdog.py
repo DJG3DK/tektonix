@@ -112,7 +112,7 @@ def _probe(url: str) -> tuple[bool, str, str]:
 
     The body is kept because it is where a readiness endpoint says WHICH
     dependency failed. Without it the alert could only guess, and guessed
-    "check Postgres" for a trading bot whose exchange feed had dropped
+    "check Postgres" for a service whose outside data feed had dropped
     (2026-09-24) -- a service with no database check at all."""
     try:
         r = subprocess.run(

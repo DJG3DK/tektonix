@@ -161,7 +161,7 @@ def _not_ready(probes, body):
 
 
 def test_an_outside_feed_is_named_and_not_blamed_on_the_database(probes, restarts):
-    """2026-09-24: a trading service's exchange feed dropped, and the alert
+    """2026-09-24: a service's outside data feed dropped, and the alert
     said "its database probe is failing -- check Postgres" about a service
     with no database check at all."""
     body = ('{"ok":false,"checks":{"engine":{"ok":true,"running":true},'
