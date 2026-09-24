@@ -112,3 +112,38 @@ def test_past_the_cap_the_branch_is_skipped_however_short_the_text():
         looks_incomplete = bool(last) and len(last) < vs.MIN_CONCLUSION_CHARS
         takes_branch = looks_incomplete and nudges < vs.MAX_SHORT_CONCLUSION_NUDGES
         assert takes_branch is should_nudge, nudges
+
+
+# ---------------------------------------------------------------------------
+# an announced action is not a conclusion, however long (2026-09-24)
+# ---------------------------------------------------------------------------
+
+import pytest  # noqa: E402
+
+
+@pytest.mark.parametrize("text,unfinished", [
+    ("The reminder is right that I haven't written the fix yet -- I was still pinning down the exact "
+     "code paths. I have everything I need now: the misleading message comes from the elif branch of "
+     "_check_required_columns. Implementing now.", True),
+    ("I traced the call path. Let me read core.py and then make the change.", True),
+    ("Next, I'll add the regression test.", True),
+    ("I investigated thoroughly. The behaviour described is already correct on this branch, so no "
+     "changes are needed.", False),
+    ("Fixed the regex in card.py and verified the reproduction and its neighbours; all related tests pass.",
+     False),
+])
+def test_a_long_message_that_ends_by_announcing_work_is_not_a_conclusion(text, unfinished):
+    """A benchmark task ended "done, no changes" on exactly the first of these:
+    long enough for the length check, and a promise, not an answer."""
+    assert vs.announces_unfinished_work(text) is unfinished
+
+
+def test_a_benchmark_task_never_ends_with_no_changes(monkeypatch):
+    """Its statement is to change the source; an empty patch always fails it."""
+    import agent.config as cfg
+    monkeypatch.setitem(cfg.PROJECTS, "bench", {"sandbox": "/tmp/bench", "benchmark": True})
+    state = _state(repo="bench", no_diff_streak=1,
+                   execution_log=[_work_entry("I read everything and I am confident in the analysis above. " * 3)])
+    src = __import__("inspect").getsource(vs)
+    assert 'benchmark task with no diff -- it requires a source change' in src
+    assert (cfg.PROJECTS.get(state["repo"]) or {}).get("benchmark")

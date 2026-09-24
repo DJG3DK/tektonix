@@ -40,6 +40,7 @@ existing commit instead of stranding a real, unreviewed change.
 """
 
 import os
+import re
 from contextlib import asynccontextmanager
 import time
 
@@ -73,6 +74,28 @@ from agent.outer_state import AgentState
 # Minimum length for a final message to count as a genuine "no changes
 # needed" conclusion rather than a truncated, mid-thought response.
 MIN_CONCLUSION_CHARS = 120
+# The END of a last response that announces work instead of concluding: "I have
+# everything I need now ... Implementing now." ended a benchmark task as "done,
+# no changes" on 2026-09-24 -- long enough to pass the length check, and an
+# intention, not a conclusion. Matched on the final sentences only.
+_ANNOUNCED_ACTION = re.compile(
+    r"(?:\b(?:implementing|applying|making|writing|adding|fixing|proceeding|starting)\b[^.!?]{0,60}"
+    r"\b(?:now|next|the (?:fix|change|edit)s?)\b"
+    r"|\b(?:let me|i'll|i will|i am going to|i'm going to|next,? i|now i'll|now,? let me)\b)"
+    r"(?:[^.!?]|\.(?=\S))*[.!?:]*\s*$",   # a dot inside a word (core.py) is not a sentence end
+    re.IGNORECASE)
+_NO_CHANGE_CONCLUSION = re.compile(
+    r"\b(?:no (?:code )?changes? (?:is |are )?(?:needed|required|necessary)|already (?:fixed|handled|correct|works)|"
+    r"nothing (?:needs|to) (?:be )?chang)", re.IGNORECASE)
+
+
+def announces_unfinished_work(text: str) -> bool:
+    """A final response whose last sentences say what it is ABOUT to do."""
+    text = (text or "").strip()
+    if not text or _NO_CHANGE_CONCLUSION.search(text):
+        return False
+    tail = " ".join(re.split(r"(?<=[.!?])\s+", text)[-2:])
+    return bool(_ANNOUNCED_ACTION.search(tail))
 # How many times in a row a terse final response may be nudged before the gate
 # stops asking and lets the normal no-diff path decide. Without a cap this
 # branch resets no_diff_streak every pass, so "no changes needed" can never be
@@ -651,7 +674,8 @@ async def _verify_and_ship_inner(state: AgentState, repo: str, repo_root: str,
         # "cut off mid-thought" from nothing is what caused the loop.
         last_response = (_last_work_response_text(state) or "").strip()
         nudges = state.get("short_conclusion_streak", 0)
-        looks_incomplete = bool(last_response) and len(last_response) < MIN_CONCLUSION_CHARS
+        looks_incomplete = bool(last_response) and (
+            len(last_response) < MIN_CONCLUSION_CHARS or announces_unfinished_work(last_response))
         if looks_incomplete and nudges < MAX_SHORT_CONCLUSION_NUDGES:
             feedback = (
                 "Your last response looks like it was cut off mid-thought -- it announced what you "
@@ -673,6 +697,15 @@ async def _verify_and_ship_inner(state: AgentState, repo: str, repo_root: str,
         # reset here, so the ordinary no-diff path below decides the outcome --
         # which is the bound this branch was missing.
 
+        # A benchmark task's statement is to change the source: an empty
+        # patch always fails it, so "done, no changes" is never its ending.
+        # Bounded like any other loop-back, by the budget and max_iterations.
+        if (PROJECTS.get(state.get("repo") or "") or {}).get("benchmark"):
+            return _loop_back(
+                "benchmark task with no diff -- it requires a source change",
+                "There are still no file changes, and this task requires a change to the library's "
+                "source code: an empty change cannot resolve it. Make the fix now with `edit`, then "
+                "verify it.", state, no_diff_streak=1)
         if state.get("no_diff_streak", 0) >= 1:
             return _done_no_changes(state)
         feedback = (
