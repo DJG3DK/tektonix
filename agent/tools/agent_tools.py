@@ -22,6 +22,7 @@ current task, not persisted cross-task, matching deepagents' own default
 offload behavior.
 """
 
+from agent.harness_voice import HARNESS
 import re
 import json
 import mimetypes
@@ -452,7 +453,7 @@ def make_agent_tools(
         signature = json.dumps([path, old_string, new_string])
         if _last_failed_edit.get("signature") == signature:
             return (
-                "ERROR: REFUSED without retrying -- this exact edit (same path, old_string, and "
+                HARNESS + " ERROR: REFUSED without retrying -- this exact edit (same path, old_string, and "
                 "new_string) already failed and you just resubmitted it completely unchanged (this is "
                 "enforced across the whole task, not just this turn -- it doesn't matter if this looks "
                 "like a fresh attempt to you). str_replace is a pure function of the file's CURRENT "

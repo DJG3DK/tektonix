@@ -38,6 +38,8 @@ model takes the hint.
 
 from __future__ import annotations
 
+from agent.harness_voice import HARNESS
+
 import re
 
 # The agent's own filesystem: store-backed, and mounted nowhere in the sandbox.
@@ -172,26 +174,26 @@ def _read_targets(text: str) -> list[str] | None:
 _LEADING_CD = re.compile(r"^\s*cd\s+[\"']?(/[\w./-]+)")
 
 EDIT_NOTE = (
-    "[harness] That wrote a file through the shell. Use the `edit` tool (or `write` for a new "
+    HARNESS + " That wrote a file through the shell. Use the `edit` tool (or `write` for a new "
     "file) instead: it runs in-process, while every bash call starts a container -- the shell "
     "route is ~10x the wall-clock for the same change, and `edit` is path-guarded and catches a "
     "repeated failed edit. Keep bash for RUNNING things: tests, builds, rg, git status."
 )
 MEMORY_READ_NOTE = (
-    "[harness] That path is not in this container. /memories, /skills and /org-memory are your "
+    HARNESS + " That path is not in this container. /memories, /skills and /org-memory are your "
     "OWN filesystem, not the repo's -- bash cannot see them at all, so the command above could "
     "only fail. Read them with your built-in `read_file` (and `ls`/`glob`) instead. The repo is "
     "the other filesystem: /workspace in bash, relative paths for `read`/`write`/`edit`."
 )
 MEMORY_WRITE_NOTE = (
-    "[harness] That tried to WRITE your own memory through the shell, and it did not work even "
+    HARNESS + " That tried to WRITE your own memory through the shell, and it did not work even "
     "if the exit code said 0: /memories, /skills and /org-memory are not mounted in this "
     "container, so the bytes went into a sandbox that is thrown away when the command ends. Use "
     "your built-in `write_file` / `edit_file` -- those are the only tools that reach it. (Not "
     "`edit`: that one is path-guarded to the repo and will reject the path.)"
 )
 READ_NOTE = (
-    "[harness] That read files through the shell. Use the `read` tool instead -- same content, "
+    HARNESS + " That read files through the shell. Use the `read` tool instead -- same content, "
     "measured at 0.1ms against 389ms for a bash call, because `read` runs in-process and every "
     "bash call starts a container. Reading SEVERAL files is still `read`: issue one `read` call "
     "per file IN THE SAME TURN and they all run together (five of them measured at 0.3ms total, "

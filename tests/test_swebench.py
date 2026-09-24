@@ -342,7 +342,7 @@ def test_searching_for_the_published_fix_is_refused_on_a_benchmark(cmd):
     fix's own pull request."""
     from agent.tools.benchmark_guard import refusal
     msg = refusal(cmd)
-    assert msg and msg.startswith("REFUSED on a benchmark task") and "does not exist anywhere" in msg
+    assert msg and msg.startswith("[Tektonix harness] REFUSED on a benchmark task") and "does not exist anywhere" in msg
 
 
 @pytest.mark.parametrize("cmd", [

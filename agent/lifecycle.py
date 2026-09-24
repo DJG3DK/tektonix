@@ -30,6 +30,8 @@ just run; the graph continues from that node's outgoing edge:
 """
 from __future__ import annotations
 
+from agent.harness_voice import HARNESS, OPERATOR, operator
+
 from dataclasses import dataclass, field
 
 # Resting states, as the operator sees them. The first three come from the
@@ -142,12 +144,12 @@ def resume(values: dict, store_status: str | None, *, message: str | None,
             f"Additional budget granted -- ${additional_budget:.2f} more, ${new_budget:.2f} total now. "
             if additional_budget > 0 else "No additional budget added. "
         )
-        note = (
+        note = HARNESS + " " + (
             f"Resumed by operator after escalation (was: {values.get('escalation_reason') or 'unknown reason'}). "
             f"{budget_note}Continue the task from where you left off."
         )
         if message:
-            note += f"\n\nOperator note: {message}"
+            note += f"\n\n{operator(message)}"
         # New work means a new commit; an approval of the old one must not
         # survive to ship it.
         return Transition({**base, **_FRESH, "escalated": False, "escalation_reason": None,
@@ -155,7 +157,7 @@ def resume(values: dict, store_status: str | None, *, message: str | None,
                           "verify_and_ship", summary="back to work", extra=extra)
 
     if phase == "done":
-        return Transition({**base, "no_diff_streak": 0, "pending_feedback": f"Operator note: {message}",
+        return Transition({**base, "no_diff_streak": 0, "pending_feedback": operator(message),
                            "merge_approved_sha": None},
                           "verify_and_ship", summary="reopened with a note", extra=extra)
 
@@ -179,8 +181,8 @@ def merge_decision(values: dict, store_status: str | None, decision: str,
         raise Refused(400, "request_changes requires a message -- the agent needs to know what to change")
     return Transition({**_FRESH, "pending_merge_approval": None, "merge_approved_sha": None,
                        "pending_feedback": (
-                           "The operator reviewed the final diff and sent it back for more work "
-                           "before it may merge. Their notes:\n\n" + message.strip())},
+                           HARNESS + " The operator reviewed the final diff and sent it back for more work "
+                           "before it may merge. Their notes:\n\n" + operator(message))},
                       "verify_and_ship", summary="sent back")
 
 
@@ -213,7 +215,7 @@ def command_decision(values: dict, store_status: str | None, decision: str,
     # pending_feedback is a routing placeholder, never sent to the model:
     # work_node reads approval_decision first and resumes the paused turn.
     return Transition({"pending_approval": None, "approval_decision": decisions,
-                       "pending_feedback": "[operator submitted an approval decision]"},
+                       "pending_feedback": OPERATOR + " submitted an approval decision"},
                       "verify_and_ship", summary=f"command {decision}", extra={"count": count})
 
 

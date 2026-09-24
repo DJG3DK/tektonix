@@ -36,6 +36,8 @@ import hashlib
 import json
 
 from langchain_core.messages import ToolMessage
+
+from agent.harness_voice import HARNESS
 from langchain.agents.middleware.types import AgentMiddleware
 
 # Tools whose repeat is meaningful, not a loop.
@@ -123,7 +125,7 @@ class RepeatCallGuardMiddleware(AgentMiddleware):
         preview = _result_text(run["last"])[:_RESULT_PREVIEW]
         return ToolMessage(
             content=(
-                f"REPEATED CALL: this is the {run['n']}th identical `{tool_call.get('name')}` call in a row and the "
+                f"{HARNESS} REPEATED CALL: this is the {run['n']}th identical `{tool_call.get('name')}` call in a row and the "
                 f"last two returned exactly the same result, so it was not run again. That result:\n{preview}\n\n"
                 f"Nothing about the repo changed between those calls. Do something different: change the "
                 f"arguments, act on this result, or state what it tells you and move on."
@@ -135,7 +137,7 @@ class RepeatCallGuardMiddleware(AgentMiddleware):
     def _refusal(self, tool_call, run) -> ToolMessage:
         return ToolMessage(
             content=(
-                f"ERROR: `{tool_call.get('name')}` with these exact arguments has now been requested {run['n']} times "
+                f"{HARNESS} ERROR: `{tool_call.get('name')}` with these exact arguments has now been requested {run['n']} times "
                 f"in a row with an unchanging result. It will not run again with these arguments. You are in a "
                 f"loop: stop, write down what the last result told you, and take a DIFFERENT next step "
                 f"(different command or file, an edit, a check, or finish the todo)."

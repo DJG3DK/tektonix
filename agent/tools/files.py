@@ -1,5 +1,6 @@
 """File read/write, scoped strictly under a repo root — no path traversal."""
 
+from agent.harness_voice import HARNESS
 import re
 from pathlib import Path
 
@@ -31,7 +32,7 @@ def _resolve(repo_root: str, rel_path: str) -> Path:
         # directly contradicts the "/workspace is the repo root" story the
         # agent is (correctly) told everywhere else. Say what to do instead.
         raise PathEscapeError(
-            f"{rel_path!r} is not a valid repo path -- paths must be RELATIVE to the repo root "
+            f"{HARNESS} {rel_path!r} is not a valid repo path -- paths must be RELATIVE to the repo root "
             f"(e.g. \"src/App.tsx\"), and must stay inside it (no '..' escapes, no absolute host paths)."
         )
     return target

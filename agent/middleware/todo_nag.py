@@ -41,6 +41,8 @@ plan strip renders.
 from __future__ import annotations
 
 from langchain_core.messages import HumanMessage
+
+from agent.harness_voice import HARNESS
 from langchain.agents.middleware.types import AgentMiddleware, ModelRequest, ModelResponse
 
 # Model turns the list may go unchanged before the first reminder, and the
@@ -60,7 +62,7 @@ def render_nag(todos: list[dict], turns: int) -> str:
         return ""
     nxt = outstanding[0].get("content", "").strip()
     return (
-        "=== PLAN CHECK ===\n"
+        f"{HARNESS} === PLAN CHECK ===\n"
         f"Your todo list has not changed in {turns} turns and still shows "
         f"{len(outstanding)} item(s) outstanding. The next one is: {nxt}\n"
         "If you have finished anything on that list, call `write_todos` NOW to mark it "

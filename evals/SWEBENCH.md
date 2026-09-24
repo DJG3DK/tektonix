@@ -25,6 +25,8 @@ The repository is copied out of the task's image, not cloned. Several
 already ends at the task. The runner checks that no commit is reachable
 beyond it before a task starts, and refuses the task if one is.
 
+Every word the harness itself puts into the agent's conversation -- the task framing, a guard's refusal, a checkpoint, the ship gate's feedback, a handover to the fallback seat -- starts with `[Tektonix harness]` (`agent/harness_voice.py`), so a trajectory shows plainly which text was the system's and which was the model's.
+
 ## What is Tektonix's own, and so part of what is measured
 
 - **The agent:** the same graph, models, prompts and tools as production,

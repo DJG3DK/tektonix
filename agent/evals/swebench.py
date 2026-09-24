@@ -33,6 +33,8 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from agent.harness_voice import HARNESS
+
 # The dataset's current official home. The older princeton-nlp copy has the
 # same 500 tasks, issue text, commits and patches; this one adds the `image`
 # field the harness now requires, and drops six unreliable PASS_TO_PASS tests
@@ -101,7 +103,7 @@ def project_name(instance_id: str) -> str:
 def goal_for(instance: dict) -> str:
     """The issue, and only the issue. The framing is ours and the same for every task."""
     return (
-        f"Resolve the following GitHub issue in the {instance['repo']} repository, which is "
+        f"{HARNESS} Resolve the following GitHub issue in the {instance['repo']} repository, which is "
         f"checked out in your workspace. Change the library's source code so the problem the "
         f"issue describes is fixed. Do not modify the existing tests; you may add new ones. "
         f"You have no internet access. The fix does not exist anywhere in this environment: the "

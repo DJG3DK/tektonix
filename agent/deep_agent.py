@@ -50,6 +50,7 @@ from agent.middleware.budget_guard import BudgetMeterCallback, BudgetGuardMiddle
 from agent.middleware.model_pin import PlanCodeModelMiddleware
 from agent.middleware.todo_nag import StaleTodoMiddleware
 from agent.middleware.step_back import StepBackMiddleware
+from agent.harness_voice import HARNESS
 from agent.store_paging import all_items
 from agent.tools.agent_tools import make_agent_tools
 from agent.tools.project_db import make_project_db_tool
@@ -671,7 +672,7 @@ def _make_ask_user_tool():
         not ask more than one question at a time. The tool result is the
         operator's own reply -- treat it as authoritative direction."""
         return (
-            "(no operator response captured -- proceed with your best "
+            f"{HARNESS} (no operator response captured -- proceed with your best "
             "judgment and state the assumption you are making)"
         )
 

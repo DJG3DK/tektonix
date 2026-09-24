@@ -35,9 +35,9 @@ async def test_third_identical_call_is_served_from_cache_and_fourth_refused():
     assert h.calls == 2 and r1.content == r2.content == "same output"
     r3 = await mw.awrap_tool_call(_req("bash", {"command": "grep x"}, 3), h)
     assert h.calls == 2, "the third identical call must not execute"
-    assert r3.status == "error" and r3.content.startswith("REPEATED CALL") and "same output" in r3.content
+    assert r3.status == "error" and r3.content.startswith("[Tektonix harness] REPEATED CALL") and "same output" in r3.content
     r4 = await mw.awrap_tool_call(_req("bash", {"command": "grep x"}, 4), h)
-    assert h.calls == 2 and r4.content.startswith("ERROR:") and "loop" in r4.content
+    assert h.calls == 2 and r4.content.startswith("[Tektonix harness] ERROR:") and "loop" in r4.content
 
 
 async def test_a_call_whose_result_changes_is_never_blocked():
@@ -78,7 +78,7 @@ def test_sync_path_matches_async_semantics():
 
     for i in range(3):
         r = mw.wrap_tool_call(_req("read", {"path": "a.js"}, i), handler)
-    assert calls["n"] == 2 and r.content.startswith("REPEATED CALL")
+    assert calls["n"] == 2 and r.content.startswith("[Tektonix harness] REPEATED CALL")
 
 
 def test_guard_is_attached_to_every_build_seat_and_to_planning():

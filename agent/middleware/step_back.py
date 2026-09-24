@@ -23,6 +23,8 @@ from __future__ import annotations
 import time
 
 from langchain_core.messages import HumanMessage
+
+from agent.harness_voice import HARNESS
 from langchain.agents.middleware.types import AgentMiddleware, ModelRequest, ModelResponse
 
 BUDGET_FRACTIONS = (1 / 3, 2 / 3)
@@ -31,7 +33,7 @@ MINUTES = (45, 90)
 
 def render_checkpoint(spent: float, budget: float, minutes: float) -> str:
     return (
-        "=== CHECKPOINT ===\n"
+        f"{HARNESS} === CHECKPOINT ===\n"
         f"This task has now spent ${spent:.2f} of its ${budget:.2f} budget"
         + (f", {minutes:.0f} minutes into this pass" if minutes >= 1 else "") + ".\n"
         "Before your next step, write three short lines:\n"

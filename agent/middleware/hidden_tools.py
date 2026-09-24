@@ -36,6 +36,8 @@ constructor argument that prevents it.
 """
 
 from langchain_core.messages import ToolMessage
+
+from agent.harness_voice import HARNESS
 from langchain.agents.middleware.types import AgentMiddleware, ModelRequest, ModelResponse
 
 
@@ -86,7 +88,7 @@ class HiddenToolsMiddleware(AgentMiddleware):
         name = request.tool_call.get("name", "")
         return ToolMessage(
             content=(
-                f"ERROR: the `{name}` tool is not available to you (it searches your own "
+                f"{HARNESS} ERROR: the `{name}` tool is not available to you (it searches your own "
                 f"memory/skills space, never the repo, and has been withdrawn). To search or "
                 f"explore the REAL repo, use `bash` with rg/grep inside /workspace, or "
                 f"read_project_file/list_project_dir if you have them. Do not call `{name}` again."

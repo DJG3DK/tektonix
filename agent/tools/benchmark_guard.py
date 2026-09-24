@@ -20,6 +20,8 @@ from __future__ import annotations
 
 import re
 
+from agent.harness_voice import HARNESS
+
 _WHY = ("The fix for this issue does not exist anywhere in this environment: the repository has no "
         "commits after this point, there is no newer package and no network, and the tests that will "
         "grade the fix are not here. Searching for them only spends the budget. Work from the issue "
@@ -47,4 +49,4 @@ def hunt_reason(command: str) -> str | None:
 
 def refusal(command: str) -> str | None:
     why = hunt_reason(command)
-    return f"REFUSED on a benchmark task ({why}). {_WHY}" if why else None
+    return f"{HARNESS} REFUSED on a benchmark task ({why}). {_WHY}" if why else None

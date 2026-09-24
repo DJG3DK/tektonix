@@ -75,6 +75,7 @@ from langgraph.config import get_stream_writer
 from langgraph.types import Command
 
 from agent.config import Config
+from agent.harness_voice import HARNESS, marked
 from agent.frontend_route import FALLBACK
 from agent.middleware.repeat_guard import RepeatLoopError
 from agent.deep_agent import build_deep_agent
@@ -436,7 +437,7 @@ async def work_node(state: AgentState, app_config: Config, checkpointer, pg_stor
         restored = await restore_task_workspace(workspace, task_id)
         print(f"[work] {repo}: workspace restore -> {restored}")
         if restored.get("reset_onto_base"):
-            workspace_note = (
+            workspace_note = HARNESS + " " + (
                 "Main moved on since your last commit, and your commit conflicts with it in:\n\n"
                 + "\n".join(f"  - {f}" for f in restored["conflicts"]) + "\n\n"
                 f"Your branch has been reset onto the current main, so the workspace now holds "
@@ -496,7 +497,7 @@ async def work_node(state: AgentState, app_config: Config, checkpointer, pg_stor
     else:
         messages: list = []
         if pending_feedback:
-            messages.append(HumanMessage(content=pending_feedback))
+            messages.append(HumanMessage(content=marked(pending_feedback)))
         elif state["iteration_count"] == 0:
             messages.append(HumanMessage(content=state["goal"]))
         # Operator messages (server.py's /message endpoint, agent/messages.py's
@@ -641,7 +642,7 @@ async def work_node(state: AgentState, app_config: Config, checkpointer, pg_stor
                 agent, tracker, last_failed_edit_ref = await _build(
                     FALLBACK, tracker.total_cost, last_failed_edit_ref.get("signature"))
                 stream_input = {"messages": [HumanMessage(content=(
-                    "[harness] The model working on this task got stuck: " + str(e).split(". The model")[0]
+                    HARNESS + " The model working on this task got stuck: " + str(e).split(". The model")[0]
                     + ". You are a different model taking over mid-task. Read the todo list and the recent "
                     "conversation, check what has actually changed (`git status`, `git diff`), then carry on "
                     "with a DIFFERENT approach. Do not repeat that call."))]}
