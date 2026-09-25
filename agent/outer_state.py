@@ -154,6 +154,11 @@ class AgentState(TypedDict):
     # reach the "no changes needed" exit, and the task looped until
     # max_iterations (live, 2026-09-13).
     short_conclusion_streak: int
+    # How many times this task's coordinator has delegated to the `verifier`
+    # subagent, and whether the ship gate has already sent it back once for
+    # not doing so (a benchmark task; verify_and_ship.py).
+    verifier_runs: int
+    verifier_nudged: bool
 
     # Whether the operator who created this task has auto-approve enabled
     # (User.auto_approve_commands). Captured onto the task at creation
@@ -237,6 +242,8 @@ def initial_state(
         inner_thread_generation=0,
         incomplete_plan_streak=0,
         short_conclusion_streak=0,
+        verifier_runs=0,
+        verifier_nudged=False,
         auto_approve_commands=auto_approve_commands,
         require_merge_review=require_merge_review,
         pending_merge_approval=None,

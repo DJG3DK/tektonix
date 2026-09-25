@@ -88,3 +88,25 @@ def test_the_coordinator_verifies_a_fix_past_its_example_through_an_independent_
     assert '"model": test_writer_model' in spec, "a different model from the coder that wrote the fix"
     assert 'tool_by_name["write"]' not in spec and 'tool_by_name["edit"]' not in spec, "it runs code, never edits it"
     assert "StepBackMiddleware(tracker)" in src
+
+
+def test_the_verifier_judges_the_reported_behaviour_not_regressions():
+    """On 2026-09-24 the verifier found 232 inputs where the reported bug still
+    happened, called them "pre-existing, not a regression", and a half-fix
+    shipped."""
+    from agent import deep_agent
+    p = deep_agent.VERIFIER_SYSTEM_PROMPT
+    assert "FAILURE OF THE FIX even if it failed before" in p
+    assert "VERDICT: FIX HOLDS" in p and "VERDICT: FIX INCOMPLETE" in p
+    assert "FIX INCOMPLETE means the fix is not done" in deep_agent.COORDINATOR_SYSTEM_PROMPT_TEMPLATE
+
+
+def test_a_benchmark_fix_is_sent_back_once_if_the_verifier_never_saw_it():
+    import inspect
+
+    from agent.nodes import verify_and_ship as vs
+    src = inspect.getsource(vs)
+    gate = src[src.index('"benchmark fix not yet checked by the verifier"') - 400:]
+    assert 'not state.get("verifier_runs") and not state.get("verifier_nudged")' in gate
+    assert '"verifier_nudged": True' in gate
+    assert src.index("benchmark fix not yet checked by the verifier") > src.index("if not checks[\"all_ok\"]")

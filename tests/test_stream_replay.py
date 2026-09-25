@@ -201,3 +201,21 @@ def test_capture_is_optional(published):
     entries, writer = published
     asyncio.run(work._consume_values("T1", "work", _Projection({"messages": [AIMessage(content="x", id="a")]}),
                                      writer, {}))
+
+
+def test_the_coordinator_s_verifier_delegations_are_counted(published):
+    """The ship gate sends a benchmark fix back once if the coordinator never
+    asked the verifier (2026-09-24: one never did, and shipped a fix the hidden
+    tests rejected). A subagent delegating is not the coordinator doing so."""
+    call = AIMessage("", id="a1", tool_calls=[{"name": "task", "id": "c1",
+                                              "args": {"subagent_type": "verifier", "description": "break it"}}])
+    other = AIMessage("", id="a2", tool_calls=[{"name": "task", "id": "c2",
+                                               "args": {"subagent_type": "test-writer", "description": "tests"}}])
+    final_text: dict = {}
+    asyncio.run(work._consume_values("T1", "work", _Projection({"messages": [call, other]}),
+                                     lambda e: None, {}, final_text=final_text))
+    assert final_text.get("verifier_calls") == 1
+    sub: dict = {}
+    asyncio.run(work._consume_values("T1", "work:general-purpose", _Projection({"messages": [call]}),
+                                     lambda e: None, {}, final_text=sub))
+    assert "verifier_calls" not in sub

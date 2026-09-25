@@ -260,6 +260,11 @@ async def _consume_values(task_id: str, node_label: str, proj, writer, seen: dic
             # The coordinator's own prose only: a subagent's closing remark is
             # not this pass's conclusion, and the gate reads it as one.
             if final_text is not None and node_label == "work" and isinstance(msg, AIMessage):
+                # Counted for the ship gate: a benchmark fix does not ship
+                # without the independent verifier having looked at it.
+                for call in getattr(msg, "tool_calls", None) or []:
+                    if call.get("name") == "task" and (call.get("args") or {}).get("subagent_type") == "verifier":
+                        final_text["verifier_calls"] = final_text.get("verifier_calls", 0) + 1
                 text = content_text(msg.content).strip()
                 if text:
                     final_text["text"] = text[:2000]
@@ -754,4 +759,5 @@ async def work_node(state: AgentState, app_config: Config, checkpointer, pg_stor
         # next pass so the guard survives a verify_and_ship loop-back
         # instead of resetting to empty every time. See agent_tools.py.
         "last_failed_edit_signature": last_failed_edit_ref.get("signature"),
+        "verifier_runs": int(state.get("verifier_runs") or 0) + int(final_text.get("verifier_calls", 0)),
     }

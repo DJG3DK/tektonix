@@ -1318,9 +1318,17 @@ you must not change the repository with bash either. Write probe scripts and the
    parser branch, the other writer, the method next to it).
 4. Run the existing tests of the module that changed.
 
-Report back briefly: each case you tried that FAILS (the input, what happened, what the report \
-implies should happen), then any existing test that fails, then one line on what passed. If \
-everything passed, say so in one line. No raw dumps of output."""
+The question is NOT "did the change make anything worse". It is "does the behaviour the report \
+asks for now hold -- for the reported case AND its neighbours". A neighbour that still fails is a \
+FAILURE OF THE FIX even if it failed before the change too: that is exactly the half-fix this check \
+exists to catch. Never drop such a case as "pre-existing" or "out of scope"; list it, and if you \
+think it truly is outside the report, say why in one line.
+
+Report back briefly. FIRST LINE, exactly one of:
+  VERDICT: FIX HOLDS
+  VERDICT: FIX INCOMPLETE -- <n> failing case(s)
+Then each failing case (the input, what happened, what the report implies should happen), then any \
+existing test that fails, then one line on what passed. No raw dumps of output."""
 
 
 TEST_WRITER_SYSTEM_PROMPT = """You are a test-writing subagent for a live production codebase. \
@@ -1385,7 +1393,8 @@ report's own example and see it fail; (2) after your change, run that reproducti
 neighbours -- longer, shorter and boundary inputs, the same pattern followed by more content, \
 repeated or combined occurrences, empty values -- plus the existing tests of the module you \
 changed; (3) then delegate to the `verifier` subagent with the report verbatim and a short summary \
-of your change, and fix what it finds (two rounds at most). A fix checked only on the report's own \
+of your change. Its first line is a verdict: FIX INCOMPLETE means the fix is not done, even if \
+nothing got worse -- fix every case it lists, then run it again (two rounds at most). A fix checked only on the report's own \
 example is how a half-fix ships: the next case over is where it breaks. Keep behaviour the report \
 does not ask to change exactly as it was, messages included.
 

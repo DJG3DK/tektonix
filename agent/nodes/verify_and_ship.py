@@ -717,6 +717,22 @@ async def _verify_and_ship_inner(state: AgentState, repo: str, repo_root: str,
         )
         return _loop_back("checks passed but no diff -- nudging for progress", feedback, state, no_diff_streak=1)
 
+    # A benchmark fix does not ship unverified. The prompt asks the
+    # coordinator to delegate to the `verifier` before finishing a bug fix;
+    # on 2026-09-24 one never did, and shipped a fix whose error message the
+    # hidden tests rejected. Sent back once -- a nudge, not a loop.
+    if ((PROJECTS.get(state.get("repo") or "") or {}).get("benchmark")
+            and not state.get("verifier_runs") and not state.get("verifier_nudged")):
+        return {
+            **_loop_back(
+                "benchmark fix not yet checked by the verifier",
+                "Before this fix ships, delegate to the `verifier` subagent: give it the issue text "
+                "verbatim and a short summary of your change. Its first line is its verdict; if it says "
+                "FIX INCOMPLETE, fix every case it lists before finishing.",
+                state, no_diff_streak=0),
+            "verifier_nudged": True,
+        }
+
     # Don't ship a half-finished plan. The agent writes itself a todo list
     # up front, and it used to be free to reach this gate with most of that
     # list still pending -- checks pass on the part it HAS done, so the diff
