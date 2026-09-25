@@ -196,8 +196,13 @@ def nudge(diff: str, issue: str, repo_root: str | Path, fired: set[str]) -> tupl
             return ("sibling_definition",
                     f"A function you changed is defined elsewhere too: {listed}. The same bug usually "
                     f"lives in the sibling implementation (the other parser, unparser, writer or "
-                    f"formatter of the same thing). Open each one, apply the same fix where it applies, "
-                    f"and say explicitly why it does not where it does not.")
+                    f"formatter of the same thing). Run each sibling on the report's own input and "
+                    f"compare what it RETURNS with what the report implies it should: the bug is the "
+                    f"wrong output, not the crash. A sibling that returns '' or drops the input where "
+                    f"the report implies something should render has the same bug even though it "
+                    f"does not raise (2026-09-25: one printed '()' -> '' and was left alone as \"does "
+                    f"not crash\"). Apply the same fix where the output is wrong, and say explicitly "
+                    f"why not where it is right.")
     if "grammar_rejection" not in fired and touches_grammar(diff) and not has_rejection_test(diff):
         return ("grammar_rejection",
                 "This change touches a grammar, parser or regular expression, and your added tests only "
