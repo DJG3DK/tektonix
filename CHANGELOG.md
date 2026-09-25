@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### The gate reads the diff for three shapes of a wrong fix
+
+Two 50-task samples lost the same tasks the same way with the rule against it
+in the coder's prompt: an invented error message where the hidden tests
+assert the existing template; a grammar rewritten to accept what it used to
+reject, with tests for the parsing side only; a fix applied to one of two
+functions of the same name. A paragraph in a long system prompt lost to the
+decision in front of the model every time. The ship gate now reads the diff
+for each shape and sends the fix back once, at the decision point, with the
+specific thing to change: keep the message template; open the sibling
+definition; add a must-still-reject test. On benchmark projects for now.
+
+The coder seat's chain of thought can be switched off for one runner process
+(`--coder-reasoning off`, recorded in the summary): its losses read as
+over-thinking and its blowouts were pure reasoning, and with it off the same
+model answers the same prompt in a quarter of the time. Measured on the ten
+tasks the first sample lost before it decides anything.
+
 ### The reviewer reads the agent's answer
 
 A review round is an argument, and only one side was being heard. The

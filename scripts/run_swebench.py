@@ -75,6 +75,9 @@ def _args(argv=None):
                    help="a guard against a hung task, not a limit on the work: SWE-bench sets no time "
                         "limit, and --budget is what bounds a task (default 180)")
     p.add_argument("--keep-images", action="store_true", help="do not delete a batch's images afterwards")
+    p.add_argument("--coder-reasoning", choices=("on", "off"), default="on",
+                   help="off: the coder seat runs with its chain of thought disabled (CODER_REASONING=off "
+                        "for this process only); recorded in the summary")
     return p.parse_args(argv)
 
 
@@ -393,6 +396,8 @@ def main(argv=None) -> int:
     instances = shard(instances, args.shard)
     if args.gold_check:
         return _gold_check(args, [i["instance_id"] for i in instances])
+    if args.coder_reasoning == "off":
+        os.environ["CODER_REASONING"] = "off"
     run_id = args.run_id or time.strftime("tektonix-%Y%m%dT%H%M%SZ", time.gmtime())
     run_dir = RUNS / run_id
     run_dir.mkdir(parents=True, exist_ok=False)
@@ -431,6 +436,7 @@ def main(argv=None) -> int:
             "resolved_rate": round(100 * len(resolved) / len(ids), 1) if graded and ids else None,
             "total_cost_usd": round(sum(r.get("cost_usd", 0) for r in results.values()), 4),
             "runtime_settings": settings,
+            "coder_reasoning": args.coder_reasoning,
             "host": sampler.record(),
             "instances": {i: {**results.get(i, {"outcome": "not_run"}),
                               **({"resolved": i in resolved} if graded or i in graded_ids_so_far else {}),

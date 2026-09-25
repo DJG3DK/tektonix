@@ -68,6 +68,7 @@ from agent.tools.review_gate import (
 from agent.project_checks import autodetect_checks_if_none
 from agent.tools.git import sha_in_repo
 from agent.outer_state import AgentState
+from agent.nodes import diff_patterns
 
 # Duration lives in runtime_settings ("review_wait_timeout_s") so it can be
 # raised without a restart when a large diff needs longer than the default.
@@ -747,6 +748,19 @@ async def _verify_and_ship_inner(state: AgentState, repo: str, repo_root: str,
             "legitimate no-changes-needed completion."
         )
         return _loop_back("checks passed but no diff -- nudging for progress", feedback, state, no_diff_streak=1)
+
+    # Three shapes of a wrong fix the diff itself shows -- a new error
+    # message, a sibling function left alone, a grammar change with no
+    # must-still-reject test -- each sent back once, at the point the
+    # decision was made (agent/nodes/diff_patterns.py, 2026-09-25: two
+    # samples lost the same tasks the same way with the rule in the prompt).
+    if (PROJECTS.get(state.get("repo") or "") or {}).get("benchmark"):
+        fired = set(state.get("pattern_nudges") or [])
+        hit = diff_patterns.nudge(diff, state.get("goal") or "", repo_root, fired)
+        if hit:
+            name, feedback = hit
+            return {**_loop_back(f"benchmark diff pattern: {name.replace('_', ' ')}", feedback, state, no_diff_streak=0),
+                    "pattern_nudges": sorted(fired | {name})}
 
     # A benchmark fix does not ship unverified. The prompt asks the
     # coordinator to delegate to the `verifier` before finishing a bug fix;

@@ -86,6 +86,8 @@ Tektonix's. `SWEBENCH_PYTHON` and `SWEBENCH_DATASET_JSON` override the paths.
     scripts/run_swebench.py --all --parallel 4
 
 `--budget` caps each task ($3 by default) and `--ceiling` the whole run.
+`--coder-reasoning off` runs the coder seat with its chain of thought disabled,
+for this process only; the summary records it.
 SWE-bench sets no time limit. `--task-timeout-min` (180) only guards against
 a hung task. The budget is what bounds the work, as it does in production.
 

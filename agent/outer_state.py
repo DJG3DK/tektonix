@@ -159,6 +159,8 @@ class AgentState(TypedDict):
     # not doing so (a benchmark task; verify_and_ship.py).
     verifier_runs: int
     verifier_nudged: bool
+    # Diff patterns the gate has already sent back once (agent/nodes/diff_patterns.py).
+    pattern_nudges: list[str]
 
     # Whether the operator who created this task has auto-approve enabled
     # (User.auto_approve_commands). Captured onto the task at creation
@@ -244,6 +246,7 @@ def initial_state(
         short_conclusion_streak=0,
         verifier_runs=0,
         verifier_nudged=False,
+        pattern_nudges=[],
         auto_approve_commands=auto_approve_commands,
         require_merge_review=require_merge_review,
         pending_merge_approval=None,

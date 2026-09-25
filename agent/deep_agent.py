@@ -797,10 +797,20 @@ def approval_gates(repo: str, auto_approve_commands: bool, repo_root: str | None
     return interrupt_on_for(auto_approve_commands, repo_root)
 
 
+def coder_reasoning() -> bool | None:
+    """None: the seat's own default. False: the operator turned the coder's
+    chain of thought off (CODER_REASONING=off), an experiment from 2026-09-25:
+    the coder's losses read as over-thinking ("the canonical upstream shape"),
+    its blowouts were pure reasoning, and with reasoning off it answers the
+    same prompt in a quarter of the time. The router forwards
+    `reasoning.enabled` to the provider; measured to work on the coder's pin."""
+    return False if os.environ.get("CODER_REASONING", "").strip().lower() in ("off", "0", "false", "no") else None
+
+
 def llm_for_role(config: Config, model_name: str, reasoning_effort: str | None = None,
                  timeout: int | None = None, callbacks: list | None = None,
                  task_id: str | None = None, session_id: str | None = None,
-                 max_tokens: int | None = None) -> ChatOpenAI:
+                 max_tokens: int | None = None, reasoning: bool | None = None) -> ChatOpenAI:
     # model_name is a bare router alias, resolved entirely by the
     # proxy, not by anything in this process.
     #
@@ -918,7 +928,8 @@ def llm_for_role(config: Config, model_name: str, reasoning_effort: str | None =
         # x-router-call-id) but cannot total a TASK, which is why a restart
         # reset the displayed spend to the last checkpoint and lost everything
         # the killed pass had spent: real money, invisible.
-        extra_body=_call_metadata(task_id, session_id),
+        extra_body={**(_call_metadata(task_id, session_id) or {}),
+                    **({"reasoning": {"enabled": False}} if reasoning is False else {})} or None,
     )
 
 
@@ -2014,7 +2025,8 @@ async def build_deep_agent(
     # Every seat carries the task id, so the router's ledger can total a task
     # rather than only price a call -- subagents included, since their spend is
     # the task's spend.
-    coordinator_model = llm_for_role(config, coder_role, task_id=task_id, max_tokens=COORDINATOR_MAX_TOKENS)
+    coordinator_model = llm_for_role(config, coder_role, task_id=task_id, max_tokens=COORDINATOR_MAX_TOKENS,
+                                     reasoning=coder_reasoning())
     planner_model = llm_for_role(config, "agent-planner", task_id=task_id, max_tokens=SEAT_MAX_TOKENS)
     investigator_model = llm_for_role(config, coder_role if route in ("frontend", "fallback") else "agent-investigator",
                                      task_id=task_id, max_tokens=SEAT_MAX_TOKENS)
