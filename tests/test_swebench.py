@@ -433,3 +433,28 @@ async def test_an_edit_that_changes_nothing_is_refused(tmp_path):
     edit = {t.name: t for t in tools}["edit"]
     out = await edit.ainvoke({"path": "a.py", "old_string": "x = 1", "new_string": "x = 1"})
     assert out.startswith("[Tektonix harness] ERROR: old_string and new_string are identical")
+
+
+def test_grading_retries_the_harness_s_image_listing_race(tmp_path, monkeypatch):
+    """With two shards side by side, the harness's report step listed an image
+    the other shard removed a moment later, and the whole shard crashed."""
+    import json as _json
+    monkeypatch.setattr(sb, "GRADE_RETRY_S", 0)
+    calls = []
+
+    def fake_run(cmd, cwd=None, **k):
+        calls.append(cmd)
+        if len(calls) == 1:
+            return subprocess.CompletedProcess(cmd, 1, "", "docker.errors.ImageNotFound: 404 No such image")
+        (tmp_path / "tektonix.r1.json").write_text(_json.dumps({"resolved_ids": ["a"]}))
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+    monkeypatch.setattr(sb.subprocess, "run", fake_run)
+    assert sb.grade(tmp_path / "p.jsonl", ["a"], "r1", tmp_path, log=lambda m: None)["resolved_ids"] == ["a"]
+    assert len(calls) == 2
+
+    calls.clear()
+    monkeypatch.setattr(sb.subprocess, "run", lambda cmd, **k: (calls.append(cmd),
+                        subprocess.CompletedProcess(cmd, 1, "", "some other failure"))[1])
+    with pytest.raises(sb.SetupError):
+        sb.grade(tmp_path / "p.jsonl", ["a"], "r2", tmp_path, log=lambda m: None)
+    assert len(calls) == 1, "only that race is retried"

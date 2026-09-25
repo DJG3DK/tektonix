@@ -31,6 +31,7 @@ import random
 import re
 import shutil
 import subprocess
+import time
 from pathlib import Path
 
 from agent.harness_voice import HARNESS
@@ -44,6 +45,8 @@ DATASET = "SWE-bench/SWE-bench_Verified"
 DATASET_JSON = Path(os.environ.get("SWEBENCH_DATASET_JSON", "/opt/swebench/verified.json"))
 HARNESS_PYTHON = os.environ.get("SWEBENCH_PYTHON", "/opt/swebench/venv/bin/python")
 MODEL_NAME = "tektonix"
+GRADE_ATTEMPTS = 4
+GRADE_RETRY_S = 15
 CONDA_INIT = "source /opt/miniconda3/bin/activate testbed"
 
 # The package each repository installs, for the gate's import check.
@@ -286,10 +289,19 @@ def grade(predictions: Path, instance_ids: list[str], run_id: str, report_dir: P
            # Re-reads the harness's own logs of this run_id -- every batch --
            # into one report, without running anything again.
            *(["--rewrite_reports", "true"] if rewrite else [])]
-    log("grading: " + " ".join(cmd[:3]) + " ...")
-    r = subprocess.run(cmd, cwd=str(report_dir), capture_output=True, text=True, timeout=6 * 3600)
-    (report_dir / "grading.log").write_text(r.stdout + "\n" + r.stderr)
     report = report_dir / f"{'gold' if predictions_arg == 'gold' else MODEL_NAME}.{run_id}.json"
-    if not report.is_file():
-        raise SetupError(f"the harness wrote no report (exit {r.returncode}); see {report_dir / 'grading.log'}")
-    return json.loads(report.read_text())
+    for attempt in range(1, GRADE_ATTEMPTS + 1):
+        log("grading: " + " ".join(cmd[:3]) + " ..." + (f" (attempt {attempt})" if attempt > 1 else ""))
+        r = subprocess.run(cmd, cwd=str(report_dir), capture_output=True, text=True, timeout=6 * 3600)
+        (report_dir / "grading.log").write_text(r.stdout + "\n" + r.stderr)
+        if report.is_file():
+            return json.loads(report.read_text())
+        # The harness's report step lists every image on the host and then
+        # fetches each by id; another run pulling or deleting images in
+        # between makes one vanish (2026-09-25, two shards side by side).
+        # Repeating is safe: tasks already graded are skipped, and only the
+        # report is rebuilt.
+        if "ImageNotFound" not in (r.stdout + r.stderr) or attempt == GRADE_ATTEMPTS:
+            break
+        time.sleep(GRADE_RETRY_S)
+    raise SetupError(f"the harness wrote no report (exit {r.returncode}); see {report_dir / 'grading.log'}")

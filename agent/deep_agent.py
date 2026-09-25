@@ -2087,10 +2087,14 @@ async def build_deep_agent(
             RepeatCallGuardMiddleware(contain=True),
             BudgetGuardMiddleware(tracker),
             ModelCallLimitMiddleware(run_limit=_rs.as_int("model_call_run_limit"), exit_behavior="error"),
-            ToolCallLimitMiddleware(run_limit=_rs.as_int("tool_call_run_limit"), exit_behavior="error"),
-            # Bounded: a targeted check, not a sweep. One verifier ran 49
-            # calls and 20 minutes on a fix that was already right.
-            ToolCallLimitMiddleware(run_limit=VERIFIER_TOOL_CALLS, exit_behavior="end"),
+            # ONE tool-call limit (LangChain refuses two instances of a
+            # middleware class on an agent -- a second one here stopped every
+            # task at build, 2026-09-25), at the tighter of the two caps, and
+            # ending the run rather than raising: a targeted check, not a
+            # sweep. One verifier ran 49 calls and 20 minutes on a fix that was
+            # already right.
+            ToolCallLimitMiddleware(run_limit=min(VERIFIER_TOOL_CALLS, _rs.as_int("tool_call_run_limit")),
+                                    exit_behavior="end"),
         ],
         "interrupt_on": interrupt_on,
     }

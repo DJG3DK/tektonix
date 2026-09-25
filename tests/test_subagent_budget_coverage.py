@@ -244,3 +244,19 @@ async def test_frontend_route_moves_coder_and_investigator_only(monkeypatch, bui
     assert "agent-coder-frontend" in roles
     assert "agent-coder" not in roles and "agent-investigator" not in roles
     assert "agent-test-writer" in roles and "agent-planner" in roles
+
+
+async def test_no_agent_carries_two_instances_of_one_middleware(build_args, monkeypatch):
+    """LangChain's create_agent refuses duplicate middleware instances. A second
+    ToolCallLimitMiddleware on the verifier (2026-09-25) passed every test --
+    they capture the build rather than run it -- and stopped every task at its
+    first step. Checked here on what the build hands to create_deep_agent."""
+    cfg, repo, cp, store = build_args
+    captured = _capture(monkeypatch, da)
+    await da.build_deep_agent(cfg, repo, 5.0, cp, store)
+    seats = [("coordinator", captured["middleware"])] + [(s["name"], s.get("middleware") or [])
+                                                         for s in captured["subagents"]]
+    for name, mws in seats:
+        kinds = [type(m).__name__ for m in mws]
+        dupes = {k for k in kinds if kinds.count(k) > 1}
+        assert not dupes, f"{name} carries more than one {sorted(dupes)}"
