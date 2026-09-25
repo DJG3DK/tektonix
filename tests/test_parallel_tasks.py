@@ -134,10 +134,12 @@ async def test_the_ship_gate_is_one_at_a_time_whatever_the_slots(monkeypatch):
     assert order in (["a in", "a out", "b in", "b out"], ["b in", "b out", "a in", "a out"])
 
 
-def test_the_setting_defaults_to_one_task_per_project():
-    """Deploying this changes nothing until the operator raises it."""
+def test_the_setting_defaults_to_ten_tasks_per_project():
+    """Ten at once by the operator's call (2026-09-25), after six at once
+    measured well within the box; the ceiling leaves room above it."""
     from agent import runtime_settings
-    assert runtime_settings.KNOBS["parallel_tasks_per_project"]["default"] == 1
+    knob = runtime_settings.KNOBS["parallel_tasks_per_project"]
+    assert knob["default"] == 10 and knob["max"] >= 16 and knob["min"] == 1
 
 
 # --- the sweep ---------------------------------------------------------------

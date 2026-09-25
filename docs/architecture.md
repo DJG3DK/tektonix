@@ -173,7 +173,7 @@ its own git worktree on its own branch (`agent/workspaces.py`), filled from the
 project's workspace: dependency trees hardlinked, build output copied, live-data
 mounts mounted again read-only -- never linked, since a link would reach
 production. How many tasks run on a project at once is a setting
-(`parallel_tasks_per_project`, default 1), held as that many Postgres *advisory*
+(`parallel_tasks_per_project`, default 10), held as that many Postgres *advisory*
 locks (`agent/graph.py`, `project_slot`; slot 0 is the old project lock's key),
 so a second worker or an overlapping restart sees the same slots and a crash
 releases its claim when its connection closes. Tasks code in parallel and take

@@ -16,7 +16,7 @@ The agent targets a fixed set of local projects (`PROJECTS` in `agent/config.py`
 `/home/agent-workspaces/.tasks/<project>/<task-id>`, on its own branch `agent/<task-id>`, filled
 from the project's workspace (`/home/agent-workspaces/<project>`) with dependencies hardlinked and
 build output copied (`agent/workspaces.py`). So tasks on the same project can run side by side:
-**Settings → Tasks at once per project** sets how many (default 1). They code in parallel and take
+**Settings → Tasks at once per project** sets how many (default 10; each task has its own 2 GB sandbox, so size it to the machine). They code in parallel and take
 turns only for checks, review and merge; a task that merges second is rebased onto the first and
 reviewed again. The limit is a set of Postgres advisory locks (`agent/graph.py`, `project_slot`)
 rather than anything in the process, because it is a property of the project: a second worker or an

@@ -37,12 +37,16 @@ KNOBS: dict[str, dict] = {
             "own workspace, so they cannot touch each other's files; above 1 they code in "
             "parallel and take turns only for checks, review and merge. A task that merges "
             "second is rebased onto the first and reviewed again. Each running task has its "
-            "own sandbox containers and model calls, so raise it with the machine in mind."
+            "own sandbox containers (2 GB, 2 CPUs each) and model calls, so raise it with the "
+            "machine in mind: ten at once measured under a quarter of a 32 GB box (2026-09-25)."
         ),
         "unit": "tasks",
-        "default": 1,
+        # 10 since 2026-09-25: six at once used 7 GB of 31 and no CPU to speak
+        # of on the benchmark box, and the router did not notice; the
+        # operator asked for ten as the default.
+        "default": 10,
         "min": 1,
-        "max": 8,
+        "max": 16,
         "env": None,
         "group": "Budgets & loop limits",
     },

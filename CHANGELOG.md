@@ -53,6 +53,11 @@ shows a sample's percentage beside its fraction, and a run now records the box
 it ran on -- memory, CPU, load, disk, containers, OOM kills, and the router's
 in-flight calls and latency, once a minute -- and shows it under the run, so
 "can we run ten at once" is read off the page instead of three logs.
+Ten tasks at once per project is the default now (it was one; the ceiling is
+sixteen): six at once used a quarter of the box and the router did not notice.
+The benchmark's shards are its own affair -- one runner process and one SQLite
+file per few tasks -- and the live agent needs none: one process, Postgres, and
+a per-project set of advisory-lock slots that a second worker also honours.
 
 ### The agent can show you images, and logo work starts from your logo
 
