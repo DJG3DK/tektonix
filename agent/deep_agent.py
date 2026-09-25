@@ -50,6 +50,7 @@ from agent.middleware.budget_guard import BudgetMeterCallback, BudgetGuardMiddle
 from agent.middleware.model_pin import PlanCodeModelMiddleware
 from agent.middleware.todo_nag import StaleTodoMiddleware
 from agent.middleware.step_back import StepBackMiddleware
+from agent.middleware.wrap_up import WrapUpMiddleware
 from agent.harness_voice import HARNESS
 from agent.store_paging import all_items
 from agent.tools.agent_tools import make_agent_tools
@@ -2095,6 +2096,9 @@ async def build_deep_agent(
             # already right.
             ToolCallLimitMiddleware(run_limit=min(VERIFIER_TOOL_CALLS, _rs.as_int("tool_call_run_limit")),
                                     exit_behavior="end"),
+            # A countdown before that limit, so a verdict comes back instead
+            # of "Tool call limit reached" and nothing else (2026-09-25).
+            WrapUpMiddleware(limit=min(VERIFIER_TOOL_CALLS, _rs.as_int("tool_call_run_limit"))),
         ],
         "interrupt_on": interrupt_on,
     }

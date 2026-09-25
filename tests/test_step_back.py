@@ -110,3 +110,18 @@ def test_a_benchmark_fix_is_sent_back_once_if_the_verifier_never_saw_it():
     assert 'not state.get("verifier_runs") and not state.get("verifier_nudged")' in gate
     assert '"verifier_nudged": True' in gate
     assert src.index("benchmark fix not yet checked by the verifier") > src.index("if not checks[\"all_ok\"]")
+
+
+def test_a_bounded_subagent_is_told_to_report_before_its_cap():
+    """The verifier's cap ended one run with only "Tool call limit reached":
+    its findings never reached the coordinator."""
+    from langchain_core.messages import ToolMessage
+
+    from agent.middleware.wrap_up import WrapUpMiddleware
+    mw = WrapUpMiddleware(limit=30)
+    outs = [mw.wrap_tool_call(SimpleNamespace(tool_call={"id": str(i)}),
+                              lambda r: ToolMessage(content="ok", tool_call_id=r.tool_call["id"])).content
+            for i in range(30)]
+    noted = [i + 1 for i, c in enumerate(outs) if "[Tektonix harness]" in c]
+    assert noted == [20, 26]
+    assert "Send your report NOW, opening with the VERDICT line" in outs[25]

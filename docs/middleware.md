@@ -30,6 +30,7 @@ general-purpose subagent once ran with no budget ceiling at all.
 | `TodoListMiddleware` | — supplies `write_todos` (library). | ● | | | | | | |
 | `StaleTodoMiddleware` | Letting a written plan go stale while work continues. | ● | | | | | | | |
 | `StepBackMiddleware` | Circling past a third or two-thirds of the budget, or 45/90 minutes into a pass, without restating the goal and the evidence. | ● | | | | | | |
+| `WrapUpMiddleware` | A bounded subagent hitting its tool-call cap with its findings unsent. | | | | | ● | | |
 | `PlanCodeModelMiddleware` | One model doing both planning and coding. | ● | | | | | | |
 | `BriefFirstMiddleware` | Reading the repo before the request is written down. | | | | | | ● | |
 | `PinnedBriefMiddleware` | Compaction dropping the operator's own request. | | | | | | ● | |
@@ -84,6 +85,10 @@ task's budget, and 45 and 90 minutes into a pass, the coordinator's next call
 asks it to restate what should happen, what its change does and what evidence
 shows it works, and to finish if that evidence has stopped moving. The
 benchmark tasks that failed were the ones that circled for two hours.
+
+**`WrapUpMiddleware`** (`wrap_up.py`) — counts down the verifier's tool calls in
+its own results before its cap, so it sends a verdict instead of being cut off
+with nothing returned.
 
 **`PlanCodeModelMiddleware`** (`model_pin.py`) — the coordinator's first turn
 of a thread runs on the planner model, every turn after on the coder model.
