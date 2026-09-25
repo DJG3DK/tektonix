@@ -117,6 +117,31 @@ MAX_THREAD_RESTARTS = 1
 INCOMPLETE_PLAN_LIMIT = 3
 
 
+# The agent's answer to a review round travels to the reviewer in the
+# follow-up commit's message, under this heading: the reviewer reads every
+# commit body of the branch, so the argument reaches it in round 2 and
+# beyond (services/commit-reviewer/reviewer.js, extractAgentResponses).
+# 2026-09-25: a reviewer that only reads diffs repeated a false finding
+# three rounds running while the agent disproved it each time -- with the
+# reviewer's own example, the test it asked for, and a run showing its
+# proposed fix re-broke the issue -- and none of that ever reached it.
+REVIEW_RESPONSE_MARKER = "Response to review round"
+_REVIEW_RESPONSE_MAX = 6000
+
+
+def _review_response_note(state: AgentState) -> str:
+    """The commit-message section carrying this pass's answer to the last
+    review round, or "" when there was no round to answer."""
+    prior = state.get("review_gate_result") or {}
+    if prior.get("verdict") != "NEEDS_FIXES":
+        return ""
+    response = (_last_work_response_text(state) or "").strip()
+    if not response:
+        return ""
+    round_no = int(prior.get("consecutiveNeedsFixes") or 1)
+    return f"\n\n{REVIEW_RESPONSE_MARKER} {round_no}:\n{response[:_REVIEW_RESPONSE_MAX]}"
+
+
 def _last_work_response_text(state: AgentState) -> str | None:
     """The most recent "work" node log entry's detail -- work.py populates
     this from the inner thread's actual final message content, so this
@@ -784,7 +809,7 @@ async def _verify_and_ship_inner(state: AgentState, repo: str, repo_root: str,
     # top of it into one fresh combined commit, which supersedes the old sha
     # (committed_sha gets overwritten below, in _review_and_deploy).
     goal = state["goal"]
-    commit_message = f"{goal}\n\n(shipped via deepagents-based agent)"
+    commit_message = f"{goal}\n\n(shipped via deepagents-based agent)" + _review_response_note(state)
     operator_edit = state.get("_operator_edit")
     if operator_edit:
         note = (operator_edit.get("note") or "").strip()
@@ -909,7 +934,8 @@ async def _review_and_deploy(state: AgentState, repo: str, sha: str) -> dict:
         # human instead." That flag was previously read nowhere here, so the
         # detector only moved a dashboard badge. Now it actually halts: loop back
         # only while NOT escalated; once escalated, hand off to a human.
-        if review.get("escalated"):
+        benchmark = bool((PROJECTS.get(repo) or {}).get("benchmark"))
+        if review.get("escalated") and not benchmark:
             reason = (
                 f"The independent review service escalated this after repeated non-converging "
                 f"rounds (its churn/consecutive-NEEDS_FIXES circuit breaker fired) -- a human "
@@ -922,32 +948,48 @@ async def _review_and_deploy(state: AgentState, repo: str, sha: str) -> dict:
                 "stale_pending_review_streak": 0,
                 **_escalate(reason),
             }
-        feedback = (
-            f"The review service (an independent adversarial check, separate from the checks above) "
-            f"found real issues and rejected this:\n\n{detail}\n\n"
-            f"Fix these specifically, then let this gate re-review."
-        )
-        return {
-            "iteration_count": state["iteration_count"] + 1,
-            "pending_feedback": feedback,
-            "no_diff_streak": 0,
-            "committed_sha": sha,
-            "review_gate_result": review,
-            "execution_log": [log_entry],
-            # audit C-5: clear the merge approval on this non-shipping return.
-            # The approved-merge fast path re-triggers a FRESH review of the same
-            # sha, and a model reviewer can legitimately return NEEDS_FIXES on a
-            # second pass (or because live main moved). Leaving merge_approved_sha
-            # set sent the router back into verify_and_ship every lap -- never
-            # reaching work, spending a trigger_check + up to 900s wait_for_review
-            # each time, until the iteration ceiling escalated. The agent's fix
-            # will be a NEW commit needing its own fresh approval anyway.
-            "merge_approved_sha": None,
-            # A real review just ran for this sha -- whatever streak was
-            # counting "stuck re-polling the same stale verdict" no longer
-            # applies to this fresh verdict.
-            "stale_pending_review_streak": 0,
-        }
+        if review.get("escalated"):
+            # A benchmark's prediction is the working tree whatever the
+            # verdict, and there is no human to hand it to: after the
+            # breaker fires the fix ships as it stands, recorded as disputed.
+            # 2026-09-25: a reviewer repeated a false finding three rounds
+            # running (the deleted line was the reference fix's own) and the
+            # task was labelled escalated with its patch already submitted.
+            rounds = int(review.get("consecutiveNeedsFixes") or 0)
+            review = {**review, "disputed": True}
+            log_entry = {**log_entry,
+                         "summary": f"review service verdict: NEEDS_FIXES, disputed -- shipping as is after {rounds} rounds",
+                         "detail": detail}
+        else:
+            feedback = (
+                f"The review service (an independent adversarial check, separate from the checks above) "
+                f"found real issues and rejected this:\n\n{detail}\n\n"
+                f"Fix these specifically, then let this gate re-review. Your final message of this pass "
+                f"is shown to the reviewer next round: if a finding is wrong, say so there with the exact "
+                f"command you ran and its output -- the reviewer reads only the diff and your message, "
+                f"and cannot run code."
+            )
+            return {
+                "iteration_count": state["iteration_count"] + 1,
+                "pending_feedback": feedback,
+                "no_diff_streak": 0,
+                "committed_sha": sha,
+                "review_gate_result": review,
+                "execution_log": [log_entry],
+                # audit C-5: clear the merge approval on this non-shipping return.
+                # The approved-merge fast path re-triggers a FRESH review of the same
+                # sha, and a model reviewer can legitimately return NEEDS_FIXES on a
+                # second pass (or because live main moved). Leaving merge_approved_sha
+                # set sent the router back into verify_and_ship every lap -- never
+                # reaching work, spending a trigger_check + up to 900s wait_for_review
+                # each time, until the iteration ceiling escalated. The agent's fix
+                # will be a NEW commit needing its own fresh approval anyway.
+                "merge_approved_sha": None,
+                # A real review just ran for this sha -- whatever streak was
+                # counting "stuck re-polling the same stale verdict" no longer
+                # applies to this fresh verdict.
+                "stale_pending_review_streak": 0,
+            }
 
     # ── Operator's final look ────────────────────────────────────────────
     # The review service is a MODEL's opinion; this pause is the operator's.

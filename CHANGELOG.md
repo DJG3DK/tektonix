@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+### The reviewer reads the agent's answer
+
+A review round is an argument, and only one side was being heard. The
+reviewer reads the diff; it cannot run code. When it rejected a fix, the agent
+ran the reviewer's own example, the test it asked for, and a probe showing the
+reviewer's proposed change re-broke the issue, and put all of it in its closing
+message, which went nowhere: the follow-up commit carried the goal and nothing
+else, so the reviewer saw the same diff with a comment and repeated itself.
+Three rounds later its breaker fired and a task whose deleted line was the
+reference fix's own ended as "escalated".
+
+Now the agent's closing message of a round rides in the follow-up commit under
+"Response to review round N", the reviewer is given every answer on the branch
+before it repeats a finding, and a blocking finding a response has disproved
+with a run is withdrawn unless the diff itself shows otherwise; a finding
+repeated must name the evidence it disputes. The rejection tells the agent its
+message will be read. On a benchmark, where the prediction is the tree and no
+human is waiting, a fix the breaker stops is shipped as disputed rather than
+escalated. The reviewer's leaked tool-call tags no longer end up in its
+summary.
+
 ### What the 50-task SWE-bench sample taught the harness
 
 The 2026-09-25 sample resolved 40 of 50. Reading every trajectory found five

@@ -93,6 +93,7 @@ for f in services/*/*.js services/shared/*.js; do node --check "$f"; done
 node tests/test_projects_config_merge.js
 node tests/test_reviewer_preexisting.js
 node tests/test_reviewer_gate_attribution.js
+node tests/test_reviewer_rebuttal.js
 node tests/test_stale_build_steps.js
 pwsh tests/test_install_ps1.ps1
 node tests/test_reviewer_candidates.js
