@@ -111,3 +111,30 @@ def test_nudge_fires_each_pattern_once_in_order(tmp_path):
     name, text = dp.nudge(GRAMMAR, ISSUE, tmp_path, set())
     assert name == "grammar_rejection" and "STILL be rejected" in text
     assert dp.nudge(GRAMMAR, ISSUE, tmp_path, {"grammar_rejection"}) is None
+
+
+def test_a_nested_function_is_named_from_the_file_not_the_hunk_header(tmp_path):
+    src = tmp_path / "sphinx" / "domains"
+    src.mkdir(parents=True)
+    (src / "python.py").write_text("\n".join([
+        "import ast", "", "",
+        "def _parse_annotation(annotation):",
+        "    def unparse(node):",
+        "        if isinstance(node, ast.Tuple):",
+        "            result = []",
+        "            for elem in node.elts:",
+        "                result.extend(unparse(elem))",
+        "            result.pop()",
+        "            return result",
+        "    return unparse(ast.parse(annotation))",
+    ]) + "\n")
+    diff = (
+        "diff --git a/sphinx/domains/python.py b/sphinx/domains/python.py\n"
+        "--- a/sphinx/domains/python.py\n+++ b/sphinx/domains/python.py\n"
+        "@@ -7,7 +7,8 @@ def _parse_annotation(annotation):\n"
+        "             result = []\n             for elem in node.elts:\n                 result.extend(unparse(elem))\n"
+        "-            result.pop()\n+            if node.elts:\n+                result.pop()\n             return result\n"
+    )
+    assert dp.changed_functions(diff, tmp_path) == [("sphinx/domains/python.py", "unparse"),
+                                                   ("sphinx/domains/python.py", "_parse_annotation")]
+    assert dp.changed_functions(diff) == [("sphinx/domains/python.py", "_parse_annotation")]

@@ -80,8 +80,40 @@ def new_error_messages(diff: str, issue: str) -> list[str]:
     return found
 
 
-def changed_functions(diff: str) -> list[tuple[str, str]]:
-    """(path, function) for every hunk inside a Python function body."""
+_HUNK_START = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
+_DEF_LINE = re.compile(r"^(\s*)(?:async\s+)?def\s+(\w+)\s*\(")
+
+
+def _enclosing_defs(path: Path, line_no: int) -> list[str]:
+    """Every function enclosing this line of the file, innermost first --
+    the hunk header names only the outermost, and the function that
+    changed in sphinx-7462 was `unparse` nested inside `_parse_annotation`
+    (twice)."""
+    try:
+        lines = path.read_text(errors="replace").splitlines()
+    except OSError:
+        return []
+    if not lines or line_no < 1:
+        return []
+    i = min(line_no, len(lines)) - 1
+    while i >= 0 and not lines[i].strip():
+        i -= 1
+    indent = len(lines[i]) - len(lines[i].lstrip()) if i >= 0 else 0
+    names: list[str] = []
+    for j in range(i, -1, -1):
+        m = _DEF_LINE.match(lines[j])
+        if m and len(m.group(1)) < indent or (m and j == i):
+            names.append(m.group(2))
+            indent = len(m.group(1))
+            if indent == 0:
+                break
+    return names
+
+
+def changed_functions(diff: str, repo_root: str | Path | None = None) -> list[tuple[str, str]]:
+    """(path, function) for every hunk inside a Python function body: the
+    enclosing functions read from the file when the tree is at hand
+    (nested ones included), else the hunk header's."""
     out: list[tuple[str, str]] = []
     path = None
     for line in diff.splitlines():
@@ -89,9 +121,17 @@ def changed_functions(diff: str) -> list[tuple[str, str]]:
             m = _FILE.match(line)
             path = m.group(1) if m else line[4:]
         elif line.startswith("@@") and path and path.endswith(".py") and not _TEST_PATH.search(path):
-            m = _HUNK_FUNC.match(line)
-            if m and (path, m.group(1)) not in out:
-                out.append((path, m.group(1)))
+            names: list[str] = []
+            start = _HUNK_START.match(line)
+            if repo_root is not None and start:
+                first = int(start.group(1)) + 3   # past the hunk's leading context lines
+                names = _enclosing_defs(Path(repo_root) / path, first)
+            if not names:
+                m = _HUNK_FUNC.match(line)
+                names = [m.group(1)] if m else []
+            for name in names:
+                if (path, name) not in out:
+                    out.append((path, name))
     return out
 
 
@@ -150,7 +190,7 @@ def nudge(diff: str, issue: str, repo_root: str | Path, fired: set[str]) -> tupl
                     f"already had. Keep the existing message template and change only its arguments -- "
                     f"what it reports, not how it says it -- unless the report quotes the wording it wants.")
     if "sibling_definition" not in fired:
-        siblings = sibling_definitions(repo_root, changed_functions(diff))
+        siblings = sibling_definitions(repo_root, changed_functions(diff, repo_root))
         if siblings:
             listed = "; ".join(f"`{name}` also in {', '.join(files)}" for name, files in siblings.items())
             return ("sibling_definition",
