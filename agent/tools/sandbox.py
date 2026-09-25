@@ -89,6 +89,16 @@ def host_path(path: str) -> str:
 SANDBOX_IMAGE = "tektonix-sandbox:latest"  # built from docker/agent-sandbox/Dockerfile
 SANDBOX_MEMORY_LIMIT = "2g"
 SANDBOX_CPU_LIMIT = "2"
+# No swap on top of the memory limit. Unset, docker gives a container as much
+# swap again, so an oversized test run thrashes the host's disk for minutes
+# before it is killed -- 31 such kills in two benchmark runs (2026-09-24),
+# with the host's IO "full" pressure at 22-35% while they lasted. Failing fast
+# is kinder to everything else on the box.
+SANDBOX_MEMORY_SWAP = SANDBOX_MEMORY_LIMIT
+# Test runners that size their worker pool from the HOST's core count see 32
+# cores inside a 2-CPU, 2 GB container: Django's runtests started 32 workers
+# and ran out of memory. Told the container's own size instead.
+SANDBOX_TEST_ENV = {"DJANGO_TEST_PROCESSES": SANDBOX_CPU_LIMIT}
 # audit M-10: cap process count to blunt a fork bomb, drop all Linux
 # capabilities (git/npm/node need none), and forbid privilege escalation.
 SANDBOX_PIDS_LIMIT = "512"
@@ -208,6 +218,10 @@ def sandbox_layout_for(cwd: str) -> dict:
       sandbox_network:    forced for every command, e.g. "none" -- for a
                           benchmark, where a shell with the internet can look
                           up the published fix
+      sandbox_readonly_mounts: {container path: host path}, mounted read-only
+                          -- a benchmark's untouched tree at /baseline, so an
+                          agent can run the code as it was before its change
+                          (the sandbox's .git is read-only: git stash cannot)
 
     Server-owned config, never the workspace's: a mount point is validated as
     an absolute path and may not shadow the container's own system paths."""
@@ -220,8 +234,14 @@ def sandbox_layout_for(cwd: str) -> dict:
               and m.rstrip("/") not in forbidden]
     init = cfg.get("sandbox_shell_init") or ""
     network = cfg.get("sandbox_network") or None
+    ro = cfg.get("sandbox_readonly_mounts") or {}
+    readonly = [(str(src), tgt) for tgt, src in (ro.items() if isinstance(ro, dict) else [])
+                if isinstance(tgt, str) and _MOUNT_POINT.match(tgt) and ".." not in tgt
+                and tgt.rstrip("/") not in forbidden and tgt not in mounts
+                and isinstance(src, str) and os.path.isabs(src) and ".." not in src and os.path.isdir(src)]
     return {"mounts": mounts, "init": str(init) if isinstance(init, str) else "",
-            "network": str(network) if network in ("none", "bridge") else None}
+            "network": str(network) if network in ("none", "bridge") else None,
+            "readonly": readonly}
 
 
 def _shell(cmd: str) -> list[str]:
@@ -369,12 +389,15 @@ async def run_shell_sandboxed(
         "docker", "run", "--rm", "--name", container_name,
         "-v", f"{host_path(cwd)}:/workspace",
         *[a for m in layout["mounts"] for a in ("-v", f"{host_path(cwd)}:{m}")],
+        *[a for src, tgt in layout.get("readonly", []) for a in ("-v", f"{host_path(src)}:{tgt}:ro")],
         *git_mount_args,
         *nm_mount_args,
         *net_args,
         "-w", "/workspace",
         "--memory", SANDBOX_MEMORY_LIMIT,
+        "--memory-swap", SANDBOX_MEMORY_SWAP,
         "--cpus", SANDBOX_CPU_LIMIT,
+        *[a for k, v in SANDBOX_TEST_ENV.items() for a in ("-e", f"{k}={v}")],
         # audit M-10 hardening. --user is deliberately NOT set: the bind-mounted
         # worktree is root-owned on the host (pm2 runs as root), so a non-root
         # container user could not write to it. Network stays on the default
@@ -459,7 +482,9 @@ async def start_preview_container(cmd: str, cwd: str, container_port: int,
         "-p", f"127.0.0.1:{host_port}:{container_port}",
         "-w", "/workspace",
         "--memory", SANDBOX_MEMORY_LIMIT,
+        "--memory-swap", SANDBOX_MEMORY_SWAP,
         "--cpus", SANDBOX_CPU_LIMIT,
+        *[a for k, v in SANDBOX_TEST_ENV.items() for a in ("-e", f"{k}={v}")],
         "--pids-limit", SANDBOX_PIDS_LIMIT,
         "--cap-drop", "ALL",
         "--security-opt", "no-new-privileges",

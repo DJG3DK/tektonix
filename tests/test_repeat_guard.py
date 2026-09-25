@@ -84,7 +84,8 @@ def test_sync_path_matches_async_semantics():
 def test_guard_is_attached_to_every_build_seat_and_to_planning():
     import inspect
     src = inspect.getsource(da)
-    assert src.count("RepeatCallGuardMiddleware()") == 5, "coordinator + investigator + test-writer + general-purpose + verifier"
+    assert src.count("RepeatCallGuardMiddleware(contain=True)") == 4, "investigator + test-writer + general-purpose + verifier"
+    assert src.count("RepeatCallGuardMiddleware()") == 1, "the coordinator: its loop moves the pass to the fallback seat"
     assert "RepeatCallGuardMiddleware()" in inspect.getsource(pc)
 
 
@@ -99,3 +100,45 @@ async def test_a_long_run_of_refused_calls_ends_the_pass():
         for i in range(REFUSED_AT + BREAK_AT + 1):
             await mw.awrap_tool_call(_req("bash", {"command": "pnpm config get --location"}, i), h)
     assert h.calls == 2, "nothing executed after the second identical call"
+
+
+# ── a stuck subagent is ended with a report, not the whole task ─────────────
+
+async def test_a_contained_subagent_that_loops_is_ended_with_a_report():
+    """A verifier looping on `git stash` used to raise out of the whole pass
+    and move the entire task to the fallback seat."""
+    from agent.middleware.repeat_guard import BREAK_AT, REFUSED_AT
+    g = RepeatCallGuardMiddleware(contain=True)
+    h = _Handler()
+    for i in range(REFUSED_AT + BREAK_AT):
+        await g.awrap_tool_call(_req("bash", {"command": "git stash"}, i), h)
+    assert g._stuck and "stuck in a tool loop" in g._stuck
+
+    async def model_must_not_run(request):
+        raise AssertionError("the model is not called once the subagent is stopped")
+    resp = await g.awrap_model_call(object(), model_must_not_run)
+    msg = resp.result[0]
+    assert msg.content.startswith("[Tektonix harness] This subagent was stopped") and not msg.tool_calls
+    with pytest.raises(Exception, match="stuck in a tool loop"):
+        coord = RepeatCallGuardMiddleware()
+        for i in range(REFUSED_AT + BREAK_AT):
+            await coord.awrap_tool_call(_req("bash", {"command": "git stash"}, i), h)
+
+
+def test_different_calls_with_the_same_long_output_are_a_loop_too():
+    """probe_c9.py, probe_c10.py, ... same content, same output, 92 times."""
+    from agent.middleware.repeat_guard import RepeatCallGuardMiddleware, SAME_OUTPUT_AT
+    from langchain_core.messages import ToolMessage
+    g = RepeatCallGuardMiddleware(contain=True)
+    out = "x" * 300
+
+    def run(i):
+        return g.wrap_tool_call(_req("bash", {"command": f"python probe_c{i}.py"}, i),
+                                lambda r: ToolMessage(content=out, tool_call_id=r.tool_call["id"]))
+    results = [run(i) for i in range(SAME_OUTPUT_AT)]
+    assert "[Tektonix harness] The last" not in results[SAME_OUTPUT_AT - 2].content
+    assert f"The last {SAME_OUTPUT_AT} calls, each with different arguments" in results[-1].content
+    short = RepeatCallGuardMiddleware()
+    for i in range(20):
+        r = short.wrap_tool_call(_req("edit", {"path": f"f{i}.py"}, i), lambda r: ToolMessage(content="OK", tool_call_id=r.tool_call["id"]))
+    assert r.content == "OK", "a short identical result (an edit's OK) is not a loop"

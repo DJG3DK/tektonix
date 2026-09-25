@@ -42,7 +42,7 @@ def test_the_guards_and_handovers_are_written_in_the_harness_s_name():
     from agent.middleware import hidden_tools, repeat_guard
     from agent.nodes import work
     from agent.tools import agent_tools
-    assert inspect.getsource(repeat_guard).count("{HARNESS} ") == 2
+    assert inspect.getsource(repeat_guard).count("{HARNESS} ") == 4, "cached, refused, same-output note, stopped"
     assert "{HARNESS} ERROR: the `{name}` tool is not available" in inspect.getsource(hidden_tools)
     assert 'HARNESS + " ERROR: REFUSED without retrying' in inspect.getsource(agent_tools)
     assert '{HARNESS} (no operator response captured' in inspect.getsource(deep_agent)

@@ -221,3 +221,34 @@ async def test_if_the_fallback_loops_too_the_task_is_handed_back(monkeypatch):
     result = await graph.ainvoke(state, config={"configurable": {"thread_id": "t1"}})
     assert builds == ["general", "fallback"]
     assert result["escalated"] is True and "fallback seat got stuck as well" in result["escalation_reason"]
+
+
+# ── an empty reply is asked to carry on, inside the pass ─────────────────────
+
+class _RunWith(_FakeRun):
+    def __init__(self, messages):
+        super().__init__()
+        self.values = _AsyncIter([{"messages": messages}])
+
+
+async def test_an_empty_reply_is_asked_to_carry_on_rather_than_ending_the_pass(monkeypatch):
+    """13033 returned an empty reply on 8 of its 41 turns (2026-09-24); each
+    ended a pass and spent the ship gate's nudges on nothing."""
+    from langchain_core.messages import AIMessage, HumanMessage
+
+    class _Agent(_FakeAgent):
+        async def astream_events(self, graph_input, config, version):
+            self.calls += 1
+            self.inputs.append(graph_input)
+            if self.calls <= 2:
+                return _RunWith([AIMessage("", id=f"e{self.calls}")])
+            return _RunWith([AIMessage("Fixed the parser and verified it on the reported case.", id="done")])
+
+    agent = _Agent(fail_times=0, exc_factory=None)
+    monkeypatch.setattr(work_module, "build_deep_agent", lambda *a, **k: _fake_build_deep_agent_result(agent))
+    graph = _build_mini_graph(MemorySaver())
+    state = initial_state(task_id="t1", goal="do the thing", repo="test-repo", budget_usd=10.0)
+    result = await graph.ainvoke(state, config={"configurable": {"thread_id": "t1"}})
+    assert agent.calls == 3 and result["escalated"] is False
+    nudge = agent.inputs[1]["messages"][0]
+    assert isinstance(nudge, HumanMessage) and nudge.content.startswith("[Tektonix harness] Your last reply was empty")

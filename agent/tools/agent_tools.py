@@ -450,6 +450,11 @@ def make_agent_tools(
             # retry could be refused for resembling it.
             return ("ERROR: no old_string given -- `edit` needs the exact existing text to replace. "
                     "To create or overwrite a whole file, use `write` instead.")
+        if old_string == new_string:
+            # Accepted with "OK" before, four times in one task (2026-09-24):
+            # the model believed it had changed the file.
+            return (HARNESS + " ERROR: old_string and new_string are identical, so this edit would change "
+                    "nothing. Read the target lines again and write the replacement you actually intend.")
         signature = json.dumps([path, old_string, new_string])
         if _last_failed_edit.get("signature") == signature:
             return (

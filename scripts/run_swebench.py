@@ -26,6 +26,13 @@ import uuid
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+# No LangSmith tracing for a benchmark run. .env turns it on for the server;
+# here it serialised every node and model call's whole state on the runner's
+# one core (at 100% with four tasks), and sent benchmark traces into the
+# production project. Set before agent.config loads .env, which never
+# overrides a variable already set.
+os.environ["LANGSMITH_TRACING"] = "false"
+os.environ["LANGCHAIN_TRACING_V2"] = "false"
 
 from agent import paths  # noqa: E402
 from agent.evals import reviewer as ev_reviewer  # noqa: E402
@@ -59,6 +66,10 @@ def _args(argv=None):
                         "is graded (default 20, about 60 GB of images at a time)")
     p.add_argument("--max-disk-pct", type=float, default=80.0,
                    help="never start a batch or pull an image with the disk this full (default 80)")
+    p.add_argument("--shard", default=None, metavar="K/N",
+                   help="run only every N-th selected task, starting at the K-th (1-based), so N runner "
+                        "processes share one selection: one process's event loop and SQLite file per few "
+                        "tasks, and each shard its own --run-id")
     p.add_argument("--task-timeout-min", type=int, default=180,
                    help="a guard against a hung task, not a limit on the work: SWE-bench sets no time "
                         "limit, and --budget is what bounds a task (default 180)")
@@ -125,6 +136,18 @@ def _router_ledger(task_id: str) -> tuple[dict, float]:
     except (OSError, ValueError):
         pass
     return counts, billed
+
+
+def shard(instances: list[dict], spec: str | None) -> list[dict]:
+    """Every N-th task starting at the K-th, for spec "K/N"; all when None.
+    The shards of one selection are disjoint and together are all of it."""
+    if not spec:
+        return instances
+    k, _, n = spec.partition("/")
+    k, n = int(k), int(n)
+    if not 1 <= k <= n:
+        raise SystemExit(f"--shard {spec}: K must be between 1 and N")
+    return instances[k - 1::n]
 
 
 def publish_projects(path: Path, projects: dict) -> Path:
@@ -328,6 +351,7 @@ def main(argv=None) -> int:
         return 0
     instances = sb.select(sb.load_instances(), ids=args.instances,
                           sample=args.sample, seed=args.seed)
+    instances = shard(instances, args.shard)
     if args.gold_check:
         return _gold_check(args, [i["instance_id"] for i in instances])
     run_id = args.run_id or time.strftime("tektonix-%Y%m%dT%H%M%SZ", time.gmtime())
@@ -350,7 +374,8 @@ def main(argv=None) -> int:
             "run_id": run_id, "dataset": sb.DATASET, "notes": args.notes,
             "state": state, "pid": os.getpid(),
             "diagnostic": run_id.startswith("diag-"),
-            "selection": {"instances": args.instances, "sample": args.sample, "seed": args.seed, "all": args.all},
+            "selection": {"instances": args.instances, "sample": args.sample, "seed": args.seed, "all": args.all,
+                          "shard": args.shard},
             "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(started)),
             "finished_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "parallel": args.parallel, "budget_usd": args.budget, "batch_size": size,

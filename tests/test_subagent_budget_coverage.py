@@ -181,6 +181,12 @@ async def test_build_agents_do_not_hide_task_or_the_memory_tools(build_args, mon
     await da.build_deep_agent(cfg, repo, 5.0, cp, store)
     hidden = _hidden_by(captured["middleware"])
     for spec in captured["subagents"]:
+        # The verifier writes nothing but probe scripts, through bash into
+        # .scratch/; its memory write tools confused it (2026-09-24), so they
+        # are hidden from that seat alone.
+        if spec.get("name") == "verifier":
+            assert {"write_file", "edit_file"} <= _hidden_by(spec)
+            continue
         hidden |= _hidden_by(spec)
     for keep in ("task", "read_file", "ls", "write_file", "edit_file"):
         assert keep not in hidden, f"{keep!r} must stay visible to build agents"

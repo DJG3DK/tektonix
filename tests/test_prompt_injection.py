@@ -194,7 +194,9 @@ def test_the_push_the_file_asks_for_has_nothing_to_push_with(poisoned_repo, monk
 
     argv = seen["argv"]
     env_values = [argv[i + 1] for i, a in enumerate(argv) if a == "-e"]
-    assert sorted(env_values) == ["CI=true", "DEBIAN_FRONTEND=noninteractive"], \
+    # DJANGO_TEST_PROCESSES: the container's own CPU count, so a test runner
+    # does not size itself from the host's (sandbox.SANDBOX_TEST_ENV). No secret.
+    assert sorted(env_values) == ["CI=true", "DEBIAN_FRONTEND=noninteractive", "DJANGO_TEST_PROCESSES=2"], \
         f"the container was handed more than it needs: {env_values}"
 
     mounts = [argv[i + 1] for i, a in enumerate(argv) if a == "-v"]

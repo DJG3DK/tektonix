@@ -36,13 +36,14 @@ def render_checkpoint(spent: float, budget: float, minutes: float) -> str:
         f"{HARNESS} === CHECKPOINT ===\n"
         f"This task has now spent ${spent:.2f} of its ${budget:.2f} budget"
         + (f", {minutes:.0f} minutes into this pass" if minutes >= 1 else "") + ".\n"
-        "Before your next step, write three short lines:\n"
+        "Before your next step, write four short lines:\n"
         "1. What the request says should happen (the behaviour, in its own terms).\n"
         "2. What your change does now.\n"
         "3. What evidence shows it works: which runs, on which inputs, with what result.\n"
-        "If the last several steps have not changed line 3, you are going in circles. Pick the "
-        "simplest change consistent with line 1, verify it on the reported case and its neighbours, "
-        "and finish. Do not start a new line of investigation unless line 3 shows a concrete failure.\n"
+        "4. What is still open: any case that fails, and any behaviour change you have not explained.\n"
+        "If line 4 is not empty, resolving it IS the work -- do that next, and do not finish before it "
+        "is. If line 4 is empty and the last several steps have not changed line 3, you are going in "
+        "circles: take the simplest change consistent with line 1, verify it, and finish.\n"
         "=== END CHECKPOINT ==="
     )
 

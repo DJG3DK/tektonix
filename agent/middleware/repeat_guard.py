@@ -53,6 +53,14 @@ REFUSED_AT = 4     # and from here on refused
 BREAK_AT = 8
 
 
+# Different calls, the same answer: a probe written to probe_c9.py, then
+# probe_c10.py, ... with the same content, 92 times in a row (2026-09-24) --
+# never the same arguments, so the per-call count above never moved. Counted
+# on results long enough to mean something, not on a short "OK".
+SAME_OUTPUT_AT = 8
+SAME_OUTPUT_MIN_CHARS = 100
+
+
 class RepeatLoopError(RuntimeError):
     """Raised by the guard when a model repeats a refused call BREAK_AT times."""
 _RESULT_PREVIEW = 1_200
@@ -75,9 +83,16 @@ def _result_text(result) -> str:
 
 
 class RepeatCallGuardMiddleware(AgentMiddleware):
-    def __init__(self, exempt: frozenset[str] = DEFAULT_EXEMPT):
+    def __init__(self, exempt: frozenset[str] = DEFAULT_EXEMPT, contain: bool = False):
+        """`contain` is for a SUBAGENT: when it is stuck, it is ended with a
+        report to the coordinator instead of raising, which used to end the
+        whole pass and move the entire task to the fallback seat because one
+        verifier looped on `git stash` (2026-09-24)."""
         super().__init__()
         self.exempt = exempt
+        self.contain = contain
+        self._stuck: str | None = None
+        self._same = {"hash": None, "key": None, "n": 0}
         # key -> {"n": consecutive identical calls, "results": [hash, ...], "last": ToolMessage}
         self._runs: dict[str, dict] = {}
         self._last_key: str | None = None
@@ -101,18 +116,48 @@ class RepeatCallGuardMiddleware(AgentMiddleware):
         stable = len(run["results"]) >= 2 and run["results"][-1] == run["results"][-2]
         if run["n"] >= REFUSED_AT and stable:
             if run["n"] >= REFUSED_AT + BREAK_AT:
-                raise RepeatLoopError(
+                self._give_up(
                     f"stuck in a tool loop: `{tool_call.get('name')}` with identical arguments requested "
                     f"{run['n']} times in a row with an unchanging result, {BREAK_AT} of them after the guard "
-                    f"refused to run it. The model is no longer steering; ending this pass so the task can be "
-                    f"resumed on a different seat."
-                )
+                    f"refused to run it. The model is no longer steering")
             return self._refusal(tool_call, run)
         if run["n"] >= CACHED_AT and stable and run["last"] is not None:
             return self._cached(tool_call, run)
         return None
 
+    def _give_up(self, why: str) -> None:
+        if not self.contain:
+            raise RepeatLoopError(f"{why}; ending this pass so the task can be resumed on a different seat.")
+        self._stuck = why
+
+    def _same_output(self, request, result):
+        """Different calls, identical long output, again and again."""
+        text = _result_text(result)
+        if len(text) < SAME_OUTPUT_MIN_CHARS:
+            self._same = {"hash": None, "key": None, "n": 0}
+            return result
+        h = hashlib.sha1(text.encode()).hexdigest()
+        key = _key(request.tool_call)
+        if h == self._same["hash"] and key != self._same["key"]:
+            self._same["n"] += 1
+        elif h != self._same["hash"]:
+            self._same["n"] = 1
+        self._same.update(hash=h, key=key)
+        n = self._same["n"]
+        if n >= SAME_OUTPUT_AT + BREAK_AT:
+            self._give_up(f"stuck in a loop: {n} tool calls in a row, with different arguments, returned exactly "
+                          f"the same output. The model is no longer steering")
+        if n >= SAME_OUTPUT_AT and isinstance(result, ToolMessage):
+            note = (f"\n\n{HARNESS} The last {n} calls, each with different arguments, returned exactly this "
+                    f"same output. Changing a file name or an argument is not changing anything: stop, say what "
+                    f"this output tells you, and take a genuinely different step.")
+            return result.model_copy(update={"content": (result.content if isinstance(result.content, str)
+                                                         else _result_text(result)) + note})
+        return result
+
     def _after(self, request, result):
+        if request.tool_call.get("name", "") not in self.exempt:
+            result = self._same_output(request, result)
         key = self._last_key
         if key is None or key not in self._runs:
             return result
@@ -158,3 +203,17 @@ class RepeatCallGuardMiddleware(AgentMiddleware):
         if short is not None:
             return short
         return self._after(request, await handler(request))
+
+    # -- a contained subagent that is stuck ends its run --------------------
+    def _stopped(self):
+        from langchain_core.messages import AIMessage  # noqa: PLC0415
+        from langchain.agents.middleware.types import ModelResponse  # noqa: PLC0415
+        return ModelResponse(result=[AIMessage(content=(
+            f"{HARNESS} This subagent was stopped: {self._stuck}. Its findings up to that point are in the "
+            f"conversation above; treat anything it did not report as unchecked."))])
+
+    def wrap_model_call(self, request, handler):
+        return self._stopped() if self._stuck else handler(request)
+
+    async def awrap_model_call(self, request, handler):
+        return self._stopped() if self._stuck else await handler(request)

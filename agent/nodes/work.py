@@ -75,7 +75,7 @@ from langgraph.config import get_stream_writer
 from langgraph.types import Command
 
 from agent.config import Config
-from agent.harness_voice import HARNESS, marked
+from agent.harness_voice import HARNESS, harness, marked
 from agent.frontend_route import FALLBACK
 from agent.middleware.repeat_guard import RepeatLoopError
 from agent.deep_agent import build_deep_agent
@@ -105,6 +105,7 @@ MODEL_RETRY_BACKOFF_S = (15, 30, 60, 120, 240)
 # Any other API error is the provider refusing the request -- usually a
 # malformed tool-call generation. Retried quickly, then handed back.
 REJECTED_RETRIES_PER_PASS = 2
+EMPTY_REPLY_RETRIES = 3
 REJECTED_RETRY_BACKOFF_S = 5
 
 
@@ -266,6 +267,10 @@ async def _consume_values(task_id: str, node_label: str, proj, writer, seen: dic
                     if call.get("name") == "task" and (call.get("args") or {}).get("subagent_type") == "verifier":
                         final_text["verifier_calls"] = final_text.get("verifier_calls", 0) + 1
                 text = content_text(msg.content).strip()
+                # An empty reply (no text, no tool call) ends the agent's
+                # turn as surely as a real conclusion does; the pass retries
+                # it rather than handing the gate an empty ending.
+                final_text["last_ai_empty"] = not text and not (getattr(msg, "tool_calls", None) or [])
                 if text:
                     final_text["text"] = text[:2000]
         if tracker is not None:
@@ -558,6 +563,7 @@ async def work_node(state: AgentState, app_config: Config, checkpointer, pg_stor
     model_failures = 0
     rejected = 0
     on_fallback = False
+    empty_replies = 0
     try:
         while True:
             try:
@@ -599,6 +605,18 @@ async def work_node(state: AgentState, app_config: Config, checkpointer, pg_stor
                         interrupts = await run.interrupts()
                         if interrupts:
                             pending_approval = interrupts[0].value
+                # The model ended its turn with an empty reply: 13033 did so on
+                # 8 of its 41 turns (2026-09-24), each one ending a pass and
+                # spending the gate's nudges on nothing. Asked to carry on,
+                # inside this pass, a few times.
+                if final_text.get("last_ai_empty") and not pending_approval and empty_replies < EMPTY_REPLY_RETRIES:
+                    empty_replies += 1
+                    final_text["last_ai_empty"] = False
+                    stream_input = {"messages": [HumanMessage(content=harness(
+                        "Your last reply was empty -- no text and no tool call. Carry on with the task from "
+                        "where you are: take the next step with a tool, or, if you are finished, say what you "
+                        "did and how you verified it."))]}
+                    continue
                 break
             except TRANSIENT_MODEL_ERRORS as e:
                 model_failures += 1

@@ -95,7 +95,8 @@ def test_a_benchmark_project_runs_offline_in_its_image_with_its_own_gate(monkeyp
     monkeypatch.setitem(PROJECTS, "sbx-proj", entry)
     assert sandbox_environment_for("/tmp/sbx-proj")[0] == "swebench/x:latest"
     layout = sandbox_layout_for("/tmp/sbx-proj")
-    assert layout == {"mounts": ["/testbed"], "init": sb.CONDA_INIT, "network": "none"}
+    assert layout == {"mounts": ["/testbed"], "init": sb.CONDA_INIT, "network": "none", "readonly": []}, \
+        "no /baseline here: the template path does not exist in this test"
     names = [c["name"] for c in entry["checks"]]
     assert names == ["compile", "import"] and "import sympy" in entry["checks"][1]["cmd"]
     assert entry["benchmark"] is True and entry["review"] == {"checks": []}
@@ -371,3 +372,64 @@ def test_only_a_benchmark_s_bash_carries_the_guard():
     from agent.tools import agent_tools
     assert "if benchmark:" in inspect.getsource(agent_tools.make_agent_tools)
     assert 'benchmark=bool((PROJECTS.get(repo) or {}).get("benchmark"))' in inspect.getsource(deep_agent.build_deep_agent)
+
+
+def test_a_benchmark_sees_its_untouched_tree_at_baseline_read_only(tmp_path, monkeypatch):
+    """Agents kept retrying `git stash` on the sandbox's read-only .git to run
+    the code as it was before their change."""
+    from agent.tools.sandbox import sandbox_layout_for
+    template = tmp_path / "sbx-proj"
+    template.mkdir()
+    entry = sb.project_entry({"repo": "sympy/sympy"}, {"live": "/l", "sandbox": str(template),
+                                                        "image": "swebench/x:latest", "base": "abc123"})
+    assert entry["sandbox_readonly_mounts"] == {"/baseline": str(template)}
+    monkeypatch.setitem(PROJECTS, "sbx-proj", entry)
+    assert sandbox_layout_for(str(template))["readonly"] == [(str(template), "/baseline")]
+    monkeypatch.setitem(PROJECTS, "bad", {"sandbox": str(tmp_path / "bad"),
+                                          "sandbox_readonly_mounts": {"/etc": str(template), "/b": "relative",
+                                                                      "/c": "/no/such/dir"}})
+    (tmp_path / "bad").mkdir()
+    assert sandbox_layout_for(str(tmp_path / "bad"))["readonly"] == []
+
+
+def test_a_sandbox_cannot_swap_and_is_told_its_own_size():
+    """31 containers were killed after thrashing the host's swap: Django's test
+    runner sized itself from the host's 32 cores inside a 2-CPU container."""
+    import inspect
+
+    from agent.tools import sandbox
+    src = inspect.getsource(sandbox.run_shell_sandboxed)
+    assert '"--memory-swap", SANDBOX_MEMORY_SWAP' in src and "SANDBOX_TEST_ENV" in src
+    assert sandbox.SANDBOX_MEMORY_SWAP == sandbox.SANDBOX_MEMORY_LIMIT
+    assert sandbox.SANDBOX_TEST_ENV == {"DJANGO_TEST_PROCESSES": sandbox.SANDBOX_CPU_LIMIT}
+
+
+def test_shards_split_one_selection_without_overlap():
+    mod = _runner()
+    rows = [{"instance_id": str(i)} for i in range(11)]
+    parts = [mod.shard(rows, f"{k}/3") for k in (1, 2, 3)]
+    assert sorted(r["instance_id"] for p in parts for r in p) == sorted(r["instance_id"] for r in rows)
+    assert mod.shard(rows, None) == rows
+    with pytest.raises(SystemExit):
+        mod.shard(rows, "4/3")
+
+
+@pytest.mark.parametrize("cmd,kind", [
+    ("cd /workspace && git stash", "git-write"),
+    ("git -C /workspace checkout -- a.py", "git-write"),
+    ("cat > /workspace/.scratch/p.py <<'EOF'\nprint(1)\nEOF", None),
+    ("cd /workspace && git show HEAD:a.py | head", None),
+    ("git diff HEAD", None),
+])
+def test_git_writes_are_explained_and_scratch_probes_are_not_nagged(cmd, kind):
+    from agent.tools import bash_advice
+    assert bash_advice.kind(cmd) == kind
+
+
+async def test_an_edit_that_changes_nothing_is_refused(tmp_path):
+    from agent.tools.agent_tools import make_agent_tools
+    (tmp_path / "a.py").write_text("x = 1\n")
+    tools, _ = make_agent_tools(str(tmp_path))
+    edit = {t.name: t for t in tools}["edit"]
+    out = await edit.ainvoke({"path": "a.py", "old_string": "x = 1", "new_string": "x = 1"})
+    assert out.startswith("[Tektonix harness] ERROR: old_string and new_string are identical")

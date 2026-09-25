@@ -228,6 +228,10 @@ def project_entry(instance: dict, mf: dict) -> dict:
         "live": str(mf["live"]), "sandbox": str(mf["sandbox"]),
         "sandbox_image": mf["image"], "sandbox_mounts": ["/testbed"],
         "sandbox_shell_init": CONDA_INIT, "sandbox_network": "none",
+        # The untouched tree, read-only: how the agent runs the code as it was
+        # before its change. It had been trying git stash, which the
+        # read-only .git refuses, in loops (2026-09-24).
+        "sandbox_readonly_mounts": {"/baseline": str(mf["sandbox"])},
         "benchmark": True,
         "checks": checks_for(instance, mf["base"]),
         # The reviewer reviews the diff; it runs no checks of its own here --

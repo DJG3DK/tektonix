@@ -74,6 +74,13 @@ the tasks it never reached are recorded as `not_run` with the reason.
 for the whole run from its own logs of every batch (`--rewrite_reports`),
 without running anything again.
 
+`--shard K/N` runs every N-th task of the selection, starting at the K-th, so
+several runner processes share one sample (each with its own `--run-id`,
+SQLite file and reviewers): `--shard 1/2` and `--shard 2/2` side by side
+run six tasks at once as two processes of three. A run never traces to
+LangSmith. Each task sees its untouched tree read-only at `/baseline`, to run
+the code as it was before its change (the sandbox's `.git` is read-only).
+
 The **SWE-bench Verified** section of the Analytics page shows every run as it
 goes, with each task's result, the tests the harness ran, the patch and the
 agent's whole conversation. A run whose id starts with `diag-` is labelled

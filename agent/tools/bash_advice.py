@@ -192,6 +192,18 @@ MEMORY_WRITE_NOTE = (
     "your built-in `write_file` / `edit_file` -- those are the only tools that reach it. (Not "
     "`edit`: that one is path-guarded to the repo and will reject the path.)"
 )
+GIT_WRITE_NOTE = (
+    HARNESS + " That git command changes the repository, and it cannot work here: the sandbox's "
+    ".git is read-only, so stash, checkout, restore, reset, commit and the rest fail (often with "
+    "no message). To run or read the code as it was BEFORE your change, use /baseline if it exists "
+    "(the untouched tree) or `git show HEAD:<path>`; to see your change, `git diff`. The ship gate "
+    "commits for you."
+)
+# git subcommands that write the repository. The sandbox mounts .git
+# read-only, and on 2026-09-24 agents retried `git stash` dozens of times to
+# see the code before their change -- each failing with no stderr.
+_GIT_WRITE = re.compile(r"\bgit\s+(?:-C\s+\S+\s+)?(?:stash|checkout|restore|reset|commit|switch|apply|"
+                        r"cherry-pick|revert|rebase|merge|am|add|rm|mv|clean)\b")
 READ_NOTE = (
     HARNESS + " That read files through the shell. Use the `read` tool instead -- same content, "
     "measured at 0.1ms against 389ms for a bash call, because `read` runs in-process and every "
@@ -257,14 +269,20 @@ def advice_for(command: str) -> str | None:
     if _VIRTUAL_PATH.search(text):
         return MEMORY_WRITE_NOTE if _writes(text) else MEMORY_READ_NOTE
 
+    # Also not a preference: the repository is read-only to git in here.
+    if _GIT_WRITE.search(text):
+        return GIT_WRITE_NOTE
+
     # Scratch space outside the checkout: a shell is the only tool that
     # reaches it, so there is nothing cheaper to point at.
     if _outside_repo(text):
         return None
 
-    # A write is the expensive mistake, so it wins when a command does both.
+    # A write is the expensive mistake, so it wins when a command does both --
+    # except a probe script into .scratch/, which is what that space is for
+    # and which the verifier, having no write tool, can only reach this way.
     if _writes(text):
-        return EDIT_NOTE
+        return None if ".scratch/" in text else EDIT_NOTE
 
     # Reading is ALL it does -- one file or six, one stage or a pipeline that
     # only trims. `cat x | grep y` is a search and is left alone, because bash
@@ -284,6 +302,7 @@ NOTE_KINDS = {
     READ_NOTE: "read",
     MEMORY_READ_NOTE: "memory-read",
     MEMORY_WRITE_NOTE: "memory-write",
+    GIT_WRITE_NOTE: "git-write",
 }
 
 

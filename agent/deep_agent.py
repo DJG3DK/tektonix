@@ -1300,6 +1300,8 @@ by blow of your own process -- a long, unfiltered report defeats the entire reas
 delegated to in the first place (keeping the coordinator's own context small)."""
 
 
+VERIFIER_TOOL_CALLS = 30
+
 VERIFIER_SYSTEM_PROMPT = """You are an independent verifier. The coordinator has changed the \
 code to fix a reported bug and delegated to you to BREAK that fix before it ships. You run a \
 different model on purpose: do not take its word that the fix works.
@@ -1315,14 +1317,24 @@ you must not change the repository with bash either. Write probe scripts and the
 3. Probe the neighbours: inputs longer, shorter and at the boundaries of the reported one; the same \
    pattern followed by more content; repeated and combined occurrences; empty and None values; the \
    sibling code paths the report mentions or the changed function obviously shares (the other \
-   parser branch, the other writer, the method next to it).
-4. Run the existing tests of the module that changed.
+   parser branch, the other writer, the method next to it). Check BOTH directions: what the change \
+   now rejects that it accepted, and what it now ACCEPTS that it rejected -- a parser that newly \
+   accepts inputs the report never mentions has changed behaviour too.
+4. Run the existing tests of the module that changed -- once, not the whole package again if the \
+   coordinator told you it already ran it.
+
+Be targeted, not exhaustive: the reported case and a handful of well-chosen neighbours, each run \
+once. To compare with the code BEFORE the change, do not use git stash/checkout/restore -- the \
+sandbox's .git is read-only and they fail; use /baseline if it exists (the untouched tree), or \
+`git show HEAD:<path>`.
 
 The question is NOT "did the change make anything worse". It is "does the behaviour the report \
 asks for now hold -- for the reported case AND its neighbours". A neighbour that still fails is a \
 FAILURE OF THE FIX even if it failed before the change too: that is exactly the half-fix this check \
 exists to catch. Never drop such a case as "pre-existing" or "out of scope"; list it, and if you \
-think it truly is outside the report, say why in one line.
+think it truly is outside the report, name the DIFFERENT behaviour it belongs to in one line. A \
+behaviour change the report does not ask for (newly accepted or newly rejected inputs) is a \
+finding too.
 
 Report back briefly. FIRST LINE, exactly one of:
   VERDICT: FIX HOLDS
@@ -1393,13 +1405,22 @@ report's own example and see it fail; (2) after your change, run that reproducti
 neighbours -- longer, shorter and boundary inputs, the same pattern followed by more content, \
 repeated or combined occurrences, empty values -- plus the existing tests of the module you \
 changed; (3) then delegate to the `verifier` subagent with the report verbatim and a short summary \
-of your change. Its first line is a verdict: FIX INCOMPLETE means the fix is not done, even if \
-nothing got worse -- fix every case it lists, then run it again (two rounds at most). A fix checked only on the report's own \
-example is how a half-fix ships: the next case over is where it breaks. Keep behaviour the report \
-does not ask to change exactly as it was, messages included.
+of your change -- plus which tests you already ran, so it does not rerun them. Do not ask it for \
+an exhaustive sweep; it checks the reported case and its neighbours. Its first line is a verdict: \
+FIX INCOMPLETE means the fix is not done, even if nothing got worse -- fix every case it lists, \
+then run it again (two rounds at most). If it comes back with no verdict line, ask it once more \
+for the verdict rather than starting over. A fix checked only on the report's own \
+example is how a half-fix ships: the next case over is where it breaks. When the report shows \
+wrong output, fix the code that PRODUCES it -- its arguments, its condition, the grammar rule -- \
+before adding a new branch around it; the smallest change to the existing path is usually the \
+right one. A finding stays open until you can say which part of the report it is not about: \
+"it was already broken before my change" does not close it. Leave behaviour the report does not \
+touch as it was.
 
 SCRATCH: throwaway probe scripts and their output go in /workspace/.scratch/ -- git ignores it, so \
-nothing there is ever committed. Never leave them elsewhere in the repository.
+nothing there is ever committed. Never leave them elsewhere in the repository. The sandbox's .git is \
+read-only: git stash/checkout/restore/commit fail. To run the code as it was BEFORE your change, \
+use /baseline when it exists (the untouched tree, read-only) or `git show HEAD:<path>`.
 
 """ + _FILESYSTEM_GUIDANCE + _VISUAL_GUIDANCE + _FINDING_GUIDANCE + """
 
@@ -1992,7 +2013,7 @@ async def build_deep_agent(
             # thinks of `rm` (observed 2026-09-08). bash rm is the real one.
             SanitizeToolCallsMiddleware(),  # a malformed tool call in history never reaches a provider (2026-09-09)
             HiddenToolsMiddleware("glob", "grep", "execute", "delete"),
-            RepeatCallGuardMiddleware(),  # the same call with the same result is not run a third time (2026-09-09)
+            RepeatCallGuardMiddleware(contain=True),  # the same call with the same result is not run a third time (2026-09-09)
             BudgetGuardMiddleware(tracker),
             ModelCallLimitMiddleware(run_limit=_rs.as_int("model_call_run_limit"), exit_behavior="error"),
             ToolCallLimitMiddleware(run_limit=_rs.as_int("tool_call_run_limit"), exit_behavior="error"),
@@ -2033,7 +2054,7 @@ async def build_deep_agent(
             # backend, so it can only error or mislead.
             SanitizeToolCallsMiddleware(),  # a malformed tool call in history never reaches a provider (2026-09-09)
             HiddenToolsMiddleware("glob", "grep", "execute", "delete"),
-            RepeatCallGuardMiddleware(),  # the same call with the same result is not run a third time (2026-09-09)
+            RepeatCallGuardMiddleware(contain=True),  # the same call with the same result is not run a third time (2026-09-09)
             BudgetGuardMiddleware(tracker),
             ModelCallLimitMiddleware(run_limit=_rs.as_int("model_call_run_limit"), exit_behavior="error"),
             ToolCallLimitMiddleware(run_limit=_rs.as_int("tool_call_run_limit"), exit_behavior="error"),
@@ -2060,11 +2081,16 @@ async def build_deep_agent(
         "model": test_writer_model,
         "middleware": [
             SanitizeToolCallsMiddleware(),
-            HiddenToolsMiddleware("glob", "grep", "execute", "delete"),
-            RepeatCallGuardMiddleware(),
+            # write_file/edit_file reach the agent's memory space, never the
+            # repo; a verifier reaching for them to write a probe died on it.
+            HiddenToolsMiddleware("glob", "grep", "execute", "delete", "write_file", "edit_file"),
+            RepeatCallGuardMiddleware(contain=True),
             BudgetGuardMiddleware(tracker),
             ModelCallLimitMiddleware(run_limit=_rs.as_int("model_call_run_limit"), exit_behavior="error"),
             ToolCallLimitMiddleware(run_limit=_rs.as_int("tool_call_run_limit"), exit_behavior="error"),
+            # Bounded: a targeted check, not a sweep. One verifier ran 49
+            # calls and 20 minutes on a fix that was already right.
+            ToolCallLimitMiddleware(run_limit=VERIFIER_TOOL_CALLS, exit_behavior="end"),
         ],
         "interrupt_on": interrupt_on,
     }
@@ -2109,7 +2135,7 @@ async def build_deep_agent(
             # backend, so it can only error or mislead.
             SanitizeToolCallsMiddleware(),  # a malformed tool call in history never reaches a provider (2026-09-09)
             HiddenToolsMiddleware("glob", "grep", "execute", "delete"),
-            RepeatCallGuardMiddleware(),  # the same call with the same result is not run a third time (2026-09-09)
+            RepeatCallGuardMiddleware(contain=True),  # the same call with the same result is not run a third time (2026-09-09)
             BudgetGuardMiddleware(tracker),
             ModelCallLimitMiddleware(run_limit=_rs.as_int("model_call_run_limit"), exit_behavior="error"),
             ToolCallLimitMiddleware(run_limit=_rs.as_int("tool_call_run_limit"), exit_behavior="error"),
