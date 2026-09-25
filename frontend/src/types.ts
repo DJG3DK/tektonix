@@ -549,6 +549,8 @@ export interface SwebenchRunSummary {
   parallel: number | null;
   budget_usd: number | null;
   models: Record<string, number>;
+  /** Set when the run was split across runner processes (--shard K/N): its shards' run names. */
+  shards?: string[];
 }
 
 export interface SwebenchOverview {
@@ -581,6 +583,8 @@ export interface SwebenchTaskRow {
   reference_fails: boolean;
   tests: SwebenchTests | null;
   has_trajectory: boolean;
+  /** The run holding this task's files -- a shard, for a split run. */
+  run?: string;
 }
 
 export interface SwebenchRun {

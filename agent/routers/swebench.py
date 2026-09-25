@@ -110,6 +110,72 @@ def summary(name: str, s: dict) -> dict:
     }
 
 
+_SHARD_NAME = re.compile(r"^(?P<base>.+)-s(?P<k>\d+)$")
+
+
+def _shard_base(name: str, s: dict) -> str | None:
+    """The run a shard belongs to: `<base>-s<k>` with a `--shard k/n` selection."""
+    m = _SHARD_NAME.match(name)
+    shard = (s.get("selection") or {}).get("shard")
+    return m.group("base") if m and shard else None
+
+
+def _all_summaries() -> dict[str, dict]:
+    out = {}
+    if RUNS_DIR.is_dir():
+        for d in RUNS_DIR.iterdir():
+            s = _load(d / "summary.json") if d.is_dir() else None
+            if s is not None:
+                out[d.name] = s
+    return out
+
+
+def _groups(all_s: dict[str, dict]) -> dict[str, list[str]]:
+    """base name -> its shards' run names, for runs split with --shard."""
+    groups: dict[str, list[str]] = {}
+    for name, s in all_s.items():
+        base = _shard_base(name, s)
+        if base:
+            groups.setdefault(base, []).append(name)
+    return {b: sorted(ns) for b, ns in groups.items()}
+
+
+def combined(base: str, parts: list[dict]) -> dict:
+    """One run split into shards (--shard K/N), shown as the run it is: its
+    totals summed, its state the least finished of its shards."""
+    states = {p["state"] for p in parts}
+    graded = all(p["graded"] for p in parts)
+    models: dict[str, int] = {}
+    for p in parts:
+        for m, n in p["models"].items():
+            models[m] = models.get(m, 0) + n
+    started = [p["started_at"] for p in parts if p["started_at"]]
+    finished = [p["finished_at"] for p in parts if p["finished_at"]]
+    total = sum(p["total"] for p in parts)
+    resolved = sum(p["resolved"] or 0 for p in parts)
+    t0, t1 = _parse_ts(min(started)) if started else None, _parse_ts(max(finished)) if finished else None
+    return {
+        **parts[0],
+        "name": base,
+        "state": "running" if "running" in states else ("stopped" if "stopped" in states else "done"),
+        "notes": parts[0]["notes"],
+        "started_at": min(started) if started else None,
+        "finished_at": max(finished) if finished else None,
+        "duration_s": round(t1 - t0) if t0 and t1 and "running" not in states else None,
+        "total": total,
+        "done": sum(p["done"] for p in parts),
+        "graded": graded,
+        "resolved": resolved,
+        "graded_count": sum(p["graded_count"] for p in parts),
+        "resolved_rate": round(100 * resolved / total, 1) if graded and total else None,
+        "total_cost_usd": round(sum(p["total_cost_usd"] or 0 for p in parts), 4),
+        "stopped_early": "; ".join(p["stopped_early"] for p in parts if p["stopped_early"]) or None,
+        "parallel": sum(p["parallel"] or 0 for p in parts),
+        "models": dict(sorted(models.items(), key=lambda kv: -kv[1])),
+        "shards": [p["name"] for p in parts],
+    }
+
+
 def _harness_tests(run_dir: Path, run_id: str, iid: str) -> dict | None:
     """Which graded tests failed, from the official harness's own report."""
     rep = _load(run_dir / "logs" / "run_evaluation" / run_id / "tektonix" / iid / "report.json")
@@ -140,12 +206,11 @@ def _gold_checks() -> dict:
 @router.get("/api/swebench")
 async def list_runs(user: User = Depends(require_full_auth)):
     auth.require_admin(user)
-    runs = []
-    if RUNS_DIR.is_dir():
-        for d in RUNS_DIR.iterdir():
-            s = _load(d / "summary.json") if d.is_dir() else None
-            if s is not None:
-                runs.append(summary(d.name, s))
+    all_s = _all_summaries()
+    groups = _groups(all_s)
+    in_group = {n for ns in groups.values() for n in ns}
+    runs = [summary(name, s) for name, s in all_s.items() if name not in in_group]
+    runs += [combined(base, [summary(n, all_s[n]) for n in names]) for base, names in groups.items()]
     runs.sort(key=lambda r: r["started_at"] or "", reverse=True)
     return {"runs": runs[:50], "dataset_size": DATASET_SIZE, "gold_check": _gold_checks()}
 
@@ -153,6 +218,18 @@ async def list_runs(user: User = Depends(require_full_auth)):
 @router.get("/api/swebench/runs/{name}")
 async def get_run(name: str, user: User = Depends(require_full_auth)):
     auth.require_admin(user)
+    if not _RUN_NAME.match(name):
+        raise HTTPException(400, "not a run name")
+    all_s = _all_summaries()
+    shards = _groups(all_s).get(name)
+    if shards and not (RUNS_DIR / name / "summary.json").is_file():
+        parts = [_run_tasks(n) for n in shards]
+        return {"summary": combined(name, [p["summary"] for p in parts]),
+                "tasks": [t for p in parts for t in p["tasks"]]}
+    return _run_tasks(name)
+
+
+def _run_tasks(name: str) -> dict:
     d = _run_dir(name)
     s = _load(d / "summary.json") or {}
     run_id = s.get("run_id") or name
@@ -171,6 +248,8 @@ async def get_run(name: str, user: User = Depends(require_full_auth)):
             "reference_fails": iid in fails,
             "tests": _harness_tests(d, run_id, iid),
             "has_trajectory": (d / "trajectories" / f"{iid}.json").is_file(),
+            # The run that holds this task's files: a shard, for a split run.
+            "run": name,
         })
     return {"summary": summary(name, s), "tasks": tasks}
 

@@ -185,7 +185,8 @@ export function SwebenchPanel() {
                 <span className="evals-history-cost">{usd(r.total_cost_usd)}</span>
                 <span className="evals-history-notes">
                   <em className={`evals-partial swebench-kind is-${r.kind}`}>{KIND_LABEL[r.kind]}</em>
-                  {r.state !== "done" && <em className="evals-partial">{r.state}</em>} {r.notes || r.name}
+                  {r.state !== "done" && <em className="evals-partial">{r.state}</em>}
+                  {r.shards && <em className="evals-partial">{r.shards.length} processes</em>} {r.notes || r.name}
                 </span>
               </button>
             ))}
@@ -224,7 +225,7 @@ function TaskRow({ runName, task: t }: { runName: string; task: SwebenchTaskRow 
   useEffect(() => {
     if (!open || detail || !t.started) return;
     let live = true;
-    getSwebenchTask(runName, t.id).then((d) => live && setDetail(d)).catch(() => {});
+    getSwebenchTask(t.run ?? runName, t.id).then((d) => live && setDetail(d)).catch(() => {});
     return () => {
       live = false;
     };

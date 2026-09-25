@@ -125,3 +125,24 @@ def test_admins_only(client, monkeypatch):
     monkeypatch.setitem(srv.app.dependency_overrides, srv.require_full_auth, lambda: _user("user"))
     assert client.get("/api/swebench").status_code == 403
     assert client.get("/api/swebench/runs/done-run/tasks/django__django-11265").status_code == 403
+
+
+def test_a_run_split_into_shards_shows_as_one_run(client, monkeypatch, tmp_path):
+    """Two runner processes of one 50-task sample showed as two 25-task runs."""
+    for k, tasks in ((1, {"a__a-1": {"task_id": "t1", "outcome": "shipped", "resolved": True, "cost_usd": 0.5}}),
+                     (2, {"b__b-2": {"task_id": "t2", "outcome": "shipped", "cost_usd": 0.25}, "c__c-3": {}})):
+        _write(tmp_path, f"big-run-s{k}", {
+            "run_id": f"big-run-s{k}", "state": "running", "pid": os.getpid(),
+            "selection": {"sample": 50, "seed": 1, "shard": f"{k}/2"}, "total": len(tasks),
+            "started_at": f"2026-09-25T0{k}:00:00Z", "graded": False, "resolved_so_far": k == 1 and 1 or 0,
+            "graded_so_far": 1 if k == 1 else 0, "total_cost_usd": 0.5 if k == 1 else 0.25, "parallel": 3,
+            "instances": tasks})
+    runs = {r["name"]: r for r in client.get("/api/swebench").json()["runs"]}
+    assert "big-run-s1" not in runs and "big-run-s2" not in runs
+    big = runs["big-run"]
+    assert big["total"] == 3 and big["done"] == 2 and big["resolved"] == 1 and big["graded_count"] == 1
+    assert big["total_cost_usd"] == 0.75 and big["parallel"] == 6 and big["state"] == "running"
+    assert big["shards"] == ["big-run-s1", "big-run-s2"] and big["started_at"] == "2026-09-25T01:00:00Z"
+    detail = client.get("/api/swebench/runs/big-run").json()
+    assert {t["id"]: t["run"] for t in detail["tasks"]} == {"a__a-1": "big-run-s1", "b__b-2": "big-run-s2",
+                                                            "c__c-3": "big-run-s2"}
