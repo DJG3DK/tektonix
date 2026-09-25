@@ -37,8 +37,11 @@ logger = logging.getLogger("tektonix")
 # finish_reason is not always reported through the router; a completion this
 # long with nothing to show for it is the same runaway reasoning.
 RUNAWAY_COMPLETION_TOKENS = 16_000
-# Per agent invocation: a subagent's later `task` call starts clean.
-MAX_RETRIES_PER_INVOCATION = 5
+# Per agent invocation (a coordinator pass, a subagent's `task` call). A
+# bound, not a budget: one coordinator emptied five times in its first hour
+# and every retry on the fallback answered (2026-09-25); past it the work
+# node's nudge takes over, which re-asks the model that just emptied.
+MAX_RETRIES_PER_INVOCATION = 30
 
 RETRY_NOTE = ("Your previous attempt ran out of output tokens while thinking and produced nothing. "
               "Answer directly: the next tool call, or your conclusion, without re-deriving everything.")

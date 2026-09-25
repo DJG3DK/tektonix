@@ -1312,8 +1312,11 @@ delegated to in the first place (keeping the coordinator's own context small).""
 
 VERIFIER_TOOL_CALLS = 30
 TEST_WRITER_TOOL_CALLS = 60
-# Output cap for the coordinator's model only -- see llm_for_role.
+# Output cap for every seat this agent builds -- see llm_for_role. The
+# subagent seats hit the router's 32768 default with content the same hour
+# the coordinator's cap went in (13 verifier calls in 30 minutes).
 COORDINATOR_MAX_TOKENS = 16384
+SEAT_MAX_TOKENS = 16384
 _REPORT_NOTE_MAX = 12_000
 
 
@@ -2012,17 +2015,17 @@ async def build_deep_agent(
     # rather than only price a call -- subagents included, since their spend is
     # the task's spend.
     coordinator_model = llm_for_role(config, coder_role, task_id=task_id, max_tokens=COORDINATOR_MAX_TOKENS)
-    planner_model = llm_for_role(config, "agent-planner", task_id=task_id)
+    planner_model = llm_for_role(config, "agent-planner", task_id=task_id, max_tokens=SEAT_MAX_TOKENS)
     investigator_model = llm_for_role(config, coder_role if route in ("frontend", "fallback") else "agent-investigator",
-                                     task_id=task_id)
+                                     task_id=task_id, max_tokens=SEAT_MAX_TOKENS)
     # On the loop fallback every seat that acts moves: the loop that ended the
     # pass was as often in a subagent as in the coordinator.
     test_writer_model = llm_for_role(config, coder_role if route == "fallback" else "agent-test-writer",
-                                     task_id=task_id)
+                                     task_id=task_id, max_tokens=SEAT_MAX_TOKENS)
     # Its own alias, so the router's ledger bills the verifier as the verifier
     # and not as the test-writer whose model it shared (2026-09-25).
     verifier_model = llm_for_role(config, coder_role if route == "fallback" else "agent-verifier",
-                                  task_id=task_id)
+                                  task_id=task_id, max_tokens=SEAT_MAX_TOKENS)
     # One low-effort fallback for the seats' empty-reply retry (empty_reply.py).
     empty_reply_model = llm_for_role(config, "agent-coder-fallback", reasoning_effort="low", task_id=task_id)
     # The report, verbatim, for the seats that check the fix: a one-line
@@ -2254,12 +2257,17 @@ async def build_deep_agent(
         ) + absent_files + reference_note + history_note + ("\n\n" + _LOGO_GUIDANCE if logo_tools else ""),
         middleware=[
             SanitizeToolCallsMiddleware(),  # a malformed tool call in history never reaches a provider (2026-09-09)
-            EmptyReplyRetryMiddleware(empty_reply_model, "coordinator"),
             HiddenToolsMiddleware("glob", "grep", "execute", "delete"),
             RepeatCallGuardMiddleware(),  # the same call with the same result is not run a third time (2026-09-09)  # see subagent specs' comment
             BudgetGuardMiddleware(tracker),
             # Planner on the thread's first turn, coder after -- see model_pin.py.
             PlanCodeModelMiddleware(planner_model, coordinator_model),
+            # INSIDE the plan/code pick, not outside it: that middleware sets
+            # the model on every call, so an outer retry's fallback model was
+            # replaced by its choice -- and the retry's note, a HumanMessage,
+            # made it a "planning turn", so 17 of 19 retries went to the
+            # planner at full effort (2026-09-25, first hour of a run).
+            EmptyReplyRetryMiddleware(empty_reply_model, "coordinator"),
             SummarizationMiddleware(
                 # Meter callback, not middleware: this model is ainvoke()d
                 # directly by SummarizationMiddleware, a path no agent

@@ -126,3 +126,23 @@ def test_sync_path_matches_async_semantics():
         return ModelResponse(result=[_capped() if len(seen) == 1 else AIMessage(content="ok")])
     resp = mw.wrap_model_call(_req(), handler)
     assert len(seen) == 2 and seen[1].model is FALLBACK and resp.result[0].content == "ok"
+
+
+def test_the_coordinator_s_retry_sits_inside_the_plan_code_model_pick():
+    """PlanCodeModelMiddleware sets the model on every call, so a retry
+    outside it lost its fallback model: 17 of 19 retries went to the planner
+    at full effort in the first hour of a run (2026-09-25). Inside it, the
+    retry's override is the last word."""
+    import ast
+    import pathlib
+
+    tree = ast.parse(pathlib.Path("agent/deep_agent.py").read_text())
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.keyword) and node.arg == "middleware" and isinstance(node.value, ast.List)):
+            continue
+        names = [getattr(getattr(e, "func", None), "id", None) for e in node.value.elts]
+        if "PlanCodeModelMiddleware" in names:
+            assert "EmptyReplyRetryMiddleware" in names
+            assert names.index("EmptyReplyRetryMiddleware") > names.index("PlanCodeModelMiddleware")
+            return
+    raise AssertionError("no coordinator middleware list with PlanCodeModelMiddleware found")
