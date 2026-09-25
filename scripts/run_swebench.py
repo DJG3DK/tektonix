@@ -35,6 +35,7 @@ os.environ["LANGSMITH_TRACING"] = "false"
 os.environ["LANGCHAIN_TRACING_V2"] = "false"
 
 from agent import paths  # noqa: E402
+from agent.evals import host_metrics  # noqa: E402
 from agent.evals import reviewer as ev_reviewer  # noqa: E402
 from agent.evals import swebench as sb  # noqa: E402
 
@@ -396,6 +397,8 @@ def main(argv=None) -> int:
     run_dir = RUNS / run_id
     run_dir.mkdir(parents=True, exist_ok=False)
     started = time.time()
+    # The box and the router, once a minute, beside the run (host_metrics.py).
+    sampler = host_metrics.Sampler(run_dir, started).start()
     ids = [i["instance_id"] for i in instances]
     results: dict = {}
     resolved: set = set()
@@ -428,6 +431,7 @@ def main(argv=None) -> int:
             "resolved_rate": round(100 * len(resolved) / len(ids), 1) if graded and ids else None,
             "total_cost_usd": round(sum(r.get("cost_usd", 0) for r in results.values()), 4),
             "runtime_settings": settings,
+            "host": sampler.record(),
             "instances": {i: {**results.get(i, {"outcome": "not_run"}),
                               **({"resolved": i in resolved} if graded or i in graded_ids_so_far else {}),
                               **({"harness_note": harness_notes[i]} if i in harness_notes else {})}
@@ -450,8 +454,11 @@ def main(argv=None) -> int:
         # Ctrl-C, a kill, or a crash: the summary says which, so the page does
         # not show a dead run as running.
         why = "stopped by the operator" if isinstance(e, KeyboardInterrupt) else f"crashed: {type(e).__name__}: {e}"
+        sampler.stop()
         write_summary(graded=False, stopped=why[:500], state="stopped")
         raise
+    finally:
+        sampler.stop()
 
 
 def _batches(args, run_id, run_dir, ids, batches, results, resolved, graded_ids_so_far,

@@ -601,9 +601,29 @@ export interface SwebenchReview {
   [key: string]: unknown;
 }
 
+/** One figure the runner samples once a minute while a run goes
+ *  (agent/evals/host_metrics.py). Every one is host-wide. */
+export type SwebenchHostField =
+  | "mem_pct" | "mem_avail_gb" | "cpu_pct" | "load1" | "disk_pct" | "containers" | "oom_kills"
+  | "router_calls" | "router_inflight" | "router_p50_s" | "router_p90_s" | "router_errors";
+
+/** A sample: unix seconds plus whichever fields were read that minute. */
+export type SwebenchHostSample = { t: number } & { [k in SwebenchHostField]?: number };
+
+export interface SwebenchHost {
+  interval_s: number;
+  samples: number;
+  /** Max of each field over the run so far (over every sample, not only the thinned series). */
+  peaks: { [k in SwebenchHostField]?: number };
+  /** Thinned to <= 300 points, ascending t. */
+  series: SwebenchHostSample[];
+}
+
 export interface SwebenchRun {
   summary: SwebenchRunSummary;
   tasks: SwebenchTaskRow[];
+  /** The box and the model router while the run went; null for a run from before it was recorded. */
+  host?: SwebenchHost | null;
 }
 
 export interface SwebenchMessage {

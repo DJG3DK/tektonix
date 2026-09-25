@@ -32,3 +32,42 @@
 .swebench-review summary { cursor: pointer; color: var(--text-dim); font-size: 12.5px; }
 .swebench-review-summary { margin: 6px 0; font-size: 12.5px; }
 .swebench-review .evals-assert { font-size: 12px; }
+
+/* "Host during the run": peaks table and four sparklines (SwebenchHost.tsx).
+ * Data is the only thing in colour (the accent); text wears text tokens. */
+.swebench-host { display: flex; flex-direction: column; }
+.swebench-host-peaks {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(168px, 1fr)); gap: 1px;
+  margin: 0; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; background: var(--border);
+}
+.swebench-host-peak { display: flex; flex-direction: column; gap: 2px; padding: 8px 12px; background: var(--surface-raised); }
+.swebench-host-peak dt { font-size: 11.5px; color: var(--text-dim); }
+.swebench-host-peak dd { margin: 0; font-size: 15px; font-weight: 700; font-family: var(--font-mono); }
+
+.swebench-host-charts {
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 12px;
+}
+.swebench-spark {
+  margin: 0; padding: 10px 12px 8px; border: 1px solid var(--border); border-radius: 10px;
+  background: var(--surface-raised); min-width: 0;
+}
+.swebench-spark-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; font-size: 12px; }
+.swebench-spark-name { color: var(--text-dim); }
+.swebench-spark-vals { display: flex; gap: 8px; align-items: baseline; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.swebench-spark-now { font-weight: 700; font-family: var(--font-mono); font-size: 13px; }
+.swebench-spark-peak { color: var(--text-dim); font-size: 11.5px; }
+.swebench-spark-svg { display: block; width: 100%; height: auto; margin-top: 6px; overflow: visible; }
+.swebench-spark-grid { stroke: var(--border); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.swebench-spark-area { fill: var(--accent); fill-opacity: 0.1; stroke: none; }
+.swebench-spark-line {
+  fill: none; stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round;
+  vector-effect: non-scaling-stroke;
+}
+.swebench-spark-dot { fill: var(--accent); stroke: var(--surface-raised); stroke-width: 2; vector-effect: non-scaling-stroke; }
+.swebench-spark-empty { fill: var(--text-dim); font-size: 11px; }
+.swebench-host-note { margin: 10px 0 0; }
+
+@media (max-width: 700px) {
+  .swebench-host-peaks { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .swebench-host-charts { grid-template-columns: minmax(0, 1fr); }
+}

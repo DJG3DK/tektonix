@@ -119,6 +119,13 @@ Everything goes to `logs/swebench/<run-id>/`:
 - `summary.json`: per task, the outcome, cost, time, patch size, the
   reviewer's verdict and **which models the router served**, plus the runtime
   settings.
+- `host.jsonl`: the box and the router once a minute while the run went --
+  memory, CPU, load, disk, running containers, OOM kills, and the router's
+  calls, in-flight peak, median and p90 latency and errors. The peaks are in
+  `summary.json` (`host`), and the Analytics page shows the series under the
+  run, so "can we run more at once" is answered from the run itself.
+- `reviewer/`: the reviewer's history and state for the run; each task's
+  `review` in the summary holds its text, not only the verdict.
 
 ## Validating the environment: the reference fixes
 

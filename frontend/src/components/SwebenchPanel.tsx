@@ -3,6 +3,7 @@ import { getSwebench, getSwebenchRun, getSwebenchTask } from "../api";
 import type { SwebenchOverview, SwebenchReview, SwebenchRun, SwebenchTaskDetail, SwebenchTaskRow } from "../types";
 import { minutes, usd } from "../evalsFormat";
 import { headlineRun, KIND_LABEL, modelList, scoreLabel, scoreText, swebenchScorecard } from "../swebenchFormat";
+import { SwebenchHostBlock } from "./SwebenchHost";
 import "./EvalsPanel.css";
 import "./SwebenchPanel.css";
 
@@ -88,7 +89,8 @@ export function SwebenchPanel() {
     );
   }
 
-  const tasks = run && run.summary.name === shown?.name ? run.tasks : [];
+  const shownRun = run && run.summary.name === shown?.name ? run : null;
+  const tasks = shownRun ? shownRun.tasks : [];
 
   return (
     <div className="analytics-section evals swebench">
@@ -193,6 +195,8 @@ export function SwebenchPanel() {
           </div>
         </>
       )}
+
+      {shownRun?.host && <SwebenchHostBlock host={shownRun.host} />}
 
       {shown && (
         <>

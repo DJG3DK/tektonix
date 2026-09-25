@@ -21,6 +21,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException
 
 from agent import auth, paths
+from agent.evals import host_metrics
 from agent.auth import User, require_full_auth
 from agent.routers.evals import _parse_ts
 
@@ -235,8 +236,47 @@ async def get_run(name: str, user: User = Depends(require_full_auth)):
     if shards and not (RUNS_DIR / name / "summary.json").is_file():
         parts = [_run_tasks(n) for n in shards]
         return {"summary": combined(name, [p["summary"] for p in parts]),
-                "tasks": [t for p in parts for t in p["tasks"]]}
+                "tasks": [t for p in parts for t in p["tasks"]],
+                "host": _host_combined([p["host"] for p in parts])}
     return _run_tasks(name)
+
+
+def _host(d: Path, s: dict) -> dict | None:
+    """The box during the run (agent/evals/host_metrics.py): the peaks from
+    the summary, the series from host.jsonl. None for a run from before it
+    was recorded."""
+    rec = s.get("host")
+    if not rec:
+        return None
+    series = host_metrics.read_samples(d)
+    # The summary's peaks are rewritten when a task ends; until the first one
+    # does, the series is all there is.
+    peaks = rec.get("peaks") or _peaks_of(series)
+    return {"interval_s": rec.get("interval_s"), "samples": rec.get("samples") or len(series), "peaks": peaks,
+            "series": series}
+
+
+def _peaks_of(series: list[dict]) -> dict:
+    peaks: dict[str, float] = {}
+    for row in series:
+        for k in host_metrics.FIELDS:
+            if isinstance(row.get(k), (int, float)):
+                peaks[k] = max(peaks.get(k, 0), row[k])
+    return peaks
+
+
+def _host_combined(hosts: list[dict | None]) -> dict | None:
+    """Shards sample the same box: one series, and the larger of each peak."""
+    hosts = [h for h in hosts if h]
+    if not hosts:
+        return None
+    peaks: dict[str, float] = {}
+    for h in hosts:
+        for k, v in (h.get("peaks") or {}).items():
+            if isinstance(v, (int, float)):
+                peaks[k] = max(peaks.get(k, 0), v)
+    return {"interval_s": hosts[0].get("interval_s"), "samples": sum(h.get("samples") or 0 for h in hosts),
+            "peaks": peaks, "series": host_metrics.merge_series([h.get("series") or [] for h in hosts])}
 
 
 def _run_tasks(name: str) -> dict:
@@ -263,7 +303,7 @@ def _run_tasks(name: str) -> dict:
             # The run that holds this task's files: a shard, for a split run.
             "run": name,
         })
-    return {"summary": summary(name, s), "tasks": tasks}
+    return {"summary": summary(name, s), "tasks": tasks, "host": _host(d, s)}
 
 
 def _text(content) -> str:

@@ -1,7 +1,7 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { SwebenchOverview, SwebenchRunSummary } from "../types";
+import type { SwebenchHost, SwebenchOverview, SwebenchRunSummary } from "../types";
 import { SwebenchPanel } from "./SwebenchPanel";
 
 const getSwebench = vi.fn();
@@ -30,10 +30,31 @@ const overview = (): SwebenchOverview => ({
   gold_check: { checked: 7, reference_fails: ["django__django-10097"] },
 });
 
+/** Six minutes of a run: memory climbing to 91%, two OOM kills, one error. */
+const host = (): SwebenchHost => ({
+  interval_s: 60,
+  samples: 6,
+  peaks: { mem_pct: 91, cpu_pct: 72.4, load1: 19.5, disk_pct: 63, containers: 7, oom_kills: 2, router_inflight: 9,
+    router_p90_s: 48.2, router_errors: 1 },
+  series: [
+    { t: 1_000, mem_pct: 40, mem_avail_gb: 70.2, cpu_pct: 20, load1: 4, disk_pct: 60, containers: 3, oom_kills: 0,
+      router_inflight: 3, router_p90_s: 12.5, router_errors: 0 },
+    { t: 1_060, mem_pct: 65, mem_avail_gb: 40.9, cpu_pct: 72.4, load1: 19.5, disk_pct: 61, containers: 6, oom_kills: 0,
+      router_inflight: 9, router_p90_s: 48.2, router_errors: 1 },
+    { t: 1_120, mem_pct: 91, mem_avail_gb: 10.4, cpu_pct: 60, load1: 15, disk_pct: 63, containers: 7, oom_kills: 2,
+      router_inflight: 5, router_p90_s: 30, router_errors: 0 },
+  ],
+});
+
+const runDetail = (over: Record<string, unknown> = {}) => ({
+  summary: summary(),
+  host: null,
+  ...over,
+});
+
 beforeEach(() => {
   getSwebench.mockReset().mockResolvedValue(overview());
-  getSwebenchRun.mockReset().mockResolvedValue({
-    summary: summary(),
+  getSwebenchRun.mockReset().mockResolvedValue(runDetail({
     tasks: [
       { id: "django__django-11265", repo: "django/django", outcome: "shipped", reason: null, resolved: false,
         cost_usd: 0.33, duration_s: 3600, patch_bytes: 591, review_verdict: "READY", models: {}, started: true,
@@ -44,7 +65,7 @@ beforeEach(() => {
         duration_s: null, patch_bytes: null, review_verdict: null, models: {}, started: false,
         reference_fails: false, has_trajectory: false, tests: null },
     ],
-  });
+  }));
   getSwebenchTask.mockReset().mockResolvedValue({
     id: "django__django-11265", patch: "--- a/django/db/models/sql/query.py",
     review: { verdict: "READY", summary: "The change handles the nested case too.", findings: [], agentMessage: null },
@@ -82,6 +103,35 @@ describe("SwebenchPanel", () => {
     await userEvent.click(screen.getByText("django__django-11265"));
     expect(await screen.findByText("Reviewer:")).toBeInTheDocument();
     expect(screen.getByText("The change handles the nested case too.")).toBeInTheDocument();
+  });
+
+  it("shows the host during the run: the peaks and four sparklines", async () => {
+    getSwebenchRun.mockResolvedValue(runDetail({ tasks: [], host: host() }));
+    render(<SwebenchPanel />);
+    const block = await screen.findByRole("region", { name: "Host during the run" });
+    expect(block).toHaveTextContent("Memory peak91%");
+    expect(block).toHaveTextContent("Memory available, lowest10.4 GB");
+    expect(block).toHaveTextContent("CPU peak72%");
+    expect(block).toHaveTextContent("Load average peak (1 min)19.5");
+    expect(block).toHaveTextContent("Docker disk peak63%");
+    expect(block).toHaveTextContent("Containers running, peak7");
+    expect(block).toHaveTextContent("OOM kills in task containers2");
+    expect(block).toHaveTextContent("Model calls in flight, peak9");
+    expect(block).toHaveTextContent("p90 model-call latency, worst minute48.2 s");
+    expect(block).toHaveTextContent("Model-call errors1");
+    for (const f of ["mem_pct", "router_inflight", "router_p90_s", "containers"]) {
+      expect(screen.getByTestId(`sparkline-${f}`).querySelector("path.swebench-spark-line")).not.toBeNull();
+    }
+    expect(screen.getByTestId("sparkline-mem_pct")).toHaveAttribute("aria-label", "Memory used over the run: now 91%, peak 91%");
+    expect(screen.getByTestId("sparkline-router_inflight")).toHaveAttribute("aria-label", "Model calls in flight over the run: now 5, peak 9");
+    expect(block).toHaveTextContent("Sampled every 60 s by the runner; every figure is host-wide (shards of one run share the box).");
+  });
+
+  it("a run from before host sampling shows no host block", async () => {
+    render(<SwebenchPanel />);
+    await screen.findByText("django__django-11265");
+    expect(screen.queryByRole("region", { name: "Host during the run" })).not.toBeInTheDocument();
+    expect(screen.queryByText("Host during the run")).not.toBeInTheDocument();
   });
 
   it("a task not run yet asks for nothing", async () => {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { SwebenchRunSummary } from "./types";
-import { headlineRun, modelList, scoreLabel, scoreText, swebenchScorecard } from "./swebenchFormat";
+import type { SwebenchHost, SwebenchRunSummary } from "./types";
+import { headlineRun, hostPeaks, modelList, scoreLabel, scoreText, swebenchScorecard } from "./swebenchFormat";
 
 const run = (over: Partial<SwebenchRunSummary> = {}): SwebenchRunSummary => ({
   name: "r", kind: "sample", state: "done", notes: "", started_at: "2026-09-24T14:00:00Z", finished_at: null,
@@ -44,5 +44,25 @@ describe("SWE-bench wording", () => {
 
   it("names each role's model once", () => {
     expect(modelList(run().models)).toEqual(["coder: deepseek/deepseek-v4.1-flash", "planner: z-ai/glm-5.3-flash"]);
+  });
+
+  it("host peaks: the runner's peaks win, the lowest memory, OOM total and error total come from the series", () => {
+    const host: SwebenchHost = {
+      interval_s: 60, samples: 3,
+      peaks: { mem_pct: 93, router_inflight: 11 },
+      series: [
+        { t: 0, mem_pct: 40, mem_avail_gb: 60, oom_kills: 0, router_errors: 0, router_inflight: 4, router_p90_s: 8 },
+        { t: 60, mem_pct: 80, mem_avail_gb: 12.25, oom_kills: 1, router_errors: 2, router_inflight: 10, router_p90_s: 41 },
+        { t: 120, mem_pct: 70, mem_avail_gb: 30, oom_kills: 3, router_errors: 1, router_inflight: 6 },
+      ],
+    };
+    const by = Object.fromEntries(hostPeaks(host).map((p) => [p.key, p.value]));
+    expect(by.mem_pct).toBe("93%");
+    expect(by.mem_avail_gb).toBe("12.3 GB");
+    expect(by.oom_kills).toBe("3");
+    expect(by.router_errors).toBe("3");
+    expect(by.router_inflight).toBe("11");
+    expect(by.router_p90_s).toBe("41.0 s");
+    expect(by.cpu_pct).toBe("—");
   });
 });

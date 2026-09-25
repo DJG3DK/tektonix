@@ -6,7 +6,7 @@
  * percentage shown, but never as a bare number (2026-09-25: the operator
  * looked for a grade beside "40/50" and found none) -- and a diagnostic run
  * is never a score at all. */
-import type { SwebenchRunSummary } from "./types";
+import type { SwebenchHost, SwebenchHostField, SwebenchRunSummary } from "./types";
 import { day, minutes, usd } from "./evalsFormat";
 
 export const KIND_LABEL: Record<SwebenchRunSummary["kind"], string> = {
@@ -65,4 +65,50 @@ export function swebenchScorecard(r: SwebenchRunSummary, referenceFails: string[
       ? `The official reference fix itself fails ${referenceFails.length} task${referenceFails.length === 1 ? "" : "s"} in these images (${referenceFails.join(", ")}).`
       : "",
   ].filter((s) => s && s !== ".").join(" ");
+}
+
+/** One row of the "Host during the run" peaks table. */
+export interface HostPeak {
+  key: string;
+  label: string;
+  value: string;
+}
+
+const seriesMax = (h: SwebenchHost, k: SwebenchHostField): number | undefined =>
+  h.series.reduce<number | undefined>((m, s) => (s[k] == null ? m : m == null || s[k] > m ? s[k] : m), undefined);
+const seriesMin = (h: SwebenchHost, k: SwebenchHostField): number | undefined =>
+  h.series.reduce<number | undefined>((m, s) => (s[k] == null ? m : m == null || s[k] < m ? s[k] : m), undefined);
+const seriesSum = (h: SwebenchHost, k: SwebenchHostField): number | undefined =>
+  h.series.reduce<number | undefined>((m, s) => (s[k] == null ? m : (m ?? 0) + s[k]), undefined);
+const seriesLast = (h: SwebenchHost, k: SwebenchHostField): number | undefined => {
+  for (let i = h.series.length - 1; i >= 0; i--) {
+    const v = h.series[i][k];
+    if (v != null) return v;
+  }
+  return undefined;
+};
+
+export const hostPct = (v: number | null | undefined) => (v == null ? "—" : `${Math.round(v)}%`);
+export const hostGb = (v: number | null | undefined) => (v == null ? "—" : `${v.toFixed(1)} GB`);
+export const hostSec = (v: number | null | undefined) => (v == null ? "—" : `${v.toFixed(1)} s`);
+export const hostNum = (v: number | null | undefined, digits = 0) => (v == null ? "—" : v.toFixed(digits));
+
+/** The peaks row: what the box and the router hit while the run went. Peaks
+ *  the runner kept (over every sample) win over the thinned series; the
+ *  lowest available memory, the OOM total and the error total come from the
+ *  series, which is the only place they can. */
+export function hostPeaks(h: SwebenchHost): HostPeak[] {
+  const peak = (k: SwebenchHostField) => h.peaks[k] ?? seriesMax(h, k);
+  return [
+    { key: "mem_pct", label: "Memory peak", value: hostPct(peak("mem_pct")) },
+    { key: "mem_avail_gb", label: "Memory available, lowest", value: hostGb(seriesMin(h, "mem_avail_gb")) },
+    { key: "cpu_pct", label: "CPU peak", value: hostPct(peak("cpu_pct")) },
+    { key: "load1", label: "Load average peak (1 min)", value: hostNum(peak("load1"), 1) },
+    { key: "disk_pct", label: "Docker disk peak", value: hostPct(peak("disk_pct")) },
+    { key: "containers", label: "Containers running, peak", value: hostNum(peak("containers")) },
+    { key: "oom_kills", label: "OOM kills in task containers", value: hostNum(seriesLast(h, "oom_kills") ?? h.peaks.oom_kills) },
+    { key: "router_inflight", label: "Model calls in flight, peak", value: hostNum(peak("router_inflight")) },
+    { key: "router_p90_s", label: "p90 model-call latency, worst minute", value: hostSec(peak("router_p90_s")) },
+    { key: "router_errors", label: "Model-call errors", value: hostNum(seriesSum(h, "router_errors")) },
+  ];
 }

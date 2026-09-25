@@ -49,7 +49,10 @@ to match a remembered one. The reviewer's text is kept with a benchmark run
 (only its verdict was), the "read files through `read`" nudge stops after two
 per workspace (155 firings, no effect), and read-only git commands (`merge-base`,
 `stash list`, `cat-file`) are no longer warned about as writes. The scorecard
-shows a sample's percentage beside its fraction.
+shows a sample's percentage beside its fraction, and a run now records the box
+it ran on -- memory, CPU, load, disk, containers, OOM kills, and the router's
+in-flight calls and latency, once a minute -- and shows it under the run, so
+"can we run ten at once" is read off the page instead of three logs.
 
 ### The agent can show you images, and logo work starts from your logo
 
