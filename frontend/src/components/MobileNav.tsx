@@ -11,7 +11,7 @@ import "./MobileNav.css";
  * "Tasks" is not a view — it returns to the list pane, which is what the task
  * list actually is on mobile. That is why it takes `pane` as well as `view`.
  */
-export type NavView = "new-task" | "task" | "analytics" | "models" | "planning" | "users" | "settings" | "github";
+type NavView = "new-task" | "task" | "analytics" | "models" | "planning" | "users" | "settings" | "github";
 
 interface Tab {
   key: string;

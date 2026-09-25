@@ -57,21 +57,15 @@ def _make_pool(config: Config) -> AsyncConnectionPool:
         open=False,
     )
 
-# One task at a time per project. Two tasks against the same worktree would
-# overwrite each other's uncommitted work, and the loser's diff is whatever
-# survived the race.
-#
-# This was an in-process asyncio.Lock, which made "one task per project" true
-# only while exactly one process existed. A second uvicorn worker, a restart
-# that overlaps the old process, or an operator running a script against the
-# same database would each hold their own lock object and happily run two
-# tasks on one directory. The rule is a property of the PROJECT, so it has to
-# live where every process can see it: a Postgres session-level advisory lock.
-#
-# Session-level, not transaction-level, on a dedicated connection: Postgres
-# drops it when that connection closes, so a crashed or killed process
-# releases its claim without anyone cleaning up. That is the half an
-# in-process lock can never do.
+# One holder per project name (see project_slot below for what a "project"
+# is now that tasks have their own workspaces). An in-process asyncio.Lock
+# alone made that true only while exactly one process existed -- a second
+# uvicorn worker, a restart overlapping the old process, an operator script
+# against the same database each held their own -- so the claim lives where
+# every process can see it: a Postgres session-level advisory lock on a
+# dedicated connection, which Postgres drops when that connection closes, so
+# a killed process releases its claim with nobody cleaning up. This dict is
+# the in-process front of it (_in_process_lock).
 _project_locks: dict[str, asyncio.Lock] = {}
 
 # Advisory locks are a flat 64-bit namespace shared with anything else using
@@ -102,8 +96,8 @@ def _in_process_lock(repo: str) -> asyncio.Lock:
 async def project_lock(repo: str, dsn: str | None = None, on_wait=None):
     """Hold this project for the duration of the block.
 
-    Without `dsn` this is the old in-process lock, which is what callers that
-    have no database (tests, scripts) get. With a Postgres one, the claim is
+    Without `dsn` this is the in-process lock alone, which is what callers
+    that have no database (tests, scripts) get. With a Postgres one, the claim is
     visible to every process pointed at the same database. With a sqlite one
     there is no database to ask, and the claim covers every process using
     that state directory -- a narrower promise, spelled out in
@@ -420,22 +414,13 @@ async def read_with_retry(fn):
     """One retry for the read-only store/checkpointer lookups the frontend
     polls constantly (task list, stats, analytics, single-task fetch).
 
-    The connection pool (agent/graph.py's open_checkpointer/open_store) is
-    the actual fix for the class of failure this guards against: it
-    validates a connection's health at checkout
-    (`check=AsyncConnectionPool.check_connection`) before handing it to any
-    caller, which is what a Postgres restart used to break silently -- with
-    a single long-lived raw connection and no reconnect logic, every request
-    touching it would 500 until the process was restarted.
-
-    This retry is defense in depth on top of that, not a replacement for it:
-    it covers the residual window where a connection dies after the pool's
-    own checkout check but before/during the call itself (a real race, just
-    a narrow one). Deliberately scoped to read-only calls only -- retrying a
-    write here would mean thinking hard about idempotency per call site, and
-    the writes in server._stream_graph / tasks.run_task (the live task-execution path)
-    don't need it: they go through the exact same pool and get the same
-    checkout validation for free.
+    The pool above validates each connection at checkout
+    (`check=AsyncConnectionPool.check_connection`), which is what survives a
+    Postgres restart; this covers the narrow window where a connection dies
+    after that check but during the call. Read-only calls only: retrying a
+    write would need an idempotency argument per call site, and the writes
+    in server._stream_graph / tasks.run_task go through the same pool and get
+    the same checkout validation anyway.
     """
     try:
         return await fn()

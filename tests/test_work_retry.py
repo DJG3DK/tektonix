@@ -7,16 +7,17 @@ provider is still failing after MODEL_RETRIES_PER_PASS the task is handed
 back escalated, work saved, never crashed. 2026-09-24: one runaway generation
 outlasting the call timeout ended whole tasks as "error".
 
-Everything below is the older, narrower case: a malformed tool-call from an
-underlying model can get rejected by the provider with a 400, surfacing as
-openai.BadRequestError. A blanket `except Exception` in work_node would
-catch it and escalate the whole task to a human on the very first
-occurrence. The fix: work_node re-raises openai.APIError specifically
-(everything else still escalates as before), and outer_graph.py attaches a
-RetryPolicy to "work" (mirroring the one verify_and_ship already had) so
-this class of transient, provider-layer failure gets a fast, automatic
-retry -- a real chance of success given the router picks adaptively per
-call -- before ever reaching a human.
+A request the provider REJECTS (a malformed tool-call generation, surfacing
+as openai.BadRequestError) is retried the same way, REJECTED_RETRIES_PER_PASS
+times after a short pause, then handed back escalated. Any other exception
+(a bug in our own code) escalates on the first occurrence. outer_graph.py's
+RetryPolicy on "work" stays as the last net for anything raised outside the
+model stream.
+
+An empty reply -- no text, no tool call -- is asked to carry on, at most
+EMPTY_REPLY_RETRIES times per pass; this is the last resort behind
+EmptyReplyRetryMiddleware, which retries a length-capped empty reply on the
+fallback seat inside the model call.
 
 Drives a REAL compiled LangGraph graph (MemorySaver checkpointer) rather than
 calling work_node() bare -- its own docstring explicitly warns

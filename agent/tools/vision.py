@@ -4,7 +4,7 @@ browse_page (planning_tools.py, describes a screenshot captured live via
 Playwright). Routed through ChatOpenAI (not a raw HTTP POST) so every call
 participates in LangSmith tracing and shows up in the Analytics
 model-usage-by-role scan under the "vision" role -- see
-_classify_model_usage_role in server.py.
+_classify_model_usage_role in agent/routers/analytics.py.
 """
 
 import os

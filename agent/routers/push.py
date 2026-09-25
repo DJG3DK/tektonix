@@ -11,11 +11,6 @@ from server.py, because that import is a cycle: server.py includes this
 router, so this module cannot import server.py at module scope. Every later
 seam has the same constraint, which is the other thing this extraction is
 here to establish.
-
-The docstrings below are the ones these handlers already carried. They record
-decisions -- why unsubscribe is deliberately not scoped to the caller, why
-the key route also returns a count -- and moving code is not a reason to
-lose them.
 """
 from __future__ import annotations
 

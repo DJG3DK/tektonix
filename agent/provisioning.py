@@ -1565,7 +1565,7 @@ def validate_choices(report: DetectionReport, choices: dict) -> dict:
     return clean
 
 
-def config_from_choices(report_name: str, live: str, sandbox: str, choices: dict) -> dict:
+def config_from_choices(live: str, sandbox: str, choices: dict) -> dict:
     """Build the projects.json entry from what the OPERATOR confirmed.
 
     `choices` is the wizard's payload, not the detection report -- the two

@@ -9,7 +9,9 @@ Adding one means adding an alias the router can resolve *and* making it
 visible on the Models page. Miss the second half and the pin exists but
 nobody can change it: that happened on 2026-09-09 with the two frontend
 seats, which were pinned in `config.yaml`, described in `ROLE_REQUIREMENTS`,
-and absent from `MANAGED_ROLES` — invisible for weeks.
+and absent from `MANAGED_ROLES` — invisible for weeks. The verifier seat
+(`agent-verifier`, 2026-09-25) is the worked example: it went through every
+edit below in one commit.
 
 ## Run this first
 
@@ -52,19 +54,31 @@ AssertionError: aliases invisible on the Models page: ['agent-your-role']
 4. **`README.md`** — the role list. An operator who cannot find the alias in
    the docs cannot repin it, which is the same silence the test exists for.
 
-5. **The call site** — `llm_for_role(config, "agent-<role>")`. A role nothing
-   asks for is a seat on a page that changes nothing.
+5. **`frontend/src/components/ModelConfigPanel.tsx`** — `ROLE_ORDER` and
+   `ROLE_GROUPS`. Neither hides a role: one missing from both still renders,
+   appended in a trailing *Other* group. Put it where it belongs anyway — the
+   verifier went into `ROLE_ORDER` after the test-writer and into the *Build
+   pipeline* group — so the page reads as a pipeline rather than a pipeline
+   plus leftovers.
+
+6. **The call site** — `llm_for_role(config, "agent-<role>")`. A role nothing
+   asks for is a seat on a page that changes nothing. If the seat is a new
+   subagent with a middleware chain of its own, its column in
+   [docs/middleware.md](../middleware.md) is checked by
+   `tests/test_middleware_inventory.py`.
 
 ## Verify
 
 ```bash
 .venv/bin/python -m pytest tests/test_managed_roles_complete.py tests/test_model_config.py -q
-curl -s 127.0.0.1:4001/v1/models | grep agent-<role>      # after a router restart
+curl -s 127.0.0.1:4001/v1/models | grep agent-<role>      # live as soon as the file is saved
 ```
 
-The router only learns the alias on restart — and restarting it kills any
-model call in flight, which escalates the task that was making it. Check
-that nothing is running first (`docs/runbooks/stuck-task.md` §2), or wait.
+The router re-reads `config.yaml` between requests when its mtime changes
+(`services/model-router/router/config.py`), so the alias is live as soon as
+the file is saved and a call in flight keeps the table it started with.
+Nothing needs restarting — and restarting the router is the one thing not to
+do while a task is mid-call (`docs/runbooks/stuck-task.md`).
 
 ## What this does not change
 

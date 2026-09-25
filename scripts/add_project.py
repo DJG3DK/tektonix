@@ -128,7 +128,7 @@ def main() -> int:
     if not ok:
         return 1
 
-    entry = prov.config_from_choices(name, report.live, report.sandbox, choices)
+    entry = prov.config_from_choices(report.live, report.sandbox, choices)
     try:
         prov.write_project_entry(_PROJECTS_CONFIG_PATH, name, entry)
     except prov.ProvisioningError as e:

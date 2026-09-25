@@ -15,7 +15,7 @@
 
 export type ThemeId = 'drafting' | 'indigo' | 'orchid' | 'ember' | 'moss';
 
-export interface Theme {
+interface Theme {
   id: ThemeId;
   label: string;
   /** One line, in the Settings list. What it feels like, not what it is. */
@@ -57,7 +57,7 @@ export const THEMES: Theme[] = [
   },
 ];
 
-export const DEFAULT_THEME: ThemeId = 'drafting';
+const DEFAULT_THEME: ThemeId = 'drafting';
 
 const STORAGE_KEY = 'tektonix.theme';
 

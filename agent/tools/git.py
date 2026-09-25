@@ -6,10 +6,6 @@ import asyncio
 from agent.tools.shell import run_shell
 
 
-class UntrustedGitDirError(Exception):
-    """The worktree's .git pointer no longer names the repo it should."""
-
-
 # Every git command this module runs executes ON THE HOST, with cwd set to a
 # worktree the agent can write to. Two consequences drive everything below.
 #
@@ -75,11 +71,6 @@ async def _git(cmd: str, repo_root: str, timeout: int = 30) -> dict:
     if problem is not None:
         return {"ok": False, "output": f"refusing to run git: {problem}"}
     return await run_shell(f"{_GIT} {cmd}", repo_root, timeout=timeout)
-
-
-async def git_status(repo_root: str) -> str:
-    r = await _git("status --short", repo_root, timeout=30)
-    return r["output"]
 
 
 async def git_diff(repo_root: str, staged: bool = False) -> str:

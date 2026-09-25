@@ -1,7 +1,7 @@
 """Analytics: the aggregates the dashboard's charts are drawn from.
 
 The second seam out of agent/server.py (agent/routers/), and a deliberately
-boring one: four read-only routes whose only reach outside themselves is the
+boring one: five read-only routes whose only reach outside themselves is the
 store, the project list and agent/metrics.py. What it is really here to prove
 is that a seam can carry its own module-level constants and its own long
 comments across intact -- those comments are the record of what each number

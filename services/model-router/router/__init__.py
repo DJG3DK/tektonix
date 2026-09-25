@@ -1,11 +1,11 @@
 """Tektonix's own model router.
 
-Every one of the 21 deployments is `openrouter/...`, so the off-the-shelf
-proxy this replaced was a proxy in front of a proxy,
-and its headline feature -- normalising many providers behind one
-OpenAI-compatible API -- is a job OpenRouter already does. What we actually
-used it for is alias resolution, ordered fallbacks, a billed-cost figure and a
-callback that writes our own ledger. That is this package.
+Every deployment is `openrouter/...`, so the off-the-shelf proxy this
+replaced was a proxy in front of a proxy, and its headline feature --
+normalising many providers behind one OpenAI-compatible API -- is a job
+OpenRouter already does. What we actually used it for is alias resolution,
+ordered fallbacks, a billed-cost figure and a callback that writes our own
+ledger. That is this package.
 
 What it buys that the proxy could not:
 

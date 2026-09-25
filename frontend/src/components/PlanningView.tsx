@@ -39,7 +39,7 @@ function isValidProjectName(name: string): boolean {
   return PROJECT_NAME_RE.test(name);
 }
 
-export interface NewProjectForm {
+interface NewProjectForm {
   name: string;
   description: string;
   github: boolean;

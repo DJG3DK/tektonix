@@ -119,7 +119,7 @@ async def run_shell(
         await proc.wait()
         raise ShellTimeout(cmd, timeout)
     except asyncio.CancelledError:
-        # The operator's Stop button (server.py's /stop endpoint) cancels the
+        # The operator's Stop button (POST /api/tasks/{id}/stop, agent/routers/tasks.py) cancels the
         # asyncio task driving the whole run. Without this handler that just
         # abandons this await — the subprocess (and anything it forked) keeps
         # running orphaned on the server, which defeats the entire point of a

@@ -68,11 +68,12 @@ async def get_model_catalog(refresh: bool = False, user: User = Depends(require_
 
 @router.post("")
 async def save_model_config(req: SaveModelPinsRequest, user: User = Depends(require_full_auth)):
-    """Writes new pins for one or more of this agent's own roles. Does NOT
-    restart model-router -- the change only takes effect once that's done
-    separately via POST /api/model-config/restart, since that restart
-    affects every consumer of the shared router, not just this agent, and
-    should never be an automatic side effect of a save.
+    """Writes new pins for one or more of this agent's own roles. The router
+    re-reads config.yaml on its next call when the file's mtime changed
+    (services/model-router/router/config.py), so a saved pin is live without
+    a restart. POST /api/model-config/restart-router stays a separate,
+    explicit action: a restart affects every consumer of the shared router,
+    and kills a model call in flight.
     """
     auth.require_admin(user)
     catalog = await model_config.fetch_model_catalog()
@@ -102,8 +103,8 @@ async def get_model_endpoints(model: str, user: User = Depends(require_full_auth
 @router.post("/providers")
 async def save_provider_pins(req: SaveProviderPinsRequest, user: User = Depends(require_full_auth)):
     """Pin (or clear) the OpenRouter provider per role. Same contract as the
-    model pin save: writes config.yaml, takes effect at the next router
-    restart, which stays a separate explicit action."""
+    model pin save: writes config.yaml, and the router picks it up on its
+    next call; no restart."""
     auth.require_admin(user)
     cleaned = {r: (p or None) for r, p in req.pins.items()}
     try:

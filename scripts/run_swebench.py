@@ -5,6 +5,15 @@
     scripts/run_swebench.py --sample 50 --seed 1 --parallel 3
     scripts/run_swebench.py --all --parallel 4           # the advertisable number
 
+A run leaves everything in logs/swebench/<run-id>/: predictions.jsonl (the
+submission), summary.json (rewritten after every task: per task the outcome,
+cost, models, the reviewer's verdict and record, the harness's own note on
+an unresolved task; for the run the runtime settings, `coder_reasoning` and
+the host peaks), the harness's report and grading.log, trajectories/<id>.json
+(the agent's whole conversation), host.jsonl (the box and the router once a
+minute, agent/evals/host_metrics.py) and reviewer/ (the pair's history and
+state, kept out of the batch's temporary root).
+
 evals/SWEBENCH.md says what makes the result a SWE-bench result and what
 must not change for it to stay one. Import order matters here for the same
 reason it does in run_evals.py: nothing may import agent.config before the

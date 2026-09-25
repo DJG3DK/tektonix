@@ -1,9 +1,5 @@
 .akey-group { margin-top: var(--s5); }
 .akey-group:first-of-type { margin-top: var(--s4); }
-.akey-group-title {
-  font-size: var(--fs-xs); font-weight: 700; text-transform: uppercase;
-  letter-spacing: .09em; color: var(--text-faint); margin: 0 0 var(--s2);
-}
 .akey-row {
   padding: var(--s3) 0;
   border-bottom: 1px solid var(--border-soft);
@@ -46,7 +42,3 @@
   .akey-help { max-width: none; }
   .akey-restart { flex-direction: column; align-items: flex-start; }
 }
-
-/* per-group cards (2026-08-28): the group is now the card, so the old
-   in-card group title is retired; rows inherit the card's padding. */
-.settings-grid .akey-group { margin-top: 0; }

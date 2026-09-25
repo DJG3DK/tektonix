@@ -253,7 +253,7 @@ async def test_every_task_gets_a_freshly_rebuilt_fixture(run_kwargs):
 # --- the report ------------------------------------------------------------
 
 def make_suite(runs, cost=0.0, stopped=""):
-    s = runner.SuiteRun(started_at=0.0, window_label="2026-09-22T12:00:00Z")
+    s = runner.SuiteRun(window_label="2026-09-22T12:00:00Z")
     s.runs = runs
     s.total_cost = cost
     s.stopped_early = stopped

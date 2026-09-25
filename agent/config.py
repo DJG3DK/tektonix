@@ -32,8 +32,6 @@ class Config:
     dsn: str
     router_base_url: str
     router_api_key: str
-    default_budget_usd: float
-    api_port: int
     langsmith_tracing: bool
     auth_secret_key: str | None
     cors_allow_origins: list[str]
@@ -82,8 +80,6 @@ def load_config(dsn: str | None = None) -> Config:
         dsn=dsn or os.environ.get("AGENT_DSN") or os.environ["LANGGRAPH_PG_DSN"],
         router_base_url=os.environ["MODEL_ROUTER_URL"],
         router_api_key=os.environ["MODEL_ROUTER_KEY"],
-        default_budget_usd=float(os.environ.get("DEFAULT_BUDGET_USD", "2.00")),
-        api_port=int(os.environ.get("API_PORT", "8100")),
         langsmith_tracing=os.environ.get("LANGSMITH_TRACING", "").lower() == "true",
         auth_secret_key=os.environ.get("AUTH_SECRET_KEY"),
         # Same-origin by default -- server.py serves the frontend itself, so

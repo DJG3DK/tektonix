@@ -20,19 +20,35 @@ agent can influence is not a gate.
    guard.
 
 2. **Set up a worktree.** Detached checkout at the reviewed sha, with:
-   - `node_modules` linked or bind-mounted from the live checkout (never installed fresh per review)
+   - `node_modules` linked or bind-mounted read-only from the live checkout — or installed fresh
+     with `--ignore-scripts` when the branch changed a manifest or lockfile, or when live's own
+     install no longer matches its lockfile (a merged Dependabot bump nobody installed)
    - **review-only credentials**, never the live ones (see below)
    - gitignored test inputs bound **read-only** — one project's is 348MB of recorded market data,
      without which 31 of 49 suites self-skip and report green having asserted nothing
+   - PHP/Elixir/Ruby dependency directories bound read-only from live, or installed without
+     scripts when the branch changed its manifest
 
-3. **Run the real checks.** Lint, tests, build, database drift, secret scan. Whatever the repo says
-   its checks are — the reviewer runs `test:review` and lets the repo decide what is safe, rather
-   than carrying its own copy of the list.
+3. **Run the real checks.** Lint, tests, build, database drift, secret scan — the commands the
+   project's config names, contained in the sandbox container (or in this process in the bundle).
+   A check that fails identically on the base commit is marked pre-existing and blocks nothing; a
+   check whose command was missing is an infrastructure failure, escalated rather than handed to
+   the agent as something to fix.
 
 4. **Review the diff.** One call, one `submit_review` tool call back. The model never writes or runs
-   code; the mechanical work already happened.
+   code; the mechanical work already happened. Besides the diff and commit messages it sees the
+   prior round's findings, the agent's own **responses** to earlier rounds (written into the
+   follow-up commit under `Response to review round N` and read from the branch's log), the
+   current content of test files and of files the diff references or calls, and the mechanical
+   results — placed after the agent-authored material, which is fenced as untrusted data. A prior
+   blocking finding that a response has disproved with a run is withdrawn unless the diff shows
+   otherwise.
 
-5. **Record.** Verdict, findings and usage to `state.json` / `history.jsonl` / `usage.jsonl`.
+5. **Decide and record.** The verdict is derived in Node from failed checks and blocking findings,
+   never taken from the model's own field. Verdict, findings and usage go to `state.json` (per
+   project and per branch) / `history.jsonl` / `usage.jsonl`. Three rounds of `NEEDS_FIXES` in a
+   row, one file drawing findings round after round, or an unrunnable check mark the record
+   `escalated`; the agent's verify_and_ship gate reads that and hands the task to a human.
 
 ## Credentials
 
@@ -73,7 +89,7 @@ router and talks to OpenRouter directly.
 ```
 reviewer.js        the whole service — detection, worktree setup, checks, review, verdict
 review-secrets/    non-production credentials per project (gitignored)
-state.json         latest verdict per project (gitignored)
+state.json         latest verdict per project and per task branch (gitignored)
 history.jsonl      append-only review log (gitignored)
 usage.jsonl        per-review model usage and cost (gitignored)
 worktrees/         ephemeral per-review checkouts (gitignored)
@@ -82,16 +98,16 @@ worktrees/         ephemeral per-review checkouts (gitignored)
 ## Running it
 
 Runs under pm2 alongside the agent. It needs the router reachable at `MODEL_ROUTER_URL`
-(default `http://127.0.0.1:4001/v1`) and `MODEL_ROUTER_KEY` in the router's `.env`.
+(default `http://127.0.0.1:4001/v1`) and `MODEL_ROUTER_KEY`, from the environment or the router's
+`.env`. `REVIEW_CONTROL_SECRET` comes from `services/shared/.env` (see `services/shared/service-env.js`).
 
 **Zero npm dependencies** — `reviewer.js` is Node stdlib only, so there is no `package.json` and
-nothing to install. (The `require('argon2')` you may grep into is a string: a check command
-executed inside the *reviewed project's* worktree, resolved against that project's own
-`node_modules`, not this service's.)
+nothing to install.
 
-**You must edit `PROJECTS` before this reviews anything of yours.** It is defined in source, per
-deployment, on purpose: it names each repo, its live and workspace paths, its real check commands,
-which gitignored inputs get bind-mounted read-only, and which credential files come from
-`review-secrets/`. Those are facts about *your* projects that no config template can guess — and
-the check commands especially deserve to be read, not copied, because they encode which of your
-test suites are safe to run against a detached checkout.
+**Projects come from `projects.json`**, written by the console's onboarding wizard: each repo's
+live and workspace paths, its check commands, which gitignored inputs get bind-mounted read-only,
+and which credential files come from `review-secrets/`. The file is re-read every poll tick, so a
+project onboarded while the service runs is reviewed without a restart. An optional, gitignored
+`builtin-projects.local.js` (see the `.example`) overrides any entry for a deployment whose checks
+need hand-tuning — those commands deserve to be read, not copied, because they encode which of
+your test suites are safe to run against a detached checkout.

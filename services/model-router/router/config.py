@@ -56,7 +56,6 @@ class Table:
     fallbacks: dict[str, list[str]]
     loaded_at: float
     mtime: float
-    source: str
 
     def resolve(self, alias: str) -> Deployment | None:
         return self.deployments.get(alias)
@@ -99,7 +98,7 @@ def empty(path: Path, reason: str) -> Table:
     the service is up and cannot route anything yet.
     """
     logger.warning("no usable config at %s (%s); serving an empty table", path, reason)
-    return Table(deployments={}, fallbacks={}, loaded_at=time.time(), mtime=0.0, source=str(path))
+    return Table(deployments={}, fallbacks={}, loaded_at=time.time(), mtime=0.0)
 
 
 def load(path: Path | None = None) -> Table:
@@ -152,7 +151,7 @@ def load(path: Path | None = None) -> Table:
 
     st = p.stat()
     return Table(deployments=deployments, fallbacks=fallbacks,
-                 loaded_at=time.time(), mtime=st.st_mtime, source=str(p))
+                 loaded_at=time.time(), mtime=st.st_mtime)
 
 
 class Registry:

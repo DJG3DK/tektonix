@@ -588,7 +588,7 @@ function ModelConfigPins() {
         {probeMsg && <span className="model-config-probe-note">{probeMsg}</span>}
         {justSaved && (
           <span className="model-config-saved-note">
-            Saved to config.yaml. Changes take effect after a router restart.
+            Saved to config.yaml. The router reads it on its next call; no restart needed.
           </span>
         )}
         {restartDone && (

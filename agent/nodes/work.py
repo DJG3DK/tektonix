@@ -3,7 +3,7 @@ for one outer-graph pass. Not native LangGraph subgraph nesting: the outer
 AgentState and the deep agent's own state share no keys, so
 `builder.add_node("work", deep_agent_graph)` would produce a schema-merge
 mess for zero benefit. This is a plain node function that invokes the deep
-agent's own `.astream()` against a derived, distinct thread_id
+agent's own `.astream_events()` against a derived, distinct thread_id
 (f"{task_id}:work") on the same Postgres checkpointer/store instances the
 outer graph uses -- one pool, two thread namespaces that never collide.
 
@@ -219,18 +219,12 @@ async def _consume_values(task_id: str, node_label: str, proj, writer, seen: dic
     one run -- see this module's docstring on the replay it prevents. Defaults
     to a set inside `seen` so a single-projection caller (a test) still works.
 
-    `final_text` collects the COORDINATOR's last assistant text as it streams.
-    The pass's final message used to be read back from the inner agent's
-    checkpoint afterwards, and that channel is not there: measured on
-    2026-09-13, `aget_state` returns todos but no `messages`, so the final
-    summary was the empty string on every pass. That is load-bearing --
-    verify_and_ship's no-diff gate calls a final response shorter than 120
-    chars "cut off mid-thought", loops back, and resets no_diff_streak, so an
-    always-empty value meant a task with no diff could never reach the
-    two-consecutive-passes "no changes needed" exit. Task 25e2bfb0 looped on
-    exactly that, twice in eight minutes, being told to follow through on an
-    intention it had never announced. Taking the text from the stream uses
-    what we demonstrably have.
+    `final_text` collects the COORDINATOR's last assistant text as it streams,
+    because the inner checkpoint has no `messages` to read it from afterwards
+    (`aget_state` returns todos only; measured 2026-09-13). It is load-bearing:
+    verify_and_ship's no-diff gate reads a short final response as "cut off
+    mid-thought" and resets no_diff_streak, so an always-empty value kept task
+    25e2bfb0 looping on an intention it had never announced.
 
     `tracker` (the shared BudgetTracker) makes live cost visible mid-pass:
     cost_so_far otherwise only crosses to the dashboard on outer node
@@ -334,7 +328,6 @@ _TEMPLATE_SYNC_LOCKS: dict[str, "asyncio.Lock"] = {}
 
 
 def _template_sync_lock(repo: str):
-    import asyncio
     if repo not in _TEMPLATE_SYNC_LOCKS:
         _TEMPLATE_SYNC_LOCKS[repo] = asyncio.Lock()
     return _TEMPLATE_SYNC_LOCKS[repo]
@@ -743,12 +736,9 @@ async def work_node(state: AgentState, app_config: Config, checkpointer, pg_stor
     except Exception:  # noqa: BLE001 -- best-effort enrichment, never worth failing the whole node over
         pass
 
-    # The stream is the reliable source; the checkpoint read above is kept as a
-    # fallback for the case where a pass produced no streamed prose at all.
-    # Measured 2026-09-13: `messages` is absent from the inner agent's
-    # reconstructed state, so that read yields "" every time -- and an empty
-    # value here is what verify_and_ship's no-diff gate misreads as "cut off
-    # mid-thought", forever.
+    # The stream is the source; the checkpoint read above is a fallback for a
+    # pass that streamed no prose at all, and yields "" in practice (`messages`
+    # is absent from the inner agent's reconstructed state, 2026-09-13).
     if not final_summary.strip():
         final_summary = final_text.get("text", "")
 

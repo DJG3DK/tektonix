@@ -1,6 +1,6 @@
 """A planning session's transcript, kept where it survives the process.
 
-Until now a planning session's scrollback lived in two places, both lossy.
+Without this (until 2026-09-12) a session's scrollback lived in two places, both lossy.
 The checkpoint holds the message list -- but SummarizationMiddleware rewrites
 that list when a long turn compacts, discarding the earlier exchanges
 wholesale. The in-memory buffer holds the full scrollback -- until the process

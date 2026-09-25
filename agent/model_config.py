@@ -105,8 +105,10 @@ ROLE_REQUIREMENTS: dict[str, dict] = {
     "agent-coder-fallback": {
         "tools": True, "structured": False, "strict": False,
         "note": "Takes over a pass when the loop guard ends it: the regular coder kept repeating "
-                "one refused call. Also serves that pass's investigator and test-writer. A "
-                "different model is the point -- pin something other than the coder.",
+                "one refused call. Also serves that pass's investigator, test-writer and verifier, "
+                "and, at low reasoning effort, every seat's one retry of an empty length-capped "
+                "reply (agent/middleware/empty_reply.py). A different model is the point -- pin "
+                "something other than the coder.",
     },
     "agent-investigator": {
         "tools": True, "structured": False, "strict": False,
@@ -201,15 +203,6 @@ def load_forced_tool_probe() -> dict:
         return json.loads(FORCED_TOOL_PROBE_PATH.read_text())
     except Exception:
         return {"probed_at": None, "models": {}}
-
-
-def forced_tool_call_models() -> tuple[list[str], list[str], str | None]:
-    """(compliant, non_compliant, probed_at) from the probe cache."""
-    data = load_forced_tool_probe()
-    models = data.get("models") or {}
-    ok = sorted(m for m, v in models.items() if v.get("status") == "ok")
-    bad = sorted(m for m, v in models.items() if v.get("status") == "fail")
-    return ok, bad, data.get("probed_at")
 
 
 def forced_tool_call_stats() -> dict:

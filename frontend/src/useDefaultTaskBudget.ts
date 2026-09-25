@@ -6,7 +6,7 @@ import { getRuntimeSettings } from "./api";
  *  hard-code $2 regardless of that setting (operator report, 2026-09-09).
  *  Fetched once per page load and shared; the fallback only shows until the
  *  fetch lands, or if it fails (the server applies the real default anyway). */
-export const FALLBACK_TASK_BUDGET_USD = 2.0;
+const FALLBACK_TASK_BUDGET_USD = 2.0;
 
 let cached: number | null = null;
 let inflight: Promise<number> | null = null;

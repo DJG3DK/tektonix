@@ -136,9 +136,12 @@ logger = logging.getLogger("tektonix")
 # fixed 80_000 below was 7.6% of the 1,048,576-token window the coder model
 # actually has, and a real task rode it for an hour -- climb to 80k, compact to
 # ~55k, climb again, 15 summarizer calls and zero lines written, because each
-# compaction discarded the files it had just read. These two remain the
-# FLOOR-level defaults the knobs start from; everything below about why the
-# units must match and why keep must stay well under trigger still applies.
+# compaction discarded the files it had just read. The knobs default to
+# 250k/90k (runtime_settings). The two module constants below drive nothing
+# live any more: they are the pair tests/test_summarization_keep.py and
+# test_summarization_settings.py pin the unit rules against, and everything
+# below about why the units must match and why keep must stay well under
+# trigger still applies to the knobs.
 def summarization_trigger() -> list[tuple[str, int]]:
     return [("tokens", _rs.as_int("summarization_trigger_tokens"))]
 
@@ -257,12 +260,16 @@ SUMMARIZATION_TRIM_TOKENS = None
 # invocation, i.e. per outer "work" pass), not `thread_limit` -- a
 # thread_limit would persist across every resume of a long task's whole
 # lifetime, which doesn't map onto anything meaningful here the way it would
-# for a genuinely single-shot agent. exit_behavior="error" (not "end"/
-# "continue") so this surfaces as a real exception routed through
-# work_node's existing generic `except Exception` handler -> a clear
-# escalation, not a silently-truncated response that could get misread as a
-# normal completion.
-# The numbers themselves now live in runtime_settings (Settings -> Runtime
+# for a genuinely single-shot agent. On the coordinator exit_behavior="error"
+# so this surfaces as a real exception routed through work_node's generic
+# `except Exception` handler -> a clear escalation, not a silently-truncated
+# response that could get misread as a normal completion. On every subagent
+# it is "end" (2026-09-25): a test-writer that hit 400 model calls after its
+# tests were written took the whole pass down with it, where ending its run
+# hands the coordinator what it has. The verifier and the test-writer also
+# carry their own, tighter tool-call caps (VERIFIER_TOOL_CALLS,
+# TEST_WRITER_TOOL_CALLS) with a WrapUpMiddleware countdown in front.
+# The numbers themselves live in runtime_settings (Settings -> Runtime
 # limits) so they can be retuned without an edit and a restart; the reasoning
 # above is why they are shaped this way, and still applies. Read via
 # _rs.as_int("model_call_run_limit") / ("tool_call_run_limit") at the point of
@@ -286,7 +293,7 @@ SUMMARIZATION_TRIM_TOKENS = None
 # destructive git/shell patterns (force-push, rm -rf, sudo) regardless of
 # path, since those are dangerous even scoped to one repo.
 #
-# Applied to the coordinator and both subagents (below) -- not just the
+# Applied to the coordinator and every subagent (below) -- not just the
 # coordinator -- because investigator, despite its own system prompt's
 # "read-only" framing, is given the full `bash` tool (needed for real
 # find/grep-across-the-tree exploration; there's no separate read-only-
@@ -1127,8 +1134,8 @@ def _make_run_checks_tool(repo_root: str, repo: str):
     return run_checks
 
 
-# Shared across all three agents (coordinator + both subagents). This system
-# exposes two entirely separate filesystems with no way to tell them apart
+# Shared by the coordinator and every subagent. This system exposes two
+# entirely separate filesystems with no way to tell them apart
 # from tool names alone:
 #   - deepagents' own native tools (ls/read_file/write_file/edit_file/glob/
 #     grep, auto-provided by FilesystemMiddleware, required, can't be
@@ -1321,11 +1328,16 @@ by blow of your own process -- a long, unfiltered report defeats the entire reas
 delegated to in the first place (keeping the coordinator's own context small)."""
 
 
+# Tool-call caps for the two seats that check a fix, tighter than the
+# runtime knob: a targeted check, not a sweep (2026-09-25: one verifier ran
+# 49 calls on a fix that was already right; one test-writer ran 352 identical
+# commands). Each has a WrapUpMiddleware countdown in front of it.
 VERIFIER_TOOL_CALLS = 30
 TEST_WRITER_TOOL_CALLS = 60
-# Output cap for every seat this agent builds -- see llm_for_role. The
-# subagent seats hit the router's 32768 default with content the same hour
-# the coordinator's cap went in (13 verifier calls in 30 minutes).
+# Output cap for the coordinator and every subagent seat -- see llm_for_role.
+# The subagent seats hit the router's 32768 default with content the same
+# hour the coordinator's cap went in (13 verifier calls in 30 minutes). The
+# empty-reply fallback seat keeps the router's ceiling.
 COORDINATOR_MAX_TOKENS = 16384
 SEAT_MAX_TOKENS = 16384
 _REPORT_NOTE_MAX = 12_000
@@ -2164,9 +2176,9 @@ async def build_deep_agent(
 
     # The verifier: an independent seat that tries to break a bug fix before it
     # ships -- the reproduction and its neighbours, run, not read. It reads
-    # and runs but cannot edit source, and sits on the test-writer's pin, a
-    # different model from the coder that wrote the fix (2026-09-24: two
-    # half-fixes passed a review that only read the diff).
+    # and runs but cannot edit source, and runs on its own alias
+    # (agent-verifier), a different model from the coder that wrote the fix
+    # (2026-09-24: two half-fixes passed a review that only read the diff).
     verifier = {
         "name": "verifier",
         "description": (
@@ -2270,7 +2282,11 @@ async def build_deep_agent(
         middleware=[
             SanitizeToolCallsMiddleware(),  # a malformed tool call in history never reaches a provider (2026-09-09)
             HiddenToolsMiddleware("glob", "grep", "execute", "delete"),
-            RepeatCallGuardMiddleware(),  # the same call with the same result is not run a third time (2026-09-09)  # see subagent specs' comment
+            # The same call with the same result is not run a third time
+            # (2026-09-09). Not contained: a coordinator that is stuck ends
+            # the pass with RepeatLoopError and the work node moves the task
+            # to the fallback seat.
+            RepeatCallGuardMiddleware(),
             BudgetGuardMiddleware(tracker),
             # Planner on the thread's first turn, coder after -- see model_pin.py.
             PlanCodeModelMiddleware(planner_model, coordinator_model),
@@ -2301,9 +2317,10 @@ async def build_deep_agent(
             # Checkpoints at a third and two-thirds of the budget and 45/90
             # minutes in: restate the goal and the evidence, or finish.
             StepBackMiddleware(tracker),
-            # Defense-in-depth backstop against a runaway loop -- see this
-            # module's own comment on MODEL_CALL_RUN_LIMIT/TOOL_CALL_RUN_LIMIT
-            # for why these are generous limits, not a normal-operation cap.
+            # Defense-in-depth backstop against a runaway loop -- see the
+            # run-limit comment below SUMMARIZATION_TRIM_TOKENS for why these
+            # are generous limits, not a normal-operation cap, and why the
+            # coordinator alone gets "error".
             ModelCallLimitMiddleware(run_limit=_rs.as_int("model_call_run_limit"), exit_behavior="error"),
             ToolCallLimitMiddleware(run_limit=_rs.as_int("tool_call_run_limit"), exit_behavior="error"),
         ],

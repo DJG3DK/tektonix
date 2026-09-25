@@ -51,8 +51,8 @@ mechanical problems, none of them the fix itself; all five are changed.
   65 times in one run: $2.32 of $18.73 and 2.7 hours of model time, in six of
   the ten failures. It ignores every reasoning cap the router can send. Now an
   empty, length-capped reply is retried once on the fallback seat at low
-  reasoning effort, inside the same turn, and the coordinator's output cap is
-  16k. The old "your last reply was empty" nudge is the last resort, not the
+  reasoning effort, inside the same turn, and every seat's output is capped at
+  16k tokens. The old "your last reply was empty" nudge is the last resort, not the
   first.
 - **A verifier cut off with nothing to say.** 13 of 48 verifier runs hit their
   tool-call cap and returned "Tool call limit reached" and nothing else; one of
@@ -135,9 +135,9 @@ Each task now has its own workspace — a git worktree on its own branch, filled
 from the project's workspace with dependencies hardlinked (instant, no extra
 disk) and build output copied — so tasks on the same project no longer queue
 behind each other. **Settings → Tasks at once per project** sets how many
-(default 1, so nothing changes until it is raised). Tasks code in parallel and
-take turns only for checks, review and merge; the second to merge is rebased
-and reviewed again.
+(default 10, at most 16 -- it shipped at 1 and was raised the same day, see
+above). Tasks code in parallel and take turns only for checks, review and
+merge; the second to merge is rebased and reviewed again.
 
 The reviewer keeps a verdict per branch instead of per project, queues a review
 asked for while it is busy (it used to drop it, leaving the task to wait out its
@@ -254,8 +254,8 @@ thin rather than drawing a confident arrow.
 **A golden-task eval suite** (`evals/`, `scripts/run_evals.py`). The panel
 above measures production tasks, which move with whatever you happened to need
 that fortnight — the right measure for "is it better in practice", the wrong
-one for "did that change help". The suite is twelve fixed goals against three
-dependency-free fixture repos, driving the **real** pipeline: real work node,
+one for "did that change help". The suite began as twelve fixed goals against
+three dependency-free fixture repos (thirty on five since, above), driving the **real** pipeline: real work node,
 real check suite, real commit, real reviewer. It stops before the merge with
 no special mode, because `require_merge_review` already parks a task after a
 READY verdict and the harness is simply an operator who never approves.
@@ -274,12 +274,12 @@ twelve tasks** — money is not the constraint, wall-clock is.
 
 ### A task that is waiting says so
 
-One task per project is a hard constraint — they share one worktree — but the
+While one task per project was the rule — they shared one worktree — the
 status was written *before* the lock was taken, so a queued task was
 indistinguishable from a working one: "Running" with a live pulse, no log, no
 spend, and the only way to tell was noticing it had been like that a while.
-Tasks now show **Queued** (dim, not pulsing) until they actually hold the
-project. The orphan-recovery scan and the sidebar's Running group both learned
+Tasks now show **Queued** (dim, not pulsing) until they actually hold a slot
+on the project (one then; up to sixteen now). The orphan-recovery scan and the sidebar's Running group both learned
 about the new state; the Telegram alerter learned to ignore it.
 
 ### A stopped task no longer strands its alert, or its workspace

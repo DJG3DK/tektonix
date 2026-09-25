@@ -91,13 +91,3 @@
   cursor: pointer;
 }
 .rmproj-go:disabled { opacity: .45; cursor: not-allowed; }
-
-.rmproj-done {
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: var(--s3);
-  margin-top: var(--s2);
-  background: var(--surface-raised);
-}
-.rmproj-done-head { margin: 0 0 var(--s2); font-size: var(--fs-base); line-height: 1.5; }
-.rmproj-note { margin: var(--s2) 0 0; font-size: var(--fs-sm); color: var(--text-faint); line-height: 1.5; }

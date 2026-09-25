@@ -1,23 +1,20 @@
-"""PlanCodeModelMiddleware — deterministic two-model split for the coordinator.
+"""PlanCodeModelMiddleware -- deterministic two-model split for the coordinator.
 
 One pinned model per role rather than an adaptive pool. The coordinator's
 work has two distinct shapes, and each is pinned to a different model:
 
-  - PLANNING: the first model turn of an inner thread — the turn that reads
-    the goal/context and writes the todo plan. Pinned to a strong general
-    reasoner (agent-planner).
-  - CODING: every turn after that — tool-calling, editing, running checks.
-    Pinned to a coding specialist (agent-coder).
+  - PLANNING: the turn that answers fresh OUTER input -- the goal, a
+    verify_and_ship loopback, an operator message -- and decides the
+    approach. Pinned to a strong general reasoner (agent-planner).
+  - CODING: every turn after that -- tool-calling, editing, running checks.
+    Pinned to the route's coder alias (agent-coder, or the frontend/fallback
+    coder -- agent/frontend_route.py).
 
-The split is deterministic, not classified: a turn is a PLANNING turn iff the
-request's message history contains no AIMessage yet. That is exactly the
-first turn of a fresh thread — including a generation-bumped fresh thread
-after a poisoned-context restart (work.py's inner_thread_generation), where
-re-planning is precisely what's wanted. Everything downstream of the first
-AI response (loop-back feedback, approvals, operator nudges) is CODING: the
-plan exists, the remaining work is executing it.
+The split is deterministic, not classified: see is_planning_turn. It sets
+the model on EVERY call, so anything that must override the model (the
+empty-reply retry) sits after it in the coordinator's stack.
 
-Coordinator-only — subagents have their own single pinned models.
+Coordinator-only -- subagents have their own single pinned models.
 """
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
@@ -26,32 +23,23 @@ from langchain.agents.middleware.types import AgentMiddleware, ModelRequest, Mod
 
 
 def is_planning_turn(messages) -> bool:
-    """True iff this turn responds directly to fresh OUTER input.
+    """True iff this turn responds directly to fresh OUTER input: a
+    HumanMessage arrived after the model's last own message.
 
-    An earlier version of this rule was "no AIMessage in history yet" --
-    literally only the first turn of a thread. That meant a reviewer
-    NEEDS_FIXES round, a checks-failed loopback, or an operator resume
-    message -- all genuine re-planning moments -- were handled by the coder
-    pin instead of the planner.
-
-    Current rule: a turn is a planning turn iff the LAST message is a
-    HumanMessage. work_node only ever injects HumanMessages at the seams
-    (the goal, verify_and_ship feedback, operator messages), so "last
-    message is human" exactly marks the first response to each new piece of
-    outer input -- the planner reads the feedback and decides the approach.
-    From the model's first tool call onward the last message is an AI/Tool
-    message, so execution turns stay on the coder. Summarization inserts
-    its summary mid-list, never last, so it can't fake a planning turn.
+    work_node only ever injects HumanMessages at the seams (the goal,
+    verify_and_ship feedback, operator messages), so that exactly marks the
+    first response to each new piece of outer input -- the planner reads the
+    feedback and decides the approach. From the model's first tool call
+    onward the last messages are AI/Tool, so execution turns stay on the
+    coder. Summarization inserts its summary mid-list, never last, so it
+    cannot fake a planning turn. "No AIMessage yet" (only the first turn)
+    sent every loopback to the coder; "last message is human" missed a
+    thread resumed mid-tool-loop, where the operator's message is followed
+    by the interrupted calls' results.
     """
     msgs = [m for m in (messages or []) if not isinstance(m, SystemMessage)]
     if not msgs:
         return True
-    # Scan the suffix after the model's last own message: if any human input
-    # arrived since the model last spoke, this turn responds to it.
-    # "Last message is human" alone misses a real case: resuming a thread
-    # stopped mid-tool-loop appends the operator's message and then the
-    # interrupted tool calls' results, so the human input sits one or more
-    # slots before the end.
     for m in reversed(msgs):
         if isinstance(m, HumanMessage):
             return True

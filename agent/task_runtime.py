@@ -197,26 +197,22 @@ def check_budget_topup(delta: float) -> None:
             400, f"additional_budget_usd must be between 0 and ${MAX_BUDGET_TOPUP_USD:.2f}")
 
 
-# Live-log buffers (2026-08-28): the detailed stream entries (chat bubbles,
-# tool chips) previously existed ONLY as in-flight WS events -- the durable
-# sources hold much less (a task's checkpoint keeps per-pass summaries; a
-# planning thread's messages get REWRITTEN by summarization), so a refresh or
-# task switch mid-run swapped a rich live view for a skeleton. Each publisher
-# now also appends its log entries here, and the hydrate endpoints return
-# whichever source is fuller. In-process by design: it makes refresh/switch
-# lossless while the server lives, costs no store churn, and after a backend
-# restart the durable sources are still the fallback they always were.
+# Live-log buffers: each publisher appends its log entries here, and the
+# hydrate endpoints return whichever of this and the durable source is
+# fuller. The durable sources hold much less (a task's checkpoint keeps
+# per-pass summaries; a planning thread's messages get REWRITTEN by
+# summarization), so without this a refresh or task switch mid-run swapped a
+# rich live view for a skeleton (2026-08-28). In-process by design: lossless
+# while the server lives, no store churn, and after a restart the durable
+# sources are the fallback.
 LIVE_LOG_MAX_ENTRIES = 3000   # matches the frontend's MAX_LOG_ENTRIES cap
 LIVE_LOG_MAX_KEYS = 12        # LRU-ish: enough for every concurrently-viewed run
 live_task_log: dict[str, list] = {}
 
-# The durable half of that buffer is live_state.task_recorders (one planning_log.Recorder per running task). `live_task_log` dies with the process, and
-# on 2026-09-14 that is exactly what happened when the operator asked why a
-# task "got lost": the answer needed the transcript, and all that survived was
-# a 123-character stub in execution_log plus a clean worktree. Planning
-# sessions got this on 2026-09-12 (agent/planning_log.py); build tasks are the
-# ones that run for two hours and delegate seven subagents, so they needed it
-# more.
+# The durable half of that buffer is live_state.task_recorders (one
+# planning_log.Recorder per running task): `live_task_log` dies with the
+# process, and on 2026-09-14 a "lost" task's transcript had to be explained
+# from a 123-character execution_log stub and a clean worktree.
 
 
 def flush_task_log_bg(rec: planning_log.Recorder) -> None:

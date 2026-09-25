@@ -33,7 +33,7 @@ const LOWER_IS_BETTER = new Set<keyof BenchmarkWindow>([
  *  it renders without a colour. */
 const NO_DIRECTION = new Set<keyof BenchmarkWindow>(["section_reads_per_prompt"]);
 
-export type Tone = "good" | "bad" | "flat" | "none";
+type Tone = "good" | "bad" | "flat" | "none";
 
 export function deltaTone(key: keyof BenchmarkWindow, delta: number | undefined): Tone {
   if (delta == null) return "none";

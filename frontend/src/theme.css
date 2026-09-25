@@ -332,7 +332,6 @@ button { -webkit-tap-highlight-color: transparent; }
 .btn--danger:hover:not(:disabled) { background: var(--red-bg); border-color: var(--red); }
 
 .btn--sm { min-height: 28px; padding: 0 var(--s2); font-size: var(--fs-sm); }
-.btn--lg { min-height: var(--tap); padding: 0 var(--s4); font-size: var(--fs-base); }
 .btn--icon { padding: 0; width: 34px; min-height: 34px; }
 
 /* Anything thumb-operated grows to the 44px floor on touch devices. */

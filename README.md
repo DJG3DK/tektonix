@@ -16,7 +16,7 @@ The agent targets a fixed set of local projects (`PROJECTS` in `agent/config.py`
 `/home/agent-workspaces/.tasks/<project>/<task-id>`, on its own branch `agent/<task-id>`, filled
 from the project's workspace (`/home/agent-workspaces/<project>`) with dependencies hardlinked and
 build output copied (`agent/workspaces.py`). So tasks on the same project can run side by side:
-**Settings → Tasks at once per project** sets how many (default 10; each task has its own 2 GB sandbox, so size it to the machine). They code in parallel and take
+**Settings → Tasks at once per project** sets how many (default 10, at most 16; each task has its own 2 GB sandbox, so size it to the machine). They code in parallel and take
 turns only for checks, review and merge; a task that merges second is rebased onto the first and
 reviewed again. The limit is a set of Postgres advisory locks (`agent/graph.py`, `project_slot`)
 rather than anything in the process, because it is a property of the project: a second worker or an
@@ -110,16 +110,23 @@ START → work → verify_and_ship ──(findings / unfinished plan)──→ w
 
 - **`work`** (`agent/nodes/work.py`) drives the deep agent's own tool-calling loop against a
   sandboxed checkout (`docker/agent-sandbox/` — only the target repo is mounted, so a shell command
-  can't reach other projects or host secrets). It plans via `write_todos` and can delegate to two
-  subagents: **investigator** (read-only research — no write/edit/shell tools at all) and
-  **test-writer** (writes tests, required to run the checks itself before reporting done). A
+  can't reach other projects or host secrets). It plans via `write_todos` and can delegate to three
+  subagents: **investigator** (read-only research — no write/edit/shell tools at all),
+  **test-writer** (writes tests, required to run the checks itself before reporting done) and
+  **verifier** (`agent-verifier`, its own seat and ledger line since 2026-09-25: after a bug fix it
+  runs the reported case and its neighbours and reports what still fails; it edits nothing). The
+  verifier and the test-writer are bounded — 30 and 60 tool calls — and counted down in their own
+  results, so the last allowed call carries no tools and has to be the report
+  (`WrapUpMiddleware`) rather than "Tool call limit reached" and nothing. A
   `run_checks` tool lets it run the project's real typecheck/lint/test suite itself mid-task — the
   same commands the gate will run — so it finds its own breakage rather than learning about it a
   full round-trip later. On a frontend-routed task the coordinator and investigator sit on
   `agent-coder-frontend`; the test-writer keeps its own pin (see [Frontend routing](#frontend-routing)).
   If a model gets stuck repeating a call the loop guard has refused, the rest of that pass moves to
   `agent-coder-fallback`, a different model, on the same conversation. The task is handed back only
-  if that model gets stuck too.
+  if that model gets stuck too. An empty reply — reasoning that ran to the output cap and left
+  nothing to say — is retried once on that same fallback seat at low reasoning effort before the
+  conversation sees it (`EmptyReplyRetryMiddleware`); every seat's output is capped at 16k tokens.
   With a GitHub token it can also **read a pull request** host-side (`github_pull_request`) — the
   sandbox never sees the token.
 - **`verify_and_ship`** (`agent/nodes/verify_and_ship.py`) is the actual gate. It always re-runs the
@@ -140,6 +147,18 @@ START → work → verify_and_ship ──(findings / unfinished plan)──→ w
   node**, not as a third graph node — a deploy preflight can fail as its own stage (a live URL
   the build depends on is down) and escalate to a human rather than being handed to the agent as
   a compile error.
+- **A review round is an argument, and both sides are heard.** The agent's closing message of a
+  round rides in the follow-up commit under "Response to review round N"; the reviewer reads every
+  answer on the branch before repeating a finding, withdraws a blocking finding that a reported run
+  has disproved unless the diff itself shows otherwise, and must name the evidence it disputes when
+  it does repeat one. The reviewer's own breaker still ends the argument — three `NEEDS_FIXES` in
+  a row, or the same file in its findings across three rounds — and the gate escalates the task to
+  a person. On a **benchmark** project (`"benchmark": true` in `projects.json`) there is no person
+  waiting and the prediction is the tree, so the fix ships as it stands, recorded as *disputed*.
+  The same projects get three diff-pattern gates (`agent/nodes/diff_patterns.py`) that send a fix
+  back once, at the decision point: an invented error message where the existing template was
+  expected, a grammar loosened without a must-still-reject test, a fix applied to one of two
+  same-named functions.
 - **The plan has to be finished before anything is committed.** If the agent's own `write_todos`
   list still has open items, the gate holds the commit and sends it back to finish, naming what's
   left. Committing mid-plan means the review service reviews a deliberately-incomplete change and
@@ -155,7 +174,8 @@ START → work → verify_and_ship ──(findings / unfinished plan)──→ w
 - **Loops end.** A third identical tool call whose two predecessors returned the same result is
   answered from cache; the fourth and later are refused; after eight refusals in a row the pass
   escalates naming the looping tool (`RepeatCallGuardMiddleware`). A call whose result changes (a
-  poll, a flaky test) is never blocked. Malformed tool calls are stripped from every model request
+  poll, a flaky test) is never blocked — results are compared with addresses, durations and temp
+  paths normalised away — but eight identical calls in a row are refused whatever they returned. Malformed tool calls are stripped from every model request
   (`SanitizeToolCallsMiddleware`) so a truncated `write_todos` cannot poison every later turn of
   the thread.
 - **`ask_user`** lets the agent pause and ask the operator a clarifying question mid-task instead of
@@ -176,7 +196,8 @@ and inbox tools) and `save_brief` / `save_plan`. "Build Now" hands a finished pl
 pipeline above, as if it had been typed in directly. The app lands here first: Planning Chat is
 the front door, not the raw task composer.
 
-**Three seats, chosen automatically** (pins are dashboard-editable; current picks shown):
+**Three seats, chosen automatically** (pins are dashboard-editable; the models shown are
+`config.example.yaml`'s pins — yours are whatever the Models page says):
 
 | Seat | Model (dashboard alias) | Used for |
 |---|---|---|
@@ -357,14 +378,21 @@ first. The app lands on **Planning**, not the raw task composer.
   sample is too thin to read. See `agent/benchmarks.py`.
 - **Golden evals** (`scripts/run_evals.py`) — the Benchmarks panel measures production tasks, which
   move with whatever you happened to ask for that fortnight. This asks the same question twice:
-  twelve fixed goals against three dependency-free fixture repos, driving the **real** pipeline —
+  thirty fixed goals against five dependency-free fixture repos, driving the **real** pipeline —
   real work node, real check suite, real commit, real reviewer — and stopping before the merge,
   because `require_merge_review` already parks a task after a READY verdict and the harness simply
   never approves. Tasks are scored on **assertions, not outcome**: a task can ship, pass its checks
   and earn READY having "fixed" the bug by weakening the test, and that is the one failure every
   gate here is blind to. A run is isolated by construction — its own SQLite store, its own
   `projects.json`, its own reviewer pair on free ports — and it stops before crossing a spend
-  ceiling. `--verify` and `--dry-run` cost nothing. See `evals/README.md`.
+  ceiling. `--verify` and `--dry-run` cost nothing. A **Golden suite** panel on Analytics runs it
+  from the browser, shows the scorecard and what regressed since the run before. See `evals/README.md`.
+- **SWE-bench Verified** (Analytics) — every run of `scripts/run_swebench.py`, as it goes: the
+  scorecard (a sample shows its percentage beside its fraction; only a full run of all 500 is the
+  published number), each task's result, patch, reviewer text and conversation, and **Host during
+  the run** — memory, CPU, load, disk, containers, OOM kills and the router's in-flight calls and
+  latency, sampled once a minute into the run's `host.jsonl`, so "can we run more at once" is read
+  off the page. See `evals/SWEBENCH.md`.
 - **Models** (admin only) — the model-pin editor described under [Model routing](#model-routing).
 - **Users** (admin only) — create accounts, scope them to specific projects, revoke access, and
   grant auto mode **for named projects** rather than globally.
@@ -391,9 +419,10 @@ first. The app lands on **Planning**, not the raw task composer.
 - **Task identity** — the task header carries click-to-copy `id:` and `commit:` chips, so "which
   task are we talking about" has a definite answer; every tool bubble in task and planning streams
   is timestamped, so stale scrollback and live activity are distinguishable at a glance.
-- **Settings** — themed sections (Account & access / Agent behavior / Runtime limits / Notifications
-  & projects / GitHub / API keys & integrations) in a responsive two-up grid; the API-keys panel is
-  one card per credential group (Model routing, Tracing, Email) with a single panel-wide save.
+- **Settings** — one section at a time, chosen from a rail: Account, Appearance, Agent behavior,
+  Notifications, and for admins Projects, GitHub, Runtime limits, Environment and the Audit log.
+  Environment is the API-keys panel, one card per credential group (Model routing, Tracing, Email)
+  with a single panel-wide save.
   **Runtime limits** are operator-tunable without a restart: planning read/search/turn budgets, model
   and sandbox timeouts, check-suite timeouts, default task budget. A change lands on the next turn
   or task; anything already running keeps the limits it started with. Each project card also holds
@@ -533,8 +562,9 @@ Every model the agent uses is a named alias (`agent-planner`, `agent-coder`,
 `agent-consolidator`, `agent-cartographer`, `agent-classifier`, `agent-planning-chat`,
 `agent-planning-chat-hard`, `agent-planning-chat-frontend`,
 `agent-demo-chat`, `agent-reviewer`) pinned in the router's config. They're edited from the **Models** tab in the dashboard
-(`GET`/`POST /api/model-config`) — swapping a role's model is a dashboard action plus a router
-restart, no code change or redeploy. `agent/model_config.py` only ever touches these `agent-*`
+(`GET`/`POST /api/model-config`) — swapping a role's model is a dashboard action, with no restart,
+code change or redeploy: the router re-reads `config.yaml` between requests when its mtime changes,
+and a call in flight keeps the table it started with. `agent/model_config.py` only ever touches these `agent-*`
 entries; the router config is shared with other services, and edits are a surgical text
 replacement so everything else in the file is untouched.
 
@@ -627,7 +657,10 @@ appended only to what the model sees, never to the visible chat text or to what 
 agent/
   server.py            FastAPI app -- routes, WS streams, background task runners
   outer_graph.py        the 2-node work / verify_and_ship graph
-  graph.py               shared infra: Postgres checkpointer + store, per-project lock
+  graph.py               shared infra: Postgres checkpointer + store, per-project slots
+  workspaces.py          one git worktree per task, filled from the project's workspace
+  lifecycle.py           every task state × action, in one tested table
+  supervisor.py          closes tasks already on main; heals infrastructure escalations
   deep_agent.py          per-task deepagents factory (tools, memory backend, subagents)
   planning_chat.py       the Planning Chat agent
   frontend_route.py      Auto / Frontend / General seat selection
@@ -645,9 +678,10 @@ agent/
   github_repos.py        a private GitHub repo for a new project, its deploy key, the first push
   project_checks.py      detects and writes a project's checks after its first merge
   config.py              env-var config + PROJECTS (which repos this agent can target)
-  nodes/                 work.py, verify_and_ship.py
+  nodes/                 work.py, verify_and_ship.py, diff_patterns.py
   middleware/            budget_guard, model_pin, hidden_tools, repeat_guard,
-                         sanitize_tool_calls, pinned_brief, todo_nag
+                         sanitize_tool_calls, pinned_brief, todo_nag, step_back,
+                         wrap_up, empty_reply
                          (what each forbids: docs/middleware.md)
   tools/                 files, shell/bash, git, review_gate, planning_tools, vision, checks,
                          github_tools, router_ledger...
@@ -957,7 +991,7 @@ consolidation that did not run, the router refusing calls, and the difference be
 merge the agent is waiting on and a GitHub PR.
 
 **When you are adding to it**, [docs/middleware.md](docs/middleware.md) is the inventory of
-what each middleware forbids and which of the six agents it is attached to, and
+what each middleware forbids and which of the seven agents it is attached to, and
 [docs/playbooks/](docs/playbooks/README.md) covers adding a model role, a GitHub inbox
 source or a runtime knob — each starting with a test that fails until the wiring is done.
 

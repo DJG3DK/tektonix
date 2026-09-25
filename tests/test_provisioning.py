@@ -193,7 +193,7 @@ def test_config_from_choices_uses_operator_answers_not_detection(node_repo):
     """An operator's rejection must survive: detection proposed .env AND
     config/keys.json; the operator kept only .env."""
     entry = prov.config_from_choices(
-        "shop-api", str(node_repo), "/tmp/wt/shop-api",
+        str(node_repo), "/tmp/wt/shop-api",
         {"secret_files": [".env"], "checks": [{"name": "lint", "dir": ".", "cmd": "npm",
                                                "args": ["run", "lint"]}],
          "pm2_apps": ["shop"], "build_steps": [{"dir": ".", "cmd": "npm", "args": ["ci"]}],
@@ -1214,7 +1214,7 @@ def test_a_php_project_proposes_the_vendor_dir_the_reviewer_must_materialise(tmp
     assert r.dependency_dirs == ["vendor"]
 
     clean = prov.validate_choices(r, {"dependency_dirs": ["vendor"]})
-    entry = prov.config_from_choices(r.name, r.live, r.sandbox, clean)
+    entry = prov.config_from_choices(r.live, r.sandbox, clean)
     assert entry["review"]["dependencyDirs"] == ["vendor"]
 
 

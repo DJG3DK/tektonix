@@ -56,7 +56,7 @@ def check_readable(repo: str, readable: list[str]) -> None:
     Lifted out of _root so it is ONE rule rather than one per subsystem
     that grows a cross-project reach. agent/tools/history_tools.py searches
     other projects' history through this same check: the list is resolved
-    at task creation from the creator's own access (server.py
+    at task creation from the creator's own access (agent/routers/tasks.py
     _readable_repos) and carried on the task, and two places deciding
     separately what that list means is how one of them ends up laxer.
 

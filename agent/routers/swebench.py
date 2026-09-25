@@ -1,12 +1,15 @@
 """SWE-bench Verified runs, on the analytics page: the score, each task, its
-patch and the agent's whole conversation.
+patch, what the reviewer said, the box during the run, and the agent's whole
+conversation.
 
 Read-only. A run is `scripts/run_swebench.py`, started from a shell: it pulls
 gigabytes of images, runs for hours and spends real money, and what makes its
 number a SWE-bench number is spelled out in evals/SWEBENCH.md. This only reads
 what the runner leaves in logs/swebench/<run>/ -- summary.json (rewritten
-after every task, so a run shows as it goes), predictions.jsonl, the official
-harness's reports, and trajectories/<id>.json.
+after every task, so a run shows as it goes; per task the reviewer's record
+and the harness's own note), predictions.jsonl, the official harness's
+reports, host.jsonl (agent/evals/host_metrics.py) and trajectories/<id>.json.
+A run split with --shard is shown as one run.
 
 Admin-only, like the golden suite: the trajectories hold every tool call and
 file the agent read.

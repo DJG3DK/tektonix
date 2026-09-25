@@ -34,8 +34,7 @@ than from an incident:
   each page, however carefully ordered between them. (Measured after the
   live run: 146 episodes, 7 distinct `updated_at` values.) Nothing reads
   episodes that way -- agent/consolidation.py sorts them by KEY,
-  deliberately, and store_paging.recent_items is used for the tasks
-  namespace -- so this costs nothing today. It is written down because the
+  deliberately -- so this costs nothing today. It is written down because the
   first version of this paragraph promised an ordering the batching never
   kept, and the next reader would have believed it.
 * project_lock. Unlike the history-index backfill, this one writes into the

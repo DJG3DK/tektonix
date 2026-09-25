@@ -5,6 +5,7 @@ the official image name, the issue and nothing else in the goal, no network and
 no outside tools in a benchmark project, and a prediction that is the agent's
 source change -- not its tests, not the image's build output.
 """
+import os
 import subprocess
 
 import pytest
@@ -345,6 +346,9 @@ def test_every_batch_s_tasks_call_that_batch_s_reviewer():
     from agent.tools import review_gate
     mod = _runner()
     before = (review_gate.REVIEW_SERVICE_PORT, review_gate.REVIEW_CONTROL_PORT)
+    # point_agent_at_reviewer also writes the ports into os.environ; left
+    # there, a later reload of the gate in another test file read them.
+    env_before = {v: os.environ.get(v) for v in ("REVIEW_SERVICE_PORT", "REVIEW_CONTROL_PORT")}
     try:
         review_gate._CHECKS_CACHE["all"] = {"stale": True}
         mod.point_agent_at_reviewer({"REVIEW_SERVICE_PORT": "45001", "REVIEW_CONTROL_PORT": "45002"})
@@ -354,6 +358,8 @@ def test_every_batch_s_tasks_call_that_batch_s_reviewer():
         assert review_gate.REVIEW_SERVICE_PORT == 46001, "the next batch moves it again"
     finally:
         review_gate.REVIEW_SERVICE_PORT, review_gate.REVIEW_CONTROL_PORT = before
+        for var, val in env_before.items():
+            os.environ.pop(var, None) if val is None else os.environ.__setitem__(var, val)
 
 
 @pytest.mark.parametrize("cmd", [

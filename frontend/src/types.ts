@@ -22,10 +22,10 @@ export interface CurrentUser {
 
 export type TaskStatus =
   | "running" | "done" | "escalated" | "error" | "stopped"
-  /** Waiting for another task on the same project to finish. One task per
-   *  project is a hard constraint -- they share one worktree (project_lock in
-   *  agent/graph.py) -- and this is what that wait looks like from outside,
-   *  instead of a task that claims to be running and never moves. */
+  /** Waiting for a slot on its project: every slot "Tasks at once per
+   *  project" allows is held by another task (project_slot in agent/graph.py,
+   *  one advisory lock per slot). This is what that wait looks like from
+   *  outside, instead of a task that claims to be running and never moves. */
   | "queued"
   | "awaiting_approval"
   /** Review READY; merge parked on the operator's final look at the diff. */
@@ -123,7 +123,7 @@ export interface ReviewGateResult {
 // Mirrors LangChain's own HITLRequest shape verbatim (langgraph.types.
 // Interrupt.value, forwarded as-is by work.py) -- no server-side reshaping,
 // so this type is the authoritative contract for what the dashboard renders.
-export interface PendingApprovalActionRequest {
+interface PendingApprovalActionRequest {
   name: string;
   args: Record<string, unknown>;
   description?: string;
@@ -171,13 +171,13 @@ export interface StreamEvent {
   committed_sha?: string | null;
 }
 
-export interface AnalyticsDaily {
+interface AnalyticsDaily {
   date: string;
   cost: number;
   tasks: number;
 }
 
-export interface AnalyticsTask {
+interface AnalyticsTask {
   task_id: string;
   repo: string;
   goal: string;
@@ -188,7 +188,7 @@ export interface AnalyticsTask {
   created_at: number | null;
 }
 
-export interface AnalyticsEpisode {
+interface AnalyticsEpisode {
   task_id: string;
   repo: string;
   iterations: number;
@@ -201,7 +201,7 @@ export interface AnalyticsEpisode {
 // The fixed taxonomy a task's goal gets sorted into at creation time (see
 // agent/classify.py) -- "other" is also the fallback for any task created
 // before this classifier existed at all.
-export interface AnalyticsCategory {
+interface AnalyticsCategory {
   category: string;
   tasks: number;
   cost: number;
@@ -213,7 +213,7 @@ export interface AnalyticsCategory {
  *  folding them together would silently change what every other number on the
  *  Analytics page means. Until 2026-08-25 this was not measured at all — the
  *  reviewer called OpenRouter directly and never read the response's usage. */
-export interface ReviewerUsage {
+interface ReviewerUsage {
   reviews: number;
   cost: number;
   tokens_in: number;
@@ -254,7 +254,7 @@ export interface AgentModelUsage {
   errors?: number;
 }
 
-export interface ToolReliabilityEntry {
+interface ToolReliabilityEntry {
   tool: string;
   calls: number;
   errors: number;
@@ -264,13 +264,13 @@ export interface ToolReliabilityEntry {
   nudged?: number;
 }
 
-export interface ToolNudge {
+interface ToolNudge {
   /** "read" | "write" | "memory-read" | "memory-write" */
   kind: string;
   count: number;
 }
 
-export interface ToolReliabilityDaily {
+interface ToolReliabilityDaily {
   date: string;
   errors: number;
 }
@@ -472,7 +472,7 @@ export interface EvalRunSummary {
   results: Record<string, boolean>;
 }
 
-export interface EvalStatus {
+interface EvalStatus {
   running: boolean;
   pid: number | null;
   started_at: number | null;
@@ -496,7 +496,7 @@ export interface EvalsOverview {
   estimate: { cost_usd: number | null; duration_s: number | null; from_run: string | null };
 }
 
-export interface EvalAssertionRow {
+interface EvalAssertionRow {
   kind: string;
   describe: string;
   ok: boolean;
@@ -504,7 +504,7 @@ export interface EvalAssertionRow {
   detail: string;
 }
 
-export interface EvalTaskRow {
+interface EvalTaskRow {
   id: string;
   fixture: string;
   category: string;
@@ -559,7 +559,7 @@ export interface SwebenchOverview {
   gold_check: { checked: number; reference_fails: string[] };
 }
 
-export interface SwebenchTests {
+interface SwebenchTests {
   patch_applied: boolean | null;
   fail_to_pass_failed: string[];
   fail_to_pass_passed: number;
@@ -608,7 +608,7 @@ export type SwebenchHostField =
   | "router_calls" | "router_inflight" | "router_p50_s" | "router_p90_s" | "router_errors";
 
 /** A sample: unix seconds plus whichever fields were read that minute. */
-export type SwebenchHostSample = { t: number } & { [k in SwebenchHostField]?: number };
+type SwebenchHostSample = { t: number } & { [k in SwebenchHostField]?: number };
 
 export interface SwebenchHost {
   interval_s: number;
@@ -626,7 +626,7 @@ export interface SwebenchRun {
   host?: SwebenchHost | null;
 }
 
-export interface SwebenchMessage {
+interface SwebenchMessage {
   role: string;
   name: string | null;
   text: string;

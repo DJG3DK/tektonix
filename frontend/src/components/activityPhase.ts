@@ -12,7 +12,7 @@ import type { LogEntry } from "../types";
  *  worth saying. The backend sends a real per-project estimate where it has
  *  one (`expected_seconds`); these are the floors used until it does.
  */
-export interface ActivityPhase {
+interface ActivityPhase {
   id: "checks" | "review" | "deploy";
   /** What it is doing, as a sentence opener. */
   label: string;
@@ -76,7 +76,7 @@ export function currentPhase(log: LogEntry[]): ActivityPhase | null {
   };
 }
 
-export function humanDuration(seconds: number): string {
+function humanDuration(seconds: number): string {
   if (seconds < 3600) return `${Math.floor(seconds / 60)} min`;
   return `${(seconds / 3600).toFixed(1)} h`;
 }

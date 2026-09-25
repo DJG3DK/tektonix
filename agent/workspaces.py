@@ -1,18 +1,15 @@
 """One workspace per task, so tasks on the same project can run side by side.
 
-Until 2026-09-23 a project had exactly one workspace -- `projects.json`'s
-`sandbox`, a git worktree of the live repo -- and every task on that project
-took turns in it behind a project lock. Most of the machinery in
-agent/tools/git.py (the owner marker, the stash salvage, reclaiming a parked
-task's stash) exists to hand that one tree from task to task.
-
-Now each task gets its own worktree, on its own branch, beside the project's:
+Each task gets its own worktree, on its own branch, beside the project's
+`sandbox` (a git worktree of the live repo):
 
     <sandbox's parent>/.tasks/<sandbox's name>/<task id>
 
-The project's own `sandbox` stays, with two jobs: it is the TEMPLATE a task's
+The project's own `sandbox` has two jobs: it is the TEMPLATE a task's
 workspace is filled from, and it is what planning, the cartographer and memory
-consolidation read. No task edits it any more.
+consolidation read. No task edits it. (Before 2026-09-23 every task took turns
+in it behind the project lock; agent/tools/git.py's owner marker and stash
+salvage date from then and still carry a task parked before the change.)
 
 Filling a new worktree. A checkout has only the tracked files, and a project
 does not run on those alone: node_modules, a venv, generated clients, built

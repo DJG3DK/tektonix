@@ -383,7 +383,7 @@ export async function submitMergeDecision(
   }
 }
 
-export interface TelegramSettings {
+interface TelegramSettings {
   configured: boolean;
   chat_id: string | null;
 }
@@ -460,7 +460,7 @@ export async function setTheme(theme: string): Promise<void> {
 
 // ── web push ───────────────────────────────────────────────────────────────
 
-export interface PushKeyResponse {
+interface PushKeyResponse {
   public_key: string;
   subscriptions: number;
 }
@@ -631,7 +631,7 @@ export async function getModelConfig(): Promise<{ roles: Record<string, ModelPin
   return res.json();
 }
 
-export interface ForcedToolCallInfo {
+interface ForcedToolCallInfo {
   compliant: string[];
   non_compliant: string[];
   /** Cannot be probed at all: batch-only endpoints, or no provider serving
@@ -851,7 +851,7 @@ export interface ProvisionCandidate {
   warning: string | null;
 }
 
-export interface CheckStep {
+interface CheckStep {
   name: string;
   dir: string;
   cmd: string;
@@ -898,7 +898,7 @@ export interface ProvisionStep {
   detail: string;
 }
 
-export interface ProvisionResult {
+interface ProvisionResult {
   ok: boolean;
   steps: ProvisionStep[];
   message?: string;
@@ -1286,7 +1286,7 @@ export interface GitHubInboxItem {
   snoozed_until: number | null;
 }
 
-export interface GitHubInboxResponse {
+interface GitHubInboxResponse {
   items: GitHubInboxItem[];
   last_poll: { at: number; results: { repo: string; found?: number; proposed?: number; created?: number; resolved?: number; skipped?: string; error?: string }[] } | null;
 }

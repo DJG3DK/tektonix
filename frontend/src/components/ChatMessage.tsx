@@ -97,7 +97,7 @@ export function renderWithColorSwatches(text: string): React.ReactNode {
   return nodes.length > 1 ? nodes : text;
 }
 
-export function ArtifactImage({ caption, url }: { caption: string; url: string }) {
+function ArtifactImage({ caption, url }: { caption: string; url: string }) {
   return (
     <figure className="chat-image">
       <a href={url} target="_blank" rel="noopener noreferrer" title="Open full size">
@@ -163,7 +163,7 @@ function verdictTone(summary: string): "good" | "bad" | "warn" | "info" {
  *  (coder and test-writer both on deepseek), so the model badge alone cannot
  *  attribute an error in the stream to a role. Muted styling on purpose —
  *  the role is orientation, the model stays the colored primary badge. */
-export function RoleBadge({ role }: { role?: string | null }) {
+function RoleBadge({ role }: { role?: string | null }) {
   if (!role) return null;
   return (
     <span className="chat-role-badge" title={`agent role: ${role}`}>

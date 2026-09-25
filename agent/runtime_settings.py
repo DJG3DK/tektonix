@@ -121,7 +121,9 @@ KNOBS: dict[str, dict] = {
         "label": "Model calls per run",
         "help": (
             "Backstop against a runaway loop, not a normal-operation cap -- a healthy "
-            "task stays far below it. Applies to the coordinator and to each subagent."
+            "task stays far below it. Applies to the coordinator and to each subagent "
+            "separately: the coordinator reaching it ends the pass as an error; a subagent "
+            "reaching it ends its own run and hands the coordinator what it has."
         ),
         "unit": "calls",
         "default": 200.0,
@@ -132,7 +134,11 @@ KNOBS: dict[str, dict] = {
     },
     "tool_call_run_limit": {
         "label": "Tool calls per run",
-        "help": "The same backstop for tool calls rather than model calls.",
+        "help": (
+            "The same backstop for tool calls rather than model calls. The verifier (30) and "
+            "the test-writer (60) have their own tighter caps, so this binds them only when set "
+            "lower than those."
+        ),
         "unit": "calls",
         "default": 300.0,
         "min": 20.0,

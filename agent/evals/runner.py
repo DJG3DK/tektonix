@@ -83,7 +83,6 @@ class TaskRun:
 
 @dataclass
 class SuiteRun:
-    started_at: float
     window_label: str
     runs: list[TaskRun] = field(default_factory=list)
     stopped_early: str = ""
@@ -263,7 +262,7 @@ async def run_suite(tasks: list[TaskSpec], *, graph, config, eval_root: Path,
     `parallel` above one runs that many tasks at once -- the harness doing
     what parallel_tasks_per_project lets a real project do, so the suite
     measures the agent under it (and finishes sooner)."""
-    suite = SuiteRun(started_at=time.time(), window_label=time.strftime("%Y-%m-%dT%H:%M:%SZ"))
+    suite = SuiteRun(window_label=time.strftime("%Y-%m-%dT%H:%M:%SZ"))
     if parallel > 1:
         return await _run_suite_parallel(tasks, suite, graph=graph, config=config, eval_root=eval_root,
                                          cost_ceiling_usd=cost_ceiling_usd, run_command=run_command,

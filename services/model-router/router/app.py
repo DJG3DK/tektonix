@@ -1,11 +1,14 @@
 """The router's HTTP surface.
 
-Deliberately small. Four routes are all anything in this deployment calls:
+Deliberately small:
 
-  POST /v1/chat/completions   every model call, from four services
+  POST /v1/chat/completions   every model call, from every service on the box
   POST /v1/embeddings         episode embeddings, so they are billed here too
   GET  /health/liveliness     agent/health.py, unauthenticated by design
+  GET  /health/readiness      503 until there are deployments and an upstream key
   GET  /v1/model/info         the deployment table, for tooling
+  GET  /v1/models             the alias list
+  GET  /v1/stats              per-alias latency, errors, spend, from the ledger
 
 The compatibility contract is not a matter of taste -- each item below is
 something that breaks a specific caller if it changes:

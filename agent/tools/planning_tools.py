@@ -447,8 +447,8 @@ def make_planning_tools(
     create_project], plan_ref).
 
     `is_admin`/`actor` are the caller's role and email, threaded in
-    explicitly the way `allowed_repos` is (server.py send_planning_message ->
-    build_planning_agent -> here). They cannot be derived from
+    explicitly the way `allowed_repos` is (agent/routers/planning.py
+    send_planning_message -> server.py build_planning_agent -> here). They cannot be derived from
     `allowed_repos`: it is None for admins AND for legacy unscoped accounts,
     so only an explicit flag can gate create_project the way the endpoint it
     feeds (POST /api/projects/create) is gated. Both default off, so a caller

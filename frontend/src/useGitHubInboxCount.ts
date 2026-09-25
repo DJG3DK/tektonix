@@ -19,7 +19,7 @@ import { getGitHubInbox } from "./api";
  * fails, the honest thing is to show no badge rather than a zero, an
  * exclamation mark, or a stale count from before.
  */
-export const INBOX_POLL_MS = 45_000;
+const INBOX_POLL_MS = 45_000;
 
 export function useGitHubInboxCount(refreshKey?: unknown): number | null {
   const [count, setCount] = useState<number | null>(null);

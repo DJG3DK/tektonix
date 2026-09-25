@@ -5,7 +5,7 @@ design document and it does not explain why anything is the way it is — that
 reasoning lives in comments next to the code it justifies, where it cannot go
 stale silently. Read this to find the right file, then read the file.
 
-Written 2026-09-11, revised 2026-09-17. Everything here was checked against the running system.
+Written 2026-09-11, revised 2026-09-25. Everything here was checked against the running system.
 
 ---
 
@@ -76,7 +76,7 @@ The single most common confusion. Every project has up to three copies:
 | Path | What it is | Who writes it |
 |---|---|---|
 | `/home/<project>` | **Live.** What the world is running. | Nobody, except the merge step of a deploy (fast-forward only) |
-| `/home/agent-workspaces/<project>` | **Task worktree.** A git worktree of live, on a per-task branch `agent/<task-id>`. Mounted into the sandbox container as `/workspace` | The agent. Every edit a task makes lands here first |
+| `/home/agent-workspaces/<project>`, and `/home/agent-workspaces/.tasks/<project>/<task-id>` per task | **Project workspace, and one task worktree per task.** The project workspace is a git worktree of live; each task gets its own worktree of it, on its own branch `agent/<task-id>`, with the workspace's dependencies hardlinked and build output copied (`agent/workspaces.py`). The task's worktree is what is mounted into the sandbox container as `/workspace` | The agent. Every edit a task makes lands in its own worktree first |
 | `services/commit-reviewer/worktrees/<project>-<sha>` | **Review worktree.** A detached checkout at the exact commit under review, with the project's secret files copied in and its installed dependencies bound in read-only, so checks can run | The reviewer, then deleted |
 
 A review worktree contains what git contains, which is not enough to run
@@ -137,7 +137,7 @@ its checkpoint. Nothing is lost and every one of them is resumable:
 |---|---|---|
 | `pending_approval` | a gated action needs a yes, or `ask_user` asked a question | the operator answers (`POST /api/tasks/{id}/approve`) |
 | `pending_merge_approval` | the review passed; the final look is the operator's | the operator decides (`POST /api/tasks/{id}/merge-decision`) |
-| `escalated` | the agent cannot proceed (budget, a loop, a merge failure) | the operator resumes, optionally with more budget — or the supervisor heals it (below) |
+| `escalated` | the agent cannot proceed (budget, a loop, a merge failure, the reviewer's breaker: three `NEEDS_FIXES` in a row or one file churning across three rounds) | the operator resumes, optionally with more budget — or the supervisor heals it (below) |
 | `done` / `error` | settled | a resume, which is allowed and needs a message |
 
 A task is never a dead end: every state above can be resumed from the
@@ -195,10 +195,13 @@ agent/
                        Being split one seam at a time into routers/ -- never in
                        one pass; tests/test_route_inventory.py is the net
   outer_graph.py       the two-node graph and its routing
-  nodes/               work.py, verify_and_ship.py
+  nodes/               work.py, verify_and_ship.py, diff_patterns.py
   deep_agent.py        the build agent: seats, tools, the approval gate
   planning_chat.py     the planning agent: three seats, brief-first, draft gate
-  graph.py             the pools and the project lock, dispatched per backend
+  graph.py             the pools and the per-project slots, dispatched per backend
+  workspaces.py        one git worktree per task, filled from the project's workspace
+  lifecycle.py         every task state × action, in one tested table (section 4)
+  supervisor.py        the sweep that closes and heals parked tasks (section 4)
   backends.py          the ONLY place a DSN decides postgres vs sqlite
   store_paging.py      one pager; four hand-rolled loops used to disagree
   episodes.py          the single episode writer
@@ -224,7 +227,8 @@ agent/
   notify.py            one fan-out, two transports: Telegram and web push
   deploy_keys.py       per-project SSH deploy keys
   middleware/          budget_guard, repeat_guard, sanitize_tool_calls,
-                       hidden_tools, pinned_brief, model_pin, todo_nag
+                       hidden_tools, pinned_brief, model_pin, todo_nag,
+                       step_back, wrap_up, empty_reply
   tools/               files, bash/sandbox, git, review_gate, planning_tools,
                        github_tools, vision, checks
 scripts/
@@ -274,7 +278,7 @@ see, what to check, what to do. Start there rather than here.
 Two pages, for the two questions the source does not answer quickly.
 
 [docs/middleware.md](middleware.md) is the inventory of what each middleware
-forbids and which of the six agents it is attached to. The modules under
+forbids and which of the seven agents it is attached to. The modules under
 `agent/middleware/` carry the incident that produced each rule, at length;
 that is the story, and the inventory is the index. Subagents do **not**
 inherit the coordinator's chain, which is the single most expensive thing to

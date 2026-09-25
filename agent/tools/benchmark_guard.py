@@ -1,33 +1,25 @@
 """On a benchmark project, the agent does not go looking for the answer.
 
 2026-09-24, SWE-bench sample: tasks spent most of their budget searching for
-the published fix instead of writing one -- git's object store (`cat-file
---batch-all-objects`, `fsck --lost-found`), `git log --all`, `pip download` of
-the fixed release, `grep -r` and `find` across the whole filesystem, even
-`find / -iname "*eval*"` for the grader. Nothing was there to find: the
-repository has no later commits, the sandbox has no network, and the grading
-tests are not in the environment. But one task spent 41 turns on it, made no
-edit at all, and a trajectory like that is what disqualifies a leaderboard
-submission.
+the published fix -- git's object store, `git log --all`, `pip download` of
+the fixed release, `find`/`grep` across the whole filesystem, even a search
+for the grader. Nothing was there to find (no later commits, no network, no
+grading tests); one task spent 41 turns on it and made no edit, and such a
+trajectory disqualifies a leaderboard submission. The task statement says so
+(agent/evals/swebench.py); this refuses the searches themselves, with the
+same explanation, for benchmark projects only. Reading the repository, a
+file's own history and installed dependencies stays allowed.
 
-The task statement says so up front (agent/evals/swebench.py); this refuses
-the searches themselves, with the same explanation, for benchmark projects
-only. Reading the repository, its own history of a file, and installed
-dependencies stays allowed -- that is ordinary work.
-
-2026-09-25, 50 tasks: 62 refusals, and most of them were compounds -- `git log
---all --oneline | head -5 && git status --short`, `grep -rn "has_key" django/
-; find / -name json.py` -- where the legitimate half was thrown away with the
-hunt. In one task the lost `grep` would have led straight to the regression
-the task then failed on. So the command is split into its top-level segments
-and only the hunting segments are dropped: the rest RUNS, with a note on the
-front of the result naming what was refused and why. A pipeline is one
-segment -- if any stage of it hunts, the whole pipeline goes.
-
-The same run showed what walked past the patterns: `strings` and `marshal` on
-stale `__pycache__` bytecode (listing the hidden tests' names), `git branch
--a && git tag | tail -5` (looking for a later release), `git for-each-ref`,
-`gh api repos/.../pulls/13033/files`, `ls ~/.cache/pip`. Those are hunts too.
+`screen()` judges a command segment by segment. 2026-09-25, 50 tasks: most
+of the 62 refusals were compounds like `grep -rn x django/ ; find / -name
+json.py`, and the lost `grep` would have found the regression the task then
+failed on. Only the hunting segments are dropped; the rest runs, with a note
+on the front of its result naming what was refused and why. A pipeline is
+one segment, and a command the splitter cannot see through (a heredoc, a
+loop, a subshell) is judged whole. The same run added the hunts the first
+patterns missed: stale `__pycache__` bytecode (listing the hidden tests'
+names), `git branch -a`, `git tag`, `git for-each-ref`, `gh api`,
+`~/.cache/pip`.
 """
 
 from __future__ import annotations

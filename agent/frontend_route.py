@@ -38,7 +38,6 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-ROUTES = ("auto", "frontend", "general")
 FRONTEND, GENERAL = "frontend", "general"
 
 # Roles the two routes resolve to. The aliases live in the router's

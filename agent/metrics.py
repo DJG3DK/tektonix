@@ -1,7 +1,7 @@
 """The dashboard's metrics, computed from this deployment's own records.
 
-Until now three Analytics panels -- per-role model usage, tool reliability and
-trace health -- were read back out of LangSmith. That made an optional,
+Until 2026-09-12 three Analytics panels -- per-role model usage, tool
+reliability and trace health -- were read out of LangSmith. That made an optional,
 third-party, off-box service load-bearing for the question "what is this agent
 doing", and it cost more than it looked: profiled on 2026-09-12, the redacting
 tracer that has to run for those traces to be safe was burning ~100% of a core

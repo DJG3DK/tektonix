@@ -79,7 +79,7 @@ def test_a_restart_nobody_proposed_is_refused(rooted):
 
 def test_the_entry_records_it_under_deploy(rooted):
     entry = provisioning.config_from_choices(
-        "proj", "/srv/live/proj", "/srv/ws/proj",
+        "/srv/live/proj", "/srv/ws/proj",
         {"restart_commands": [{"kind": "compose", "cmd": "docker",
                                "args": ["compose", "up", "-d"], "dir": "."}]},
     )
@@ -89,5 +89,5 @@ def test_the_entry_records_it_under_deploy(rooted):
 def test_a_project_with_no_restart_has_no_deploy_block_at_all(rooted):
     """Absent, not empty: the review service reads `p.restart || []`, and an
     empty deploy block is a thing somebody has to interpret."""
-    entry = provisioning.config_from_choices("proj", "/l", "/s", {})
+    entry = provisioning.config_from_choices("/l", "/s", {})
     assert "deploy" not in entry

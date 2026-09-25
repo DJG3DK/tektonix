@@ -36,39 +36,39 @@ vi.mock("../api", async (importOriginal) => {
 beforeEach(() => {
   vi.clearAllMocks();
   listProjectsConfig.mockResolvedValue({
-    projects: { Artistic_Gamut: { live: "/home/Artistic_Gamut" } },
+    projects: { brochure: { live: "/home/brochure" } },
     config_path: "/p/projects.json",
     restart_required_hint: "",
   });
   listProjectArchives.mockResolvedValue({ archives: [] });
-  getDeployKey.mockResolvedValue({ project: "Artistic_Gamut", has_key: false });
+  getDeployKey.mockResolvedValue({ project: "brochure", has_key: false });
   checkoutRemovable.mockResolvedValue({
-    live: "/home/Artistic_Gamut", removable: true,
-    reason: "every commit is on a remote and nothing is uncommitted in /home/Artistic_Gamut",
+    live: "/home/brochure", removable: true,
+    reason: "every commit is on a remote and nothing is uncommitted in /home/brochure",
   });
 });
 
 async function openRemoval() {
   const user = userEvent.setup();
   render(<ProjectsPanel />);
-  const row = (await screen.findByText("Artistic_Gamut")).closest("li")!;
+  const row = (await screen.findByText("brochure")).closest("li")!;
   // The point of the test: reachable from the row, without expanding first.
-  await user.click(within(row).getByRole("button", { name: /Remove Artistic_Gamut/ }));
+  await user.click(within(row).getByRole("button", { name: /Remove brochure/ }));
   return { user, row };
 }
 
 describe("taking a project back off", () => {
   it("offers Remove on the row itself, not only once it is expanded", async () => {
     render(<ProjectsPanel />);
-    const row = (await screen.findByText("Artistic_Gamut")).closest("li")!;
-    expect(within(row).getByRole("button", { name: /Remove Artistic_Gamut/ })).toBeInTheDocument();
+    const row = (await screen.findByText("brochure")).closest("li")!;
+    expect(within(row).getByRole("button", { name: /Remove brochure/ })).toBeInTheDocument();
     // and nothing had to be expanded for that
     expect(within(row).getByRole("button", { expanded: false })).toBeInTheDocument();
   });
 
   it("opens the confirmation straight from that button", async () => {
     await openRemoval();
-    expect(await screen.findByLabelText(/Type Artistic_Gamut to confirm/)).toBeInTheDocument();
+    expect(await screen.findByLabelText(/Type brochure to confirm/)).toBeInTheDocument();
   });
 
   it("offers to delete the checkout when nothing would be lost, and says why", async () => {
@@ -77,15 +77,15 @@ describe("taking a project back off", () => {
     expect(choice).not.toBeDisabled();
 
     await user.click(choice);
-    await user.type(screen.getByLabelText(/Type Artistic_Gamut to confirm/), "Artistic_Gamut");
+    await user.type(screen.getByLabelText(/Type brochure to confirm/), "brochure");
     removeProject.mockResolvedValue({
-      ok: true, name: "Artistic_Gamut", steps: [], archive: "a.json",
-      live_untouched: null, live_removed: "/home/Artistic_Gamut",
+      ok: true, name: "brochure", steps: [], archive: "a.json",
+      live_untouched: null, live_removed: "/home/brochure",
     });
     await user.click(screen.getByRole("button", { name: /Remove and delete the checkout/ }));
 
     await waitFor(() => expect(removeProject)
-      .toHaveBeenCalledWith("Artistic_Gamut", "archive", "delete"));
+      .toHaveBeenCalledWith("brochure", "archive", "delete"));
     // and the outcome survives the project leaving the list
     expect(await screen.findByText(/was deleted; everything in it was on its remote/))
       .toBeInTheDocument();
@@ -93,7 +93,7 @@ describe("taking a project back off", () => {
 
   it("refuses the choice with the reason when something would be lost", async () => {
     checkoutRemovable.mockResolvedValue({
-      live: "/home/Artistic_Gamut", removable: false,
+      live: "/home/brochure", removable: false,
       reason: "it has 2 commits that are not on any remote",
     });
     await openRemoval();
@@ -107,15 +107,15 @@ describe("taking a project back off", () => {
     await screen.findByRole("radio", { name: /Leave it where it is/ });
     expect(screen.getByRole("radio", { name: /Leave it where it is/ })).toBeChecked();
 
-    await user.type(screen.getByLabelText(/Type Artistic_Gamut to confirm/), "Artistic_Gamut");
+    await user.type(screen.getByLabelText(/Type brochure to confirm/), "brochure");
     removeProject.mockResolvedValue({
-      ok: true, name: "Artistic_Gamut", steps: [], archive: "a.json",
-      live_untouched: "/home/Artistic_Gamut", live_removed: null,
+      ok: true, name: "brochure", steps: [], archive: "a.json",
+      live_untouched: "/home/brochure", live_removed: null,
     });
     await user.click(screen.getByRole("button", { name: /Remove and archive/ }));
 
     await waitFor(() => expect(removeProject)
-      .toHaveBeenCalledWith("Artistic_Gamut", "archive", "keep"));
+      .toHaveBeenCalledWith("brochure", "archive", "keep"));
     expect(await screen.findByText(/was not touched/)).toBeInTheDocument();
   });
 });

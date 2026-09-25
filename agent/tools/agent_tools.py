@@ -330,11 +330,10 @@ def make_agent_tools(
             # intended repo entirely -- another project's live secrets, this
             # project's own .env, etc. Container isolation keeps none of that
             # visible from inside the sandbox.
-            # audit H-18: the model supplies `timeout`; clamp it to a hard
-            # ceiling. bash holds the per-project lock for its whole run, so an
-            # unbounded value (or a nonsense one) lets a single confused turn
-            # wedge the project for everyone else. 600s is well above any
-            # legitimate build/test step.
+            #
+            # Harness text goes on the front of the result, in this order: the
+            # guard's refusal (benchmark only), the /baseline PYTHONPATH note
+            # (benchmark only), then a bash_advice nudge.
             notes: list[str] = []
             if benchmark:
                 # A benchmark task does not go looking for the published fix
@@ -357,6 +356,11 @@ def make_agent_tools(
                 if baseline:
                     command, note = baseline
                     notes.append(note)
+            # audit H-18: the model supplies `timeout`; clamp it to a hard
+            # ceiling. bash holds the per-project lock for its whole run, so an
+            # unbounded value (or a nonsense one) lets a single confused turn
+            # wedge the project for everyone else. 600s is well above any
+            # legitimate build/test step.
             _BASH_TIMEOUT_CEILING = 600
             try:
                 timeout = int(timeout)
@@ -368,10 +372,11 @@ def make_agent_tools(
             r = await run_shell_sandboxed(command, repo_root, timeout=timeout)
             content = f"exit_code={r['exit_code']}\n{_describe_output(r)}"
             # Editing or reading a file through the shell costs a container
-            # for work the in-process tools do for free -- see
-            # agent/tools/bash_advice.py for the run that made this worth
-            # saying. A note, never a refusal: writing a scratch script to RUN
-            # is a fair use of a shell.
+            # for work the in-process tools do for free (agent/tools/
+            # bash_advice.py). Advice, never a refusal -- the guard above is
+            # the only refusal here -- and the read/edit notes stop after
+            # NOTE_BUDGET per workspace. Judged on what the model asked, not
+            # the prefixed command.
             nudge = _within_note_budget(repo_root, bash_advice.advice_for(asked))
             if nudge:
                 # The note goes on the result and nowhere else. The work node

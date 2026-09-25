@@ -1,6 +1,7 @@
 """PlanCodeModelMiddleware's turn classification -- the deterministic rule
-that decides which pinned model handles a coordinator turn: planner on the
-thread's first turn, coder after."""
+that decides which pinned model handles a coordinator turn: planner on a
+turn that answers fresh outer input (a HumanMessage after the model's last
+own message), coder after."""
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 

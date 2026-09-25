@@ -180,16 +180,12 @@ async def _supervisor_deps():
 async def _auto_resume_orphaned_tasks(startup_delay: float = 5.0) -> None:
     """Reconnect tasks orphaned by a restart, without operator action.
 
-    resume_task's own docstring declares restarts routine ("this pm2 process
-    gets restarted routinely to deploy fixes") and its orphan branch resumes
-    from the checkpoint with no replanning -- but nothing ever CALLED that
-    path automatically, so every deploy stranded any in-flight build until a
-    human noticed the silence and clicked Resume (2026-08-27: the operator
-    watched a stalled screener build for an hour and asked why). This is the
-    missing last mile: at startup, find every task whose Store status says
-    "running" while nothing drives it, and restart its driver exactly the
-    way the endpoint's orphan branch does (same +40 iteration headroom, no
-    budget change -- the operator already approved this task's budget).
+    At startup, find every task whose Store status says "running" while
+    nothing drives it, and restart its driver exactly the way resume_task's
+    orphan branch does (same +40 iteration headroom, no budget change -- the
+    operator already approved this task's budget). Restarts are routine
+    (every deploy), and until 2026-08-27 each one stranded any in-flight
+    build until a human noticed the silence and clicked Resume.
 
     Deliberately NOT resumed:
       - escalated tasks (they are waiting for a human by design),
@@ -451,8 +447,8 @@ if config.cors_allow_origins:
         allow_headers=["*"],
     )
 
-# Per-seam routers (agent/routers/). server.py is 3,659 lines (2026-09-23) and is
-# being split one seam at a time, never in one pass -- see docs/todo.md and
+# Per-seam routers (agent/routers/). server.py is being split one seam at a
+# time, never in one pass -- see docs/todo.md and
 # docs/playbooks/README.md. tests/test_route_inventory.py is what makes each
 # move safe: it pins every route's path, method and auth dependency, so a
 # seam that moves either looks identical from outside or fails the snapshot.
@@ -718,10 +714,8 @@ async def health():
     describes its owner rather than this process.
 
     503 when any check fails, so a probe that only reads the status code is
-    still correct. There was no health route at all until 2026-09-11: every
-    restart check in this repo's own history curled /api/health and got the
-    SPA's index.html with a 200, which proved only that uvicorn was serving
-    static files.
+    still correct (until 2026-09-11 /api/health fell through to the SPA's
+    index.html with a 200, which proved only that uvicorn served files).
     """
     # auth_pool is the same Postgres this deployment keeps everything in, and
     # it is a real pool with a liveness check on checkout -- so one SELECT 1
@@ -953,19 +947,13 @@ async def _github_create_task(repo: str, goal: str, budget: float, route: str) -
     bot; the README promises Auto "keeps the operator's final merge approval",
     and this line is where that promise is kept.
 
-    Auto-approve of gated file/shell actions, by contrast, now follows the
-    operator's own per-project switch (auth.repo_auto_approves). It used to be
-    hard-coded False here on the reasoning that nobody typed these goals --
-    which sounded right and worked badly. Observed 2026-09-13 on Dependabot
-    alert #2, a CRITICAL Next.js RCE the inbox started by itself: the task
-    parked at awaiting_approval on
-    `"eslint-config-next": "16.2.12" -> "16.3.5"`, because editing
-    package.json trips the sensitive-path gate. A dependency bump touches the
-    manifest, the lockfile and sometimes a workflow, so it asks once per file
-    -- and the operator had Auto on for this very project. A security fix
-    that cannot change a version string unattended is not safer, it is just
-    slower to land, and the gate that actually guards the repo (merge review)
-    is untouched by this.
+    Auto-approve of gated file/shell actions, by contrast, follows the
+    operator's own per-project switch (auth.repo_auto_approves), not a
+    hard-coded False: a dependency bump edits package.json, the lockfile and
+    sometimes a workflow, and each trips the sensitive-path gate, so an
+    inbox-started CRITICAL fix parked at awaiting_approval on a version
+    string while the operator had Auto on for that project (2026-09-13). The
+    gate that guards the repo is merge review, above.
 
     Scoped to admin accounts and to projects that account listed, so the
     switch still cannot be widened by a non-admin preference, and it fails
@@ -1375,15 +1363,6 @@ _attachments_note = tasks.attachments_note   # agent/tasks.py
 # the budget ceiling in one call.
 
 
-
-
-
-
-
-
-
-
-
 # The live run state moved to agent/task_runtime.py (2026-09-23) so the task
 # and planning routes can leave this file. Same objects under the old names.
 _SUBSCRIBER_QUEUE_MAX = task_runtime.SUBSCRIBER_QUEUE_MAX
@@ -1482,14 +1461,12 @@ async def _stream_graph(task_id: str, repo: str, goal: str, budget_usd: float, g
 
     # "queued", not "running", while this project's task slots are all taken.
     #
-    # How many tasks may run on a project at once is the operator's setting
-    # (parallel_tasks_per_project; each task has its own workspace since
-    # 2026-09-23, agent/workspaces.py). But the status was written BEFORE the lock was taken, so
-    # a queued task was indistinguishable from a working one: the sidebar
-    # showed "Running", the log showed nothing, the spend showed nothing, and
-    # the only way to tell was to notice it had been like that for a while.
-    # With 59 open alerts on one project, that is a state an operator now
-    # reaches by doing the obvious thing twice.
+    # How many tasks may run on a project at once is the runtime setting
+    # parallel_tasks_per_project (default 10 since 2026-09-25; each task has
+    # its own workspace, agent/workspaces.py). The status is written before
+    # the slot is taken and "running" only once it is held, so a waiting task
+    # never reads as a working one (2026-09-22: a queued task showed
+    # "Running" with an empty log and no spend).
     await _mark("queued")
 
     # Declared here (not just inside the loop below) so the CancelledError
@@ -1882,21 +1859,12 @@ def _alert_task_status(task_id: str, status: str, repo: str, goal: str, cost: fl
     _notify_bg(task_alert(status, repo, goal, cost, detail), repo=repo)
 
 
-# A planning turn is bounded by SILENCE, not by duration.
-#
-# It used to be `wait_for(..., timeout=1800)`: a flat 30-minute ceiling on the
-# whole turn. That measures the wrong thing. A turn that is reading files and
-# calling tools is working, and the hard questions -- the ones worth asking --
-# are exactly the ones that take longest. On 2026-08-30 a live turn was killed
-# at 30 minutes while actively streaming; it had cost $2.50 and produced no
-# saved plan, so the operator got nothing for the half hour.
-#
-# What actually indicates a fault is no output at all: the model call hung, the
-# provider stopped responding, a tool never returned. Every log entry and cost
-# event this turn emits is a heartbeat, so the watchdog below fires only when
-# those stop. Duration is unbounded on purpose -- the BUDGET is the ceiling
-# that stops work, and it is the only one that should.
-# Value lives in runtime_settings so it is adjustable without a restart.
+# A planning turn is bounded by SILENCE, not by duration. Every log entry and
+# cost event the turn emits is a heartbeat; the watchdog below fires only when
+# those stop for planning_stall_timeout_s (a runtime setting, changed without
+# a restart). Duration is unbounded on purpose -- the BUDGET is the ceiling
+# that stops work. A flat 30-minute ceiling killed a live turn on 2026-08-30
+# while it was still streaming: $2.50 spent, no plan saved.
 _STALL_POLL_S = 15.0
 
 
@@ -2017,11 +1985,9 @@ async def _bank_planning_turn(
     the stored one alone (a turn can add or replace a plan, never remove
     one), and cost is banked because the spend is real either way.
 
-    `outcome` is WHY the turn ended, persisted rather than only streamed.
-    Until now the reason existed solely as a live WebSocket event: an operator
-    who was not watching that exact second, or who refreshed, was left with a
-    stream that simply stopped. The Telegram alert was the only durable record
-    of the cause, which is not a reasonable thing to require. One of:
+    `outcome` is WHY the turn ended, persisted rather than only streamed: an
+    operator who was not watching that exact second, or who refreshed, was
+    otherwise left with a stream that simply stopped. One of:
 
         completed  the turn finished and returned a plan
         stopped    the operator pressed Stop
@@ -2177,13 +2143,8 @@ async def _run_planning_turn_bg(session_id: str, repo: str, text: str, attachmen
         recorder.add(opening)
         # Every published event doubles as the watchdog's heartbeat.
         _heartbeat = {"at": time.monotonic(), "events": 0}
-        # Live cost is mirrored into the Store as it accrues, the same way a
-        # build task's is (see the "cost" branch of run_task). Without it the
-        # session row holds cost_usd from the LAST completed turn until this
-        # one banks, so hydrating mid-turn -- any page reload, any reconnect --
-        # overwrote the live figure on screen with a stale 0.00 and left it
-        # there. Reported live 2026-08-31 on a turn that went on to spend
-        # $8.11 while the dashboard read $0 throughout.
+        # Live cost is mirrored into the Store as it accrues -- see
+        # _PLANNING_COST_MIRROR_MIN_DELTA for why.
         _mirror = {"cost": starting_cost}
         _mirror_tasks: set[asyncio.Task] = set()
 
@@ -2409,10 +2370,8 @@ async def _start_task(goal: str, repo: str, budget_usd: float | None, route: str
 @app.get("/api/router-balance")
 async def get_router_balance(user: User = Depends(require_full_auth)):
     # Admin-only, as /api/consolidation/status and Analytics are: it is the
-    # operator's spend and remaining credit. It required only a session until
-    # 2026-09-23, so a restricted account could read both -- while BalanceStrip
-    # already rendered nothing for non-admins, "because the endpoint is
-    # admin-only". Now it is.
+    # operator's spend and remaining credit (any session could read it until
+    # 2026-09-23, while BalanceStrip already hid it from non-admins).
     auth.require_admin(user)
     async with httpx.AsyncClient(timeout=10.0) as client:
         from agent.tools.review_gate import (  # noqa: PLC0415
@@ -3070,7 +3029,7 @@ async def _provision_from_report(report, choices: dict, user: User,
     if not ok:
         return False, steps
 
-    entry = provisioning.config_from_choices(name, report.live, report.sandbox, choices)
+    entry = provisioning.config_from_choices(report.live, report.sandbox, choices)
     try:
         await asyncio.to_thread(provisioning.write_project_entry, _PROJECTS_CONFIG_PATH, name, entry)
         _step("config", True, f"wrote {name} to projects.json")
@@ -3555,14 +3514,11 @@ def _not_modified(request: Request, response: FileResponse) -> bool:
 # The review services listen on 4100/4101 and hold the only write path into a
 # live repo, so they bind loopback and publish nothing. On a host install nginx
 # bridges the console to them at /_review/, injecting the shared secret the
-# browser must never hold. The container bundle has no nginx, and until
-# 2026-09-20 that meant Check now, the diff view and the manual merge worked
-# only on a host install.
-#
-# The proxy below is why they work in the bundle too, with the ports still
-# unpublished: the same bridge, in the one process that is already the
-# authenticated front door. It changes nothing about who may call: admin, over the session
-# the console already required, exactly as before. The ports stay unpublished.
+# browser must never hold. The container bundle has no nginx, so this proxy
+# is the same bridge in the one process that is already the authenticated
+# front door: admin, over the console's session, with the ports still
+# unpublished (until 2026-09-20 Check now, the diff view and the manual merge
+# worked only on a host install).
 _REVIEW_PROXY_HOP_BY_HOP = frozenset({
     "connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
     "te", "trailers", "transfer-encoding", "upgrade", "host", "content-length",

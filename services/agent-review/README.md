@@ -16,7 +16,7 @@ if that verdict is `READY` — fast-forwards the work into live and pushes it.
 | `POST /api/projects/:name/merge` | fast-forward into live, then push to `origin` |
 | `POST /api/projects/:name/restart` | run the project's build steps, then restart its pm2 apps. Optional `preflight` URLs (see the example config) are checked first; a failure there is stage `preflight` and no build step runs |
 | `GET /api/review/status`, `POST /api/review/check/:name` | reviewer state and a manual trigger |
-| `GET /api/router/*` | model-router usage, stats and balance |
+| `GET /api/router/stats`, `GET /api/router/balance` | model-router usage and OpenRouter balance |
 
 Every route except `GET /health` requires `X-Review-Secret` — the reads as
 well as the writes, since 2026-09-23. In the container bundle this service is
@@ -50,4 +50,5 @@ public/index.html      the dashboard
 ecosystem.config.js    pm2
 ```
 
-Runs on `127.0.0.1:4100` behind nginx.
+Runs on `127.0.0.1:4100` behind nginx on a host install; in the container bundle it binds
+`0.0.0.0` on the compose network, reached through the agent's own `/_review/` proxy.

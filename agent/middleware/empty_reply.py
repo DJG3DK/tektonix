@@ -20,7 +20,11 @@ only a runaway chain of thought produces) is sent again, once, to the
 fallback model, with a note asking for the next step without re-deriving
 everything. The note is only in the retry request, never persisted. If the
 fallback is empty too the reply goes through unchanged and the work node's
-nudge remains the last resort.
+nudge (EMPTY_REPLY_RETRIES, twice per pass) remains the last resort. At
+most MAX_RETRIES_PER_INVOCATION retries per agent invocation, reset in
+before_agent. On the coordinator it sits INSIDE PlanCodeModelMiddleware,
+which sets the model on every call and would otherwise replace the retry's
+fallback model with its own pick.
 """
 
 from __future__ import annotations

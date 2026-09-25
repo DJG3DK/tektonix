@@ -32,6 +32,15 @@ in the dashboard reads. A rate table drifts the moment a provider reprices.
 `caller`, so spend is answerable per consumer and any one key can be revoked
 without touching the others.
 
+**The fastest host for each pinned model.** The operator picks the model;
+`router/fastest.py` ranks OpenRouter's endpoints for it by expected call time
+(latency, throughput, and the host's measured runaway rate from this ledger)
+and names them in order, refreshed in the background. A deployment that sets
+its own `provider.order`/`only`/`sort` is left alone.
+
+**An output cap.** A call that sends no `max_tokens` gets 32k
+(`upstream.DEFAULT_MAX_OUTPUT_TOKENS`); the agent's own seats send 16k.
+
 ## Compatibility
 
 It reads `config.yaml` — the operator's pins, the same file the Models page
@@ -50,11 +59,13 @@ Four things are contracts, not choices, each with a caller that breaks:
 
 | route | notes |
 |---|---|
-| `POST /v1/chat/completions` | streaming and buffered; fallbacks on the buffered path |
+| `POST /v1/chat/completions` | streaming and buffered; fallbacks up to the first byte on both |
+| `POST /v1/embeddings` | buffered; same chain, retries and ledger line as a chat call |
 | `GET /health/liveliness` | no auth, by design |
 | `GET /health/readiness` | 503 when there are no deployments or no upstream key |
 | `GET /v1/model/info` | the deployment table |
 | `GET /v1/models` | alias list |
+| `GET /v1/stats` | per-alias calls, errors, latency, tokens/s, spend and providers, from the ledger |
 
 ## Behaviour worth knowing
 
@@ -79,7 +90,7 @@ file is exactly the moment to keep serving the one known to work.
 ## Tests
 
 ```
-./venv/bin/python -m pytest tests/ -q      # 48, no network
+./venv/bin/python -m pytest tests/ -q      # no network
 ```
 
 Live checks live in `docs/runbooks/router-refusals.md`.

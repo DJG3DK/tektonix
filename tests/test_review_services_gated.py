@@ -115,7 +115,7 @@ def commit_reviewer(env):
 
 
 READS = ["/api/projects", "/api/projects/x/status", "/api/projects/x/diff",
-         "/api/router/current", "/api/router/stats", "/api/router/balance", "/api/review/status"]
+         "/api/router/stats", "/api/router/balance", "/api/review/status"]
 
 
 @pytest.mark.parametrize("route", READS)

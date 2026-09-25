@@ -69,7 +69,7 @@ class AgentState(TypedDict):
     # to tell the deep agent (a check failure's real output, or the review
     # service's findings) -- consumed and cleared by work_node the next time
     # it runs. None on a fresh task or an orphan-restart resume (see
-    # work.py's own docstring for the three cases this distinguishes).
+    # work.py's own docstring for the four cases this distinguishes).
     pending_feedback: str | None
 
     # Human-in-the-loop pre-execution approval -- see deep_agent.py's own
@@ -99,8 +99,9 @@ class AgentState(TypedDict):
     # that (re)connects between updates still sees current progress, not a
     # blank plan. [{"content": str, "status": "pending"|"in_progress"|
     # "completed"}, ...] or None before the deep agent's first write_todos
-    # call. Purely informational -- see verify_and_ship.py's own comment on
-    # why "completed" here carries zero authority over what actually ships.
+    # call. verify_and_ship's plan gate holds the commit while items are
+    # unfinished (INCOMPLETE_PLAN_LIMIT passes at most), but "completed" here
+    # carries no authority over what ships: the check suite runs regardless.
     latest_todos: list | None
 
     # Append-only, via operator.add reducer -- a mutable "latest state"

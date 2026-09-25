@@ -1,39 +1,27 @@
 """Noticing when a shell command was really a file edit or a file read.
 
-Observed live on 2026-09-12, task 01e640ef: the test-writer subagent made 229
-bash calls against ONE edit and ONE write. It was patching JavaScript by
-piping Python heredocs -- `python3 - <<'PY' ... s = open(p).read();
-open(p,'w').write(s.replace(...))` -- and reading files with `cat` and
-`sed -n`, when it had `read`, `write` and `edit` tools the whole time.
+2026-09-12, task 01e640ef: the test-writer made 229 bash calls against one
+edit and one write, patching files through Python heredocs and reading them
+with `cat` and `sed -n`. Every bash call starts a container (the median gap
+between that subagent's model calls was 11 s, nearly all of it startup and
+teardown); `read`/`write`/`edit` run in-process, are path-guarded to the
+repo, and `edit` catches a repeated failed edit. So a shell read or write
+gets a one-line note on its result pointing at the cheaper tool.
 
-That is not a stylistic preference. Every bash call spawns a fresh container:
-the median gap between that subagent's model calls was 11 seconds, nearly all
-of it container startup and teardown. `read`/`write`/`edit` run in-process and
-cost none of it. The same work through the right tools is roughly an order of
-magnitude faster in wall-clock, and it is also safer -- `edit` is path-guarded
-to the repo root and its repeat-guard catches a model retrying an edit that
-already failed, neither of which a shell heredoc gets.
+2026-09-12, task 279c29fd: the coder reached for /memories/AGENTS.md through
+bash. That path is the agent's own store-backed filesystem, mounted nowhere
+in the container, so the command can only fail -- and a WRITE there fails
+silently: the bytes land in a container that is thrown away, the shell says
+exit 0, and the generic write note would point at `edit`, which rejects
+/memories outright. That check runs first and never points at `edit`.
 
-Observed again on 2026-09-12, task 279c29fd, at the other boundary: the coder
-reached for `/memories/AGENTS.md` through bash twice -- `grep -n "..."
-/memories/AGENTS.md | head` -- while writing its memory at the end of a task.
-That path does not exist inside the container at all. It is the agent's own
-store-backed filesystem, reachable only through the built-in read_file /
-write_file / edit_file tools, so the command can do nothing but cost a
-container and return "No such file or directory".
-
-The write case is worse than a wasted container, and it is why this check runs
-BEFORE the write patterns below. `cat >> /memories/AGENTS.md` goes three ways
-wrong at once: the bytes land in a container that is thrown away, the shell
-reports exit 0 so the model believes it succeeded, and the generic write note
-would send it to `edit` -- which is path-guarded to the repo root and rejects
-/memories outright. One wrong tool pointing at another.
-
-So: a note on the result, never a refusal. Blocking would be wrong -- writing
-a scratch script to RUN is a legitimate use of a shell, and the harness cannot
-reliably tell the difference in every case. A short line pointing at the
-cheaper tool costs one line of context and stops being emitted the moment the
-model takes the hint.
+Every note here is advice, never a refusal: a scratch script written to RUN
+is a fair use of a shell, and the harness cannot tell every case apart. The
+read and edit notes are capped per workspace (agent_tools.py NOTE_BUDGET;
+2026-09-25, 155 read notes over 50 tasks changed nothing); the memory and
+git-write notes explain a command that failed and are not. Refusing is the
+benchmark guard's job (agent/tools/benchmark_guard.py), which uses the
+splitter and the note prefix below.
 """
 
 from __future__ import annotations

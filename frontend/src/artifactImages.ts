@@ -9,7 +9,7 @@ export function artifactImages(text: string): { caption: string; url: string }[]
   return [...(text || "").matchAll(ARTIFACT_IMAGE)].map((m) => ({ caption: m[1], url: m[2] }));
 }
 
-export type RichPart = { kind: "text"; text: string } | { kind: "image"; caption: string; url: string };
+type RichPart = { kind: "text"; text: string } | { kind: "image"; caption: string; url: string };
 
 /** Text split around those images, in order. */
 export function splitArtifactImages(text: string): RichPart[] {

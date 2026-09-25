@@ -316,7 +316,7 @@ def test_recommended_choices_match_add_project_yes(node_repo, tmp_path, monkeypa
 
     written = json.loads(projects_file.read_text())["projects"]["shop-api"]
     report = prov.detect_project(str(node_repo), sandbox_root=str(tmp_path / "ws-script"))
-    expected = prov.config_from_choices("shop-api", report.live, report.sandbox,
+    expected = prov.config_from_choices(report.live, report.sandbox,
                                         prov.recommended_choices(report))
     assert written == expected
     assert written["review"]["secretFiles"] == [".env", "config/keys.json"]

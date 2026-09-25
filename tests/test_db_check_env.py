@@ -70,7 +70,7 @@ def test_db_check_children_do_not_inherit_the_reviewers_env(tmp_path):
         for planted in ("OPENROUTER_API_KEY", "REVIEW_CONTROL_SECRET", "SMTP_PASSWORD"):
             assert planted not in child, f"{step} inherited {planted}"
         # ...while what the check genuinely needs is there.
-        assert child["DATABASE_URL"].startswith("postgresql://u:pw@localhost:5432/steals_ci_review_")
+        assert child["DATABASE_URL"].startswith("postgresql://u:pw@localhost:5432/tektonix_ci_review_")
         assert child["REDIS_URL"].endswith("/15")
         assert child["CI"] == "true"
 

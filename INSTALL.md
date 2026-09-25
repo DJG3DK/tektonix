@@ -225,8 +225,9 @@ detect. Its checks arrive on their own after its first merge (§9, *Checks
 never run*).
 
 Onboarding creates a **git worktree** of your repo under
-`AGENT_SANDBOX_ROOT`. The agent works there on a per-task branch and never
-commits to your working checkout.
+`AGENT_SANDBOX_ROOT`; each task then gets its own worktree of that, on its
+own branch, so several tasks can work on one project at once (Settings →
+Tasks at once per project). The agent never commits to your working checkout.
 
 ### Push access (deploy keys)
 
@@ -587,8 +588,8 @@ recommendations: expect to change them, and keep your copy with your backups
 
 Change them from **Settings → Models** in the dashboard, which shows each
 model's price, agentic-arena standing and knowledge cutoff, and each provider's
-latency, uptime and caching support. Model changes take effect at the next
-router restart.
+latency, uptime and caching support. Model changes take effect on the next
+call: the router re-reads `config.yaml` when it changes.
 
 ---
 

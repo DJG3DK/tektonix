@@ -1,23 +1,24 @@
-// commit-reviewer.js — automated post-commit review for the coding agent's workspaces
-// (git worktrees of each live repo; the clone-per-project era ended 2026-08-25).
+// commit-reviewer.js — the independent post-commit review gate.
 //
-// Polls each sandbox for new commits not yet reviewed (vs the live repo's own
-// HEAD). When found, builds an isolated git worktree off the LIVE repo — not
-// the sandbox — at that commit. The sandbox has no real .env/secrets (only
-// .env.example in most cases), so tests run there are structurally limited;
-// a worktree off live inherits the real env and node_modules, giving
-// verification that's actually representative of what would run in
-// production. Runs each project's real lint/typecheck/test/build there, then
-// sends the diff + commit messages + those mechanical results to Claude
-// Sonnet 5 for a qualitative review (the kind of thing tsc/tests don't catch
-// — see this session's own history: a missing AbortSignal, a media-panel
-// regression that would've silently dropped other staged products' jobs).
+// Polls each project's live repository for an `agent/<task-id>` branch whose
+// tip has not been reviewed. The review unit is that branch plus its
+// merge-base with live. The branch is checked out into a detached worktree
+// off the live repo, provisioned with live's node_modules (or a fresh
+// --ignore-scripts install when a manifest changed or live's install is
+// stale), read-only binds of the data the tests need, and review-only
+// credentials -- never the live ones. The project's real checks, build,
+// database and secret scans run there, contained (see runAgentCode).
 //
-// Findings are written to state.json (latest round) and history.jsonl
-// (durable, append-only). The agent reads the verdict through its own
-// verify_and_ship gate and replans in-graph; nothing is pushed at it here.
-// Never merges automatically — that stays a deliberate action, same as
-// everything else in this deploy pipeline.
+// The model (the router's `agent-reviewer` alias) then gets one call: the
+// diff, the commit messages, the agent's "Response to review round N"
+// answers from the branch's commit log, the prior round's findings, the
+// current test and referenced files, and the mechanical results. It answers
+// with one submit_review tool call. The verdict is derived in Node from
+// failed checks and blocking findings, never trusted from the model's field.
+//
+// Findings go to state.json (per project and per branch) and history.jsonl
+// (append-only). The agent reads the verdict through its own verify_and_ship
+// gate; nothing is pushed at it here, and nothing merges from here.
 
 const fs = require('fs');
 const path = require('path');
@@ -38,20 +39,17 @@ const sandbox = require('./sandbox');
 // sit beside the code, exactly as before.
 const STATE_DIR = process.env.REVIEW_STATE_DIR || __dirname;
 const STATE_PATH = path.join(STATE_DIR, 'state.json');
-// state.json is mutable and gets wiped by clearReviewState() on every merge
-// (agent-review/server.js) — by design, so a stale review can't gate the
-// *next* commit. But that also means every finding, including non-blocking
-// "minor" ones, vanishes the moment something merges, with nothing else
-// recording that they ever existed. Found the hard way: asked after a merge
-// whether earlier minor findings had been addressed and the honest answer
-// was "no way to know anymore." This file is append-only and untouched by
-// clearReviewState, so a review's full findings survive its own merge.
+// state.json is mutable: agent-review's clearReviewState() drops a branch's
+// record when it merges, so a stale review can't gate the next commit -- and
+// every finding on it, minor ones included, goes with it. This file is
+// append-only and untouched by clearReviewState, so a review's full findings
+// survive its own merge.
 const HISTORY_PATH = path.join(STATE_DIR, 'history.jsonl');
 // Review-only credentials, one subtree per project mirroring each project's
 // own relative secret paths. Never contains production values.
 const REVIEW_SECRETS_ROOT = path.join(AGENT_HOME, 'services/commit-reviewer/review-secrets');
 const POLL_MS = 120_000; // 2 min — commits aren't frequent enough to need faster
-const MAX_CONSECUTIVE_FIXES = 3; // after this many NEEDS_FIXES in a row, escalate instead of re-nudging
+const MAX_CONSECUTIVE_FIXES = 3; // this many NEEDS_FIXES in a row marks the record escalated
 
 // A check whose COMMAND was never found did not fail -- it did not run, and
 // nothing was learned about the code. Telling those apart matters because the
@@ -67,9 +65,6 @@ const MAX_CONSECUTIVE_FIXES = 3; // after this many NEEDS_FIXES in a row, escala
 const MISSING_TOOL_RE =
   /(?:\b(?:sh|bash|zsh|dash)(?::\s*\d+)?:\s*\S+:\s*not found)|(?:\S+:\s*command not found)/i;
 
-// Pure, and exported for tests: marks each FAILED check whose output says its
-// own command was missing. Leaves passing checks alone -- output on a passing
-// check may quote anything.
 // A check that could not WRITE where it needed to. EROFS is the kernel's
 // "read-only file system", and nothing in the commit under review can cause
 // it -- it means the review environment handed the tool a read-only path. It
@@ -79,6 +74,9 @@ const MISSING_TOOL_RE =
 // 2026-09-22 until it was caught by reading the output rather than the label.
 const READ_ONLY_FS_RE = /\bEROFS\b|read-only file system/i;
 
+// Pure, and exported for tests: marks each FAILED check whose output says its
+// own command was missing or its filesystem read-only. Leaves passing checks
+// alone -- output on a passing check may quote anything.
 function classifyInfrastructureFailures(checkResults) {
   for (const c of checkResults) {
     if (c.ok) continue;
@@ -98,11 +96,6 @@ function classifyInfrastructureFailures(checkResults) {
 // regardless of whether the verdicts in between were READY.
 const CHURN_WINDOW_MS = 6 * 60 * 60 * 1000; // 6h — long enough to span a bad afternoon, short enough that old churn doesn't haunt a file forever
 const CHURN_THRESHOLD = 3; // same file in findings across this many rounds -> escalate
-// Env-overridable for agent/evals, which starts its own reviewer pair on free
-// ports so a benchmark can never review a real project. Defaults are the
-// host-install ports, so nothing changes without the variable.
-const DASHBOARD_URL = process.env.REVIEW_SERVICE_URL
-    || `http://127.0.0.1:${process.env.REVIEW_SERVICE_PORT || 4100}`;
 const ROUTER_ENV_PATH = path.join(AGENT_HOME, 'services/model-router/.env');
 
 // audit C-4: the control port (4101) was unauthenticated on the same "localhost
@@ -151,14 +144,11 @@ const WORKTREE_ROOT = process.env.REVIEW_WORKTREE_ROOT
 const USAGE_LOG = process.env.REVIEW_USAGE_LOG
     || path.join(AGENT_HOME, 'services/commit-reviewer/usage.jsonl');
 
-// Each project's real check commands — verified directly against each
-// package.json's actual scripts, not assumed. `dir` is relative to the
-// worktree root (repo root when omitted). `secretFiles` are copied from the
-// LIVE checkout into the same relative path in the worktree before checks
-// run, so real secrets are available the way they would be in production —
-// the whole reason this runs off live instead of the sandbox.
-// Deployment-specific overrides, loaded from an OPTIONAL gitignored file
-// so a public checkout ships no one's infrastructure. See
+// Each project's review config -- check commands (`dir` relative to the
+// worktree root), which gitignored inputs are bound read-only, which
+// credential files come from review-secrets/ -- comes from projects.json,
+// with deployment-specific overrides in an OPTIONAL gitignored file so a
+// public checkout ships no one's infrastructure. See
 // builtin-projects.local.js.example. Anything defined there wins over
 // projects.json (see services/shared/projects-config.js).
 //
@@ -180,17 +170,10 @@ if (process.env.REVIEW_ONLY_PROJECTS_JSON !== '1') {
 }
 
 // Merged with projects.json so a wizard-onboarded project is reviewed without
-// editing this file; the hand-tuned entries above stay authoritative.
-// See services/shared/projects-config.js for the merge rule.
+// editing any file here; the built-in entries stay authoritative. See
+// services/shared/projects-config.js for the merge rule.
 const { loadProjects, healthProjectsCheck } = require('../shared/projects-config');
 
-// A function, never a constant bound at startup. Until 2026-09-16 this was
-// `const PROJECTS = loadProjects(...)`, so a project created from the
-// dashboard (or one whose checks were written after its first merge) did not
-// exist here until pm2 restarted the service: the poll never looked at its
-// branches, /check answered 404, and the agent's wait_for_review timed out
-// against a verdict that could not arrive. loadProjects reads a small file;
-// once per tick and per request is nothing.
 // Directories that need their own node_modules, read from the tree AS IT IS
 // NOW rather than recorded once at onboarding.
 //
@@ -271,6 +254,13 @@ function detectNodeModulesDirs(root) {
   return found.sort((a, b) => (a === '.' ? -1 : b === '.' ? 1 : a.localeCompare(b)));
 }
 
+// A function, never a constant bound at startup. Until 2026-09-16 this was
+// `const PROJECTS = loadProjects(...)`, so a project created from the
+// dashboard did not exist here until pm2 restarted the service: the poll
+// never looked at its branches, /check answered 404, and the agent's
+// wait_for_review timed out. loadProjects reads a small file; once per tick
+// and per request is nothing.
+const loggedDetection = new Set();
 function currentProjects() {
   const projects = loadProjects(BUILTIN_PROJECTS, { section: 'review' });
   for (const [name, cfg] of Object.entries(projects)) {
@@ -299,7 +289,6 @@ function currentProjects() {
   }
   return projects;
 }
-const loggedDetection = new Set();
 
 const GITLEAKS_BIN = path.join(__dirname, 'bin', 'gitleaks');
 
@@ -307,10 +296,11 @@ function log(msg) {
   console.log(`[${new Date().toISOString()}] ${msg}`);
 }
 
-function run(cmd, args, cwd, timeoutMs = 300_000, env) {
+// Inherits this process's environment: git, mount and gitleaks only.
+// Anything that runs agent-authored code goes through runAgentCode.
+function run(cmd, args, cwd, timeoutMs = 300_000) {
   return new Promise((resolve) => {
     const opts = { cwd, maxBuffer: 20 * 1024 * 1024, timeout: timeoutMs };
-    if (env) opts.env = { ...process.env, ...env };
     execFile(cmd, args, opts, (err, stdout, stderr) => {
       resolve({ ok: !err, output: (stdout || '') + (stderr || ''), code: err ? (err.code ?? 1) : 0 });
     });
@@ -318,22 +308,18 @@ function run(cmd, args, cwd, timeoutMs = 300_000, env) {
 }
 
 // audit C-2 (reviewer side): the check/build commands run agent-authored code
-// -- npm scripts and the test-writer's own test files. This comment used to
-// say they run on the HOST because they could not be contained. Since
-// 2026-09-21 they can, and they are: checks, the build, package-manager
-// installs, schema generation and the build assertions all go through
-// runAgentCode, which on a host install is a sandbox container and in the
-// bundle is this already-contained process.
+// -- npm scripts and the test-writer's own test files. Since 2026-09-21
+// checks, the build, package-manager installs, schema generation and the
+// build assertions all go through runAgentCode: a sandbox container on a
+// host install, this already-contained process in the bundle.
 //
-// sealedEnv is still applied inside it, and is not redundant: containment
+// sealedEnv is applied inside it as well, and is not redundant: containment
 // stops the code reaching the machine, the sealed environment stops it
-// reading the reviewer's own variables on the way past. Two different
-// failures.
+// reading the reviewer's own variables on the way past.
 //
-// What genuinely stays on the host is db:drift / db:seed / test:e2e, which
-// talk to Postgres and Redis on loopback -- inside a container "localhost"
-// is the container. SECURITY.md has the reasoning and what closing it would
-// take; do not let this comment drift back into claiming more than that.
+// What stays on the host is db:drift / db:seed / test:e2e, which talk to
+// Postgres and Redis on loopback -- inside a container "localhost" is the
+// container. SECURITY.md has the reasoning.
 function sealedEnv(extra) {
   return {
     PATH: process.env.PATH,
@@ -480,8 +466,8 @@ function computeFileChurn(project, currentFindings, branch = null) {
   return churnFile ? { file: churnFile, count: churnCount } : null;
 }
 
-// The router's own key now, not the upstream OpenRouter key — the reviewer no
-// longer needs (or should hold) provider credentials directly.
+// The router's key. The upstream OpenRouter key only on the
+// REVIEW_MODEL_OVERRIDE evaluation path, which bypasses the router.
 function getOpenRouterKey() {
   const name = REVIEW_DIRECT ? 'OPENROUTER_API_KEY' : 'MODEL_ROUTER_KEY';
   // The environment first, because in the container bundle there is no
@@ -518,8 +504,6 @@ function getOpenRouterKey() {
 const TASK_BRANCH_RE = /^agent\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const ignoredRefs = new Set();
 
-// `prev` is the project's current review record; a parameter so a test can
-// drive this against a scratch repository without a state file.
 // The worktree that has `branch` checked out, from live's own worktree list.
 async function worktreeFor(cfg, branch) {
   const out = (await git(cfg.live, ['worktree', 'list', '--porcelain'])).output || '';
@@ -531,6 +515,9 @@ async function worktreeFor(cfg, branch) {
   return null;
 }
 
+// `prev` is the project's current review record; a parameter so a test can
+// drive this against a scratch repository without a state file. `requested`
+// is a branch the caller is waiting on, which wins over the usual choice.
 async function detectNewCommit(project, cfg, prev = loadState()[project], requested = null) {
   // The agent's workspace is now a git worktree of this same repository, so its
   // per-task branch is already a local ref here -- there is no clone to fetch
@@ -1035,36 +1022,17 @@ async function setupWorktree(project, cfg, sha, base, { depsChangedOverride = nu
     }
   }
 
-  // The same problem, for every stack that keeps its dependencies inside the
-  // project rather than in a user-wide cache. PHP's `vendor/` and Elixir's
-  // `deps/` + `_build/` are gitignored, so a fresh worktree has neither --
-  // and `vendor/bin/phpunit` in a worktree exits 127 with no useful message,
-  // which reads as "the suite is broken" rather than "nothing installed it".
-  //
-  // Symlinked from the live checkout, not installed: an install here would
-  // run an untrusted composer.json's scripts, and the whole point of the
-  // review is that this code has not been vetted. A symlink gives the same
-  // resolution with no execution. Go, Rust, Maven, Gradle and NuGet all use
-  // a user-wide cache instead, so they need nothing here.
+  // The same problem for stacks that keep dependencies inside the project
+  // (PHP's vendor/, Elixir's deps/, a --path bundle): a branch that changed
+  // its manifest gets a no-scripts install of its own, everything else
+  // borrows live's copy bound read-only -- see the two functions. Go, Rust,
+  // Maven, Gradle and NuGet use a user-wide cache and need nothing here.
   const talk = (m) => log(`[${project}] ${m}`);
   const fresh = await installChangedDependencies(cfg, worktreePath, diffFiles, talk);
   setupIssues.push(...fresh.issues);
   const deps = await materializeDependencyDirs(cfg, worktreePath, { log: talk, skip: fresh.installed });
   setupIssues.push(...deps.issues);
 
-  // Credentials for the worktree come from REVIEW_SECRETS_ROOT, never from the
-  // live checkout. They used to be copied straight out of cfg.live, which meant
-  // a review -- the step whose entire job is to run code nobody has vetted yet --
-  // executed that code holding the production Bybit keys, the live JWT secret,
-  // real SMTP and notification credentials, and for one project a live payment-provider secret,
-  // supplier keys that can submit real orders, and the production DATABASE_URL.
-  // The review-secrets set is structurally identical but non-functional:
-  // dummies that decrypt/parse correctly, mail pointed at an unroutable host,
-  // side-effecting flags forced off, DATABASE_URL aimed at the test database.
-  //
-  // Fail closed. A missing review secret is recorded as a failed setup check
-  // (same path as a regenerate failure) and never silently falls back to live --
-  // a fallback would quietly restore exactly the exposure this removes.
   // Read-only inputs the tests need but git doesn't carry. data/fixtures is
   // gitignored (348M of live market data), so a worktree has none -- and the
   // suites that need it quietly self-skip rather than fail. Measured: 31 of 49
@@ -1096,13 +1064,23 @@ async function setupWorktree(project, cfg, sha, base, { depsChangedOverride = nu
     }
   }
 
+  // Credentials come from REVIEW_SECRETS_ROOT, never from the live checkout.
+  // They used to be copied out of cfg.live, so a review -- the step whose
+  // job is to run code nobody has vetted -- ran it holding production
+  // exchange keys, the live JWT secret, real mail and notification
+  // credentials, a payment-provider secret and the production DATABASE_URL.
+  // The review set is structurally identical but non-functional: dummies
+  // that decrypt/parse correctly, mail at an unroutable host, side-effecting
+  // flags off, DATABASE_URL aimed at the test database.
+  //
+  // Fail closed: a missing review secret is a failed setup check (same path
+  // as a regenerate failure), never a fallback to live.
+  //
   // `|| []` like every sibling loop above: a project with no `review` block
-  // at all is the NORMAL shape now, not an edge case. A project created from
-  // the dashboard starts as an empty repo with no .env and no manifest, so
-  // config_from_choices writes `{live, sandbox}` and nothing else; iterating
-  // the missing key threw inside setupWorktree, the catch logged "review
-  // failed with an internal error", no verdict was ever written, and the
-  // agent's wait_for_review sat there until it timed out.
+  // is the NORMAL shape -- a dashboard-created project starts as `{live,
+  // sandbox}` and nothing else. Iterating the missing key threw inside
+  // setupWorktree, no verdict was written, and the agent's wait_for_review
+  // timed out.
   for (const rel of cfg.secretFiles || []) {
     const src = path.join(REVIEW_SECRETS_ROOT, project, rel);
     const dest = path.join(worktreePath, rel);
@@ -1338,10 +1316,9 @@ async function markPreexistingFailures(project, cfg, base, checkResults, prevBas
   return baseline;
 }
 
-// Mirrors ci.yml's `build` job: the build itself, then the three assertions
-// it runs after — each exists because it caught a real incident (see the
-// comments on buildCheck.assertions in builtin-projects.local.js), not just "did the
-// build not crash".
+// The build itself, then the project's post-build assertions -- each exists
+// because it caught a real incident (see buildCheck.assertions in
+// builtin-projects.local.js.example), not just "did the build not crash".
 async function runBuildCheck(cfg, worktreePath) {
   const bc = cfg.buildCheck;
   if (!bc) return [];
@@ -1373,8 +1350,8 @@ async function runBuildCheck(cfg, worktreePath) {
 // here. Never touches the live database: a brand-new DB is created for this
 // run alone and dropped in the `finally`, regardless of outcome. Connection
 // details (host/port/user/password) are read from the worktree's own copied
-// .env — the same real credentials secretFiles already provides — with only
-// the database name swapped for a throwaway one.
+// .env -- the review-only credentials secretFiles provides -- with only the
+// database name swapped for a throwaway one.
 async function runDatabaseCheck(cfg, worktreePath) {
   const dc = cfg.databaseCheck;
   if (!dc) return [];
@@ -1392,7 +1369,7 @@ async function runDatabaseCheck(cfg, worktreePath) {
   const parsed = baseUrl.match(/^postgresql:\/\/([^:]+):([^@]+)@([^:/]+):(\d+)\/([^?]+)/);
   if (!parsed) return [{ name: 'db-setup', ok: false, output: `could not parse DATABASE_URL` }];
   const [, dbUser, dbPass, dbHost, dbPort] = parsed;
-  const throwawayDb = `steals_ci_review_${crypto.randomBytes(4).toString('hex')}`;
+  const throwawayDb = `tektonix_ci_review_${crypto.randomBytes(4).toString('hex')}`;
   // psql/libpq doesn't understand Prisma's ?schema= query param, so the
   // admin URL used for CREATE/DROP DATABASE omits it; the app-facing
   // throwaway URL (passed to pnpm db:drift/db:seed/test:e2e below, which go
@@ -1522,15 +1499,6 @@ function gatherExistingTestCoverage(worktreePath, diff) {
   return sections.join('\n\n');
 }
 
-// Same reasoning as gatherExistingTestCoverage, for a second real deadlock
-// class (2026-08-20, a monorepo project, 5 consecutive rounds): the reviewer sees only
-// the diff, so when a commit's work depends on code that ALREADY EXISTS
-// outside the diff (here: ShopPage.tsx's subcategory-tabs wiring, shipped in
-// an earlier commit), it kept flagging that code as "missing" -- an
-// unwinnable demand no further diff could satisfy. If the commit message
-// references files by name, show the reviewer their actual current content
-// so claims about pre-existing functionality are checkable, not dismissible.
-
 // Pack a diff into the review prompt WITHOUT cutting a file mid-statement.
 //
 // The old form was `diff.slice(0, 60_000)`: a 130k-char auth commit lost its
@@ -1580,6 +1548,13 @@ function packDiff(diff) {
   return { packed: kept.join('') + note, omitted };
 }
 
+// Files the diff depends on but does not contain. The reviewer sees only the
+// diff, so work that relied on code ALREADY in the tree was flagged as
+// "missing" round after round (2026-08-20, five rounds on one commit) -- a
+// demand no further diff could satisfy. Two sources: files the commit
+// message names, and the definitions of symbols the added lines import or
+// call (added after a controller's call into a method merged earlier that
+// day drew a false "never implemented" blocking finding).
 function gatherReferencedFiles(worktreePath, commitLog, diff) {
   const changed = new Set([...diff.matchAll(/^\+\+\+ b\/(.+)$/gm)].map((m) => m[1]));
   const mentioned = [...new Set([...commitLog.matchAll(/[\w./-]*\w+\.(?:tsx?|jsx?|css|prisma|py|json)\b/g)].map((m) => m[0]))];
@@ -1609,16 +1584,8 @@ function gatherReferencedFiles(worktreePath, commitLog, diff) {
     } catch { /* best-effort */ }
   }
 
-  // ── Call-site dependencies ──────────────────────────────────────────────
-  // Real incident (2026-08-20, a monorepo project marketing pagination): the diff's
-  // changed controller CALLED listMarketingPayloadsWithPagination, whose
-  // implementation had merged to live earlier the same day -- outside the
-  // unmerged-diff window this review sees. Nothing above pulls in files the
-  // changed code CALLS (only files named in commit messages), so the model
-  // concluded the method "is never implemented", issued a false blocking
-  // finding round after round, and steered the coding agent into "fixing" a
-  // working feature. Gather the definition files of symbols the diff's
-  // ADDED lines invoke, so existence claims get checked against the tree.
+  // Definitions of symbols the diff's ADDED lines import or call, so an
+  // existence claim is checked against the tree.
   const { execFileSync } = require('node:child_process');
   const depFiles = new Set();
   let currentFile = null;
@@ -1702,7 +1669,7 @@ async function reviewWithSonnet(routerKey, project, commitLog, diff, checkResult
   // the TRUSTED mechanical results AFTER the untrusted diff so trusted content
   // wins on position (a forged "## Mechanical check results" inside the diff
   // now lands before the real one).
-  const NONCE = require('crypto').randomBytes(9).toString('hex');
+  const NONCE = crypto.randomBytes(9).toString('hex');
   const fenceUntrusted = (label, body) =>
     `<<<UNTRUSTED-${label}-${NONCE}>>>\n${String(body).replace(/```/g, "'''")}\n<<<END-${label}-${NONCE}>>>`;
   const failedChecks = checkResults.filter((c) => !c.ok);
@@ -1907,9 +1874,6 @@ function stripLeakedMarkup(text) {
   return String(text).replace(/<\/?(?:summary|invoke|parameter|function_calls|antml[\w:-]*)\b[^>]*>/g, '').trim();
 }
 
-
-
-
 // audit C-3: a finding is NON-blocking only if it explicitly says so with a
 // recognised low-severity word; everything else (blocking/critical/high/
 // unknown/missing) blocks. Case-insensitive. Leniency must fail toward blocking.
@@ -1934,7 +1898,7 @@ function buildAgentMessage(review, checkResults) {
     'Automated pre-merge review found issues that need fixing before this can go to production:',
     '',
   ];
-  // Always include Sonnet's own prose — seen live: a response with
+  // Always include the model's own prose — seen live: a response with
   // verdict=NEEDS_FIXES but zero blocking findings (all minor, or the
   // findings array genuinely empty) produced a message that was just this
   // header followed by a blank line, with nothing for the agent to act on.
@@ -1976,7 +1940,7 @@ function buildAgentMessage(review, checkResults) {
   // Minor findings shown too (not just blocking) — still useful context for
   // the agent even when they're not individually release-blocking, and
   // without them a NEEDS_FIXES verdict driven by a failed check alone would
-  // silently drop everything Sonnet noticed.
+  // silently drop everything the model noticed.
   if (minor.length) {
     lines.push(blocking.length ? '' : '', 'Other findings (non-blocking, worth addressing):');
     for (const f of minor) {
@@ -2068,32 +2032,32 @@ async function reviewProject(project, cfg, routerKey, requested = null) {
       ...await runDatabaseCheck(cfg, worktreePath),
       ...await runSecretScan(cfg, worktreePath),
     ];
-    // Full messages including bodies -- was `--oneline`, which silently
-    // discarded everything after the subject line. Seen live (2026-08-20,
-    // a monorepo project round 5): the agent documented, with file/line/commit
-    // citations, that the "missing" UI wiring already existed outside the
-    // diff -- exactly the evidence needed to resolve the deadlock -- and
-    // the reviewer never saw a word of it.
+    // Full messages including bodies -- `--oneline` dropped everything after
+    // the subject (2026-08-20: the agent cited file/line/commit evidence that
+    // the "missing" wiring already existed, and the reviewer never saw it).
+    // Reading the body was half the fix: nothing put the agent's answer in a
+    // commit message until 2026-09-25, when verify_and_ship started writing
+    // it under REVIEW_RESPONSE_MARKER and extractAgentResponses started
+    // reading it.
     const fullCommitLog = (await git(cfg.live, ['log', `--format=%h %s%n%b`, `${base}..${sha}`])).output;
     const commitLog = fullCommitLog.slice(0, 8_000);
     // From the whole log, not the 8k the prompt shows: a long round-2 answer
     // must not be cut before the reviewer sees it.
     const agentResponses = extractAgentResponses(fullCommitLog);
     // audit H-10: a git-diff failure (pruned object, 300s timeout, >20MB
-  // maxBuffer overrun -- which also truncates stdout MID-FILE, defeating
-  // packDiff's boundary guarantee) must ABORT the review, not silently review
-  // an empty or half-cut diff and compute READY from green checks alone.
-  const diffResult = await git(cfg.live, ['diff', base, sha]);
-  if (!diffResult.ok || (diffResult.output || '').length === 0) {
-    log(`[${project}] git diff FAILED or empty -- failing the review closed`);
-    return {
-      verdict: 'NEEDS_FIXES',
-      summary: 'The harness could not read the diff for this commit (git diff failed, timed out, or exceeded the 20MB buffer). No review was performed. This blocks by policy until the diff is readable.',
-      findings: [{ severity: 'blocking', file: null, issue: `git diff ${base.slice(0,12)}..${sha.slice(0,12)} did not return a usable diff (ok=${diffResult.ok}, bytes=${(diffResult.output||'').length}).` }],
-      _omittedFiles: [],
-    };
-  }
-  const diff = diffResult.output;
+    // maxBuffer overrun -- which also truncates stdout MID-FILE, defeating
+    // packDiff's boundary guarantee) must ABORT the review, not silently review
+    // an empty or half-cut diff and compute READY from green checks alone.
+    const diffResult = await git(cfg.live, ['diff', base, sha]);
+    if (!diffResult.ok || (diffResult.output || '').length === 0) {
+      // Thrown, not returned: the review-shaped object returned here reached
+      // no caller that reads verdicts and left `inProgress` set on the
+      // project (2026-09-25). The catch below clears it; the agent's wait
+      // times out into its own escalation, which an unreadable diff deserves.
+      throw new Error(`git diff ${base.slice(0, 12)}..${sha.slice(0, 12)} did not return a usable diff `
+        + `(ok=${diffResult.ok}, bytes=${(diffResult.output || '').length}); failing the review closed`);
+    }
+    const diff = diffResult.output;
 
     // Loaded before the review call (not just before the verdict/escalation
     // bookkeeping below, where this used to live) so reviewWithSonnet can see
@@ -2159,16 +2123,9 @@ async function reviewProject(project, cfg, routerKey, requested = null) {
         + `cannot be counted as a pass.\n\n${review.summary || ''}`;
     }
     const hasBlockingFindings = (review.findings || []).some((f) => f.severity === 'blocking');
-    // audit H-9/H-10: ANY omitted file forces NEEDS_FIXES in NODE -- not left
-    // to the model, which the prompt could talk out of it. (The unreadable-
-    // diff half of that audit is the early `return` far above, right after
-    // the git diff call -- an unreadable diff never reaches this point. The
-    // original H-9/H-10 commit, 087f883, gated on a `diffUnreadable` flag
-    // here that was never actually defined: a ReferenceError on every
-    // READABLE diff, so each review did its full 7-minute check suite and
-    // then died at the verdict line -- "review failed with an internal
-    // error: diffUnreadable is not defined", three times in a row on
-    // 2026-08-27, timing out the build's 900s review wait.)
+    // audit H-9: ANY omitted file forces NEEDS_FIXES in NODE -- not left to
+    // the model, which the prompt could talk out of it. (An unreadable diff
+    // never reaches this point: it returns right after the git diff call.)
     const omittedFiles = review._omittedFiles || [];
     const diffIncomplete = omittedFiles.length > 0;
     if (diffIncomplete) {
@@ -2181,15 +2138,12 @@ async function reviewProject(project, cfg, routerKey, requested = null) {
     }
     const verdict = mechanicalFailed || hasBlockingFindings || diffIncomplete ? 'NEEDS_FIXES' : 'READY';
 
-    // No memory across rounds used to mean a stuck feature could get
-    // re-nudged indefinitely — the same root issue never re-surfacing as
-    // "this isn't converging", just another round of the same loop burning
-    // agent turns. Track consecutive NEEDS_FIXES verdicts; after
-    // MAX_CONSECUTIVE_FIXES, stop nudging and tell the agent to halt for a
-    // human instead, with `escalated: true` surfaced on the dashboard so
-    // it's visible without having to notice the silence. A later READY
-    // clears it — this isn't a permanent lockout, just a circuit breaker.
-    // (prevState itself was loaded earlier, before the review call.)
+    // The circuit breaker. `escalated` is set on the record after
+    // MAX_CONSECUTIVE_FIXES NEEDS_FIXES rounds in a row, when one file keeps
+    // drawing findings (churn), or when a check could not run at all, and
+    // stays set until a READY clears it. This service only records the flag;
+    // verify_and_ship reads it -- on a real project it stops looping and
+    // hands the task to a human, on a benchmark it ships the fix as disputed.
     const consecutiveNeedsFixes = verdict === 'READY' ? 0 : (prevState?.consecutiveNeedsFixes || 0) + 1;
     const wasEscalated = Boolean(prevState?.escalated);
     // Computed BEFORE appendHistory below writes this round's own entry —
@@ -2238,7 +2192,7 @@ async function reviewProject(project, cfg, routerKey, requested = null) {
     if (verdict === 'NEEDS_FIXES' && !wasEscalated) {
       log(`[${project}] NEEDS_FIXES — findings recorded in state.json/history.jsonl for the dashboard`);
     } else if (verdict === 'NEEDS_FIXES') {
-      log(`[${project}] still NEEDS_FIXES (${consecutiveNeedsFixes} in a row) — already escalated, not re-nudging`);
+      log(`[${project}] still NEEDS_FIXES (${consecutiveNeedsFixes} in a row) — already escalated`);
     } else {
       log(`[${project}] READY — no issues found`);
     }
@@ -2299,7 +2253,7 @@ function startControlServer(routerKey) {
       const presented = Buffer.from(req.headers['x-review-secret'] || '');
       const expected = Buffer.from(REVIEW_CONTROL_SECRET || '');
       const trusted = REVIEW_CONTROL_SECRET && presented.length === expected.length
-        && require('crypto').timingSafeEqual(presented, expected);
+        && crypto.timingSafeEqual(presented, expected);
       res.writeHead(ok ? 200 : 503, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({
         ok,
@@ -2324,7 +2278,7 @@ function startControlServer(routerKey) {
       }
       const provided = Buffer.from(req.headers['x-review-secret'] || '');
       const expected = Buffer.from(REVIEW_CONTROL_SECRET);
-      if (provided.length !== expected.length || !require('crypto').timingSafeEqual(provided, expected)) {
+      if (provided.length !== expected.length || !crypto.timingSafeEqual(provided, expected)) {
         res.writeHead(401, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ ok: false, error: 'invalid or missing X-Review-Secret' }));
         return;
@@ -2364,7 +2318,7 @@ function startControlServer(routerKey) {
     }
     const provided = Buffer.from(req.headers['x-review-secret'] || '');
     const expected = Buffer.from(REVIEW_CONTROL_SECRET);
-    if (provided.length !== expected.length || !require('crypto').timingSafeEqual(provided, expected)) {
+    if (provided.length !== expected.length || !crypto.timingSafeEqual(provided, expected)) {
       res.writeHead(401, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ ok: false, error: 'invalid or missing X-Review-Secret' }));
       return;

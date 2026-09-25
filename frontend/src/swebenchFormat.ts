@@ -23,7 +23,8 @@ export function headlineRun(runs: SwebenchRunSummary[]): SwebenchRunSummary | un
     ?? runs.find((r) => r.kind !== "diagnostic");
 }
 
-/** "412/500", or while running "9/12 graded so far". */
+/** "412/500"; while running, "9/12" -- resolved over the tasks graded so far
+ *  (scoreLabel says so beside it). */
 export function scoreText(r: SwebenchRunSummary): string {
   if (r.graded) return `${r.resolved ?? 0}/${r.total}`;
   if (r.graded_count > 0) return `${r.resolved ?? 0}/${r.graded_count}`;
@@ -68,7 +69,7 @@ export function swebenchScorecard(r: SwebenchRunSummary, referenceFails: string[
 }
 
 /** One row of the "Host during the run" peaks table. */
-export interface HostPeak {
+interface HostPeak {
   key: string;
   label: string;
   value: string;
@@ -89,7 +90,7 @@ const seriesLast = (h: SwebenchHost, k: SwebenchHostField): number | undefined =
 };
 
 export const hostPct = (v: number | null | undefined) => (v == null ? "—" : `${Math.round(v)}%`);
-export const hostGb = (v: number | null | undefined) => (v == null ? "—" : `${v.toFixed(1)} GB`);
+const hostGb = (v: number | null | undefined) => (v == null ? "—" : `${v.toFixed(1)} GB`);
 export const hostSec = (v: number | null | undefined) => (v == null ? "—" : `${v.toFixed(1)} s`);
 export const hostNum = (v: number | null | undefined, digits = 0) => (v == null ? "—" : v.toFixed(digits));
 

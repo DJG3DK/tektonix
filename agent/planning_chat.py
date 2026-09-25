@@ -112,8 +112,6 @@ logger = logging.getLogger("tektonix")
 # a genuinely hard investigation (the deepest useful sessions have landed
 # $1-2 with caching), tight enough that a runaway marathon is interrupted
 # while it is a surprise, not a bill.
-# Documented as configurable but hardcoded until now, so the documentation was
-# simply wrong. Read from the environment with the same default.
 # Operator-tunable at runtime (Settings -> Runtime limits). Read at use, not
 # at import, so a change lands on the next turn without a restart.
 from agent import runtime_settings as _rs
@@ -436,13 +434,12 @@ async def build_planning_agent(
     _visible = [r for r in PROJECTS if r != repo and (allowed_repos is None or r in allowed_repos)]
     other_repos = ", ".join(_visible) or "(none)"
 
-    # A real per-turn dollar ceiling (2026-08-28). This was math.inf -- the
-    # one agent with NO budget was the one the operator watched burn $7 on a
-    # single 157-call, 10.6M-input-token turn. Tasks have hard budgets
-    # enforced per model call; planning now does too, scoped per TURN (the
-    # ceiling rides on top of whatever the session has already spent, so a
-    # long session isn't strangled by its own history -- each turn gets the
-    # same allowance). Healthy turns run $0.10-$1.50; the runaways are the
+    # A per-turn dollar ceiling, enforced per model call like a task's
+    # budget (2026-08-28: with none, one turn burned $7 over 157 calls and
+    # 10.6M input tokens). Scoped per TURN: the ceiling rides on top of
+    # whatever the session has already spent, so a long session isn't
+    # strangled by its own history -- each turn gets the same allowance.
+    # Healthy turns run $0.10-$1.50; the runaways are the
     # investigate-everything marathons this exists to interrupt. On breach,
     # BudgetGuardMiddleware raises out of the turn; the teardown paths bank
     # the draft plan, the spend, and fire the planning_error Telegram alert,

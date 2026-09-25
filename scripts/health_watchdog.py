@@ -58,8 +58,6 @@ MAX_RESTARTS_PER_HOUR = 3
 ALERT_REPEAT_S = 1800          # re-alert on a still-broken service at most this often
 TIMEOUT_S = 12
 
-# repo is passed to notify_operators so a single-repo operator only hears
-# about their own service (agent/notify.py's audit H1 fan-out filter).
 # What to watch is this INSTALL's business, not the repo's: the list names
 # somebody's real services, their URLs and their pm2 process names, and no two
 # deployments share one. It lives in a gitignored file beside this script, the
@@ -72,7 +70,6 @@ TIMEOUT_S = 12
 # not something a pm2 restart fixes. Routing probes through the edge would let
 # an edge failure trigger a restart that cannot possibly help.
 SERVICES_FILE = Path(__file__).resolve().parent / "watchdog-services.local.json"
-EXAMPLE_FILE = SERVICES_FILE.with_name("watchdog-services.example.json")
 
 
 def load_services() -> list[dict]:

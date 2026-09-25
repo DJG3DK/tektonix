@@ -46,10 +46,14 @@ def test_a_deployment_that_says_how_to_choose_is_left_alone():
         assert f.extra_body_for(None, "k", "m", extra) is extra
 
 
-def test_the_ranking_is_fetched_in_the_background_and_then_used():
+def test_the_ranking_is_fetched_in_the_background_and_then_used(monkeypatch, tmp_path):
     """No call waits on the stats: the first goes out with build_body's
     throughput default, later ones name the ranked hosts, with fallbacks --
     the fast hosts' shared pools do return 429s."""
+    # The refresh reads the ledger in a thread before it ranks. Pointed at an
+    # empty path: on a box with a live ledger the scan took longer than the
+    # 50ms this test waits, and the ranking had not landed (2026-09-25).
+    monkeypatch.setattr(fastest.ledger, "LOG_PATH", tmp_path / "routing.jsonl")
     seen = []
 
     def handler(request):

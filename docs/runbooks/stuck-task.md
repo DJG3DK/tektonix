@@ -5,8 +5,9 @@
 The dashboard shows a task as **running**. The stream has not produced a line
 in a long time.
 
-> If it shows **Queued** rather than Running, stop here: it is waiting for
-> another task on the same project and will start on its own. Jump to
+> If it shows **Queued** rather than Running, stop here: every slot its
+> project allows (Settings → Tasks at once per project) is held by another
+> task, and it will start on its own. Jump to
 > [section 6](#6-is-another-process-holding-the-project).
 
  Possibly the step counter is stuck partway, or the page shows
@@ -141,6 +142,17 @@ PY
 **Action:** answer it in the dashboard. An `ask_user` question wants a typed
 reply; a gated command wants approve or reject.
 
+**Escalated by the reviewer's breaker.** A task that shows *escalated* with
+"The independent review service escalated this after repeated non-converging
+rounds" is not stuck either: the reviewer returned `NEEDS_FIXES` three rounds
+running, or the same file kept turning up in its findings, and the gate hands
+the argument to you rather than nudging again. Read the last finding against
+the agent's answer to it — the reviewer is given every "Response to review
+round N" in the branch's commits and must name the evidence it disputes when
+it repeats a finding — then Resume with a message saying which side is right.
+A benchmark project has nobody to hand it to, so there the fix ships as it
+stands, marked *disputed*, and never reaches this page.
+
 ---
 
 ## 5. Is pm2 killing it on a schedule?
@@ -179,18 +191,19 @@ is there to catch a runaway, not to recycle a working process.
 
 **First, look at the badge.** Since 2026-09-22 a task waiting for the project
 says **Queued** — dim, not pulsing — instead of claiming to be running. If
-that is what you see, nothing is wrong: another task on the same project is
-ahead of it, and it starts by itself when that one finishes. One task per
-project is a hard constraint because they share one worktree.
+that is what you see, nothing is wrong: every slot the project allows is held
+by another task, and it starts by itself when one of them finishes. How many
+tasks run on a project at once is **Settings → Tasks at once per project**
+(default 10, at most 16); each task has its own worktree, so they only take
+turns for checks, review and merge.
 
 The rest of this section is for the case where a task says *running* and the
 lock is still the answer — an older task started before that change, or a
-second process holding the lock from outside this one.
+second process holding the slots from outside this one.
 
-How many tasks run on a project at once (Settings → Tasks at once per
-project, default 1) is enforced with Postgres advisory locks, one per slot.
-A second process holding them makes a task wait at the very start, marked
-Queued.
+The slots are Postgres advisory locks, one per slot (`project_slot` in
+`agent/graph.py`). A second process holding them makes a task wait at the
+very start, marked Queued.
 
 ```bash
 grep 'locked by another process' /root/.pm2/logs/tektonix-error.log | tail -3
@@ -262,7 +275,7 @@ path that matched neither term.
 
 - **Do not restart `model-router`** to unstick a task. A model call in flight
   dies with it and the task escalates. Stop the task first if you must.
-- **Do not restart `3d-agent` mid-pass** unless you accept losing that pass.
+- **Do not restart `tektonix` mid-pass** unless you accept losing that pass.
   A running task auto-resumes, a planning turn does not.
 - **Do not delete the task** to "clear" it. Every state is resumable, and the
   diff lives in the task worktree until it is merged.

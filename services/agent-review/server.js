@@ -1,20 +1,19 @@
 'use strict';
 /**
- * Review/merge server for the coding agent's workspace.
+ * Review dashboard and merge control for the coding agent's projects.
  *
- * Purely narrow, safe git operations against the 3 live repos:
- *   - fetch/log/diff  → read-only, never touch the live working tree
- *   - merge            → --ff-only ONLY. Never rewrites/discards a commit;
- *                        refuses outright if live has diverged or has
- *                        uncommitted changes that would be clobbered — git's
- *                        own safety net, not a hand-rolled one.
- *   - restart          → explicit, separate action; merging code never
- *                        implicitly restarts the live process.
+ * Narrow git operations against each live repository:
+ *   - log/diff   → read-only, never touch the live working tree
+ *   - merge      → --ff-only ONLY, gated on the commit-reviewer's verdict for
+ *                  the exact branch and sha. Never rewrites a commit; git
+ *                  itself refuses if live has diverged or a local file would
+ *                  be clobbered.
+ *   - restart    → explicit, separate action; merging never restarts anything.
  *
- * Localhost-only (127.0.0.1) — reached exclusively via nginx's /_review/
- * proxy in front of this service, which is itself behind the same
- * auth_request login gate as everything else on that domain. No separate
- * auth layer needed here.
+ * Every route but /health requires X-Review-Secret (requireControlSecret),
+ * reads included. Loopback on a host install, behind nginx's /_review/
+ * proxy; 0.0.0.0 on the compose network in the bundle, where the agent's
+ * own proxy injects the secret.
  */
 
 const express = require('express');
@@ -29,19 +28,14 @@ const AGENT_HOME = process.env.AGENT_HOME || path.join(__dirname, '..', '..');
 
 const fs = require('fs');
 
-// `build` steps run (in order, relative to `live`) BEFORE the pm2 restarts
-// below — a bare `pm2 restart` re-runs whatever's already compiled on disk,
-// so skipping this for a project with a build step deploys stale code while
-// looking like it succeeded. Checked each project directly rather than
-// assume: a large project runs straight from source (no build step, `main: src/index.js`),
-// a Next.js project is Next.js (`next build` then `next start` serves .next/),
-// a monorepo project' API is NestJS (`nest build`) and admin/storefront are Vite
-// static bundles nginx serves directly — not pm2 apps at all, so they need
-// a build with no matching restart.
-// Deployment-specific overrides, loaded from an OPTIONAL gitignored file
-// so a public checkout ships no one's infrastructure. See
-// builtin-projects.local.js.example. Anything defined there wins over
-// projects.json (see services/shared/projects-config.js).
+// Each project's deploy config -- `build` steps (run in order, relative to
+// `live`, BEFORE any pm2 restart: a bare `pm2 restart` re-runs whatever is
+// already compiled on disk), `pm2Apps`, `restart` commands and `preflight`
+// URLs -- comes from projects.json's deploy section, with deployment-specific
+// overrides loaded from an OPTIONAL gitignored file so a public checkout
+// ships no one's infrastructure. See builtin-projects.local.js.example.
+// Anything defined there wins over projects.json (see
+// services/shared/projects-config.js).
 //
 // REVIEW_ONLY_PROJECTS_JSON=1 skips them, for the same reason the
 // commit-reviewer honours it: a second instance started by agent/evals must
@@ -73,15 +67,10 @@ function currentProjects() {
     return loadProjects(BUILTIN_PROJECTS, { section: 'deploy' });
 }
 
-// The ledger already has the model id and the tier the classifier picked.
-// A hardcoded list here was a second inventory of the same pins, and it
-// went stale the moment an operator changed config.yaml: stats then
-// labelled a live model as its own raw id, or showed zeros for a pin
-// nobody uses anymore. The label is the last path segment — the same
-// shortening the console already does — and unused models simply do not
-// appear.
+// The router's ledger, one line per model call (services/model-router/router/ledger.py).
 const ROUTING_LOG = path.join(AGENT_HOME, 'services/model-router/logs/routing.jsonl');
 
+// The last path segment of a model id -- the same shortening the console does.
 function labelForModel(id) {
     const raw = String(id || '');
     const slash = raw.lastIndexOf('/');
@@ -186,15 +175,10 @@ app.get('/api/projects', requireControlSecret, (req, res) => {
     res.json(Object.keys(currentProjects()));
 });
 
-// Read-only: what's ready to merge, and can it fast-forward cleanly.
-// Which ref in the sandbox holds the work under review. The agent now commits
-// to a per-task branch (`agent/<task-id>`), so this is no longer simply the
-// remote-tracking twin of live's own branch. The reviewer records the branch
-// its verdict was produced against; preferring that keeps "what was reviewed"
-// and "what gets merged/displayed" the same ref. The `agent/<liveBranch>`
-// fallback covers a sandbox that hasn't run a task since per-task branches
-// landed, and force-merges with no review state at all.
-async function agentRefFor(p, name, liveBranch) {
+// Which branch holds the work under review: the one the reviewer's latest
+// verdict names, if it still exists, else the newest agent/* branch, else
+// null (nothing to review or merge).
+async function agentRefFor(p, name) {
     // Prefer the branch the reviewer actually produced its verdict against, so
     // "what was reviewed" and "what gets merged" are the same ref -- but only if
     // that ref still exists. Review state outlives the branch it names: a verdict
@@ -219,19 +203,18 @@ async function agentRefFor(p, name, liveBranch) {
         const first = out.split('\n').map((r) => r.trim()).filter(Boolean)[0];
         if (first) return first;
     } catch { /* fall through */ }
-    // No agent work exists. Returning `agent/<liveBranch>` here used to be
-    // correct because the clone's main was mirrored under that name; with the
-    // clone gone that ref does not exist, and asking git for `main..agent/main`
-    // made the status endpoint 500 for every project that simply had no task
-    // in flight. null means "nothing to review or merge", which callers handle.
+    // No agent work exists. null, not a guessed ref: asking git for a range
+    // ending in a branch that does not exist 500'd the status endpoint for
+    // every project with no task in flight.
     return null;
 }
 
+// Read-only: what's ready to merge, and can it fast-forward cleanly.
 app.get('/api/projects/:name/status', requireControlSecret, async (req, res) => {
     const p = projectOr404(req, res); if (!p) return;
     try {
         const branch = (await git(p.live, ['rev-parse', '--abbrev-ref', 'HEAD'])).trim();
-        const agentRef = await agentRefFor(p, req.params.name, branch);
+        const agentRef = await agentRefFor(p, req.params.name);
         if (!agentRef) {
             const dirty0 = (await git(p.live, ['status', '--short'])).trim().split('\n').filter(Boolean);
             return res.json({ branch, agentRef: null, commits: [], dirtyFiles: dirty0, canFastForward: null });
@@ -256,7 +239,7 @@ app.get('/api/projects/:name/diff', requireControlSecret, async (req, res) => {
     const p = projectOr404(req, res); if (!p) return;
     try {
         const branch = (await git(p.live, ['rev-parse', '--abbrev-ref', 'HEAD'])).trim();
-        const agentRef = await agentRefFor(p, req.params.name, branch);
+        const agentRef = await agentRefFor(p, req.params.name);
         if (!agentRef) return res.type('text/plain').send('');
         const diff = await git(p.live, ['diff', `${branch}...${agentRef}`]);
         res.type('text/plain').send(diff);
@@ -333,7 +316,7 @@ app.post('/api/projects/:name/merge', requireControlSecret, async (req, res) => 
                     error: `${requested} does not exist.` });
             }
         } else {
-            agentRef = await agentRefFor(p, req.params.name, branch);
+            agentRef = await agentRefFor(p, req.params.name);
         }
         if (!agentRef) {
             return res.status(409).json({ ok: false, reason: 'nothing_to_merge',
@@ -549,53 +532,15 @@ app.post('/api/projects/:name/restart', requireControlSecret, async (req, res) =
     } catch (e) { res.status(500).json({ ok: false, error: e.message, stage: 'restart', built }); }
 });
 
-// Read-only, deliberately cheap: just the single most recent routing
-// decision, for the floating model badge on the review dashboard
-// (polled every few seconds — this endpoint has to stay light). Since
-// the model router's consumers are few, "most recent entry" is a
-// good proxy for "what's answering the user's active conversation right now".
+// Read-only: the dashboard's Router tab, from routing.jsonl.
 //
-// Every real turn also produces a routing.jsonl line for the complexity
-// classifier's OWN internal call (always deepseek-v4-flash, tier: null —
-// that call isn't itself tier-routed, it's what DECIDES the tier) plus,
-// separately, background context-condenser calls. Naively taking
-// "the last line" flickers the badge between that overhead and the actual
-// answering model on every turn (2026-08-16 — user watching a complex edit
-// saw Pro for a few seconds then flash, and it was this, not misrouting).
-// Only entries with `tier` set are real, classifier-decided completions.
-app.get('/api/router/current', requireControlSecret, async (req, res) => {
-    try {
-        const raw = await fs.promises.readFile(ROUTING_LOG, 'utf8').catch(() => '');
-        const lines = raw.trim().split('\n').filter(Boolean);
-        for (let i = lines.length - 1; i >= 0; i--) {
-            let e;
-            try { e = JSON.parse(lines[i]); } catch { continue; }
-            if (e.error || !e.routed_model || !e.tier) continue;
-            return res.json({
-                model: e.routed_model,
-                label: labelForModel(e.routed_model),
-                tier: e.tier,
-                ts: e.ts,
-            });
-        }
-        res.json({ model: null });
-    } catch (e) { res.status(500).json({ error: e.message }); }
-});
-
-// Read-only: model usage/routing visibility for the LLM router. Reads
-// the router's own routing.jsonl (the router logs one line
-// per completed request there) — an off-the-shelf proxy's spend API would need a
-// Postgres DB we don't have set up, so this is the lightweight substitute.
-//
-// Every real turn logs TWO+ lines: the complexity classifier's own internal
-// call (tier: null — that call decides the tier, it isn't itself routed by
-// one) plus, separately, background condenser calls — both
-// always land on deepseek-v4-flash. Blending those into the per-model
-// breakdown made flash look dominant even on sessions where the real work
-// was mostly complex (2026-08-16 finding: badge showed ~96% flash on a
-// genuinely complex edit; the actual routed completions split ~49/42
-// flash/pro). `models`/`recent`/`totals` below cover real completions
-// (tier set) only; overhead is reported separately in `overhead`.
+// The `tier` split dates from the router's tier classifier: a line with a
+// tier was a real completion, a line without one was the classifier's or
+// the condenser's own overhead call. The tier system was removed on
+// 2026-09-13 and the ledger now writes `tier: null` on every line, so as
+// written this puts every successful call under `overhead` and only errors
+// under `models`/`recent`/`totals`. The console's Analytics page, not this
+// tab, is where spend is read from (agent/metrics.py).
 app.get('/api/router/stats', requireControlSecret, async (req, res) => {
     try {
         const raw = await fs.promises.readFile(ROUTING_LOG, 'utf8').catch(() => '');
@@ -603,8 +548,13 @@ app.get('/api/router/stats', requireControlSecret, async (req, res) => {
             try { return JSON.parse(line); } catch { return null; }
         }).filter(Boolean);
 
-        const entries = allEntries.filter(e => e.error || e.tier);
-        const overheadEntries = allEntries.filter(e => !e.error && !e.tier);
+        // Every call is a routing decision: the tier system went on
+        // 2026-09-13 and the ledger writes `tier: null` since, which made this
+        // filter file every successful call under "overhead" for twelve days.
+        // Overhead is the classifier seat alone, which decides nothing.
+        const isOverhead = e => !e.error && e.alias === 'agent-classifier';
+        const entries = allEntries.filter(e => !isOverhead(e));
+        const overheadEntries = allEntries.filter(isOverhead);
 
         const byModel = {};
         for (const e of entries) {
@@ -635,7 +585,7 @@ app.get('/api/router/stats', requireControlSecret, async (req, res) => {
         const overhead = {
             requests: overheadEntries.length,
             cost: overheadEntries.reduce((s, e) => s + (e.cost || 0), 0),
-            note: 'Complexity-classifier + context-condenser calls — always deepseek-v4-flash, not a real routing decision. Excluded from `models`/`recent`/`totals` above.',
+            note: 'Classifier calls (agent-classifier): not a routing decision. Excluded from `models`/`recent`/`totals` above.',
         };
         res.json({ models: Object.values(byModel), recent, totals, overhead });
     } catch (e) { res.status(500).json({ error: e.message }); }
@@ -713,12 +663,12 @@ app.get('/api/router/balance', requireControlSecret, async (req, res) => {
     } catch (e) { res.status(502).json({ error: e.message }); }
 });
 
-// Read-only: the commit-reviewer service's last verdict per project. That
-// service (separate pm2 process, /home/3d-agent/services/commit-reviewer/reviewer.js) polls
-// each sandbox for new commits, runs real lint/test/build checks plus a
-// Claude Sonnet 5 review in an isolated worktree off LIVE (real secrets,
-// real env), and writes its findings to state.json — this just surfaces
-// that file, it doesn't run anything itself.
+// Read-only: the commit-reviewer's state.json as written -- the latest
+// verdict per project and, under `branches`, per task branch. That service
+// (services/commit-reviewer/reviewer.js, its own process) polls each
+// project's task branches, runs the real checks in a worktree off live with
+// review-only credentials, and asks the router's agent-reviewer alias for
+// the qualitative review. This just surfaces the file.
 app.get('/api/review/status', requireControlSecret, async (req, res) => {
     res.json(await readReviewState());
 });

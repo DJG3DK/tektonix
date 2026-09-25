@@ -86,18 +86,10 @@
   margin: 0 0 14px;
 }
 
-.repo-stats-list,
 .model-stats-list {
   display: flex;
   flex-direction: column;
   gap: 10px;
-}
-
-.repo-stats-row {
-  display: grid;
-  grid-template-columns: 110px 1fr 70px 70px;
-  align-items: center;
-  gap: 12px;
 }
 
 .model-stats-row {
@@ -108,12 +100,6 @@
   gap: 12px;
 }
 
-/* The repo rows keep the original three-column shape -- they carry no
-   billed/cache columns. */
-.repo-stats-row {
-  grid-template-columns: 110px 1fr 70px 70px 70px;
-}
-
 .model-stats-label {
   font-size: 12.5px;
   font-weight: 600;
@@ -122,19 +108,11 @@
   white-space: nowrap;
 }
 
-.repo-stats-bar-track,
 .model-stats-bar-track {
   height: 8px;
   border-radius: 4px;
   background: var(--surface-raised);
   overflow: hidden;
-}
-
-.repo-stats-bar-fill {
-  height: 100%;
-  background: var(--accent);
-  border-radius: 4px;
-  transition: width 0.5s ease;
 }
 
 .model-stats-bar-fill {
@@ -143,7 +121,6 @@
   transition: width 0.5s ease;
 }
 
-.repo-stats-cost,
 .model-stats-cost {
   font-size: 12.5px;
   font-family: var(--font-mono);
@@ -151,7 +128,6 @@
   text-align: right;
 }
 
-.repo-stats-count,
 .model-stats-requests,
 .model-stats-latency,
 .model-stats-cache {
@@ -285,7 +261,6 @@
 /* Stat rows: three fixed columns don't fit a phone — stack the bar under
    the label/counts line instead of squeezing it to nothing. */
 @media (max-width: 640px) {
-  .repo-stats-row,
   .model-stats-row {
     grid-template-columns: 1fr auto auto;
     gap: 5px 10px;
@@ -298,7 +273,6 @@
   }
   .model-stats-billed { grid-column: 1 / 2; text-align: left; }
   .model-stats-cache { grid-column: 2 / -1; }
-  .repo-stats-bar-track,
   .model-stats-bar-track {
     grid-column: 1 / -1;
     grid-row: 2;
@@ -342,7 +316,6 @@
   /* flex-wrap, not a 1fr grid: a single-column grid puts every figure on its
      OWN row, which turned three short numbers into three lines. Wrapping lets
      the label and bar take full width while the figures share one line. */
-  .repo-stats-row,
   .model-stats-row {
     display: flex;
     flex-wrap: wrap;
@@ -352,29 +325,22 @@
     border-bottom: 1px solid var(--border-soft);
   }
   .model-stats-label,
-  .repo-stats-label,
-  .model-stats-bar-track,
-  .repo-stats-bar-track { flex: 1 1 100%; }
-  .repo-stats-row:last-child,
+  .model-stats-bar-track { flex: 1 1 100%; }
   .model-stats-row:last-child { border-bottom: 0; }
 
-  .model-stats-label,
-  .repo-stats-label {
+  .model-stats-label {
     font-size: var(--fs-md);
     font-weight: 600;
     white-space: normal;
     overflow-wrap: anywhere;
   }
 
-  .model-stats-bar-track,
-  .repo-stats-bar-track { height: 6px; }
+  .model-stats-bar-track { height: 6px; }
 
   /* The figures become one wrapped meta line rather than three cramped columns. */
   .model-stats-cost,
   .model-stats-requests,
-  .model-stats-latency,
-  .repo-stats-cost,
-  .repo-stats-count {
+  .model-stats-latency {
     flex: 0 0 auto;
     font-size: var(--fs-sm);
     color: var(--text-dim);

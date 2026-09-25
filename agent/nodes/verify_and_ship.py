@@ -3,30 +3,32 @@ status carries no authority here -- this node always re-runs the real
 typecheck/lint/test suite itself, every pass, regardless of what the agent
 believes or reports.
 
-Four outcomes per pass:
-  1. Checks fail -> inject the real failure output as pending_feedback,
-     route back to "work" (same inner thread).
-  2. Checks pass but there's no diff, for the first time this task -> nudge
-     and loop back rather than silently doing nothing or shipping an empty
-     diff.
-  3. Checks pass but there's still no diff on a second consecutive pass ->
-     terminal "done, no changes needed" outcome, not another nudge. Two
-     consecutive no-diff passes is required so a task that hasn't started
-     yet can't be mistaken for one that's genuinely finished.
-  4. Checks pass and there's a real diff -> commit once for the whole task,
-     hand off to the review service (review_gate.py); NEEDS_FIXES loops back
-     to "work" with findings injected the same way; READY calls
-     merge_and_deploy -> terminal.
+What a pass does, in order (the iteration ceiling is checked first):
+  1. Checks fail -> the real failure output becomes pending_feedback and the
+     task loops back to "work" (same inner thread).
+  2. Checks pass, no diff -> a pending commit is re-reviewed (or nudged, then
+     restarted on a fresh inner thread, when its verdict is already known);
+     otherwise a short or unfinished-sounding conclusion is nudged, a first
+     no-diff pass is nudged, and a second consecutive one ends the task as
+     "done, no changes needed". A benchmark task never ends that way: an
+     empty patch cannot resolve it, so it loops back instead.
+  3. Checks pass with a diff -> on a benchmark, the diff-pattern gates
+     (agent/nodes/diff_patterns.py) and the verifier nudge each send it back
+     once; on any project, an unfinished todo plan holds the commit for up to
+     INCOMPLETE_PLAN_LIMIT passes.
+  4. Commit on the task branch (a new commit per pass; the branch is the
+     review unit, and the agent's answer to the last review round travels in
+     the commit message under REVIEW_RESPONSE_MARKER), rebase onto the base,
+     hand off to the review service. NEEDS_FIXES loops back with the findings;
+     the reviewer's own circuit breaker escalates, except on a benchmark,
+     which ships the fix as disputed. READY parks the task for the operator's
+     final look when require_merge_review is on, then merges and deploys or
+     opens a pull request -> terminal.
 
-The outer iteration/retry ceiling is checked first, before spending anything
-on this round.
-
-Also writes an episodic memory record at every terminal outcome (shipped or
-escalated) -- a structured, queryable summary distinct from the semantic
-/memories/AGENTS.md content. Not auto-loaded into any task's context; read
-only by the consolidation agent (agent/consolidation.py), which distills
-patterns across episodes into semantic memory updates on a schedule. Looping
-(non-terminal) passes don't write an episode.
+An episode (agent/episodes.py) is written at every terminal outcome --
+shipped, done-no-changes, escalated -- and not while parked on an operator
+decision. Read only by the consolidation agent (agent/consolidation.py),
+never loaded into a task's context.
 
 `_verify_and_ship`'s outer try/except converts any unexpected exception (a
 transient review-service network blip, a subprocess spawn hiccup) into a
@@ -56,6 +58,7 @@ from agent.tools.git import (
     git_commit,
     git_diff,
     rebase_onto_base,
+    sha_in_repo,
 )
 from agent import check_timing
 from agent import runtime_settings as _rs
@@ -66,12 +69,9 @@ from agent.tools.review_gate import (
     wait_for_review,
 )
 from agent.project_checks import autodetect_checks_if_none
-from agent.tools.git import sha_in_repo
 from agent.outer_state import AgentState
 from agent.nodes import diff_patterns
 
-# Duration lives in runtime_settings ("review_wait_timeout_s") so it can be
-# raised without a restart when a large diff needs longer than the default.
 # Minimum length for a final message to count as a genuine "no changes
 # needed" conclusion rather than a truncated, mid-thought response.
 MIN_CONCLUSION_CHARS = 120
@@ -144,9 +144,9 @@ def _review_response_note(state: AgentState) -> str:
 
 
 def _last_work_response_text(state: AgentState) -> str | None:
-    """The most recent "work" node log entry's detail -- work.py populates
-    this from the inner thread's actual final message content, so this
-    reflects what the model said to end its turn.
+    """The most recent "work" node log entry's detail -- work.py fills it
+    with the coordinator's last streamed text, so this is what the model
+    said to end its turn.
     """
     for entry in reversed(state.get("execution_log", [])):
         if entry.get("node") == "work":
@@ -283,15 +283,13 @@ async def _write_episode(store: BaseStore, state: AgentState, result: dict,
                          config: Config) -> None:
     """Work out how this task ended, and hand the record to the one writer.
 
-    The inference is here because it is about THIS node's four outcomes; the
-    writing is in agent/episodes.py because several other things are about
-    to want a say in it (see that module).
+    The inference is here because it is about this node's three terminal
+    outcomes; the writing is in agent/episodes.py, the one place an episode
+    is written.
 
-    `config` has no default on purpose. It is unused downstream today and a
-    default would have let the three existing callers stay untouched -- and
-    then the one wire this refactor exists to lay would be the one thing
-    nothing asserts, until an embedding or an index hook needed it and found
-    it None.
+    `config` has no default on purpose: write_episode hands it to the history
+    index, and a default would let a caller pass nothing and find it None
+    there.
     """
     if result.get("escalated"):
         outcome = "escalated"
@@ -680,24 +678,13 @@ async def _verify_and_ship_inner(state: AgentState, repo: str, repo_root: str,
         # The two-consecutive-no-diff "done" rule assumes a no-diff pass's
         # final message is a genuine decision, which isn't always true: a
         # model can end a pass having announced an intended next action
-        # ("let me look at X") without a tool call following through on it,
-        # and without a token-limit truncation to explain the drop. A short
-        # final message is a cheap signal for this -- a genuine "no changes
-        # needed" explanation runs several sentences; a dropped intention
-        # does not. Treating a short pass as NOT incrementing the streak
-        # costs at most one extra pass on a false positive (a real
-        # conclusion that happened to be terse), versus silently ending the
-        # task on a dropped tool call.
-        # A SHORT final response, not a missing one. The distinction is the
-        # whole fix of 2026-09-13: work.py used to read this back from the
-        # inner agent's checkpoint, where `messages` does not exist, so it was
-        # "" on every pass -- and "" is shorter than any threshold, so this
-        # branch fired every time, reset the streak, and made the
-        # two-consecutive-no-diff exit unreachable. Task 25e2bfb0 looped on it
-        # twice in eight minutes, each time told to follow through on an
-        # intention it had never announced. work.py takes the text from the
-        # stream now; an empty value here means genuinely unknown, and guessing
-        # "cut off mid-thought" from nothing is what caused the loop.
+        # ("let me look at X") without a tool call following through on it.
+        # A short final message is a cheap signal for this -- a genuine "no
+        # changes needed" explanation runs several sentences; a dropped
+        # intention does not -- and a false positive costs one extra pass.
+        # A SHORT response, never a missing one: "" means unknown (a pass that
+        # streamed no prose), and reading it as cut off reset the streak on
+        # every pass and made the exit unreachable (task 25e2bfb0, 2026-09-13).
         last_response = (_last_work_response_text(state) or "").strip()
         nudges = state.get("short_conclusion_streak", 0)
         looks_incomplete = bool(last_response) and (
@@ -818,10 +805,9 @@ async def _verify_and_ship_inner(state: AgentState, repo: str, repo_root: str,
             "incomplete_plan_streak": plan_streak + 1,
         }
 
-    # A real uncommitted diff -- commit it. If a prior commit was still
-    # pending review (pending_sha set), this naturally folds any new work on
-    # top of it into one fresh combined commit, which supersedes the old sha
-    # (committed_sha gets overwritten below, in _review_and_deploy).
+    # A real uncommitted diff -- commit it, as a new commit on top of any
+    # earlier one on the task branch. The branch is what the reviewer reads,
+    # and committed_sha moves to its new tip below, in _review_and_deploy.
     goal = state["goal"]
     commit_message = f"{goal}\n\n(shipped via deepagents-based agent)" + _review_response_note(state)
     operator_edit = state.get("_operator_edit")
@@ -919,6 +905,8 @@ async def _review_and_deploy(state: AgentState, repo: str, sha: str) -> dict:
     except Exception:  # noqa: BLE001
         pass
 
+    # The timeout is a runtime setting, so a large diff that needs longer can
+    # be given it without a restart.
     try:
         review = await wait_for_review(repo, sha, timeout=_rs.as_int("review_wait_timeout_s"), branch=branch)
     except TimeoutError as e:
@@ -941,13 +929,12 @@ async def _review_and_deploy(state: AgentState, repo: str, sha: str) -> dict:
         # hand -- in a workspace provisioned differently from the gate's, which
         # is how a run can spend rounds fixing something that was never broken.
         detail = review.get("agentMessage") or f"{review.get('summary', '')}\n\n{findings}"
-        # audit M-14: honor the reviewer's own circuit breaker. It sets
-        # `escalated` after MAX_CONSECUTIVE_FIXES non-converging rounds or when a
-        # single file churns repeatedly (built for an observed 8-round loop), and
-        # its comments say it will "stop nudging and tell the agent to halt for a
-        # human instead." That flag was previously read nowhere here, so the
-        # detector only moved a dashboard badge. Now it actually halts: loop back
-        # only while NOT escalated; once escalated, hand off to a human.
+        # The reviewer's own circuit breaker: it sets `escalated` after
+        # MAX_CONSECUTIVE_FIXES non-converging rounds or when one file churns
+        # repeatedly (built for an observed 8-round loop). Honoured here, not
+        # just shown as a badge: a live project hands off to a human, a
+        # benchmark ships the disputed fix (below), and only an un-escalated
+        # rejection loops back.
         benchmark = bool((PROJECTS.get(repo) or {}).get("benchmark"))
         if review.get("escalated") and not benchmark:
             reason = (
@@ -980,8 +967,8 @@ async def _review_and_deploy(state: AgentState, repo: str, sha: str) -> dict:
                 f"found real issues and rejected this:\n\n{detail}\n\n"
                 f"Fix these specifically, then let this gate re-review. Your final message of this pass "
                 f"is shown to the reviewer next round: if a finding is wrong, say so there with the exact "
-                f"command you ran and its output -- the reviewer reads only the diff and your message, "
-                f"and cannot run code."
+                f"command you ran and its output -- the reviewer reads the diff, its own check results "
+                f"and your message; it cannot run your probes."
             )
             return {
                 "iteration_count": state["iteration_count"] + 1,

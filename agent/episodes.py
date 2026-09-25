@@ -5,26 +5,15 @@ outcome, what it cost, and -- when it went wrong -- why. It is not loaded
 into any task's context. It is read by the consolidation agent, which
 distills patterns across episodes into the semantic memory that IS loaded.
 
-This module exists because that 25-line writer was about to be edited by
-three separate pieces of work at once: one wanting an embedding digest on
-the record, one wanting the record handed to a search index as it is
-written, one wanting extra telemetry fields on it. Three edits to one small
-function in three commits is three chances to lose one of them in a merge,
-and the thing being merged is the only durable record of what this system
-has done.
-
-The warning that made this module necessary, now acted on. The write used
-to go through deepagents' StoreBackend.awrite, which stores a FileData
-document -- content, encoding, and two timestamps -- and REBUILDS that
-document from scratch on the way in, dropping every key it does not know.
-The embed_text key the vector leg needs is exactly such a key, so it would
-have been written and silently discarded. Worse than discarded: langgraph
-emits no delete against store_vectors on an update, so an episode stripped
-of its embed_text keeps the vector it had and goes on matching text it no
-longer contains. So the value dict is composed here, in full, and written
-with one store.aput. The FileData shape is reproduced exactly, because
-consolidation.py's _read_episode and every other reader go back through
-StoreBackend to read it.
+The value dict is composed here, in full, and written with one store.aput --
+never through deepagents' StoreBackend.awrite, which rebuilds its FileData
+document (content, encoding, two timestamps) from scratch and drops every
+key it does not know. The embed_text key the vector leg needs is such a key,
+and losing it is worse than a missing vector: langgraph emits no delete
+against store_vectors on an update, so an episode stripped of embed_text
+keeps the vector it had and goes on matching text it no longer contains. The
+FileData shape is reproduced exactly, because consolidation.py's
+_read_episode and every other reader go back through StoreBackend.
 """
 
 from __future__ import annotations

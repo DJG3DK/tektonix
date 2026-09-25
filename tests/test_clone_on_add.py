@@ -169,7 +169,7 @@ def test_a_cloned_project_opens_pull_requests_by_default():
     to it would be the surprising answer.
     """
     entry = provisioning.config_from_choices(
-        "widget", "/srv/live/widget", "/srv/ws/widget",
+        "/srv/live/widget", "/srv/ws/widget",
         {"cloned_from_github": True},
     )
     assert entry["ship"] == "pr"
@@ -178,7 +178,7 @@ def test_a_cloned_project_opens_pull_requests_by_default():
 def test_a_project_onboarded_from_a_local_path_still_pushes():
     """Every existing project keeps doing exactly what it did."""
     entry = provisioning.config_from_choices(
-        "widget", "/srv/live/widget", "/srv/ws/widget", {},
+        "/srv/live/widget", "/srv/ws/widget", {},
     )
     assert "ship" not in entry, "absent means push, which is the documented default"
 
@@ -186,10 +186,10 @@ def test_a_project_onboarded_from_a_local_path_still_pushes():
 def test_the_operator_can_override_either_way():
     """A default, not a rule."""
     cloned_but_push = provisioning.config_from_choices(
-        "w", "/l", "/s", {"cloned_from_github": True, "ship": "push"})
+        "/l", "/s", {"cloned_from_github": True, "ship": "push"})
     assert cloned_but_push["ship"] == "push"
 
-    local_but_pr = provisioning.config_from_choices("w", "/l", "/s", {"ship": "pr"})
+    local_but_pr = provisioning.config_from_choices("/l", "/s", {"ship": "pr"})
     assert local_but_pr["ship"] == "pr"
 
 

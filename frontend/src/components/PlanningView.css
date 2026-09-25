@@ -325,15 +325,6 @@
   .planning-attach-row { padding: 8px 16px 0; }
 }
 
-/* Typing indicator + Stop on one row. Stop is only meaningful while a turn is
-   in flight, so it lives with the indicator that marks exactly that state
-   rather than in a toolbar where it would sit disabled most of the time. */
-.chat-typing-row {
-  display: flex;
-  align-items: center;
-  gap: var(--s3);
-}
-
 /* wrapper hosting the jump-to-bottom arrow over the scrolling log */
 .planning-view-log-wrap { position: relative; flex: 1; display: flex; min-height: 0; }
 .planning-view-log-wrap .planning-view-log { flex: 1; }

@@ -64,8 +64,6 @@ DEPENDABOT = "dependabot[bot]"
 # morning; short enough that a leaked old message is not a standing key.
 APPROVAL_TTL_S = 48 * 3600
 
-STATES = ("seen", "proposed", "task_created", "dismissed", "snoozed", "resolved")
-
 
 # ---------------------------------------------------------------------------
 # GitHub client -- async, thin, and the one thing tests replace
@@ -405,11 +403,10 @@ def decide(existing: dict[str, dict], found: list[Item], proj: dict, open_auto: 
     def _still_being_worked(prev: dict) -> bool:
         """Is a task genuinely on this item right now?
 
-        `task_created` used to be a one-way door: whatever became of the task,
-        the item kept the state and the UI offered no action on it, so the
-        alert sat in the list with no button while it was still open on
-        GitHub. Observed 2026-09-22 -- a task was stopped after going down a
-        rabbit hole, and its alert became unreachable.
+        Asked so that `task_created` is not a one-way door: an item whose
+        task is gone goes back to the queue instead of sitting with no button
+        while still open on GitHub (2026-09-22: a stopped task left its alert
+        unreachable).
 
         In flight means running, queued, or parked on a decision about THAT
         task (an approval, a merge, an escalation the operator can resume).
@@ -527,14 +524,10 @@ def approval_url(settings: dict, token: str) -> str | None:
 # putting the code in the goal
 # ---------------------------------------------------------------------------
 #
-# A code-scanning goal used to carry the rule id, a list of file:line, and one
-# sentence per location. Everything except the thing the task is about.
-#
-# What that produced, three times on 2026-09-22: the agent treated the rule id
-# as the subject, went and read CodeQL's own query source to work out what the
-# rule meant, and never opened the controller it had been handed the line
-# number for. Prompt guidance telling it not to held for about six minutes
-# against fifty thousand tokens of momentum.
+# A code-scanning goal that carries only the rule id and a file:line list
+# makes the rule the subject: three times on 2026-09-22 the agent read
+# CodeQL's own query source and never opened the controller it had been
+# handed the line number for. Prompt guidance did not hold against that.
 #
 # The alert already knows the file and the line. Reading them is a file read,
 # not a judgement, so the goal can simply CONTAIN the code -- and a goal with

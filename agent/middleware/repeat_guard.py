@@ -96,6 +96,8 @@ SAME_OUTPUT_MIN_CHARS = 100
 
 class RepeatLoopError(RuntimeError):
     """Raised by the guard when a model repeats a refused call BREAK_AT times."""
+
+
 _RESULT_PREVIEW = 1_200
 
 
