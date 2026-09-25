@@ -700,12 +700,18 @@ async def _verify_and_ship_inner(state: AgentState, repo: str, repo_root: str,
         # A benchmark task's statement is to change the source: an empty
         # patch always fails it, so "done, no changes" is never its ending.
         # Bounded like any other loop-back, by the budget and max_iterations.
+        # 2026-09-25: "make the fix now with `edit`" got a cosmetic no-op
+        # rewrite on a task whose example already worked at the base commit
+        # -- the hidden test was a neighbouring case the issue never named.
         if (PROJECTS.get(state.get("repo") or "") or {}).get("benchmark"):
             return _loop_back(
                 "benchmark task with no diff -- it requires a source change",
                 "There are still no file changes, and this task requires a change to the library's "
-                "source code: an empty change cannot resolve it. Make the fix now with `edit`, then "
-                "verify it.", state, no_diff_streak=1)
+                "source code: an empty change cannot resolve it. If the issue's own example already "
+                "behaves correctly at the base commit, the report is about a case that still fails in "
+                "the same code path: find it -- the neighbours of the example (a chained/unraised "
+                "exception, an empty or nested input, the sibling branch) -- and fix that. A cosmetic "
+                "rewrite of working code resolves nothing.", state, no_diff_streak=1)
         if state.get("no_diff_streak", 0) >= 1:
             return _done_no_changes(state)
         feedback = (
@@ -727,8 +733,9 @@ async def _verify_and_ship_inner(state: AgentState, repo: str, repo_root: str,
             **_loop_back(
                 "benchmark fix not yet checked by the verifier",
                 "Before this fix ships, delegate to the `verifier` subagent: give it the issue text "
-                "verbatim and a short summary of your change. Its first line is its verdict; if it says "
-                "FIX INCOMPLETE, fix every case it lists before finishing.",
+                "verbatim AND your `git diff` output; a one-line description is not a brief. Its first "
+                "line is its verdict, `VERDICT: FIX HOLDS` or `VERDICT: FIX INCOMPLETE`; on FIX "
+                "INCOMPLETE, fix every case it lists before finishing.",
                 state, no_diff_streak=0),
             "verifier_nudged": True,
         }

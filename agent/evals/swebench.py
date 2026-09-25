@@ -111,7 +111,13 @@ def goal_for(instance: dict) -> str:
         f"issue describes is fixed. Do not modify the existing tests; you may add new ones. "
         f"You have no internet access. The fix does not exist anywhere in this environment: the "
         f"repository has no commits after this point, there is no newer package, and the tests that "
-        f"will grade the fix are not here. Do not search for them; work from the issue and the code.\n\n"
+        f"will grade the fix are not here. Do not search for them; work from the issue and the code. "
+        f"You may recognise this issue and its upstream fix from memory. Do not reproduce a remembered "
+        f"patch: work from the issue and the code, verify by running, and never replace a change you "
+        f"have verified with a remembered one. To run the code as it was before your change use "
+        f"/baseline; for an editable install run test commands there with PYTHONPATH=/baseline (the "
+        f"shell sets it for you when the command starts with cd /baseline), otherwise the package "
+        f"still imports from /workspace.\n\n"
         f"<issue>\n{instance['problem_statement'].strip()}\n</issue>"
     )
 

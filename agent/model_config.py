@@ -34,6 +34,7 @@ MANAGED_ROLES = {
     "agent-coder-fallback": "Coder (Loop fallback)",
     "agent-investigator": "Investigator",
     "agent-test-writer": "Test Writer",
+    "agent-verifier": "Verifier",
     "agent-summarizer": "Summarizer",
     "agent-vision": "Vision",
     "agent-consolidator": "Consolidator",
@@ -114,6 +115,12 @@ ROLE_REQUIREMENTS: dict[str, dict] = {
     "agent-test-writer": {
         "tools": True, "structured": False, "strict": False,
         "note": "Writes tests and must run the checks itself before reporting done.",
+    },
+    "agent-verifier": {
+        "tools": True, "structured": False, "strict": False,
+        "note": "Tries to break a bug fix before it ships: runs the reported case and its "
+                "neighbours, edits nothing. Its own seat since 2026-09-25 so its calls are not "
+                "billed as the test-writer's. A different model from the coder is the point.",
     },
     "agent-summarizer": {
         "tools": False, "structured": False, "strict": False,

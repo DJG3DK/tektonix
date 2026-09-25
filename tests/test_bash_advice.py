@@ -297,3 +297,97 @@ def test_a_mixed_command_that_reads_and_searches_is_a_search():
     """One search stage anywhere means bash was the right call."""
     assert advice_for("cat src/a.js && rg -n x src") is None
     assert advice_for("rg -n x src && cat src/a.js") is None
+
+
+# ---------------------------------------------------------------------------
+# 2026-09-25, from the 50-task benchmark trajectories
+# ---------------------------------------------------------------------------
+
+
+def test_the_splitter_can_hand_back_the_separators():
+    """The benchmark guard drops one segment of a compound command and joins
+    the rest back into something the shell will still run, so it needs to
+    know which separator followed each segment."""
+    from agent.tools.bash_advice import split_top_level
+    assert split_top_level("a && b ; c\nd || e", ("&&", "||", ";", "\n"), keep_seps=True) == [
+        ("a ", "&&"), (" b ", ";"), (" c", "\n"), ("d ", "||"), (" e", ""),
+    ]
+    assert split_top_level("awk 'NR>=40 && NR<=90' f && g", ("&&",), keep_seps=True) == [
+        ("awk 'NR>=40 && NR<=90' f ", "&&"), (" g", ""),
+    ]
+    assert split_top_level("a && b", ("&&",)) == ["a ", " b"], "the plain form is unchanged"
+
+
+@pytest.mark.parametrize("command", [
+    "git merge-base --is-ancestor abc HEAD",
+    "git stash list",
+    "git stash show -p stash@{0}",
+    "git cat-file -t HEAD",
+    "git show HEAD:src/a.py | head -20",
+    "git status --short && git stash list",
+    "git rm-check",
+])
+def test_read_only_git_is_not_told_it_cannot_work(command):
+    """`\\bmerge\\b` matched `merge-base`, and `stash` matched `stash list`: a
+    read-only question was answered with "the repository is read-only"."""
+    assert advice_for(command) is None, command
+
+
+@pytest.mark.parametrize("command", [
+    "git merge feature", "git stash", "git stash pop", "git rm a.py", "git add .", "git -C /workspace reset --hard",
+])
+def test_git_writes_are_still_flagged(command):
+    assert advice_for(command) is bash_advice.GIT_WRITE_NOTE, command
+
+
+def test_a_benchmark_refusal_has_a_kind_the_work_node_can_read():
+    """The guard's note names the refused command, so it is a prefix in the
+    kinds table rather than a whole note."""
+    from agent.tools.benchmark_guard import refusal, screen
+    assert bash_advice.kind_of_result(refusal("git fsck") + "\n") == "benchmark-refused"
+    _, note = screen("git log --all | head ; git status")
+    assert bash_advice.kind_of_result(note + "\nexit_code=0\n") == "benchmark-refused"
+    assert bash_advice.kind_of_result("[Tektonix harness] ERROR: REFUSED without retrying") is None, "the edit guard's"
+
+
+def test_the_read_and_edit_notes_stop_after_two_per_workspace(tmp_path, monkeypatch):
+    """155 read notes and 48 edit notes over 50 tasks changed nothing; at ~600
+    chars each they were only context cost. Two says it. The memory and
+    git-write notes explain a failed command and are not capped."""
+    import asyncio
+
+    from agent.tools import agent_tools
+
+    async def _fake_sandbox(cmd, cwd, timeout=None, extra_env=None, network=None):
+        return {"ok": True, "exit_code": 0, "output": "x\n"}
+
+    monkeypatch.setattr(agent_tools, "run_shell_sandboxed", _fake_sandbox)
+    monkeypatch.setattr(agent_tools, "_NOTES_SENT", {})
+    bash = {t.name: t for t in agent_tools.make_agent_tools(str(tmp_path))[0]}["bash"]
+    run = lambda cmd: asyncio.run(bash.ainvoke({"command": cmd}))  # noqa: E731
+
+    assert run("cat a.py").startswith(READ_NOTE)
+    assert run("cat b.py").startswith(READ_NOTE)
+    assert run("cat c.py").startswith("exit_code=0"), "the third read is not nagged"
+    assert run("sed -i 's/a/b/' a.py").startswith(EDIT_NOTE), "each note has its own budget"
+    assert run("sed -i 's/a/b/' a.py").startswith(EDIT_NOTE)
+    assert run("sed -i 's/a/b/' a.py").startswith("exit_code=0")
+    for _ in range(3):
+        assert run("git stash").startswith(bash_advice.GIT_WRITE_NOTE)
+        assert run("cat /memories/AGENTS.md").startswith(bash_advice.MEMORY_READ_NOTE)
+
+    # Another workspace starts fresh; the same one is still spent, even from
+    # a new tool instance (the deep agent is rebuilt every pass).
+    other = {t.name: t for t in agent_tools.make_agent_tools(str(tmp_path / "other"))[0]}["bash"]
+    assert asyncio.run(other.ainvoke({"command": "cat a.py"})).startswith(READ_NOTE)
+    again = {t.name: t for t in agent_tools.make_agent_tools(str(tmp_path))[0]}["bash"]
+    assert asyncio.run(again.ainvoke({"command": "cat a.py"})).startswith("exit_code=0")
+
+
+def test_the_note_budget_table_does_not_grow_without_bound(monkeypatch):
+    from agent.tools import agent_tools
+    monkeypatch.setattr(agent_tools, "_NOTES_SENT", {})
+    for i in range(agent_tools._NOTES_SENT_MAX_ROOTS + 10):
+        agent_tools._within_note_budget(f"/w/{i}", READ_NOTE)
+    assert len(agent_tools._NOTES_SENT) == agent_tools._NOTES_SENT_MAX_ROOTS
+    assert "/w/0" not in agent_tools._NOTES_SENT and f"/w/{agent_tools._NOTES_SENT_MAX_ROOTS + 9}" in agent_tools._NOTES_SENT

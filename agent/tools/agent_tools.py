@@ -127,6 +127,61 @@ def _is_search_command(command: str) -> bool:
     return bool(_SEARCH_COMMAND.search(tail))
 
 
+# How many times per workspace the read and edit nudges are worth sending.
+# Over 50 benchmark tasks on 2026-09-25 READ_NOTE went out 155 times and
+# EDIT_NOTE 48, at ~600 chars each, and the model's behaviour did not change
+# once. Two is enough to have said it; after that a preference is only
+# context cost. The memory and git-write notes are not capped: they explain a
+# command that failed, not a cheaper spelling of one that worked.
+NOTE_BUDGET = 2
+_CAPPED_NOTES = (bash_advice.READ_NOTE, bash_advice.EDIT_NOTE)
+# {repo_root: {note: sent}}, bounded so a long-lived server does not keep a
+# row for every workspace it has ever seen.
+_NOTES_SENT: dict[str, dict[str, int]] = {}
+_NOTES_SENT_MAX_ROOTS = 256
+
+
+def _within_note_budget(repo_root: str, nudge: str | None) -> str | None:
+    """`nudge`, or None once this workspace has had its share of it."""
+    if not nudge or nudge not in _CAPPED_NOTES:
+        return nudge
+    if repo_root not in _NOTES_SENT and len(_NOTES_SENT) >= _NOTES_SENT_MAX_ROOTS:
+        _NOTES_SENT.pop(next(iter(_NOTES_SENT)))
+    sent = _NOTES_SENT.setdefault(repo_root, {})
+    if sent.get(nudge, 0) >= NOTE_BUDGET:
+        return None
+    sent[nudge] = sent.get(nudge, 0) + 1
+    return nudge
+
+
+# A command that runs something from the untouched tree: `cd /baseline ...`
+# or a script under /baseline/ given to an interpreter.
+_BASELINE_RUN = re.compile(
+    r"\bcd\s+[\"']?/baseline(?=[/\s\"']|$)"
+    r"|\b(?:python[\d.]*|pytest|py\.test|tox|bash|sh)\b[^;&|]*\s[\"']?/baseline/"
+)
+BASELINE_PYTHONPATH_NOTE = (
+    HARNESS + " PYTHONPATH=/baseline was set for that command. The package is an editable install "
+    "that resolves to /workspace, so a script run from /baseline would otherwise import YOUR patched "
+    "code and call it the baseline."
+)
+
+
+def _run_at_baseline(command: str) -> tuple[str, str] | None:
+    """The command with /baseline first on the import path, and the note
+    saying so -- or None when it does not run anything there.
+
+    2026-09-25: `cd /baseline/tests && python runtests.py ...` was the agent's
+    baseline comparison, and it silently tested the patched code -- the
+    editable install's finder points at /testbed, which is the workspace. The
+    task had passed in two earlier runs. Setting the path is mechanical, so
+    the harness does it rather than asking the model to remember.
+    """
+    if "PYTHONPATH" in command or not _BASELINE_RUN.search(command):
+        return None
+    return f"export PYTHONPATH=/baseline${{PYTHONPATH:+:$PYTHONPATH}}; {command}", BASELINE_PYTHONPATH_NOTE
+
+
 def make_agent_tools(
     repo_root: str,
     backend: BackendProtocol | None = None,
@@ -280,13 +335,28 @@ def make_agent_tools(
             # unbounded value (or a nonsense one) lets a single confused turn
             # wedge the project for everyone else. 600s is well above any
             # legitimate build/test step.
+            notes: list[str] = []
             if benchmark:
                 # A benchmark task does not go looking for the published fix
-                # or the grading tests (agent/tools/benchmark_guard.py).
-                from agent.tools.benchmark_guard import refusal  # noqa: PLC0415
-                refused = refusal(command)
-                if refused:
+                # or the grading tests (agent/tools/benchmark_guard.py). Only
+                # the hunting segments are dropped; the rest of a compound
+                # command runs, with the refusal named on the front of its
+                # result (2026-09-25: the legitimate half of `grep ... ;
+                # find / ...` was being thrown away with the hunt).
+                from agent.tools.benchmark_guard import screen  # noqa: PLC0415
+                command, refused = screen(command)
+                if command is None:
                     return refused
+                if refused:
+                    notes.append(refused)
+            # What the model asked to run, for the advice below; `command`
+            # may pick up a harness prefix from here on.
+            asked = command
+            if benchmark:
+                baseline = _run_at_baseline(command)
+                if baseline:
+                    command, note = baseline
+                    notes.append(note)
             _BASH_TIMEOUT_CEILING = 600
             try:
                 timeout = int(timeout)
@@ -302,15 +372,19 @@ def make_agent_tools(
             # agent/tools/bash_advice.py for the run that made this worth
             # saying. A note, never a refusal: writing a scratch script to RUN
             # is a fair use of a shell.
-            nudge = bash_advice.advice_for(command)
+            nudge = _within_note_budget(repo_root, bash_advice.advice_for(asked))
             if nudge:
                 # The note goes on the result and nowhere else. The work node
                 # reads the kind back off this text when it records the tool
                 # event (bash_advice.kind_of_result), so one bash call stays
                 # one row on the reliability panel -- a second event here put
                 # "bash-as-read" in the tool list as though it were a tool.
-                content = f"{nudge}\n{content}"
-            if r["exit_code"] == 1 and not r["output"].strip() and _is_search_command(command):
+                # A refusal outranks it on the front: that one is the kind
+                # worth recording.
+                notes.append(nudge)
+            for note in reversed(notes):
+                content = f"{note}\n{content}"
+            if r["exit_code"] == 1 and not r["output"].strip() and _is_search_command(asked):
                 # rg/grep exit 1 is "pattern not found", not a failure. Say so
                 # in the result, for the model and for the dashboard: on
                 # 2026-09-08 a coder's clean post-removal sweep (four rg calls,
@@ -401,6 +475,7 @@ def make_agent_tools(
     # passes -- see this function's own docstring on why a single pass's
     # closure isn't enough.
     _last_failed_edit: dict = {"signature": initial_last_failed_edit}
+    _last_noop_edit: dict = {"path": None}
 
     @tool
     @tool_errors_to_text
@@ -452,9 +527,16 @@ def make_agent_tools(
                     "To create or overwrite a whole file, use `write` instead.")
         if old_string == new_string:
             # Accepted with "OK" before, four times in one task (2026-09-24):
-            # the model believed it had changed the file.
+            # the model believed it had changed the file. And the second time
+            # in a row on one path it is an already-applied edit being re-sent
+            # (four times, 2026-09-25): say so.
+            if _last_noop_edit.get("path") == path:
+                return (HARNESS + " ERROR: this text is already in the file exactly as your new_string; a "
+                        "previous edit applied it. Read the file and move on.")
+            _last_noop_edit["path"] = path
             return (HARNESS + " ERROR: old_string and new_string are identical, so this edit would change "
                     "nothing. Read the target lines again and write the replacement you actually intend.")
+        _last_noop_edit["path"] = None
         signature = json.dumps([path, old_string, new_string])
         if _last_failed_edit.get("signature") == signature:
             return (

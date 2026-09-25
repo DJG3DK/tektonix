@@ -2,8 +2,10 @@
  * the component so it can be tested on its own.
  *
  * The rules are evals/SWEBENCH.md's: only a full run of all 500 tasks is "X%
- * on SWE-bench Verified". A sample is "N of a 50-task sample", never a bare
- * percentage, and a diagnostic run is never a score at all. */
+ * on SWE-bench Verified". A sample is "N of a 50-task sample" -- its
+ * percentage shown, but never as a bare number (2026-09-25: the operator
+ * looked for a grade beside "40/50" and found none) -- and a diagnostic run
+ * is never a score at all. */
 import type { SwebenchRunSummary } from "./types";
 import { day, minutes, usd } from "./evalsFormat";
 
@@ -29,10 +31,10 @@ export function scoreText(r: SwebenchRunSummary): string {
 }
 
 export function scoreLabel(r: SwebenchRunSummary): string {
-  const pct = r.graded && r.total ? ` · ${((100 * (r.resolved ?? 0)) / r.total).toFixed(1)}%` : "";
-  if (r.kind === "full") return `resolved${pct}`;
+  const pct = r.graded && r.total ? `${((100 * (r.resolved ?? 0)) / r.total).toFixed(1)}%` : "";
+  if (r.kind === "full") return pct ? `resolved · ${pct}` : "resolved";
   if (!r.graded) return r.graded_count > 0 ? "resolved among the tasks graded so far" : "not graded yet";
-  return `resolved in a ${r.total}-task ${r.kind === "sample" ? "sample" : "selection"} — not the published number`;
+  return `resolved in a ${r.total}-task ${r.kind === "sample" ? "sample" : "selection"}${pct ? ` (${pct})` : ""} — not the published number`;
 }
 
 /** The first model of each role, "agent-coder -> deepseek/x" as "coder: x". */

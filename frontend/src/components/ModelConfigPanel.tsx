@@ -18,6 +18,7 @@ const ROLE_ORDER = [
   "agent-coder-fallback",
   "agent-investigator",
   "agent-test-writer",
+  "agent-verifier",
   "agent-summarizer",
   "agent-vision",
   "agent-consolidator",
@@ -35,7 +36,7 @@ const ROLE_ORDER = [
 // every group still renders, in a trailing "Other" group -- same
 // never-hide-a-role rule as ROLE_ORDER.
 const ROLE_GROUPS: [string, string[]][] = [
-  ["Build pipeline", ["agent-planner", "agent-coder", "agent-coder-frontend", "agent-investigator", "agent-test-writer", "agent-reviewer"]],
+  ["Build pipeline", ["agent-planner", "agent-coder", "agent-coder-frontend", "agent-investigator", "agent-test-writer", "agent-verifier", "agent-reviewer"]],
   ["Planning chat", ["agent-planning-chat", "agent-planning-chat-hard", "agent-planning-chat-frontend", "agent-classifier"]],
   ["Support", ["agent-summarizer", "agent-vision", "agent-cartographer", "agent-consolidator", "agent-demo-chat"]],
 ];

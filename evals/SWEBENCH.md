@@ -42,6 +42,31 @@ Every word the harness itself puts into the agent's conversation -- the task fra
   the image's commit. Test files are left out: the harness applies the task's
   own test patch after the prediction, and a clash fails the task. Build
   output and caches are left out too.
+- **The baseline:** `/baseline` is the untouched tree, read-only. For an
+  editable install (Django's `runtests.py`, most of these repositories) a test
+  run started there still imports the package from `/workspace`, so the shell
+  sets `PYTHONPATH=/baseline` for any command that goes there. Before that
+  (2026-09-25) "fails on /baseline too" was a comparison of the patched code
+  with itself.
+
+## What the 2026-09-25 sample changed
+
+40 of 50 (seed 1), $18.73 billed. Read against the trajectories, the ten
+failures were five harness problems, each fixed the same day; the fix itself
+was the cause in none of them:
+
+| what | how it showed | change |
+| --- | --- | --- |
+| empty, length-capped replies | 65 calls spent 32,768 output tokens on reasoning and returned nothing: $2.32, 2.7 h, six of the ten failures. The coder ignores every reasoning cap the router can send | retried once on the fallback seat at low effort inside the same turn (`agent/middleware/empty_reply.py`); the coordinator's output cap is 16k |
+| a verifier cut off without a report | 13 of 48 runs ended at the tool-call cap with "Tool call limit reached" and nothing else | on its last allowed call a bounded subagent has no tools and must report; countdown and counters are per invocation; the test-writer is bounded the same way; the verifier bills as `agent-verifier` |
+| `/baseline` tested the workspace | "pre-existing on baseline" said 39 times; one task that passed twice before failed | `PYTHONPATH=/baseline` set by the shell, and the prompts say why |
+| a loop with a changing address in its output | one command 352 times, $1.15 | results normalised before hashing; eight identical calls are refused regardless |
+| the guard refused whole compound commands | the legitimate half of `git log --all ... && grep ...` was lost, twice on the path to the failing case | only the hunting segments are refused, and named; `.pyc` reading, `git tag`, `git branch -a`, `gh` are hunts too |
+
+The model wrote "matches the upstream fix" in 23 of 50 tasks. The guard stops
+it searching the disk; nothing stops it remembering. The task statement now
+says a verified change is never rewritten to match a remembered one, which is
+what three of the failures did.
 
 ## Setup (once)
 

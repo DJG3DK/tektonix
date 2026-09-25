@@ -24,13 +24,14 @@ general-purpose subagent once ran with no budget ceiling at all.
 | `ModelCallLimitMiddleware` | More model calls in one run than the configured limit. | ● | ● | ● | ● | ● | ● | ● |
 | `ToolCallLimitMiddleware` | More tool calls in one run than the configured limit. | ● | ● | ● | ● | ● | ● | ● |
 | `SanitizeToolCallsMiddleware` | A malformed tool call in history reaching a provider. | ● | ● | ● | ● | ● | ● | |
+| `EmptyReplyRetryMiddleware` | A reply that is nothing but exhausted reasoning reaching the conversation; retried once on the fallback seat. | ● | ● | ● | ● | ● | | |
 | `HiddenToolsMiddleware` | Tools the factory adds unasked (`task`, `glob`, `grep`, `execute`, `delete`). | ● | ● | ● | ● | ● | ● | |
 | `RepeatCallGuardMiddleware` | Running the same call with the same result a third time. | ● | ● | ● | ● | ● | ● | |
 | `SummarizationMiddleware` | Unbounded context growth (library). | ● | | | | | ● | |
 | `TodoListMiddleware` | — supplies `write_todos` (library). | ● | | | | | | |
 | `StaleTodoMiddleware` | Letting a written plan go stale while work continues. | ● | | | | | | | |
 | `StepBackMiddleware` | Circling past a third or two-thirds of the budget, or 45/90 minutes into a pass, without restating the goal and the evidence. | ● | | | | | | |
-| `WrapUpMiddleware` | A bounded subagent hitting its tool-call cap with its findings unsent. | | | | | ● | | |
+| `WrapUpMiddleware` | A bounded subagent hitting its tool-call cap with its findings unsent. | | | ● | | ● | | |
 | `PlanCodeModelMiddleware` | One model doing both planning and coding. | ● | | | | | | |
 | `BriefFirstMiddleware` | Reading the repo before the request is written down. | | | | | | ● | |
 | `PinnedBriefMiddleware` | Compaction dropping the operator's own request. | | | | | | ● | |
@@ -86,9 +87,14 @@ asks it to restate what should happen, what its change does and what evidence
 shows it works, and to finish if that evidence has stopped moving. The
 benchmark tasks that failed were the ones that circled for two hours.
 
-**`WrapUpMiddleware`** (`wrap_up.py`) — counts down the verifier's tool calls in
-its own results before its cap, so it sends a verdict instead of being cut off
-with nothing returned.
+**`WrapUpMiddleware`** (`wrap_up.py`) — counts down the verifier's and the
+test-writer's tool calls in their own results before the cap, and hands the
+last model call no tools at all, so a report comes back instead of "Tool call
+limit reached" and nothing.
+
+**`EmptyReplyRetryMiddleware`** (`empty_reply.py`) — a reply with no content
+and no tool calls (reasoning that ran to the output cap) is retried once on
+the fallback seat before the conversation sees it.
 
 **`PlanCodeModelMiddleware`** (`model_pin.py`) — the coordinator's first turn
 of a thread runs on the planner model, every turn after on the coder model.

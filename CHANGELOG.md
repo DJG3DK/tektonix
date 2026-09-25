@@ -2,6 +2,55 @@
 
 ## Unreleased
 
+### What the 50-task SWE-bench sample taught the harness
+
+The 2026-09-25 sample resolved 40 of 50. Reading every trajectory found five
+mechanical problems, none of them the fix itself; all five are changed.
+
+- **A model that thinks until it has nothing left to say.** The coder returned
+  an empty reply with its whole 32,768-token output budget spent on reasoning
+  65 times in one run: $2.32 of $18.73 and 2.7 hours of model time, in six of
+  the ten failures. It ignores every reasoning cap the router can send. Now an
+  empty, length-capped reply is retried once on the fallback seat at low
+  reasoning effort, inside the same turn, and the coordinator's output cap is
+  16k. The old "your last reply was empty" nudge is the last resort, not the
+  first.
+- **A verifier cut off with nothing to say.** 13 of 48 verifier runs hit their
+  tool-call cap and returned "Tool call limit reached" and nothing else; one of
+  them had found the exact case the hidden test checks. On its last allowed
+  call a bounded subagent now gets no tools and must write its report, and the
+  countdown fires when a threshold is crossed, not only when it is hit exactly
+  (two calls per turn skipped it). Its counters reset per invocation instead of
+  carrying over to the next round. The test-writer gets the same cap; a
+  subagent that runs out of model calls ends with a report instead of killing
+  the whole pass (one did, with the fix already written). The verifier has its
+  own ledger line (`agent-verifier`) instead of being billed as the test-writer.
+- **A baseline that tested the patched code.** `/baseline/tests/runtests.py`
+  imports the editable install, which is the workspace, so "fails on baseline
+  too, pre-existing" was said 39 times about the very code under change, and
+  one task that passed in two earlier runs failed on it. The shell now sets
+  `PYTHONPATH=/baseline` for a `cd /baseline` command on a benchmark, and the
+  prompts say why.
+- **A loop the guard could not see.** One test-writer ran a byte-identical
+  command 352 times ($1.15) because its output carried a memory address, so no
+  two results ever hashed equal. Results are normalised before hashing, and
+  eight identical calls in a row are refused whatever they returned.
+- **A guard that threw away the good half.** Refusing a compound command for
+  one hunting segment (`git log --all ... && git status`) also dropped the
+  legitimate one; twice the dropped grep would have led to the failing case.
+  Only the hunting segments are refused now, named in the result, and the rest
+  runs. Reading `.pyc` bytecode, `git tag`/`git branch -a` and `gh` join the
+  list of hunts.
+
+Also: the model cited "the upstream fix" from memory in 23 of 50 tasks and
+overwrote its own verified fix to match it in three of the failures; the task
+statement and the coder's prompt now say a verified change is never rewritten
+to match a remembered one. The reviewer's text is kept with a benchmark run
+(only its verdict was), the "read files through `read`" nudge stops after two
+per workspace (155 firings, no effect), and read-only git commands (`merge-base`,
+`stash list`, `cat-file`) are no longer warned about as writes. The scorecard
+shows a sample's percentage beside its fraction.
+
 ### The agent can show you images, and logo work starts from your logo
 
 A new `show_images` tool puts images in the conversation -- an SVG the agent

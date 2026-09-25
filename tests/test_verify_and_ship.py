@@ -156,6 +156,38 @@ async def test_no_diff_first_time_nudges_and_sets_streak_to_one(monkeypatch):
     assert "escalated" not in result
 
 
+async def test_a_benchmark_with_no_diff_is_sent_to_the_example_s_neighbours_not_to_edit_for_its_own_sake(monkeypatch):
+    """2026-09-25: "make the fix now with `edit`" got a cosmetic rewrite of
+    working code on a task whose example already passed at the base commit;
+    the hidden test was a neighbouring case the issue never named."""
+    monkeypatch.setattr(vs, "run_all_checks", _fake_checks(all_ok=True))
+    monkeypatch.setattr(vs, "git_diff", _fake_return(""))
+    monkeypatch.setitem(vs.PROJECTS, "test-repo", {"benchmark": True})
+    state = _state(no_diff_streak=1)
+
+    result = await vs._verify_and_ship(state, config=None)
+
+    assert result["no_diff_streak"] == 1 and not vs._is_terminal(result), "an empty patch never ends a benchmark"
+    text = result["pending_feedback"]
+    assert "already behaves correctly at the base commit" in text
+    assert "neighbours of the example" in text and "A cosmetic rewrite of working code resolves nothing" in text
+    assert "Make the fix now" not in text
+
+
+async def test_a_benchmark_fix_is_sent_to_the_verifier_with_the_diff_and_its_verdict_lines(monkeypatch):
+    monkeypatch.setattr(vs, "run_all_checks", _fake_checks(all_ok=True))
+    monkeypatch.setattr(vs, "git_diff", _fake_return("diff --git a/x.py b/x.py\n+fix"))
+    monkeypatch.setitem(vs.PROJECTS, "test-repo", {"benchmark": True})
+    state = _state()
+
+    result = await vs._verify_and_ship(state, config=None)
+
+    assert result["verifier_nudged"] is True
+    text = result["pending_feedback"]
+    assert "VERDICT: FIX HOLDS" in text and "VERDICT: FIX INCOMPLETE" in text, "the verifier's own verdict lines"
+    assert "`git diff` output" in text and "a one-line description is not a brief" in text
+
+
 async def test_no_diff_second_consecutive_time_terminates_done(monkeypatch):
     monkeypatch.setattr(vs, "run_all_checks", _fake_checks(all_ok=True))
     monkeypatch.setattr(vs, "git_diff", _fake_return(""))

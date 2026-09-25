@@ -191,6 +191,16 @@ def _harness_tests(run_dir: Path, run_id: str, iid: str) -> dict | None:
     }
 
 
+def _harness_notes(run_dir: Path, s: dict, run_id: str) -> dict:
+    """The harness's own reading of each unresolved task (`failure_reasons`
+    in its report), for runs graded before the runner kept it in the
+    summary. `no_tests_collected` on pytest's own suite is the inner
+    sessions printing "collected 0 items", not our failure (2026-09-25)."""
+    rep = _load(run_dir / (s.get("official_report") or f"tektonix.{run_id}.json")) or {}
+    notes = rep.get("failure_reasons")
+    return notes if isinstance(notes, dict) else {}
+
+
 def _gold_checks() -> dict:
     """Every reference-fix check on disk, merged: the tasks whose OFFICIAL fix
     fails in the official image, which no agent can resolve."""
@@ -234,6 +244,7 @@ def _run_tasks(name: str) -> dict:
     s = _load(d / "summary.json") or {}
     run_id = s.get("run_id") or name
     fails = set(_gold_checks()["reference_fails"])
+    notes = _harness_notes(d, s, run_id)
     tasks = []
     for iid, row in (s.get("instances") or {}).items():
         repo = iid.rsplit("-", 1)[0].replace("__", "/")
@@ -247,6 +258,7 @@ def _run_tasks(name: str) -> dict:
             "started": bool(row.get("task_id")) or row.get("outcome") not in (None, "not_run"),
             "reference_fails": iid in fails,
             "tests": _harness_tests(d, run_id, iid),
+            "harness_note": row.get("harness_note") or notes.get(iid),
             "has_trajectory": (d / "trajectories" / f"{iid}.json").is_file(),
             # The run that holds this task's files: a shard, for a split run.
             "run": name,
@@ -303,4 +315,10 @@ async def get_task(name: str, instance_id: str, user: User = Depends(require_ful
     except OSError:
         pass
     traj = _load(d / "trajectories" / f"{instance_id}.json")
-    return {"id": instance_id, "patch": patch, "conversation": _conversation(traj) if traj else []}
+    # The reviewer's whole verdict -- summary, findings, the message it sent
+    # the agent -- as the runner kept it (`review` in summary.json). A run from
+    # before it was kept has only the verdict word.
+    row = ((_load(d / "summary.json") or {}).get("instances") or {}).get(instance_id) or {}
+    review = row.get("review") or ({"verdict": row["review_verdict"]} if row.get("review_verdict") else None)
+    return {"id": instance_id, "patch": patch, "review": review,
+            "conversation": _conversation(traj) if traj else []}

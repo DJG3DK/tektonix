@@ -529,7 +529,7 @@ and it's shared across every task and planning session for that project. A secon
 ## Model routing
 
 Every model the agent uses is a named alias (`agent-planner`, `agent-coder`,
-`agent-coder-frontend`, `agent-coder-fallback`, `agent-investigator`, `agent-test-writer`, `agent-summarizer`, `agent-vision`,
+`agent-coder-frontend`, `agent-coder-fallback`, `agent-investigator`, `agent-test-writer`, `agent-verifier`, `agent-summarizer`, `agent-vision`,
 `agent-consolidator`, `agent-cartographer`, `agent-classifier`, `agent-planning-chat`,
 `agent-planning-chat-hard`, `agent-planning-chat-frontend`,
 `agent-demo-chat`, `agent-reviewer`) pinned in the router's config. They're edited from the **Models** tab in the dashboard

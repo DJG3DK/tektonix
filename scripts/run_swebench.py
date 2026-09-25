@@ -187,6 +187,39 @@ def point_agent_at_reviewer(overrides: dict[str, str]) -> None:
         gate._CHECKS_CACHE.clear()
 
 
+def review_record(review: dict | None) -> dict | None:
+    """The reviewer's whole verdict for the summary -- text and findings, not
+    just the verdict word. 2026-09-25: only `review_verdict` was kept, and the
+    pair's own files went with the run's temporary root, so "what did the
+    reviewer say" had no answer afterwards. `baseline` is dropped: a cache of
+    which checks fail on base, not a review."""
+    if not review:
+        return None
+    return {k: v for k, v in review.items() if k != "baseline"}
+
+
+def keep_reviewer_files(src: Path, dst: Path) -> None:
+    """The batch's reviewer state, copied out of the temporary root before it
+    is deleted: history.jsonl and reviewer.log appended (one run, many
+    batches), state.json merged per project."""
+    if not src.is_dir():
+        return
+    dst.mkdir(parents=True, exist_ok=True)
+    for name in ("history.jsonl", "reviewer.log"):
+        f = src / name
+        if f.is_file():
+            with (dst / name).open("ab") as out, f.open("rb") as inp:
+                shutil.copyfileobj(inp, out)
+    state = src / "state.json"
+    if state.is_file():
+        try:
+            merged = json.loads((dst / "state.json").read_text()) if (dst / "state.json").is_file() else {}
+            merged.update(json.loads(state.read_text()))
+            (dst / "state.json").write_text(json.dumps(merged, indent=1))
+        except ValueError:
+            shutil.copy2(state, dst / "state.json")
+
+
 def disk_used_pct(path: str = "/var/lib/docker") -> float:
     """How full the disk the images land on is, the way df reports it."""
     try:
@@ -284,9 +317,10 @@ async def _run(args, instances: list[dict], root: Path, run_dir: Path, spent_bef
                     with predictions.open("a") as fh:
                         fh.write(json.dumps({"instance_id": iid, "model_name_or_path": sb.MODEL_NAME,
                                              "model_patch": patch}) + "\n")
+                    review = final.get("review_gate_result") or {}
                     results[iid] = {"task_id": task_id, "outcome": outcome, "reason": reason, "cost_usd": round(cost, 4),
                                     "duration_s": round(time.monotonic() - started), "patch_bytes": len(patch),
-                                    "review_verdict": (final.get("review_gate_result") or {}).get("verdict"),
+                                    "review_verdict": review.get("verdict"), "review": review_record(review),
                                     "models": models}
                     print(f"  {iid:40} {outcome:10} ${cost:6.2f} {results[iid]['duration_s']:5}s "
                           f"patch {len(patch):6}B", flush=True)
@@ -299,6 +333,7 @@ async def _run(args, instances: list[dict], root: Path, run_dir: Path, spent_bef
         settings = rs.all_values()
     finally:
         await ev_reviewer.stop(rev)
+        keep_reviewer_files(root / "reviewer", run_dir / "reviewer")
     return {"results": {**results, **skipped}, "runtime_settings": settings}
 
 
@@ -314,8 +349,11 @@ def _grade_into(run_dir: Path, run_id: str, workers: int) -> None:
                     "resolved_rate": round(100 * len(resolved) / len(ids), 1) if ids else None,
                     "official_report": f"{sb.MODEL_NAME}.{run_id}.json",
                     "harness": {k: official.get(k) for k in official if k.endswith("_instances")}})
+    notes = official.get("failure_reasons") or {}
     for i in ids:
         summary["instances"].setdefault(i, {})["resolved"] = i in resolved
+        if i in notes:
+            summary["instances"][i]["harness_note"] = notes[i]
     (run_dir / "summary.json").write_text(json.dumps(summary, indent=1))
     print(f"\n{len(resolved)}/{len(ids)} resolved by the official harness ({summary['resolved_rate']}%)"
           f"  ${summary.get('total_cost_usd', 0):.2f}\n  written to {run_dir}")
@@ -362,6 +400,10 @@ def main(argv=None) -> int:
     results: dict = {}
     resolved: set = set()
     graded_ids_so_far: set = set()
+    # The harness's own reading of an unresolved task (its `failure_reasons`):
+    # `no_tests_collected` on pytest's own suite is the inner sessions
+    # printing "collected 0 items", not our failure (2026-09-25).
+    harness_notes: dict = {}
     settings: dict = {}
     size = max(1, args.batch_size)
     batches = [instances[k:k + size] for k in range(0, len(instances), size)]
@@ -387,7 +429,8 @@ def main(argv=None) -> int:
             "total_cost_usd": round(sum(r.get("cost_usd", 0) for r in results.values()), 4),
             "runtime_settings": settings,
             "instances": {i: {**results.get(i, {"outcome": "not_run"}),
-                              **({"resolved": i in resolved} if graded or i in graded_ids_so_far else {})}
+                              **({"resolved": i in resolved} if graded or i in graded_ids_so_far else {}),
+                              **({"harness_note": harness_notes[i]} if i in harness_notes else {})}
                           for i in ids},
         }
         tmp = run_dir / "summary.json.tmp"
@@ -402,7 +445,7 @@ def main(argv=None) -> int:
     write_summary(graded=False)
     try:
         return _batches(args, run_id, run_dir, ids, batches, results, resolved, graded_ids_so_far,
-                        settings, write_summary, task_done)
+                        harness_notes, settings, write_summary, task_done)
     except BaseException as e:
         # Ctrl-C, a kill, or a crash: the summary says which, so the page does
         # not show a dead run as running.
@@ -412,7 +455,7 @@ def main(argv=None) -> int:
 
 
 def _batches(args, run_id, run_dir, ids, batches, results, resolved, graded_ids_so_far,
-             settings, write_summary, task_done) -> int:
+             harness_notes, settings, write_summary, task_done) -> int:
     """Each batch run, graded, and its images deleted. The collections are
     main()'s, updated in place, so its summary always sees the latest."""
 
@@ -441,6 +484,7 @@ def _batches(args, run_id, run_dir, ids, batches, results, resolved, graded_ids_
             # Graded now, while this batch's images are still here.
             report = sb.grade(run_dir / "predictions.jsonl", ran, run_id, run_dir, max_workers=args.grade_workers)
             resolved |= set(report.get("resolved_ids") or [])
+            harness_notes.update(report.get("failure_reasons") or {})
             graded_ids_so_far.update(ran)
             write_summary(graded=False)
             print(f"  batch {n}: {len(set(ran) & resolved)}/{len(ran)} resolved; "
@@ -464,6 +508,7 @@ def _batches(args, run_id, run_dir, ids, batches, results, resolved, graded_ids_
                          max_workers=args.grade_workers, rewrite=True)
         resolved.clear()
         resolved.update(final.get("resolved_ids") or [])
+        harness_notes.update(final.get("failure_reasons") or {})
     summary = write_summary(graded=True, stopped=stopped, state="stopped" if stopped else "done")
     print(f"\n{len(resolved)}/{len(ids)} resolved by the official harness ({summary['resolved_rate']}%)"
           f"  ${summary['total_cost_usd']:.2f}" + (f"\n  STOPPED EARLY: {stopped}" if stopped else "")

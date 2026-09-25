@@ -46,12 +46,19 @@ def client(monkeypatch, tmp_path):
     _write(tmp_path, "done-run", {
         "run_id": "done-run", "selection": {"sample": 2}, "started_at": "2026-09-24T12:00:00Z",
         "finished_at": "2026-09-24T13:00:00Z", "total": 2, "graded": True, "resolved": 1, "total_cost_usd": 0.5,
+        "official_report": "tektonix.done-run.json",
         "instances": {
             iid: {"task_id": "t1", "outcome": "shipped", "resolved": False, "cost_usd": 0.3,
-                  "models": {"agent-coder -> deepseek/x": 5}},
+                  "models": {"agent-coder -> deepseek/x": 5}, "review_verdict": "NEEDS_FIXES",
+                  "review": {"verdict": "NEEDS_FIXES", "summary": "The fix misses the nested case.",
+                             "findings": [{"severity": "blocking", "file": "x.py", "issue": "nested input still raises"}],
+                             "agentMessage": "Fix the nested case."}},
             "psf__requests-1142": {"task_id": "t2", "outcome": "shipped", "resolved": True, "cost_usd": 0.2,
-                                   "models": {"agent-coder -> deepseek/x": 2}},
+                                   "models": {"agent-coder -> deepseek/x": 2}, "review_verdict": "READY",
+                                   "harness_note": "no_tests_collected"},
         }},
+        **{"tektonix.done-run.json": {"resolved_ids": ["psf__requests-1142"],
+                                      "failure_reasons": {iid: "no_tests_collected"}}},
         **{"predictions.jsonl": json.dumps({"instance_id": iid, "model_patch": "--- a/x.py"}) + "\n",
            f"trajectories__SLASH__{iid}.json": {"task_id": "t1", "threads": [{"generation": 0, "namespace": "coordinator",
                "messages": [{"type": "ai", "data": {"content": "x" * 9000, "tool_calls": [{"name": "grep", "args": {"q": 1}}]}}]}]},
@@ -92,6 +99,26 @@ def test_a_run_s_tasks_carry_the_harness_s_own_test_results(client):
     assert t["resolved"] is False and t["repo"] == "django/django" and t["has_trajectory"]
     assert t["tests"]["fail_to_pass_failed"] == ["test_with_exclude"] and t["tests"]["pass_to_pass_passed"] == 2
     assert tasks["psf__requests-1142"]["tests"] is None
+
+
+def test_the_harness_s_own_note_on_a_task_is_shown_from_the_summary_or_its_report(client):
+    """pytest's own suite prints "collected 0 items" from inner sessions, so
+    the harness flags it `no_tests_collected`: its note, not our failure. A
+    run graded before the runner kept it still has it, in the report."""
+    tasks = {t["id"]: t for t in client.get("/api/swebench/runs/done-run").json()["tasks"]}
+    assert tasks["psf__requests-1142"]["harness_note"] == "no_tests_collected", "from the summary row"
+    assert tasks["django__django-11265"]["harness_note"] == "no_tests_collected", "from the official report"
+
+
+def test_a_task_carries_what_the_reviewer_said_not_only_its_verdict(client):
+    body = client.get("/api/swebench/runs/done-run/tasks/django__django-11265").json()
+    assert body["review"]["verdict"] == "NEEDS_FIXES"
+    assert body["review"]["summary"] == "The fix misses the nested case."
+    assert body["review"]["findings"][0]["issue"] == "nested input still raises"
+    assert body["review"]["agentMessage"] == "Fix the nested case."
+    # A run from before the record was kept: the verdict word alone.
+    old = client.get("/api/swebench/runs/done-run/tasks/psf__requests-1142").json()
+    assert old["review"] == {"verdict": "READY"} and old["patch"] is None
 
 
 def test_a_task_s_patch_and_conversation(client):

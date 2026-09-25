@@ -43,6 +43,7 @@ warnings.filterwarnings(
     "ignore", message="Cannot currently include response headers when response_format is specified"
 )
 from agent import runtime_settings as _rs
+from agent.middleware.empty_reply import EmptyReplyRetryMiddleware
 from agent.middleware.hidden_tools import HiddenToolsMiddleware
 from agent.middleware.repeat_guard import RepeatCallGuardMiddleware
 from agent.middleware.sanitize_tool_calls import SanitizeToolCallsMiddleware
@@ -798,9 +799,16 @@ def approval_gates(repo: str, auto_approve_commands: bool, repo_root: str | None
 
 def llm_for_role(config: Config, model_name: str, reasoning_effort: str | None = None,
                  timeout: int | None = None, callbacks: list | None = None,
-                 task_id: str | None = None, session_id: str | None = None) -> ChatOpenAI:
+                 task_id: str | None = None, session_id: str | None = None,
+                 max_tokens: int | None = None) -> ChatOpenAI:
     # model_name is a bare router alias, resolved entirely by the
     # proxy, not by anything in this process.
+    #
+    # max_tokens (None by default: the router's own ceiling applies): an
+    # output cap for a seat whose blowouts are pure reasoning. The coordinator
+    # burned exactly the router's 32768 output tokens with no answer 50 times
+    # in one run (2026-09-25); halving the cap halves each blowout, and a
+    # real coder answer stays under ~15k (services/model-router/router/upstream.py).
     #
     # stream_usage=True is not optional: ChatOpenAI only auto-enables it when
     # talking to the default OpenAI base_url/client, which this custom
@@ -894,6 +902,7 @@ def llm_for_role(config: Config, model_name: str, reasoning_effort: str | None =
         # response_metadata.
         include_response_headers=True,
         reasoning_effort=reasoning_effort,
+        max_tokens=max_tokens,
         # callbacks: how a model invoked OUTSIDE the graph's model node still
         # gets metered -- SummarizationMiddleware ainvoke()s its summary model
         # directly, where no agent middleware wraps the call, so the summarizer
@@ -1302,10 +1311,32 @@ delegated to in the first place (keeping the coordinator's own context small).""
 
 
 VERIFIER_TOOL_CALLS = 30
+TEST_WRITER_TOOL_CALLS = 60
+# Output cap for the coordinator's model only -- see llm_for_role.
+COORDINATOR_MAX_TOKENS = 16384
+_REPORT_NOTE_MAX = 12_000
+
+
+def _report_note(goal: str) -> str:
+    """The task, verbatim, for a seat that otherwise sees only what the
+    coordinator chose to say in its task() description."""
+    goal = (goal or "").strip()
+    if not goal:
+        return ""
+    if len(goal) > _REPORT_NOTE_MAX:
+        goal = goal[:_REPORT_NOTE_MAX] + "\n... [truncated]"
+    return "\n\nTHE REPORT, VERBATIM (the coordinator may have summarised it; this is the original):\n" + goal
+
 
 VERIFIER_SYSTEM_PROMPT = """You are an independent verifier. The coordinator has changed the \
 code to fix a reported bug and delegated to you to BREAK that fix before it ships. You run a \
 different model on purpose: do not take its word that the fix works.
+
+Your report's first line is exactly one of these two, and nothing else counts as a verdict:
+  VERDICT: FIX HOLDS
+  VERDICT: FIX INCOMPLETE -- <n> failing case(s)
+"FIX COMPLETE", "FIX VERIFIED", "LGTM" and every other wording are not verdicts; the coordinator \
+will send you back for the line.
 
 Work in /workspace. You cannot edit source files -- your tools do not include write or edit -- and \
 you must not change the repository with bash either. Write probe scripts and their output under \
@@ -1324,10 +1355,23 @@ you must not change the repository with bash either. Write probe scripts and the
 4. Run the existing tests of the module that changed -- once, not the whole package again if the \
    coordinator told you it already ran it.
 
+Judge STRUCTURED output where it exists -- the parse tree, doctree, AST, the type of the returned \
+object (a list that became a generator is a change) -- not only the rendered text or the links in \
+it: a fix can render right and be wrong at the node level. For a parser, grammar or regex change, \
+also probe inputs that must STILL be rejected. Any observable difference between before and after \
+that the report does not ask for -- a header, a status line, a byte count, a node type, a mangled \
+identifier, a rendered string -- is a FINDING; there is no "minor side effect not counted". Never \
+fetch the upstream repository (no curl/gh/pip against github or PyPI for the project itself): you \
+judge the code in front of you against the report, not against what upstream did.
+
 Be targeted, not exhaustive: the reported case and a handful of well-chosen neighbours, each run \
 once. To compare with the code BEFORE the change, do not use git stash/checkout/restore -- the \
 sandbox's .git is read-only and they fail; use /baseline if it exists (the untouched tree), or \
-`git show HEAD:<path>`.
+`git show HEAD:<path>`. For an editable install (`pip install -e`, Django's runtests.py, most \
+of these repos) a test runner started from /baseline still imports the package from /workspace; \
+prefix `PYTHONPATH=/baseline` (the bash tool adds it for `cd /baseline` commands) or compare \
+against `git show HEAD:<path>`. After the ship gate has committed, HEAD includes the change; \
+/baseline never does.
 
 The question is NOT "did the change make anything worse". It is "does the behaviour the report \
 asks for now hold -- for the reported case AND its neighbours". A neighbour that still fails is a \
@@ -1360,6 +1404,10 @@ If the task names a GitHub pull request, read it with `github_pull_request(repo,
 the work: the review comments (file:line) are the findings to address, the diff is the code they refer to, \
 and the checks say what is failing. Treat each review comment as a todo. (The tool exists only when this \
 deployment has a GitHub token; if it is missing, say so instead of guessing.)
+
+You write tests; you never edit production source. To check that a test would catch a wrong \
+implementation, run it against a mutated COPY under /workspace/.scratch/, never a mutation of the \
+module itself (one test-writer left nine mutation probes in the module under test, 2026-09-25).
 
 Before reporting a test as done, call the `run_checks` tool yourself to confirm it actually runs \
 and actually passes -- and read what it's asserting one more time: would this test fail if the \
@@ -1418,10 +1466,24 @@ right one. A finding stays open until you can say which part of the report it is
 "it was already broken before my change" does not close it. Leave behaviour the report does not \
 touch as it was.
 
+You may recognise the upstream fix from memory. Do not use it. A change you have VERIFIED by \
+running it is never rewritten to match a remembered upstream version; the only reason to change \
+verified behaviour is a failing observation. Prefer the smallest edit to the existing path: a \
+parser or validator must not accept inputs it rejected before unless the report asks; an error \
+message keeps its existing template and only its arguments change. A failure in the issue's own \
+behaviour class is in scope even if /baseline fails it too; "pre-existing" closes nothing. A \
+PASS->FAIL in the changed module's existing tests is never pre-existing until you have traced the \
+test body to code you did not change. The verifier's verdict line is "VERDICT: FIX HOLDS" or \
+"VERDICT: FIX INCOMPLETE"; a FIX INCOMPLETE is not overridden by "upstream does it this way".
+
 SCRATCH: throwaway probe scripts and their output go in /workspace/.scratch/ -- git ignores it, so \
 nothing there is ever committed. Never leave them elsewhere in the repository. The sandbox's .git is \
 read-only: git stash/checkout/restore/commit fail. To run the code as it was BEFORE your change, \
-use /baseline when it exists (the untouched tree, read-only) or `git show HEAD:<path>`.
+use /baseline when it exists (the untouched tree, read-only) or `git show HEAD:<path>`. For an \
+editable install (`pip install -e`, Django's runtests.py, most of these repos) a test runner \
+started from /baseline still imports the package from /workspace; prefix `PYTHONPATH=/baseline` \
+(the bash tool adds it for `cd /baseline` commands) or compare against `git show HEAD:<path>`. \
+After the ship gate has committed, HEAD includes your change; /baseline never does.
 
 """ + _FILESYSTEM_GUIDANCE + _VISUAL_GUIDANCE + _FINDING_GUIDANCE + """
 
@@ -1949,7 +2011,7 @@ async def build_deep_agent(
     # Every seat carries the task id, so the router's ledger can total a task
     # rather than only price a call -- subagents included, since their spend is
     # the task's spend.
-    coordinator_model = llm_for_role(config, coder_role, task_id=task_id)
+    coordinator_model = llm_for_role(config, coder_role, task_id=task_id, max_tokens=COORDINATOR_MAX_TOKENS)
     planner_model = llm_for_role(config, "agent-planner", task_id=task_id)
     investigator_model = llm_for_role(config, coder_role if route in ("frontend", "fallback") else "agent-investigator",
                                      task_id=task_id)
@@ -1957,6 +2019,16 @@ async def build_deep_agent(
     # pass was as often in a subagent as in the coordinator.
     test_writer_model = llm_for_role(config, coder_role if route == "fallback" else "agent-test-writer",
                                      task_id=task_id)
+    # Its own alias, so the router's ledger bills the verifier as the verifier
+    # and not as the test-writer whose model it shared (2026-09-25).
+    verifier_model = llm_for_role(config, coder_role if route == "fallback" else "agent-verifier",
+                                  task_id=task_id)
+    # One low-effort fallback for the seats' empty-reply retry (empty_reply.py).
+    empty_reply_model = llm_for_role(config, "agent-coder-fallback", reasoning_effort="low", task_id=task_id)
+    # The report, verbatim, for the seats that check the fix: a one-line
+    # task() description was all a verifier had of a multi-paragraph report
+    # (2026-09-25).
+    report_note = _report_note(goal)
 
     project_memory = await load_project_memory(repo, store, task_id=task_id)
     project_memory_content = project_memory.content
@@ -2013,10 +2085,13 @@ async def build_deep_agent(
             # cleaning up dead modules gets "not found" four times before it
             # thinks of `rm` (observed 2026-09-08). bash rm is the real one.
             SanitizeToolCallsMiddleware(),  # a malformed tool call in history never reaches a provider (2026-09-09)
+            EmptyReplyRetryMiddleware(empty_reply_model, "investigator"),
             HiddenToolsMiddleware("glob", "grep", "execute", "delete"),
             RepeatCallGuardMiddleware(contain=True),  # the same call with the same result is not run a third time (2026-09-09)
             BudgetGuardMiddleware(tracker),
-            ModelCallLimitMiddleware(run_limit=_rs.as_int("model_call_run_limit"), exit_behavior="error"),
+            # "end", not "error", on every subagent: the coordinator gets a
+            # report instead of the whole pass dying (2026-09-25).
+            ModelCallLimitMiddleware(run_limit=_rs.as_int("model_call_run_limit"), exit_behavior="end"),
             ToolCallLimitMiddleware(run_limit=_rs.as_int("tool_call_run_limit"), exit_behavior="error"),
         ],
         "skills": [SKILLS_ROUTE],
@@ -2035,7 +2110,7 @@ async def build_deep_agent(
             "mutates external state, or touches a third-party API. Must produce real behavioral "
             "coverage, never source-inspection-only tests."
         ),
-        "system_prompt": TEST_WRITER_SYSTEM_PROMPT + absent_files,
+        "system_prompt": TEST_WRITER_SYSTEM_PROMPT + absent_files + report_note,
         # test_writer_excluded, not a clause per subsystem: it writes tests
         # for THIS repo against this repo's suite, and nothing in its prompt
         # tells it another project exists. Tools a seat was never told about
@@ -2054,11 +2129,19 @@ async def build_deep_agent(
             # shell here, and built-in execute has no sandbox behind this
             # backend, so it can only error or mislead.
             SanitizeToolCallsMiddleware(),  # a malformed tool call in history never reaches a provider (2026-09-09)
+            EmptyReplyRetryMiddleware(empty_reply_model, "test-writer"),
             HiddenToolsMiddleware("glob", "grep", "execute", "delete"),
             RepeatCallGuardMiddleware(contain=True),  # the same call with the same result is not run a third time (2026-09-09)
             BudgetGuardMiddleware(tracker),
-            ModelCallLimitMiddleware(run_limit=_rs.as_int("model_call_run_limit"), exit_behavior="error"),
-            ToolCallLimitMiddleware(run_limit=_rs.as_int("tool_call_run_limit"), exit_behavior="error"),
+            # "end": one test-writer hit 400 model calls after its tests were
+            # already written, and "error" killed the whole pass (2026-09-25).
+            ModelCallLimitMiddleware(run_limit=_rs.as_int("model_call_run_limit"), exit_behavior="end"),
+            # Same cap and countdown as the verifier: one test-writer ran 352
+            # identical commands with nothing bounding it (2026-09-25). ONE
+            # ToolCallLimitMiddleware per stack (see the verifier's).
+            ToolCallLimitMiddleware(run_limit=min(TEST_WRITER_TOOL_CALLS, _rs.as_int("tool_call_run_limit")),
+                                    exit_behavior="end"),
+            WrapUpMiddleware(limit=min(TEST_WRITER_TOOL_CALLS, _rs.as_int("tool_call_run_limit"))),
         ],
         "skills": [SKILLS_ROUTE],
         "interrupt_on": interrupt_on,
@@ -2077,17 +2160,18 @@ async def build_deep_agent(
             "case, its neighbours, the module's existing tests -- and reports what still fails. It "
             "changes no source."
         ),
-        "system_prompt": VERIFIER_SYSTEM_PROMPT + "\n\n" + _FILESYSTEM_GUIDANCE,
+        "system_prompt": VERIFIER_SYSTEM_PROMPT + "\n\n" + _FILESYSTEM_GUIDANCE + report_note,
         "tools": [tool_by_name["read"], tool_by_name["bash"], run_checks_tool],
-        "model": test_writer_model,
+        "model": verifier_model,
         "middleware": [
             SanitizeToolCallsMiddleware(),
+            EmptyReplyRetryMiddleware(empty_reply_model, "verifier"),
             # write_file/edit_file reach the agent's memory space, never the
             # repo; a verifier reaching for them to write a probe died on it.
             HiddenToolsMiddleware("glob", "grep", "execute", "delete", "write_file", "edit_file"),
             RepeatCallGuardMiddleware(contain=True),
             BudgetGuardMiddleware(tracker),
-            ModelCallLimitMiddleware(run_limit=_rs.as_int("model_call_run_limit"), exit_behavior="error"),
+            ModelCallLimitMiddleware(run_limit=_rs.as_int("model_call_run_limit"), exit_behavior="end"),
             # ONE tool-call limit (LangChain refuses two instances of a
             # middleware class on an agent -- a second one here stopped every
             # task at build, 2026-09-25), at the tighter of the two caps, and
@@ -2142,10 +2226,11 @@ async def build_deep_agent(
             # shell here, and built-in execute has no sandbox behind this
             # backend, so it can only error or mislead.
             SanitizeToolCallsMiddleware(),  # a malformed tool call in history never reaches a provider (2026-09-09)
+            EmptyReplyRetryMiddleware(empty_reply_model, "general-purpose"),
             HiddenToolsMiddleware("glob", "grep", "execute", "delete"),
             RepeatCallGuardMiddleware(contain=True),  # the same call with the same result is not run a third time (2026-09-09)
             BudgetGuardMiddleware(tracker),
-            ModelCallLimitMiddleware(run_limit=_rs.as_int("model_call_run_limit"), exit_behavior="error"),
+            ModelCallLimitMiddleware(run_limit=_rs.as_int("model_call_run_limit"), exit_behavior="end"),
             ToolCallLimitMiddleware(run_limit=_rs.as_int("tool_call_run_limit"), exit_behavior="error"),
         ],
         "skills": [SKILLS_ROUTE],
@@ -2169,6 +2254,7 @@ async def build_deep_agent(
         ) + absent_files + reference_note + history_note + ("\n\n" + _LOGO_GUIDANCE if logo_tools else ""),
         middleware=[
             SanitizeToolCallsMiddleware(),  # a malformed tool call in history never reaches a provider (2026-09-09)
+            EmptyReplyRetryMiddleware(empty_reply_model, "coordinator"),
             HiddenToolsMiddleware("glob", "grep", "execute", "delete"),
             RepeatCallGuardMiddleware(),  # the same call with the same result is not run a third time (2026-09-09)  # see subagent specs' comment
             BudgetGuardMiddleware(tracker),

@@ -15,7 +15,9 @@ describe("SWE-bench wording", () => {
     expect(text).toContain("resolved 36 of a 50-task sample of SWE-bench Verified");
     expect(text).not.toMatch(/\d+(\.\d)?%/);
     expect(text).toContain("django__django-10097");
-    expect(scoreLabel(run())).toContain("not the published number");
+    expect(scoreLabel(run())).toBe("resolved in a 50-task sample (72.0%) — not the published number");
+    expect(scoreLabel(run({ kind: "selected", total: 4, resolved: 3, graded_count: 4 })))
+      .toBe("resolved in a 4-task selection (75.0%) — not the published number");
   });
 
   it("gives a full run its percentage", () => {

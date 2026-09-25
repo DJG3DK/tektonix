@@ -94,3 +94,29 @@ def test_str_replace_refuses_binary_content(tmp_path):
     _write_bytes(tmp_path, "image.png", b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR")
     with pytest.raises(BinaryFileError):
         str_replace(str(tmp_path), "image.png", "x", "y")
+
+
+def test_a_second_identical_noop_edit_in_a_row_names_the_already_applied_edit(tmp_path):
+    """A coder re-sent the same already-applied edit four times (2026-09-25):
+    the first refusal stays as it was, the second says the text is already
+    there."""
+    import asyncio
+
+    from agent.tools.agent_tools import make_agent_tools
+    (tmp_path / "a.py").write_text("x = 2\n")
+    tools = {t.name: t for t in make_agent_tools(str(tmp_path))[0]}
+
+    def edit(**kw):
+        t = tools["edit"]
+        return t.invoke(kw) if not t.coroutine else asyncio.run(t.ainvoke(kw))
+
+    first = edit(path="a.py", old_string="x = 2", new_string="x = 2")
+    assert "identical, so this edit would change nothing" in first
+    second = edit(path="a.py", old_string="x = 2", new_string="x = 2")
+    assert "already in the file exactly as your new_string" in second and "Read the file and move on" in second
+    assert "identical, so this edit would change nothing" not in second
+    # a real edit in between resets it; a different path is its own count
+    assert edit(path="a.py", old_string="x = 2", new_string="x = 3") == "OK"
+    assert "identical, so this edit would change nothing" in edit(path="a.py", old_string="x = 3", new_string="x = 3")
+    (tmp_path / "b.py").write_text("y\n")
+    assert "identical, so this edit would change nothing" in edit(path="b.py", old_string="y", new_string="y")

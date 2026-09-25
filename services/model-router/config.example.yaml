@@ -343,6 +343,16 @@ model_list:
     model_info:
       input_cost_per_token: 0.00000015
       output_cost_per_token: 0.0000006
+  - model_name: agent-verifier
+    params:
+      # The verifier tries to break a bug fix before it ships. Its own alias
+      # (2026-09-25) so its calls are billed as its own, not the test-writer's.
+      model: openrouter/deepseek/deepseek-v4.1-flash
+      api_key: os.environ/OPENROUTER_API_KEY
+      extra_body: {"provider": {"require_parameters": true}}
+    model_info:
+      input_cost_per_token: 0.00000015
+      output_cost_per_token: 0.0000006
   - model_name: agent-reviewer
     params:
       # The commit reviewer (commit-reviewer/reviewer.js). Added 2026-08-25 —

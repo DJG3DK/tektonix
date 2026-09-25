@@ -105,7 +105,9 @@ MODEL_RETRY_BACKOFF_S = (15, 30, 60, 120, 240)
 # Any other API error is the provider refusing the request -- usually a
 # malformed tool-call generation. Retried quickly, then handed back.
 REJECTED_RETRIES_PER_PASS = 2
-EMPTY_REPLY_RETRIES = 3
+# 2 not 3 since 2026-09-25: EmptyReplyRetryMiddleware now retries an empty
+# length-capped reply on the fallback seat before the pass sees it.
+EMPTY_REPLY_RETRIES = 2
 REJECTED_RETRY_BACKOFF_S = 5
 
 
@@ -607,8 +609,12 @@ async def work_node(state: AgentState, app_config: Config, checkpointer, pg_stor
                             pending_approval = interrupts[0].value
                 # The model ended its turn with an empty reply: 13033 did so on
                 # 8 of its 41 turns (2026-09-24), each one ending a pass and
-                # spending the gate's nudges on nothing. Asked to carry on,
-                # inside this pass, a few times.
+                # spending the gate's nudges on nothing. The last resort: an
+                # empty reply that ran out of output tokens while thinking (50
+                # of them in the 2026-09-25 SWE-bench run) is first retried on
+                # the fallback seat by EmptyReplyRetryMiddleware, inside the
+                # model call. Only what gets past that is asked to carry on
+                # here, a couple of times.
                 if final_text.get("last_ai_empty") and not pending_approval and empty_replies < EMPTY_REPLY_RETRIES:
                     empty_replies += 1
                     final_text["last_ai_empty"] = False

@@ -182,7 +182,8 @@ def test_each_batch_is_graded_then_its_images_deleted_and_the_disk_stops_the_run
 
     def fake_grade(pred, ids, run_id, report_dir, max_workers=4, rewrite=False, **k):
         events.append(("rewrite" if rewrite else "grade", list(ids)))
-        return {"resolved_ids": [i for i in ids if i.endswith(("-0", "-3"))]}
+        return {"resolved_ids": [i for i in ids if i.endswith(("-0", "-3"))],
+                "failure_reasons": {i: "no_tests_collected" for i in ids if i.endswith("-2")}}
 
     def fake_subprocess_run(cmd, **k):
         if cmd[:3] == ["docker", "image", "rm"]:
@@ -205,6 +206,34 @@ def test_each_batch_is_graded_then_its_images_deleted_and_the_disk_stops_the_run
     assert summary["state"] == "stopped" and summary["runtime_settings"] == {"x": 1}
     assert summary["instances"]["r__r-1"]["outcome"] == "setup_error" and summary["instances"]["r__r-1"]["resolved"] is False, \
         "a task that could not be set up is never graded, and never dropped from the total"
+    assert summary["instances"]["r__r-2"]["harness_note"] == "no_tests_collected", "the harness's own note is kept"
+    assert "harness_note" not in summary["instances"]["r__r-0"]
+
+
+def test_the_reviewer_s_record_and_files_outlive_the_run_s_temporary_root(tmp_path):
+    """Only `review_verdict` used to survive, and the pair's history went with
+    the temporary root: "what did the reviewer say" had no answer."""
+    import json
+    mod = _runner()
+    review = {"verdict": "NEEDS_FIXES", "summary": "misses a case", "findings": [{"severity": "blocking", "issue": "x"}],
+              "agentMessage": "fix x", "baseline": {"abc": {"pytest": False}}}
+    kept = mod.review_record(review)
+    assert kept["summary"] == "misses a case" and kept["findings"] and kept["agentMessage"] == "fix x"
+    assert "baseline" not in kept, "a cache of which checks fail on base is not a review"
+    assert mod.review_record(None) is None and mod.review_record({}) is None
+
+    src, dst = tmp_path / "tmp" / "reviewer", tmp_path / "run" / "reviewer"
+    for n, (state, line) in enumerate([({"p1": {"verdict": "READY"}}, '{"project": "p1"}'),
+                                        ({"p2": {"verdict": "NEEDS_FIXES"}}, '{"project": "p2"}')], 1):
+        src.mkdir(parents=True, exist_ok=True)
+        (src / "state.json").write_text(json.dumps(state))
+        (src / "history.jsonl").write_text(line + "\n")
+        (src / "reviewer.log").write_text(f"batch {n}\n")
+        mod.keep_reviewer_files(src, dst)      # once per batch, into one run folder
+    assert json.loads((dst / "state.json").read_text()) == {"p1": {"verdict": "READY"}, "p2": {"verdict": "NEEDS_FIXES"}}
+    assert (dst / "history.jsonl").read_text() == '{"project": "p1"}\n{"project": "p2"}\n'
+    assert (dst / "reviewer.log").read_text() == "batch 1\nbatch 2\n"
+    mod.keep_reviewer_files(tmp_path / "nowhere", dst)     # a batch whose pair never started
 
 
 def test_a_trajectory_is_every_message_each_conversation_held():
@@ -336,14 +365,30 @@ def test_every_batch_s_tasks_call_that_batch_s_reviewer():
     'cd / && grep -rl "division_of_units" --include=*.py / 2>/dev/null | head',
     'find / -maxdepth 4 -iname "*eval*"',
     "cat /tmp/tektonix-swebench-abc/work/live/x/.git/packed-refs",
+    # 2026-09-25: what walked past the first patterns
+    "strings sphinx/domains/__pycache__/cpp.cpython-39.pyc | grep -i userdefined",
+    "python -c \"import marshal; c = marshal.loads(open('tests/__pycache__/test_domain_py.cpython-39.pyc',"
+    "'rb').read()[16:]); print(c.co_names)\"",
+    "python -m dis sphinx/__pycache__/x.cpython-39.pyc",
+    "xxd tests/__pycache__/test_x.cpython-39.pyc | head",
+    "git branch -a && git tag | tail -5",
+    "git branch -r", "git branch --all", "git tag", "git tag --contains abc",
+    "git for-each-ref --sort=-creatordate | head",
+    "git ls-remote origin",
+    "gh api repos/django/django/pulls/13033/files",
+    "gh pr view 13033",
+    "ls ~/.cache/pip", "ls $HOME/.cache", "find /root/.cache/pip -name '*.whl'",
+    # a loop cannot be split, so it is judged whole
+    "for f in a b; do curl $f; done",
 ])
 def test_searching_for_the_published_fix_is_refused_on_a_benchmark(cmd):
     """Answer-hunting was 15% of all shell commands in the first samples and
     most of the budget of the tasks that failed; one curled GitHub for the
     fix's own pull request."""
-    from agent.tools.benchmark_guard import refusal
+    from agent.tools.benchmark_guard import refusal, screen
     msg = refusal(cmd)
     assert msg and msg.startswith("[Tektonix harness] REFUSED on a benchmark task") and "does not exist anywhere" in msg
+    assert screen(cmd) == (None, msg), "nothing of it runs"
 
 
 @pytest.mark.parametrize("cmd", [
@@ -354,10 +399,38 @@ def test_searching_for_the_published_fix_is_refused_on_a_benchmark(cmd):
     "cd /workspace && find . -name '*.py' -path '*timeseries*'",
     "ls /opt/miniconda3/envs/testbed/lib/python3.9/site-packages/numpy/core",
     "cd /workspace && python .scratch/probe.py",
+    # ordinary work that shares words with the hunts
+    "pip list | grep -i sphinx", "pip show django",
+    "git log --oneline -3", "git log -p -- django/utils/x.py", "git blame -L 10,20 a.py",
+    "git show HEAD:a.py", "git describe --tags", "git branch", "git branch -vv",
+    'python -c "import sphinx; print(sphinx.__file__)"',
+    # cleaning stale bytecode is fine; only reading it is a hunt
+    "find . -name __pycache__ -exec rm -rf {} +",
+    "find . -name '*.pyc' -delete",
+    'grep -rn "foo" --exclude-dir=__pycache__ .',
+    "git log --oneline --grep=tags",
 ])
 def test_ordinary_work_is_never_refused(cmd):
-    from agent.tools.benchmark_guard import refusal
+    from agent.tools.benchmark_guard import refusal, screen
     assert refusal(cmd) is None
+    assert screen(cmd) == (cmd, None)
+
+
+@pytest.mark.parametrize("cmd,remaining,dropped", [
+    ("git log --all --oneline | head -5 && git status --short", "git status --short", "git log --all --oneline | head -5"),
+    ('grep -rn "has_key" django/ ; find / -name json.py', 'grep -rn "has_key" django/', "find / -name json.py"),
+    ("cd /workspace && curl -s http://x || echo offline", "cd /workspace || echo offline", "curl -s http://x"),
+    ("cd /workspace && git log --all --oneline\ngit status", "cd /workspace \ngit status", "git log --all --oneline"),
+])
+def test_only_the_hunting_half_of_a_compound_command_is_refused(cmd, remaining, dropped):
+    """62 refusals over 50 tasks on 2026-09-25, most of them compounds whose
+    legitimate half was thrown away with the hunt; in one task that half was
+    the `grep` that would have found the regression the task failed on."""
+    from agent.tools.benchmark_guard import screen
+    run, note = screen(cmd)
+    assert run == remaining
+    assert note.startswith("[Tektonix harness] REFUSED part of that command on a benchmark task: `" + dropped + "`")
+    assert "does not exist anywhere" in note and "The rest of the command ran" in note
 
 
 def test_the_task_statement_says_the_fix_is_not_in_the_environment():
@@ -365,13 +438,81 @@ def test_the_task_statement_says_the_fix_is_not_in_the_environment():
     assert "does not exist anywhere in this environment" in goal and "Do not search for them" in goal
 
 
-def test_only_a_benchmark_s_bash_carries_the_guard():
+def test_the_task_statement_forbids_a_remembered_patch_and_says_how_to_run_baseline():
+    """2026-09-25: a verified change was swapped for the upstream fix from
+    memory, and an editable install kept importing /workspace at /baseline."""
+    goal = sb.goal_for({"repo": "a/b", "problem_statement": "broken"})
+    assert "Do not reproduce a remembered patch" in goal
+    assert "never replace a change you have verified with a remembered one" in goal
+    assert "PYTHONPATH=/baseline" in goal and "cd /baseline" in goal
+    assert goal.index("/baseline") < goal.index("<issue>"), "framing before the issue, never inside it"
+
+
+def _bash(tmp_path, monkeypatch, ran: list, benchmark: bool):
+    """The real bash tool with the container replaced by a recorder."""
+    from agent.tools import agent_tools
+
+    async def _fake_sandbox(cmd, cwd, timeout=None, extra_env=None, network=None):
+        ran.append(cmd)
+        return {"ok": True, "exit_code": 0, "output": "ok\n"}
+
+    monkeypatch.setattr(agent_tools, "run_shell_sandboxed", _fake_sandbox)
+    tools, _ = agent_tools.make_agent_tools(str(tmp_path), benchmark=benchmark)
+    return {t.name: t for t in tools}["bash"]
+
+
+def test_only_a_benchmark_s_bash_carries_the_guard(tmp_path, monkeypatch):
+    import asyncio
     import inspect
 
     from agent import deep_agent
-    from agent.tools import agent_tools
+    from agent.tools import agent_tools, bash_advice
     assert "if benchmark:" in inspect.getsource(agent_tools.make_agent_tools)
     assert 'benchmark=bool((PROJECTS.get(repo) or {}).get("benchmark"))' in inspect.getsource(deep_agent.build_deep_agent)
+
+    hunt = 'grep -rn "has_key" django/ ; find / -name json.py'
+    ran: list = []
+    out = asyncio.run(_bash(tmp_path / "plain", monkeypatch, ran, benchmark=False).ainvoke({"command": hunt}))
+    assert ran == [hunt] and out.startswith("exit_code=0"), "an ordinary project runs it all, unremarked"
+
+    ran.clear()
+    out = asyncio.run(_bash(tmp_path / "bench", monkeypatch, ran, benchmark=True).ainvoke({"command": hunt}))
+    assert ran == ['grep -rn "has_key" django/'], "the legitimate half ran"
+    assert out.startswith("[Tektonix harness] REFUSED part of that command") and "\nexit_code=0\nok" in out
+    assert bash_advice.kind_of_result(out) == "benchmark-refused", "the work node's telemetry can see it"
+
+    ran.clear()
+    out = asyncio.run(_bash(tmp_path / "bench", monkeypatch, ran, benchmark=True).ainvoke({"command": "git fsck"}))
+    assert ran == [] and out.startswith("[Tektonix harness] REFUSED on a benchmark task")
+    assert bash_advice.kind_of_result(out) == "benchmark-refused"
+
+
+@pytest.mark.parametrize("cmd,prefixed", [
+    ("cd /baseline/tests && python runtests.py utils_tests -v 1", True),
+    ("python /baseline/tests/runtests.py utils_tests", True),
+    ('cd "/baseline" && python -m pytest tests/test_x.py -q', True),
+    ("diff -u /baseline/django/utils/x.py django/utils/x.py", False),
+    ("cd /baseline/tests && PYTHONPATH=/baseline python runtests.py x", False),
+    ("cd /workspace && python -m pytest tests -q", False),
+])
+def test_a_run_at_baseline_imports_the_baseline_not_the_patched_tree(tmp_path, monkeypatch, cmd, prefixed):
+    """2026-09-25: `cd /baseline/tests && python runtests.py` was the agent's
+    baseline check and it tested the PATCHED code -- the editable install
+    resolves to the workspace whatever the cwd. The task had passed in two
+    earlier runs."""
+    import asyncio
+
+    from agent.tools.agent_tools import BASELINE_PYTHONPATH_NOTE
+    ran: list = []
+    out = asyncio.run(_bash(tmp_path, monkeypatch, ran, benchmark=True).ainvoke({"command": cmd}))
+    if prefixed:
+        assert ran == ["export PYTHONPATH=/baseline${PYTHONPATH:+:$PYTHONPATH}; " + cmd]
+        assert out.startswith(BASELINE_PYTHONPATH_NOTE + "\nexit_code=0")
+    else:
+        assert ran == [cmd] and out.startswith("exit_code=0")
+    ran.clear()
+    asyncio.run(_bash(tmp_path, monkeypatch, ran, benchmark=False).ainvoke({"command": cmd}))
+    assert ran == [cmd], "only a benchmark project has a /baseline"
 
 
 def test_a_benchmark_sees_its_untouched_tree_at_baseline_read_only(tmp_path, monkeypatch):
@@ -417,13 +558,31 @@ def test_shards_split_one_selection_without_overlap():
 @pytest.mark.parametrize("cmd,kind", [
     ("cd /workspace && git stash", "git-write"),
     ("git -C /workspace checkout -- a.py", "git-write"),
+    ("git stash pop", "git-write"),
+    ("git add -A && git commit -m x", "git-write"),
     ("cat > /workspace/.scratch/p.py <<'EOF'\nprint(1)\nEOF", None),
     ("cd /workspace && git show HEAD:a.py | head", None),
     ("git diff HEAD", None),
+    # 2026-09-25: read-only git that the old \\b matched
+    ("git merge-base --is-ancestor abc HEAD", None),
+    ("git stash list", None),
+    ("git stash show -p", None),
+    ("git cat-file -t HEAD", None),
+    ("git status --short && git stash list", None),
 ])
 def test_git_writes_are_explained_and_scratch_probes_are_not_nagged(cmd, kind):
     from agent.tools import bash_advice
     assert bash_advice.kind(cmd) == kind
+
+
+def test_the_git_write_note_does_not_point_at_a_head_that_moves():
+    """The ship gate commits mid-task, after which HEAD includes the agent's
+    own change; `git show HEAD:<path>` then showed it its own code as the
+    original, and one task lost six calls to that."""
+    from agent.tools.bash_advice import GIT_WRITE_NOTE
+    assert "git show HEAD:" not in GIT_WRITE_NOTE
+    assert "/baseline" in GIT_WRITE_NOTE and "PYTHONPATH=/baseline" in GIT_WRITE_NOTE
+    assert "`git show <base>:<path>`" in GIT_WRITE_NOTE and "git log --oneline -3" in GIT_WRITE_NOTE
 
 
 async def test_an_edit_that_changes_nothing_is_refused(tmp_path):

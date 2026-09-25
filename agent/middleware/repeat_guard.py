@@ -28,12 +28,17 @@ A call whose previous result DIFFERED from the one before (a flaky test, a
 poll) is never blocked: the guard is for calls that have already proven
 they will answer the same way. Non-idempotent tools by nature (write_todos,
 save_plan, ask_user) are exempt by name -- re-running them is the point.
+
+Results are compared after stripping the noise that changes between two
+runs of the same command (addresses, durations, timestamps, temp paths),
+and past HARD_REPEAT_AT identical calls the result is not consulted at all.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+import re
 
 from langchain_core.messages import ToolMessage
 
@@ -51,6 +56,34 @@ REFUSED_AT = 4     # and from here on refused
 # RepeatLoopError -- the work node escalates with the reason, the operator
 # resumes on a different seat.
 BREAK_AT = 8
+# A model sending the same command this many times is looping whatever the
+# output says: 2026-09-25, one byte-identical bash command 352 times in a row
+# ($1.15, 29 min) whose output carried an object address, so no two results
+# ever hashed equal and the guard never fired.
+HARD_REPEAT_AT = 8
+
+# What differs between two runs of the same command without meaning
+# anything: memory addresses, durations, timestamps, temp paths, pids.
+_NOISE = [re.compile(p) for p in (
+    r"0x[0-9a-fA-F]+",
+    r"\bin \d+(?:\.\d+)?\s*(?:s|ms|sec|secs|seconds?)\b",
+    r"\b\d+(?:\.\d+)?\s*(?:ms|secs?|seconds?)\b",
+    r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?",
+    r"\b1[5-9]\d{8}(?:\.\d+)?\b",
+    r"/tmp/[^\s'\"`]+",
+    r"\bpid=\d+\b",
+)]
+
+
+def _normalise(text: str) -> str:
+    for rx in _NOISE:
+        text = rx.sub("~", text)
+    return text
+
+
+def _ordinal(n: int) -> str:
+    suffix = "th" if 10 <= n % 100 <= 20 else {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
+    return f"{n}{suffix}"
 
 
 # Different calls, the same answer: a probe written to probe_c9.py, then
@@ -112,18 +145,33 @@ class RepeatCallGuardMiddleware(AgentMiddleware):
         run = self._runs.setdefault(key, {"n": 0, "results": [], "last": None})
         run["n"] += 1
         # Only calls that have proven stable are blocked: the previous two
-        # results must match each other.
+        # results must match each other -- until HARD_REPEAT_AT, past which
+        # the result no longer matters.
         stable = len(run["results"]) >= 2 and run["results"][-1] == run["results"][-2]
-        if run["n"] >= REFUSED_AT and stable:
+        hard = run["n"] >= HARD_REPEAT_AT
+        if run["n"] >= REFUSED_AT and (stable or hard):
             if run["n"] >= REFUSED_AT + BREAK_AT:
                 self._give_up(
                     f"stuck in a tool loop: `{tool_call.get('name')}` with identical arguments requested "
-                    f"{run['n']} times in a row with an unchanging result, {BREAK_AT} of them after the guard "
+                    f"{run['n']} times in a row, {BREAK_AT} of them after the guard "
                     f"refused to run it. The model is no longer steering")
-            return self._refusal(tool_call, run)
+            return self._refusal(tool_call, run, stable)
         if run["n"] >= CACHED_AT and stable and run["last"] is not None:
             return self._cached(tool_call, run)
         return None
+
+    # The instance lives as long as the agent it is built into, and a
+    # subagent's graph is invoked once per task() call: a verifier's round 2
+    # started with round 1's counts (2026-09-25). Fresh per invocation.
+    def before_agent(self, state, runtime):
+        self._stuck = None
+        self._same = {"hash": None, "key": None, "n": 0}
+        self._runs = {}
+        self._last_key = None
+        return None
+
+    async def abefore_agent(self, state, runtime):
+        return self.before_agent(state, runtime)
 
     def _give_up(self, why: str) -> None:
         if not self.contain:
@@ -162,7 +210,7 @@ class RepeatCallGuardMiddleware(AgentMiddleware):
         if key is None or key not in self._runs:
             return result
         run = self._runs[key]
-        run["results"] = (run["results"] + [hashlib.sha1(_result_text(result).encode()).hexdigest()])[-2:]
+        run["results"] = (run["results"] + [hashlib.sha1(_normalise(_result_text(result)).encode()).hexdigest()])[-2:]
         run["last"] = result
         return result
 
@@ -170,7 +218,7 @@ class RepeatCallGuardMiddleware(AgentMiddleware):
         preview = _result_text(run["last"])[:_RESULT_PREVIEW]
         return ToolMessage(
             content=(
-                f"{HARNESS} REPEATED CALL: this is the {run['n']}th identical `{tool_call.get('name')}` call in a row and the "
+                f"{HARNESS} REPEATED CALL: this is the {_ordinal(run['n'])} identical `{tool_call.get('name')}` call in a row and the "
                 f"last two returned exactly the same result, so it was not run again. That result:\n{preview}\n\n"
                 f"Nothing about the repo changed between those calls. Do something different: change the "
                 f"arguments, act on this result, or state what it tells you and move on."
@@ -179,11 +227,13 @@ class RepeatCallGuardMiddleware(AgentMiddleware):
             status="error",
         )
 
-    def _refusal(self, tool_call, run) -> ToolMessage:
+    def _refusal(self, tool_call, run, stable: bool = True) -> ToolMessage:
+        why = ("with an unchanging result" if stable else
+               "-- its output differs only in noise (addresses, timings), and nothing you did changed between them")
         return ToolMessage(
             content=(
                 f"{HARNESS} ERROR: `{tool_call.get('name')}` with these exact arguments has now been requested {run['n']} times "
-                f"in a row with an unchanging result. It will not run again with these arguments. You are in a "
+                f"in a row {why}. It will not run again with these arguments. You are in a "
                 f"loop: stop, write down what the last result told you, and take a DIFFERENT next step "
                 f"(different command or file, an edit, a check, or finish the todo)."
             ),

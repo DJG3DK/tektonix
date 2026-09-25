@@ -37,7 +37,7 @@ beforeEach(() => {
     tasks: [
       { id: "django__django-11265", repo: "django/django", outcome: "shipped", reason: null, resolved: false,
         cost_usd: 0.33, duration_s: 3600, patch_bytes: 591, review_verdict: "READY", models: {}, started: true,
-        reference_fails: false, has_trajectory: true,
+        reference_fails: false, has_trajectory: true, harness_note: "no_tests_collected",
         tests: { patch_applied: true, fail_to_pass_failed: ["test_with_exclude"], fail_to_pass_passed: 0,
           pass_to_pass_failed: [], pass_to_pass_passed: 30 } },
       { id: "sympy__sympy-1", repo: "sympy/sympy", outcome: "not_run", reason: null, cost_usd: null,
@@ -47,6 +47,7 @@ beforeEach(() => {
   });
   getSwebenchTask.mockReset().mockResolvedValue({
     id: "django__django-11265", patch: "--- a/django/db/models/sql/query.py",
+    review: { verdict: "READY", summary: "The change handles the nested case too.", findings: [], agentMessage: null },
     conversation: [{ generation: 0, namespace: "coordinator", messages: [
       { role: "human", name: null, text: "Resolve the following GitHub issue", tool_calls: [] },
       { role: "ai", name: null, text: "", tool_calls: [{ name: "read_file", args: "{}" }] },
@@ -73,6 +74,14 @@ describe("SwebenchPanel", () => {
     expect(screen.getByText("Resolve the following GitHub issue")).toBeInTheDocument();
     expect(screen.getByText("→ read_file")).toBeInTheDocument();
     expect(getSwebenchTask).toHaveBeenCalledWith("tektonix-sample50", "django__django-11265");
+  });
+
+  it("shows what the reviewer said, and the harness's own note as the harness's", async () => {
+    render(<SwebenchPanel />);
+    expect(await screen.findByText("harness: no_tests_collected")).toHaveAttribute("title", expect.stringContaining("harness"));
+    await userEvent.click(screen.getByText("django__django-11265"));
+    expect(await screen.findByText("Reviewer:")).toBeInTheDocument();
+    expect(screen.getByText("The change handles the nested case too.")).toBeInTheDocument();
   });
 
   it("a task not run yet asks for nothing", async () => {

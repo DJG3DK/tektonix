@@ -102,7 +102,7 @@ _FILEISH = re.compile(r"^[\w./~-]+$")
 
 def _is_read_pipeline(segment: str) -> list[str] | None:
     """The files a segment reads, or None if it is doing anything else."""
-    stages = [st.strip() for st in _split_top_level(segment, ("|",))]
+    stages = [st.strip() for st in split_top_level(segment, ("|",))]
     if not stages or not stages[0]:
         return None
     first = _READ_STAGE.match(stages[0])
@@ -119,14 +119,21 @@ def _is_read_pipeline(segment: str) -> list[str] | None:
     return files
 
 
-def _split_top_level(text: str, seps: tuple[str, ...]) -> list[str]:
+def split_top_level(text: str, seps: tuple[str, ...], keep_seps: bool = False):
     """Split on separators that are not inside quotes.
 
     A plain re.split cut `awk 'NR>=40 && NR<=90' file` in half, because the
     `&&` is part of the awk program. Quotes have to be respected or the
     matcher's answer depends on what a command happens to contain.
+
+    With `keep_seps`, each segment comes with the separator that followed it
+    (the last one with ""), so a caller can drop a segment and join the rest
+    back into a command the shell will still run -- the benchmark guard does
+    that (agent/tools/benchmark_guard.py, 2026-09-25).
     """
-    out, buf, quote = [], [], None
+    out: list = []
+    buf: list[str] = []
+    quote = None
     i = 0
     while i < len(text):
         ch = text[i]
@@ -143,19 +150,19 @@ def _split_top_level(text: str, seps: tuple[str, ...]) -> list[str]:
             continue
         hit = next((sep for sep in seps if text.startswith(sep, i)), None)
         if hit:
-            out.append("".join(buf))
+            out.append(("".join(buf), hit) if keep_seps else "".join(buf))
             buf = []
             i += len(hit)
             continue
         buf.append(ch)
         i += 1
-    out.append("".join(buf))
+    out.append(("".join(buf), "") if keep_seps else "".join(buf))
     return out
 
 
 def _read_targets(text: str) -> list[str] | None:
     """Every file the command reads, when reading is ALL it does."""
-    segments = _split_top_level(text, ("&&", "||", ";"))
+    segments = split_top_level(text, ("&&", "||", ";"))
     out: list[str] = []
     for seg in segments:
         seg = seg.strip()
@@ -195,15 +202,25 @@ MEMORY_WRITE_NOTE = (
 GIT_WRITE_NOTE = (
     HARNESS + " That git command changes the repository, and it cannot work here: the sandbox's "
     ".git is read-only, so stash, checkout, restore, reset, commit and the rest fail (often with "
-    "no message). To run or read the code as it was BEFORE your change, use /baseline if it exists "
-    "(the untouched tree) or `git show HEAD:<path>`; to see your change, `git diff`. The ship gate "
-    "commits for you."
+    "no message). To run or read the code as it was BEFORE your change: prefer /baseline (the "
+    "untouched tree, read-only; for an editable install run it with PYTHONPATH=/baseline or the "
+    "package still imports from /workspace). Or `git show <base>:<path>`, where <base> is the "
+    "commit before your changes -- `git log --oneline -3` shows it; NOT `HEAD`, which moves once "
+    "the ship gate has committed your work. To see your change, `git diff <base>`."
 )
 # git subcommands that write the repository. The sandbox mounts .git
 # read-only, and on 2026-09-24 agents retried `git stash` dozens of times to
 # see the code before their change -- each failing with no stderr.
-_GIT_WRITE = re.compile(r"\bgit\s+(?:-C\s+\S+\s+)?(?:stash|checkout|restore|reset|commit|switch|apply|"
-                        r"cherry-pick|revert|rebase|merge|am|add|rm|mv|clean)\b")
+#
+# The subcommand has to end at whitespace or the end of the segment: with a
+# plain \b, `merge` matched `git merge-base --is-ancestor` (2026-09-25, a
+# read-only question answered with "that cannot work here"). `stash list` and
+# `stash show` only read the stash and are not writes either.
+_GIT_WRITE = re.compile(r"\bgit\s+(?:-C\s+\S+\s+)?(?:stash(?!\s+(?:list|show)(?=\s|$))|checkout|restore|reset|"
+                        r"commit|switch|apply|cherry-pick|revert|rebase|merge|am|add|rm|mv|clean)(?=\s|$)")
+# How every refusal from agent/tools/benchmark_guard.py begins, whole or
+# partial. Kept here so the guard and the telemetry agree on the spelling.
+BENCHMARK_REFUSED_PREFIX = HARNESS + " REFUSED"
 READ_NOTE = (
     HARNESS + " That read files through the shell. Use the `read` tool instead -- same content, "
     "measured at 0.1ms against 389ms for a bash call, because `read` runs in-process and every "
@@ -303,6 +320,9 @@ NOTE_KINDS = {
     MEMORY_READ_NOTE: "memory-read",
     MEMORY_WRITE_NOTE: "memory-write",
     GIT_WRITE_NOTE: "git-write",
+    # The benchmark guard's note names the refused command, so it is a
+    # prefix here rather than a whole note (agent/tools/benchmark_guard.py).
+    BENCHMARK_REFUSED_PREFIX: "benchmark-refused",
 }
 
 

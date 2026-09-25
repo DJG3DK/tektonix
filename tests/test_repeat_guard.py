@@ -142,3 +142,56 @@ def test_different_calls_with_the_same_long_output_are_a_loop_too():
     for i in range(20):
         r = short.wrap_tool_call(_req("edit", {"path": f"f{i}.py"}, i), lambda r: ToolMessage(content="OK", tool_call_id=r.tool_call["id"]))
     assert r.content == "OK", "a short identical result (an edit's OK) is not a loop"
+
+
+# ── 2026-09-25: 352 identical bash calls whose output carried an address ──────
+
+async def test_output_noise_does_not_hide_a_repeat():
+    """The result held `<... object at 0x...>` and a duration, so no two
+    results hashed equal and the guard never fired."""
+    mw = RepeatCallGuardMiddleware()
+    h = _Handler(results=lambda i: f"<Foo object at 0x{0x79d3b6733250 + i:x}> failed in 0.{i}s "
+                                   f"2026-09-25T10:00:{i:02d} /tmp/pytest-{i}/x pid={1000 + i}")
+    for i in range(1, 3):
+        await mw.awrap_tool_call(_req("bash", {"command": "pytest -x"}, i), h)
+    r3 = await mw.awrap_tool_call(_req("bash", {"command": "pytest -x"}, 3), h)
+    assert h.calls == 2 and r3.content.startswith("[Tektonix harness] REPEATED CALL")
+    assert "3rd identical" in r3.content, "and the ordinal is spelled right"
+
+
+async def test_a_genuinely_changing_result_is_still_not_noise():
+    mw = RepeatCallGuardMiddleware()
+    h = _Handler(results=lambda i: f"{i} tests failed")
+    for i in range(1, 5):
+        await mw.awrap_tool_call(_req("bash", {"command": "pytest"}, i), h)
+    assert h.calls == 4
+
+
+async def test_past_hard_repeat_at_the_result_no_longer_matters():
+    """A model sending the same command eight times is looping whatever the
+    output says."""
+    from agent.middleware.repeat_guard import BREAK_AT, HARD_REPEAT_AT, REFUSED_AT, RepeatLoopError
+    mw = RepeatCallGuardMiddleware()
+    h = _Handler(results=lambda i: f"run {i}: {i * 7919 % 1000} widgets")  # never equal, never noise
+    results = []
+    with pytest.raises(RepeatLoopError, match="stuck in a tool loop"):
+        for i in range(1, REFUSED_AT + BREAK_AT + 1):
+            results.append(await mw.awrap_tool_call(_req("bash", {"command": "python probe.py"}, i), h))
+    assert h.calls == HARD_REPEAT_AT - 1, "executed up to the hard cap, refused after"
+    assert results[HARD_REPEAT_AT - 1].status == "error" and "differs only in noise" in results[HARD_REPEAT_AT - 1].content
+    assert results[HARD_REPEAT_AT - 2].content.startswith("run ")
+
+
+async def test_state_is_reset_per_agent_invocation():
+    """One middleware instance serves every task() call of a subagent: a
+    verifier's round 2 inherited round 1's counts."""
+    mw = RepeatCallGuardMiddleware(contain=True)
+    h = _Handler()
+    for i in range(3):
+        await mw.awrap_tool_call(_req("bash", {"command": "git diff"}, i), h)
+    assert mw._runs and mw._last_key
+    mw._stuck = "pretend"
+    await mw.abefore_agent({}, None)
+    assert not mw._runs and mw._last_key is None and mw._stuck is None and mw._same["n"] == 0
+    r = await mw.awrap_tool_call(_req("bash", {"command": "git diff"}, 9), h)
+    assert r.content == "same output" and h.calls == 3, "round 2 starts from a clean slate"

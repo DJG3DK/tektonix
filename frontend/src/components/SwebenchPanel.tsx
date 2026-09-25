@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { getSwebench, getSwebenchRun, getSwebenchTask } from "../api";
-import type { SwebenchOverview, SwebenchRun, SwebenchTaskDetail, SwebenchTaskRow } from "../types";
+import type { SwebenchOverview, SwebenchReview, SwebenchRun, SwebenchTaskDetail, SwebenchTaskRow } from "../types";
 import { minutes, usd } from "../evalsFormat";
 import { headlineRun, KIND_LABEL, modelList, scoreLabel, scoreText, swebenchScorecard } from "../swebenchFormat";
 import "./EvalsPanel.css";
@@ -239,6 +239,11 @@ function TaskRow({ runName, task: t }: { runName: string; task: SwebenchTaskRow 
         <span className="evals-task-id">{t.id}</span>
         {t.reference_fails && <span className="evals-badge is-fail" title="the official fix fails too">unresolvable</span>}
         {t.outcome && t.outcome !== "not_run" && <span className="evals-task-cat">{t.outcome}</span>}
+        {t.harness_note && (
+          <span className="evals-task-cat swebench-harness-note" title="the official harness's own note on this task">
+            harness: {t.harness_note}
+          </span>
+        )}
         {t.started && (
           <span className="evals-task-meta">{usd(t.cost_usd)} · {minutes(t.duration_s)}</span>
         )}
@@ -275,6 +280,9 @@ function TaskRow({ runName, task: t }: { runName: string; task: SwebenchTaskRow 
                 <>
                   {detail.patch ? <pre className="evals-diff">{detail.patch}</pre>
                     : <div className="evals-task-line">No patch: the agent changed no source file.</div>}
+                  {(detail.review ?? (t.review_verdict ? { verdict: t.review_verdict } : null)) && (
+                    <Review review={detail.review ?? { verdict: t.review_verdict }} />
+                  )}
                   {detail.conversation.length > 0 && (
                     <button
                       type="button"
@@ -293,6 +301,30 @@ function TaskRow({ runName, task: t }: { runName: string; task: SwebenchTaskRow 
         </div>
       )}
     </div>
+  );
+}
+
+/** What the reviewer said, not only its verdict: its summary, each finding,
+ *  and the message it sent the agent (2026-09-25: only the verdict word
+ *  survived a run, so "what did the reviewer say" had no answer). */
+function Review({ review }: { review: SwebenchReview }) {
+  const findings = review.findings ?? [];
+  const hasText = Boolean(review.summary || findings.length || review.agentMessage);
+  return (
+    <details className="swebench-review">
+      <summary>
+        Reviewer: <strong>{review.verdict ?? "no verdict"}</strong>
+        {review.escalated && <> · escalated</>}
+        {!hasText && <> · no text kept</>}
+      </summary>
+      {review.summary && <p className="swebench-review-summary">{review.summary}</p>}
+      {findings.map((f, i) => (
+        <div key={i} className={`evals-assert ${f.severity === "blocking" ? "is-fail" : ""}`}>
+          [{f.severity}] {f.file ? `${f.file}: ` : ""}{f.issue}
+        </div>
+      ))}
+      {review.agentMessage && <pre className="swebench-msg-text">{review.agentMessage}</pre>}
+    </details>
   );
 }
 

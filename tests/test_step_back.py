@@ -85,7 +85,8 @@ def test_the_coordinator_verifies_a_fix_past_its_example_through_an_independent_
     src = inspect.getsource(deep_agent.build_deep_agent)
     assert "subagents=[general_purpose, investigator, test_writer, verifier]" in src
     spec = src[src.index("verifier = {"):src.index("# Explicit general-purpose subagent")]
-    assert '"model": test_writer_model' in spec, "a different model from the coder that wrote the fix"
+    assert '"model": verifier_model' in spec, "a different model from the coder that wrote the fix"
+    assert '"agent-verifier"' in src, "billed on its own alias, not the test-writer's (2026-09-25)"
     assert 'tool_by_name["write"]' not in spec and 'tool_by_name["edit"]' not in spec, "it runs code, never edits it"
     assert "StepBackMiddleware(tracker)" in src
 

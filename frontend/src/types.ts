@@ -582,9 +582,23 @@ export interface SwebenchTaskRow {
   started: boolean;
   reference_fails: boolean;
   tests: SwebenchTests | null;
+  /** The harness's own reading of an unresolved task (its `failure_reasons`),
+   *  e.g. "no_tests_collected" -- its note, not our failure. */
+  harness_note?: string | null;
   has_trajectory: boolean;
   /** The run holding this task's files -- a shard, for a split run. */
   run?: string;
+}
+
+/** The reviewer's record of a task's last review (services/commit-reviewer),
+ *  as the runner kept it. A run from before it was kept has only the verdict. */
+export interface SwebenchReview {
+  verdict: string | null;
+  summary?: string | null;
+  findings?: { severity: string; file?: string | null; issue: string }[];
+  agentMessage?: string | null;
+  escalated?: boolean;
+  [key: string]: unknown;
 }
 
 export interface SwebenchRun {
@@ -602,5 +616,6 @@ export interface SwebenchMessage {
 export interface SwebenchTaskDetail {
   id: string;
   patch: string | null;
+  review?: SwebenchReview | null;
   conversation: { generation: number; namespace: string; messages: SwebenchMessage[] }[];
 }
