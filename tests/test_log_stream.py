@@ -187,3 +187,42 @@ def test_forget_lets_a_key_start_over():
     seq.forget("a")
     assert seq.current("a") == 0
     assert seq.next("a") == 1
+
+
+
+# --- the planning session's three sources -------------------------------------
+
+def _e(kind, summary, ts):
+    return {"kind": kind, "summary": summary, "detail": summary, "timestamp": ts}
+
+
+def test_the_checkpoint_s_translation_does_not_double_the_recorded_log():
+    """2026-09-26: 91 recorded entries came back as 182, the translation
+    stamped with the read's time and merged by id."""
+    from agent import log_stream
+    recorded = [_e("user", "add a trailing stop", "2026-09-26T14:34:43Z"),
+                _e("agent", "calling: read_file(a)", "2026-09-26T14:34:46Z"),
+                _e("agent", "calling: read_file(a)", "2026-09-26T14:35:01Z"),   # genuinely called twice
+                _e("tool-result", "tool result: ok", "2026-09-26T14:35:02Z")]
+    translated = [_e(e["kind"], e["summary"], "2026-09-26T14:43:39Z") for e in recorded]
+    out = log_stream.fill_gaps(recorded, translated)
+    assert out == recorded
+
+
+def test_the_translation_fills_what_the_transcript_lost_in_order():
+    from agent import log_stream
+    recorded = [_e("agent", "calling: read_file(b)", "2026-09-26T14:35:10Z"),
+                _e("tool-result", "tool result: b", "2026-09-26T14:35:11Z")]
+    translated = [_e("user", "the goal", "now"), _e("agent", "calling: read_file(a)", "now"),
+                  _e("agent", "calling: read_file(b)", "now"), _e("tool-result", "tool result: b", "now"),
+                  _e("agent", "done", "now")]
+    out = log_stream.fill_gaps(recorded, translated)
+    assert [e["summary"] for e in out] == ["the goal", "calling: read_file(a)", "calling: read_file(b)", "tool result: b", "done"]
+    assert out[2] is recorded[0], "the recorded copy, with its real timestamp, is the one kept"
+
+
+def test_a_session_from_before_the_transcript_is_the_translation_alone():
+    from agent import log_stream
+    translated = [_e("user", "hi", "now"), _e("agent", "hello", "now")]
+    assert log_stream.fill_gaps([], translated) == translated
+    assert log_stream.fill_gaps(None, None) == []

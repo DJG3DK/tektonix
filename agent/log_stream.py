@@ -120,3 +120,48 @@ class SeqCounter:
 
     def forget(self, key: str) -> None:
         self._counters.pop(key, None)
+
+
+# What makes a planning entry the same entry when the two copies cannot share
+# a timestamp: the checkpoint's messages carry none, so their translation is
+# stamped with the time of the read, and an id built from that never matches
+# the streamed entry's. Three fields of content, no time.
+_CONTENT_FIELDS = ("kind", "summary", "detail")
+
+
+def _content_key(entry: dict) -> tuple:
+    return tuple(str(entry.get(k)) for k in _CONTENT_FIELDS)
+
+
+def fill_gaps(recorded: list | None, translated: list | None) -> list:
+    """The recorded log (durable transcript and live buffer, already merged by
+    id), with anything only the checkpoint's translation has slotted in where
+    the checkpoint puts it.
+
+    2026-09-26: the planning session GET unioned the translation with the
+    recorded log by id, and every entry came back twice -- 182 for a 91-entry
+    session -- because the translation is stamped with the read's own time.
+    The recorded copy is the one with the real timestamp, so it wins; the
+    translation only fills what the transcript lost (its cap, a flush that
+    never landed) and, for a session from before the transcript existed,
+    stands in for all of it. Matched in order by content, so a call the model
+    genuinely made twice stays twice.
+    """
+    base = list(recorded or [])
+    extra = [e for e in (translated or []) if isinstance(e, dict)]
+    if not extra:
+        return base
+    if not base:
+        return extra
+    out: list = []
+    at = 0
+    for entry in extra:
+        key = _content_key(entry)
+        found = next((i for i in range(at, len(base)) if _content_key(base[i]) == key), None)
+        if found is None:
+            out.append(entry)
+        else:
+            out.extend(base[at:found + 1])
+            at = found + 1
+    out.extend(base[at:])
+    return out

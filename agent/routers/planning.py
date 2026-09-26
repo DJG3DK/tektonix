@@ -25,7 +25,7 @@ from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket
 from pydantic import BaseModel
 
-from agent import auth, live_state, planning_log, task_runtime
+from agent import auth, log_stream, live_state, planning_log, task_runtime
 from agent import config as agent_config
 from agent.auth import User, check_repo_access, require_full_auth
 from agent.frontend_route import normalize_override
@@ -98,14 +98,17 @@ async def get_planning_session(request: Request, session_id: str, user: User = D
     thread_config = planning_thread_config(session_id, repo)
     checkpoint = await agent.aget_state(thread_config)
     messages = (checkpoint.values.get("messages") or []) if checkpoint and checkpoint.values else []
-    log = [e for e in (_translate_planning_message(m) for m in messages) if e]
+    translated = [e for e in (_translate_planning_message(m) for m in messages) if e]
     # Three sources, each lossy in its own way. The checkpoint loses whatever
     # summarization compacted away; the live buffer loses everything when the
     # process exits; the durable transcript loses only what fell off its cap.
-    # Merged by entry id, so a reader gets the union rather than whichever one
-    # happens to be longest.
-    log = _fuller_log(_live_planning_log.get(session_id), log)
-    log = _fuller_log(await planning_log.load(request.app.state.store, repo, session_id), log)
+    # The transcript and the buffer share entry ids and merge by them; the
+    # checkpoint's translation is stamped with the read's own time, so it is
+    # matched by content and only fills what the other two lack (2026-09-26:
+    # unioning it by id doubled every entry of every session).
+    recorded = _fuller_log(_live_planning_log.get(session_id),
+                           await planning_log.load(request.app.state.store, repo, session_id))
+    log = log_stream.fill_gaps(recorded, translated)
     return {"meta": meta, "log": log, "running": session_id in _running_planning_turns}
 
 @router.post("/api/planning/sessions/{session_id}/archive")
