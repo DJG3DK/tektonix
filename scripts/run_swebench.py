@@ -44,6 +44,7 @@ os.environ["LANGSMITH_TRACING"] = "false"
 os.environ["LANGCHAIN_TRACING_V2"] = "false"
 
 from agent import paths  # noqa: E402
+from agent import tool_events  # noqa: E402
 from agent.evals import host_metrics  # noqa: E402
 from agent.evals import reviewer as ev_reviewer  # noqa: E402
 from agent.evals import swebench as sb  # noqa: E402
@@ -411,6 +412,8 @@ def main(argv=None) -> int:
     run_dir = RUNS / run_id
     run_dir.mkdir(parents=True, exist_ok=False)
     started = time.time()
+    # This run's tool events beside it, not in production's log (tool_events.py).
+    tool_events.redirect(run_dir / "tool_events.jsonl")
     # The box and the router, once a minute, beside the run (host_metrics.py).
     sampler = host_metrics.Sampler(run_dir, started).start()
     ids = [i["instance_id"] for i in instances]

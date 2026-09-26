@@ -31,6 +31,17 @@ LOG_PATH = Path(
 )
 MAX_BYTES = 5_000_000
 _KEEP_FRACTION = 0.5
+# A process that is not production -- a benchmark runner -- writes its events
+# beside its own run instead (2026-09-26: one 50-task sample wrote 16,776
+# rows into the production log, which trimmed away every production day
+# before it and made the reliability chart one day wide).
+_override: Path | None = None
+
+
+def redirect(path: Path | None) -> None:
+    """Send every event this process records to `path` (None: production's)."""
+    global _override
+    _override = Path(path) if path else None
 
 
 def record(tool: str, ok: bool, task_id: str | None = None, repo: str | None = None,
@@ -44,7 +55,7 @@ def record(tool: str, ok: bool, task_id: str | None = None, repo: str | None = N
     "bash-as-read" both invented a tool nobody has and added a phantom call to
     the reliability panel's count.
     """
-    target = path or LOG_PATH
+    target = path or _override or LOG_PATH
     entry = {
         "ts": time.time(),
         "tool": tool,

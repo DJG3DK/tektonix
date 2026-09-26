@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### The reliability chart is a fortnight wide again
+
+The errors-per-day series carried only the days with errors, so one busy day
+drew as a single point. It covers every day of the window now, zero where
+nothing failed. The busy day was the benchmark: its runner wrote 16,776 tool
+events into production's log, which trims itself and so lost every
+production day before it. A benchmark run writes its events beside its own
+run now, and the benchmark rows were removed from production's log.
+
 ### A Benchmarks page, and SWE-bench runs start from it
 
 The Analytics page had grown two whole benchmarks under its numbers. The

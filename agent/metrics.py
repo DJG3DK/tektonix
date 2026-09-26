@@ -193,9 +193,12 @@ def tool_reliability(window_days: int = 7, now: float | None = None) -> dict:
     for b in by_tool.values():
         tools.append({**b, "error_rate": (b["errors"] / b["calls"]) if b["calls"] else 0.0})
     tools.sort(key=lambda t: t["calls"], reverse=True)
+    # Every day of the window, zero where nothing failed: a series of only
+    # the days with errors drew one point for a fortnight (2026-09-26).
+    days = [time.strftime("%Y-%m-%d", time.gmtime(now - k * 86400)) for k in range(window_days - 1, -1, -1)]
     return {
         "tools": tools,
-        "daily": [{"date": d, "errors": n} for d, n in sorted(daily.items())],
+        "daily": [{"date": d, "errors": daily.get(d, 0)} for d in days],
         "nudges": [{"kind": k, "count": n} for k, n in sorted(nudges.items(), key=lambda kv: -kv[1])],
         "window_days": window_days,
         "source": "tool-events",

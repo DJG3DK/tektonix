@@ -145,7 +145,7 @@ def test_tool_results_are_counted_and_failures_separated(tmp_path, monkeypatch):
     assert by["bash"]["calls"] == 3 and by["bash"]["errors"] == 1
     assert by["bash"]["error_rate"] == pytest.approx(1 / 3)
     assert by["edit"]["errors"] == 0
-    assert data["daily"] and data["daily"][0]["errors"] == 1
+    assert data["daily"][-1]["errors"] == 1 and sum(d["errors"] for d in data["daily"]) == 1
 
 
 def test_the_tool_log_never_carries_the_tool_output(tmp_path):
@@ -175,7 +175,9 @@ def test_the_tool_log_is_trimmed_rather_than_growing(tmp_path, monkeypatch):
 
 def test_tool_reliability_with_no_log_is_empty_not_an_error(tmp_path, monkeypatch):
     monkeypatch.setattr(metrics, "TOOL_EVENTS_LOG", tmp_path / "nope.jsonl")
-    assert metrics.tool_reliability() == {"tools": [], "daily": [], "nudges": [],
+    data = metrics.tool_reliability()
+    assert len(data["daily"]) == data["window_days"] and not any(d["errors"] for d in data["daily"])
+    assert {**data, "daily": []} == {"tools": [], "daily": [], "nudges": [],
                                           "window_days": 7, "source": "tool-events"}
 
 
@@ -221,7 +223,7 @@ def test_a_nudge_is_not_an_error(tmp_path, monkeypatch):
     data = metrics.tool_reliability()
     assert data["tools"][0]["errors"] == 0
     assert data["tools"][0]["error_rate"] == 0.0
-    assert data["daily"] == []
+    assert not any(d["errors"] for d in data["daily"])
 
 
 # ---------------------------------------------------------------------------
@@ -346,3 +348,30 @@ def test_the_old_marker_rows_are_folded_into_bash(tmp_path, monkeypatch):
     assert data["tools"][0]["calls"] == 1, "the marker was never a call of its own"
     assert data["tools"][0]["nudged"] == 1
     assert data["nudges"] == [{"kind": "read", "count": 1}]
+
+
+def test_the_daily_series_covers_every_day_of_the_window_zero_where_nothing_failed(tmp_path, monkeypatch):
+    """One busy day used to be the whole chart (2026-09-26)."""
+    log = tmp_path / "tool_events.jsonl"
+    tool_events.record(tool="bash", ok=False, task_id="T1", path=log)
+    monkeypatch.setattr(metrics, "TOOL_EVENTS_LOG", log)
+    now = time.time()
+    data = metrics.tool_reliability(window_days=14, now=now)
+    assert len(data["daily"]) == 14
+    assert data["daily"][-1]["date"] == time.strftime("%Y-%m-%d", time.gmtime(now)) and data["daily"][-1]["errors"] == 1
+    assert all(d["errors"] == 0 for d in data["daily"][:-1])
+    assert [d["date"] for d in data["daily"]] == sorted(d["date"] for d in data["daily"])
+
+
+def test_a_redirected_process_writes_beside_its_run_not_in_production_s_log(tmp_path, monkeypatch):
+    prod = tmp_path / "prod.jsonl"
+    mine = tmp_path / "run" / "tool_events.jsonl"
+    monkeypatch.setattr(tool_events, "LOG_PATH", prod)
+    tool_events.redirect(mine)
+    try:
+        tool_events.record(tool="bash", ok=True, task_id="B1")
+    finally:
+        tool_events.redirect(None)
+    assert mine.is_file() and not prod.exists()
+    tool_events.record(tool="bash", ok=True, task_id="P1")
+    assert prod.is_file()
