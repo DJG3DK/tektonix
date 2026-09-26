@@ -17,13 +17,14 @@ describe("route", () => {
     expect(parseRoute("/new").view).toBe("new-task");
     expect(parseRoute("/settings").view).toBe("settings");
     expect(parseRoute("/analytics").view).toBe("analytics");
+    expect(parseRoute("/benchmarks").view).toBe("benchmarks");
   });
 
   it("is the inverse of routePath for every route it produces", () => {
     const routes: Route[] = [
       { view: "planning" }, { view: "planning", sessionId: "s 1/x" }, { view: "task", taskId: "t-1" },
       { view: "github" }, { view: "new-task" }, { view: "settings" }, { view: "analytics" },
-      { view: "models" }, { view: "users" },
+      { view: "models" }, { view: "users" }, { view: "benchmarks" },
     ];
     for (const r of routes) expect(parseRoute(routePath(r))).toEqual(r);
   });

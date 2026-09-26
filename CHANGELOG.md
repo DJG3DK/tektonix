@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### A Benchmarks page, and SWE-bench runs start from it
+
+The Analytics page had grown two whole benchmarks under its numbers. The
+golden suite and SWE-bench Verified now have their own admin page,
+**Benchmarks**, and Analytics keeps the windowed outcome numbers. SWE-bench
+runs start from the page -- sample size, seed, tasks at once, per-task budget
+-- as the same runner an operator uses from a shell, in its own session and
+split into processes of five, and stop from it; the runner's own log shows
+under the run. The golden suite's stop button was already there.
+
 ### The gate reads the diff for three shapes of a wrong fix
 
 Two 50-task samples lost the same tasks the same way with the rule against it

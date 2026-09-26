@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
-import { getSwebench, getSwebenchRun, getSwebenchTask } from "../api";
+import {
+  getSwebench, getSwebenchRun, getSwebenchRunLog, getSwebenchTask, startSwebenchRun, stopSwebenchRun,
+} from "../api";
 import type { SwebenchOverview, SwebenchReview, SwebenchRun, SwebenchTaskDetail, SwebenchTaskRow } from "../types";
 import { minutes, usd } from "../evalsFormat";
 import { headlineRun, KIND_LABEL, modelList, scoreLabel, scoreText, swebenchScorecard } from "../swebenchFormat";
@@ -14,13 +16,38 @@ import "./SwebenchPanel.css";
  * "did my change make it better?", this is the number the rest of the world
  * compares agents by.
  *
- * Read-only. A run is started from a shell (scripts/run_swebench.py): it
- * pulls gigabytes of images and runs for hours. This reads what it leaves,
- * which it rewrites after every task, so a run shows here as it goes.
+ * A run is a detached runner on the server (agent/routers/swebench.py): it
+ * pulls gigabytes of images and runs for hours. This panel starts and stops
+ * one and reads what it leaves, which it rewrites after every task, so a run
+ * shows here as it goes. Grading is a separate step, done later.
  */
 
 const POLL_RUNNING_MS = 15_000;
 const POLL_IDLE_MS = 120_000;
+const LOG_POLL_MS = 15_000;
+const LOG_LINES = 80;
+
+/** Sample sizes the Start control offers; 500 is the full run (the contract's
+ *  meaning of `sample: 500`), the only one whose score is publishable. */
+const SAMPLE_SIZES = [50, 100, 250, 500] as const;
+const FULL = 500;
+
+/** What a run costs and takes, from the one measured point: 50 tasks ran
+ *  about $18 and 4 to 6 hours at ten at once. Cost scales with the tasks;
+ *  time with the tasks and inversely with how many run at once. */
+function roughCost(sample: number): number {
+  return Math.round((18 * sample) / 50);
+}
+function roughHours(sample: number, parallel: number): [number, number] {
+  const scale = (sample / 50) * (10 / Math.max(1, parallel));
+  return [Math.max(1, Math.round(4 * scale)), Math.max(1, Math.round(6 * scale))];
+}
+
+function clamp(n: number, lo: number, hi: number): number {
+  return Math.min(hi, Math.max(lo, n));
+}
+
+const STOP_PROMPT = "Stop this run? Tasks already finished keep their results; nothing is graded until you grade it later.";
 
 export function SwebenchPanel() {
   const [data, setData] = useState<SwebenchOverview | null>(null);
@@ -28,6 +55,21 @@ export function SwebenchPanel() {
   const [selected, setSelected] = useState<string | null>(null);
   const [run, setRun] = useState<SwebenchRun | null>(null);
   const [copied, setCopied] = useState(false);
+  // The Start control (mirrors EvalsPanel): a confirm step, then a busy state.
+  const [confirming, setConfirming] = useState(false);
+  const [sample, setSample] = useState<number>(50);
+  // The number fields hold what was typed; the numbers used are clamped
+  // below. Clamping on every keystroke snapped a cleared field to its
+  // minimum, so typing "5" after clearing "10" gave "15".
+  const [seedRaw, setSeedRaw] = useState("1");
+  const [parallelRaw, setParallelRaw] = useState("10");
+  const [budgetRaw, setBudgetRaw] = useState("3");
+  const seed = Math.max(0, Math.floor(Number(seedRaw) || 0));
+  const parallel = clamp(Math.floor(Number(parallelRaw) || 10), 1, 16);
+  const budget = clamp(Number(budgetRaw) || 3, 0.5, 10);
+  const [notes, setNotes] = useState("");
+  const [busy, setBusy] = useState<null | "start" | "stop">(null);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -40,6 +82,8 @@ export function SwebenchPanel() {
 
   const runs = data?.runs ?? [];
   const anyRunning = runs.some((r) => r.state === "running");
+  // One real run at a time: a diagnostic experiment does not hold the box.
+  const blocking = runs.find((r) => r.state === "running" && r.kind !== "diagnostic");
   useEffect(() => {
     void load();
     const t = setInterval(() => void load(), anyRunning ? POLL_RUNNING_MS : POLL_IDLE_MS);
@@ -60,6 +104,39 @@ export function SwebenchPanel() {
       live = false;
     };
   }, [shownKey]);   // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function start() {
+    setBusy("start");
+    setActionError(null);
+    try {
+      const trimmed = notes.trim();
+      const res = await startSwebenchRun({
+        sample, seed, parallel, budget_usd: budget, ...(trimmed ? { notes: trimmed } : {}),
+      });
+      setConfirming(false);
+      setNotes("");
+      setSelected(res.name);
+      await load();
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : "could not start the run");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function stop(name: string) {
+    if (!confirm(STOP_PROMPT)) return;
+    setBusy("stop");
+    setActionError(null);
+    try {
+      await stopSwebenchRun(name);
+      await load();
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : "could not stop the run");
+    } finally {
+      setBusy(null);
+    }
+  }
 
   async function copy() {
     if (!headline) return;
@@ -100,11 +177,83 @@ export function SwebenchPanel() {
           <p className="analytics-section-sub">
             The public benchmark agents are compared on: {data.dataset_size} real GitHub issues from twelve Python
             projects. Each task runs in its official image with no internet access and is graded by the official
-            harness. Only a run of all {data.dataset_size} tasks is the published number. Runs are started from the
-            server (<code>scripts/run_swebench.py</code>).
+            harness. Only a run of all {data.dataset_size} tasks is the published number.
           </p>
         </div>
       </div>
+
+      <div className="swebench-start" role="group" aria-label="Start a run">
+        <span className="swebench-start-title">Start a run</span>
+        <label className="swebench-field">
+          Sample
+          <select value={sample} onChange={(e) => setSample(Number(e.target.value))} disabled={confirming || busy !== null}>
+            {SAMPLE_SIZES.map((n) => (
+              <option key={n} value={n}>{n === FULL ? `All ${data.dataset_size}` : n}</option>
+            ))}
+          </select>
+        </label>
+        <label className="swebench-field">
+          Seed
+          <input type="number" min={0} step={1} value={seedRaw} disabled={confirming || busy !== null}
+            onChange={(e) => setSeedRaw(e.target.value)} />
+        </label>
+        <label className="swebench-field">
+          Tasks at once
+          <input type="number" min={1} max={16} step={1} value={parallelRaw} disabled={confirming || busy !== null}
+            onChange={(e) => setParallelRaw(e.target.value)} />
+        </label>
+        <label className="swebench-field">
+          Per-task budget $
+          <input type="number" min={0.5} max={10} step={0.5} value={budgetRaw} disabled={confirming || busy !== null}
+            onChange={(e) => setBudgetRaw(e.target.value)} />
+        </label>
+        <button
+          type="button"
+          className="evals-run-btn"
+          onClick={() => setConfirming(true)}
+          disabled={Boolean(blocking) || confirming || busy !== null}
+        >
+          Start
+        </button>
+        {blocking && (
+          <span className="swebench-start-blocked">
+            A run is already in progress ({blocking.name}); stop it or wait for it to finish before starting another.
+          </span>
+        )}
+      </div>
+
+      {confirming && !blocking && (
+        <div className="evals-confirm" role="dialog" aria-label="Start a SWE-bench run">
+          <p>
+            Runs {sample === FULL ? <>all <strong>{data.dataset_size}</strong> tasks</> : <><strong>{sample}</strong> tasks (seed {seed})</>}{" "}
+            through the real agent, each in its official image, <strong>{parallel}</strong> at once, up to{" "}
+            <strong>{usd(budget)}</strong> per task. It keeps running if the server restarts. Nothing is graded until
+            you grade it afterwards.
+          </p>
+          <p>
+            50 tasks ran about $18 and 4 to 6 hours at ten at once; 500 is roughly ten times that. This run:
+            roughly <strong>${roughCost(sample)}</strong> and{" "}
+            <strong>{roughHours(sample, parallel)[0]} to {roughHours(sample, parallel)[1]} hours</strong>.
+          </p>
+          <input
+            className="evals-notes"
+            placeholder="What changed since the last run? (optional — saved with the result)"
+            value={notes}
+            maxLength={300}
+            onChange={(e) => setNotes(e.target.value)}
+          />
+          <div className="evals-confirm-row">
+            <button type="button" className="evals-btn-secondary" onClick={() => setConfirming(false)} disabled={busy !== null}>
+              Cancel
+            </button>
+            <button type="button" className="evals-run-btn" onClick={() => void start()} disabled={busy !== null}>
+              {busy === "start" ? "Starting…" : "Start run"}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {actionError && <p className="bench-warning" role="alert">{actionError}</p>}
 
       {headline ? (
         <div className="evals-scorecard">
@@ -145,6 +294,9 @@ export function SwebenchPanel() {
               <strong>{headline.done}</strong> of {headline.total} tasks done · {headline.graded_count} graded,{" "}
               {headline.resolved ?? 0} resolved so far · {usd(headline.total_cost_usd)} spent
             </span>
+            <button type="button" className="evals-btn-secondary" onClick={() => void stop(headline.name)} disabled={busy !== null}>
+              {busy === "stop" ? "Stopping…" : "Stop"}
+            </button>
           </div>
           <div className="evals-bar" aria-hidden="true">
             <div className="evals-bar-fill" style={{ width: `${(100 * headline.done) / Math.max(1, headline.total)}%` }} />
@@ -169,8 +321,8 @@ export function SwebenchPanel() {
           <h3 className="evals-subhead">Runs</h3>
           <div className="evals-history" role="list">
             {runs.slice(0, 12).map((r) => (
+              <div key={r.name} className="swebench-run-line">
               <button
-                key={r.name}
                 type="button"
                 role="listitem"
                 className={`evals-history-row ${shown?.name === r.name ? "is-current" : ""}`}
@@ -191,6 +343,18 @@ export function SwebenchPanel() {
                   {r.shards && <em className="evals-partial">{r.shards.length} processes</em>} {r.notes || r.name}
                 </span>
               </button>
+              {r.state === "running" && (
+                <button
+                  type="button"
+                  className="evals-btn-secondary swebench-run-stop"
+                  onClick={() => void stop(r.name)}
+                  disabled={busy !== null}
+                  aria-label={`Stop ${r.name}`}
+                >
+                  Stop
+                </button>
+              )}
+              </div>
             ))}
           </div>
         </>
@@ -203,6 +367,7 @@ export function SwebenchPanel() {
           <h3 className="evals-subhead">
             Tasks — {shown.name} ({shown.done} of {shown.total} run)
           </h3>
+          <RunnerLog key={shown.name} name={shown.name} running={shown.state === "running"} />
           <div className="evals-tasks">
             {tasks.map((t) => <TaskRow key={t.id} runName={shown.name} task={t} />)}
             {!run && <p className="analytics-section-sub">Loading tasks…</p>}
@@ -210,6 +375,43 @@ export function SwebenchPanel() {
         </>
       )}
     </div>
+  );
+}
+
+/** The runner's own log, the last 80 lines: fetched when opened, and every
+ *  15 s while the run is still going. Keyed on the run name by the caller, so
+ *  a different run starts closed and empty. */
+function RunnerLog({ name, running }: { name: string; running: boolean }) {
+  const [open, setOpen] = useState(false);
+  const [lines, setLines] = useState<string[] | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    let live = true;
+    const fetchLog = () =>
+      getSwebenchRunLog(name, LOG_LINES)
+        .then((r) => { if (live) { setLines(r.lines); setErr(null); } })
+        .catch((e) => { if (live) setErr(e instanceof Error ? e.message : "could not load the log"); });
+    void fetchLog();
+    const t = running ? setInterval(() => void fetchLog(), LOG_POLL_MS) : null;
+    return () => {
+      live = false;
+      if (t) clearInterval(t);
+    };
+  }, [open, name, running]);
+
+  return (
+    <details className="swebench-log" open={open} onToggle={(e) => setOpen(e.currentTarget.open)}>
+      <summary>Runner log{running ? " · refreshes every 15 s" : ""}</summary>
+      {err && <p className="bench-warning" role="note">Couldn&apos;t load the log: {err}</p>}
+      {!err && lines == null && <p className="analytics-section-sub">Loading…</p>}
+      {lines != null && (
+        lines.length === 0
+          ? <p className="analytics-section-sub">The log is empty.</p>
+          : <pre className="swebench-log-text">{lines.join("\n")}</pre>
+      )}
+    </details>
   );
 }
 

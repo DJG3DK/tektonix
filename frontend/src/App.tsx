@@ -21,6 +21,11 @@ import { applyTheme, isThemeId, storedTheme } from "./themes";
 const AnalyticsView = lazy(() =>
   import("./components/AnalyticsView").then((m) => ({ default: m.AnalyticsView })),
 );
+// Benchmarks is its own page (2026-09-26): the golden suite and SWE-bench
+// used to sit under Analytics, below the fold of a page about spend.
+const BenchmarksView = lazy(() =>
+  import("./components/BenchmarksView").then((m) => ({ default: m.BenchmarksView })),
+);
 import { useTaskStream } from "./useTaskStream";
 import { parseRoute, routePath, sameRoute, type Route, type View } from "./route";
 import "./App.css";
@@ -216,6 +221,7 @@ function AuthenticatedApp({ user, onLogout, onUserChanged }: { user: CurrentUser
   const viewTitle =
     view === "task" ? "Task"
     : view === "analytics" ? "Analytics"
+    : view === "benchmarks" ? "Benchmarks"
     : view === "models" ? "Models"
     : view === "planning" ? "Planning"
     : view === "users" ? "Users"
@@ -243,6 +249,10 @@ function AuthenticatedApp({ user, onLogout, onUserChanged }: { user: CurrentUser
         }}
         onAnalytics={() => {
           setView("analytics");
+          setMobilePane("main");
+        }}
+        onBenchmarks={() => {
+          setView("benchmarks");
           setMobilePane("main");
         }}
         onModels={() => {
@@ -311,6 +321,11 @@ function AuthenticatedApp({ user, onLogout, onUserChanged }: { user: CurrentUser
             <AnalyticsView />
           </Suspense>
         )}
+        {view === "benchmarks" && user.role === "admin" && (
+          <Suspense fallback={<div style={{ padding: "2rem", color: "var(--text-muted, #888)" }}>Loading benchmarks...</div>}>
+            <BenchmarksView />
+          </Suspense>
+        )}
         {view === "models" && user.role === "admin" && (
           /* Single wrapper on purpose: .main-pane gives `flex: 1` to EVERY direct
              child, so returning two siblings here split the pane 50/50 and blew
@@ -323,7 +338,7 @@ function AuthenticatedApp({ user, onLogout, onUserChanged }: { user: CurrentUser
           </div>
         )}
         {view === "users" && user.role === "admin" && <UsersPanel repos={repos} />}
-        {(view === "analytics" || view === "models" || view === "users") && user.role !== "admin" && (
+        {(view === "analytics" || view === "benchmarks" || view === "models" || view === "users") && user.role !== "admin" && (
           /* An admin URL opened by a restricted account (a shared link, a
              bookmark). The server is the boundary -- every API behind these
              views answers 403 -- so this is only so the pane says why it is
@@ -383,6 +398,7 @@ function AuthenticatedApp({ user, onLogout, onUserChanged }: { user: CurrentUser
         onTasks={() => setMobilePane("list")}
         onNewPlan={() => { setSelectedPlanningSession(null); setView("planning"); setMobilePane("main"); }}
         onAnalytics={() => { setView("analytics"); setMobilePane("main"); }}
+        onBenchmarks={() => { setView("benchmarks"); setMobilePane("main"); }}
         onModels={() => { setView("models"); setMobilePane("main"); }}
         onUsers={() => { setView("users"); setMobilePane("main"); }}
         onSettings={() => { setView("settings"); setMobilePane("main"); }}

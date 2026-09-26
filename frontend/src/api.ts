@@ -1356,6 +1356,38 @@ export async function getSwebenchRun(name: string): Promise<import("./types").Sw
   return evalsJson(await apiFetch(`${API_BASE}/swebench/runs/${encodeURIComponent(name)}`), "loading the run");
 }
 
+/** Start a SWE-bench run on the server (POST /swebench/run, 202). `sample`
+ *  of 500 is the full run. 409 when a run is already in progress, 400 on bad
+ *  input -- both carry a `detail` that evalsJson turns into the message. */
+export async function startSwebenchRun(
+  opts: import("./types").SwebenchStartOptions,
+): Promise<{ ok: true; name: string; shards: string[] }> {
+  return evalsJson(await apiFetch(`${API_BASE}/swebench/run`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      sample: opts.sample, seed: opts.seed, parallel: opts.parallel, budget_usd: opts.budget_usd, notes: opts.notes,
+    }),
+  }), "starting the run");
+}
+
+/** Stop a run by its name from the runs list; a combined run's name stops
+ *  all of its shards. 409 when nothing is running. */
+export async function stopSwebenchRun(name: string): Promise<{ ok: true; stopped: string[] }> {
+  return evalsJson(
+    await apiFetch(`${API_BASE}/swebench/runs/${encodeURIComponent(name)}/stop`, { method: "POST" }),
+    "stopping the run",
+  );
+}
+
+/** The last `lines` lines of the runner's log for a run. */
+export async function getSwebenchRunLog(name: string, lines = 80): Promise<{ lines: string[] }> {
+  return evalsJson(
+    await apiFetch(`${API_BASE}/swebench/runs/${encodeURIComponent(name)}/log?lines=${lines}`),
+    "loading the runner log",
+  );
+}
+
 export async function getSwebenchTask(run: string, id: string): Promise<import("./types").SwebenchTaskDetail> {
   return evalsJson(
     await apiFetch(`${API_BASE}/swebench/runs/${encodeURIComponent(run)}/tasks/${encodeURIComponent(id)}`),

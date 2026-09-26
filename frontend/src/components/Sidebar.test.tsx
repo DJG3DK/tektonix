@@ -21,6 +21,7 @@ function renderSidebar(over: Partial<Parameters<typeof Sidebar>[0]> = {}) {
     onSelect: vi.fn(),
     onNewTask: vi.fn(),
     onAnalytics: vi.fn(),
+    onBenchmarks: vi.fn(),
     onModels: vi.fn(),
     onUsers: vi.fn(),
     onSettings: vi.fn(),
@@ -183,15 +184,24 @@ describe("Sidebar — repo filter", () => {
 });
 
 describe("Sidebar — admin-only navigation", () => {
-  it("offers Users and Analytics to an admin", () => {
+  it("offers Users, Analytics and Benchmarks to an admin", () => {
     renderSidebar({ user: user({ role: "admin" }) });
     expect(screen.getByRole("button", { name: /users/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /analytics/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /benchmarks/i })).toBeInTheDocument();
+  });
+
+  it("Benchmarks goes to its own page", async () => {
+    const { props } = renderSidebar({ user: user({ role: "admin" }) });
+    await userEvent.click(screen.getByRole("button", { name: /benchmarks/i }));
+    expect(props.onBenchmarks).toHaveBeenCalled();
+    expect(props.onAnalytics).not.toHaveBeenCalled();
   });
 
   it("hides them from a non-admin", () => {
     renderSidebar({ user: user({ role: "user" }) });
     expect(screen.queryByRole("button", { name: /users/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /benchmarks/i })).not.toBeInTheDocument();
   });
 });
 

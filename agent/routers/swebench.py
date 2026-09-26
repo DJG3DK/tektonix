@@ -17,21 +17,34 @@ file the agent read.
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
+import shutil
+import signal
+import subprocess
+import sys
+import time
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
+from pydantic import BaseModel, Field
 
-from agent import auth, paths
+from agent import audit, auth, paths
 from agent.evals import host_metrics
 from agent.auth import User, require_full_auth
+from agent.routers import audit_store
 from agent.routers.evals import _parse_ts
 
 router = APIRouter(tags=["swebench"])
 
 RUNS_DIR = paths.REPO_ROOT / "logs" / "swebench"
+RUNNER = paths.REPO_ROOT / "scripts" / "run_swebench.py"
 DATASET_SIZE = 500
+# One runner process per this many tasks at once: a process has one event
+# loop and one SQLite file, and five per process is what the 50-task samples
+# ran (evals/SWEBENCH.md, --shard).
+TASKS_PER_PROCESS = 5
 _RUN_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,120}$")
 _INSTANCE = re.compile(r"^[A-Za-z0-9_.-]+__[A-Za-z0-9_.-]+-\d+$")
 # A message's text and a tool call's arguments, cut to this for the page.
@@ -365,3 +378,159 @@ async def get_task(name: str, instance_id: str, user: User = Depends(require_ful
     review = row.get("review") or ({"verdict": row["review_verdict"]} if row.get("review_verdict") else None)
     return {"id": instance_id, "patch": patch, "review": review,
             "conversation": _conversation(traj) if traj else []}
+
+
+# --- starting and stopping a run from the page (2026-09-26) -----------------------
+#
+# The same script an operator runs from a shell, started the way the golden
+# suite's runner is (agent/routers/evals.py): in its own session, parented to
+# nothing here, so a restart of this server does not take the run with it.
+# Ten tasks at once is two processes of five, each its own shard and run id.
+
+
+class StartSwebenchRequest(BaseModel):
+    sample: int = Field(default=50, ge=1, le=DATASET_SIZE)   # DATASET_SIZE: the full run
+    seed: int = Field(default=1, ge=0, le=10_000)
+    parallel: int = Field(default=10, ge=1, le=16)
+    budget_usd: float = Field(default=3.0, ge=0.5, le=10.0)
+    notes: str = Field(default="", max_length=300)
+
+
+def plan_shards(sample: int, parallel: int) -> list[tuple[int, int, int]]:
+    """(k, n, tasks at once) per process: `parallel` split into processes of
+    at most TASKS_PER_PROCESS, never more processes than tasks."""
+    processes = max(1, min(math.ceil(parallel / TASKS_PER_PROCESS), math.ceil(sample / TASKS_PER_PROCESS)))
+    per = math.ceil(parallel / processes)
+    return [(k, processes, per) for k in range(1, processes + 1)]
+
+
+def _running_runs() -> list[str]:
+    """Scored runs whose process is alive. A diagnostic run does not block
+    a scored one."""
+    out = []
+    for name, s in _all_summaries().items():
+        if _kind(s) != "diagnostic" and (s.get("state") or "done") == "running" and _alive(s.get("pid")):
+            out.append(name)
+    return sorted(out)
+
+
+def _spawn(cmd: list[str], log_path: Path) -> None:
+    RUNS_DIR.mkdir(parents=True, exist_ok=True)
+    log = open(log_path, "w")   # noqa: SIM115 -- handed to the child, closed here after
+    try:
+        setsid = shutil.which("setsid")
+        subprocess.Popen(([setsid, "--fork"] if setsid else []) + cmd,
+                         stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+                         cwd=str(paths.REPO_ROOT), env=os.environ.copy(), close_fds=True,
+                         start_new_session=setsid is None)
+    finally:
+        log.close()
+
+
+def run_commands(req: StartSwebenchRequest, base: str, notes: str) -> list[tuple[str, list[str]]]:
+    """(run name, argv) per shard. One shard keeps the base name; several are
+    `<base>-s<k>` with `--shard k/n`, which the page shows as one run."""
+    full = req.sample >= DATASET_SIZE
+    shards = plan_shards(req.sample, req.parallel)
+    out = []
+    for k, n, per in shards:
+        name = base if n == 1 else f"{base}-s{k}"
+        cmd = [sys.executable, str(RUNNER)]
+        cmd += ["--all"] if full else ["--sample", str(req.sample), "--seed", str(req.seed)]
+        cmd += ["--parallel", str(per), "--budget", str(req.budget_usd), "--run-id", name,
+                "--notes", notes + (f" (shard {k}/{n})" if n > 1 else "")]
+        if n > 1:
+            cmd += ["--shard", f"{k}/{n}"]
+        out.append((name, cmd))
+    return out
+
+
+@router.post("/api/swebench/run", status_code=202)
+async def start_swebench_run(req: StartSwebenchRequest, request: Request, user: User = Depends(require_full_auth)):
+    auth.require_admin(user)
+    running = _running_runs()
+    if running:
+        raise HTTPException(409, f"a run is already in progress: {', '.join(running)}")
+    if not RUNNER.is_file():
+        raise HTTPException(500, "the runner script is missing")
+    full = req.sample >= DATASET_SIZE
+    stamp = time.strftime("%Y%m%dT%H%M", time.gmtime())
+    base = f"tektonix-{'all' if full else f'sample{req.sample}'}-seed{req.seed}-{stamp}"
+    if not _RUN_NAME.match(base) or (RUNS_DIR / base).exists():
+        raise HTTPException(409, "a run with this name already exists; try again in a minute")
+    notes = req.notes.strip() or f"started from the dashboard by {user.email}"
+    names = []
+    for name, cmd in run_commands(req, base, notes):
+        _spawn(cmd, RUNS_DIR / f"{name}.runner.log")
+        names.append(name)
+    await audit.record(audit_store(request), actor=user.email, action="swebench.run", target=base,
+                       detail=f"{'all 500' if full else f'{req.sample} tasks, seed {req.seed}'}, "
+                              f"{req.parallel} at once in {len(names)} process(es), ${req.budget_usd} per task")
+    return {"ok": True, "name": base, "shards": names}
+
+
+def _run_names(name: str) -> list[str]:
+    """A combined run's shards, or the run itself."""
+    all_s = _all_summaries()
+    shards = _groups(all_s).get(name)
+    if shards:
+        return shards
+    if name in all_s:
+        return [name]
+    raise HTTPException(404, "no such run")
+
+
+@router.post("/api/swebench/runs/{name}/stop")
+async def stop_swebench_run(name: str, request: Request, user: User = Depends(require_full_auth)):
+    auth.require_admin(user)
+    if not _RUN_NAME.match(name):
+        raise HTTPException(400, "not a run name")
+    all_s = _all_summaries()
+    stopped = []
+    for run in _run_names(name):
+        s = all_s.get(run) or {}
+        pid = s.get("pid")
+        if (s.get("state") or "done") != "running" or not _alive(pid):
+            continue
+        # SIGTERM to the run's whole session: the runner turns it into an
+        # orderly stop (summary marked stopped, reviewer pair down, temporary
+        # repositories removed), and the harness's own grading processes,
+        # which it may be in the middle of, go with it instead of outliving
+        # it (2026-09-25: four grading containers were left running).
+        try:
+            os.killpg(int(pid), signal.SIGTERM)
+        except (ProcessLookupError, PermissionError):
+            try:
+                os.kill(int(pid), signal.SIGTERM)
+            except (ProcessLookupError, PermissionError):
+                continue
+        stopped.append(run)
+    if not stopped:
+        raise HTTPException(409, "this run is not running")
+    for run in stopped:
+        # Best effort: the harness names its containers `sweb.eval.<task>.<run>`.
+        subprocess.Popen(f"docker ps -aq --filter name=.{run} | xargs -r docker rm -f", shell=True,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+    await audit.record(audit_store(request), actor=user.email, action="swebench.stop", target=name,
+                       detail=", ".join(stopped))
+    return {"ok": True, "stopped": stopped}
+
+
+@router.get("/api/swebench/runs/{name}/log")
+async def swebench_run_log(name: str, lines: int = 80, user: User = Depends(require_full_auth)):
+    """The runner's own output, last `lines` per shard."""
+    auth.require_admin(user)
+    if not _RUN_NAME.match(name):
+        raise HTTPException(400, "not a run name")
+    lines = max(1, min(int(lines), 500))
+    out: list[str] = []
+    for run in _run_names(name):
+        path = RUNS_DIR / f"{run}.runner.log"
+        try:
+            tail = path.read_text(errors="replace").splitlines()[-lines:]
+        except OSError:
+            tail = []
+        if len(_run_names(name)) > 1:
+            out.append(f"== {run}")
+        out.extend(tail)
+    return {"lines": out}

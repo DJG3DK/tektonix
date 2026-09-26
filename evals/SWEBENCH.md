@@ -81,6 +81,15 @@ Tektonix's. `SWEBENCH_PYTHON` and `SWEBENCH_DATASET_JSON` override the paths.
 
 ## Running
 
+From the dashboard: the **Benchmarks** page (admin) starts a run -- sample size
+(50, 100, 250 or all 500), seed, tasks at once and the per-task budget -- as
+the same runner below, in its own session so a restart of the app does not
+end it, split into processes of five tasks (`--shard`). The page stops a run
+too (the runner's orderly stop; nothing is graded until `--grade-only`), and
+shows the runner's log under the run.
+
+From a shell:
+
     scripts/run_swebench.py --instances psf__requests-1142 django__django-10097
     scripts/run_swebench.py --sample 50 --seed 1 --parallel 3
     scripts/run_swebench.py --all --parallel 4

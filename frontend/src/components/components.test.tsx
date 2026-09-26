@@ -53,6 +53,7 @@ describe("MobileNav", () => {
     onTasks: vi.fn(),
     onNewPlan: vi.fn(),
     onAnalytics: vi.fn(),
+    onBenchmarks: vi.fn(),
     onModels: vi.fn(),
     onUsers: vi.fn(),
     onSettings: vi.fn(),
@@ -62,6 +63,7 @@ describe("MobileNav", () => {
   it("hides admin-only destinations from a non-admin", () => {
     render(<MobileNav view="task" pane="list" isAdmin={false} {...handlers()} />);
     expect(screen.queryByText("Stats")).not.toBeInTheDocument();
+    expect(screen.queryByText("Bench")).not.toBeInTheDocument();
     expect(screen.queryByText("Models")).not.toBeInTheDocument();
     expect(screen.queryByText("Users")).not.toBeInTheDocument();
     expect(screen.getByText("Tasks")).toBeInTheDocument();
@@ -70,6 +72,7 @@ describe("MobileNav", () => {
   it("offers them to an admin", () => {
     render(<MobileNav view="task" pane="list" isAdmin {...handlers()} />);
     expect(screen.getByText("Stats")).toBeInTheDocument();
+    expect(screen.getByText("Bench")).toBeInTheDocument();
     expect(screen.getByText("Models")).toBeInTheDocument();
     expect(screen.getByText("Users")).toBeInTheDocument();
   });
@@ -79,6 +82,8 @@ describe("MobileNav", () => {
     render(<MobileNav view="task" pane="main" isAdmin {...h} />);
     await userEvent.click(screen.getByText("Stats"));
     expect(h.onAnalytics).toHaveBeenCalled();
+    await userEvent.click(screen.getByText("Bench"));
+    expect(h.onBenchmarks).toHaveBeenCalled();
   });
 
   it("Plan starts a planning session, not the raw task composer", async () => {

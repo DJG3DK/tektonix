@@ -16,8 +16,6 @@ import {
 import { getAgentModelUsage, getAnalytics, getBenchmarks, getRouterBalance, getToolReliability, getTraceSummary } from "../api";
 import type { AgentModelUsage, Analytics, Benchmarks, RouterBalance, ToolReliability, TraceSummary } from "../types";
 import { BenchmarkPanel } from "./BenchmarkPanel";
-import { EvalsPanel } from "./EvalsPanel";
-import { SwebenchPanel } from "./SwebenchPanel";
 import { repoColor } from "../repoColor";
 import "./AnalyticsView.css";
 import { modelColor, shortModel } from "../format";
@@ -201,10 +199,10 @@ export function AnalyticsView() {
 
       {/* Directly under the headline cards, and above everything else: this
           is the section somebody opens the page FOR after changing a prompt
-          or a model pin. Everything below it is the detail behind it. */}
+          or a model pin. Everything below it is the detail behind it. The
+          fixed suites (golden suite, SWE-bench) have their own page,
+          Benchmarks; this one is about the operator's own tasks. */}
       <BenchmarkPanel data={benchmarks} error={benchmarksError} />
-      <EvalsPanel />
-      <SwebenchPanel />
 
       {/* Reviewer spend. Its own section, not folded into the totals above:
           the agent's budget and the gate's budget are different things, and

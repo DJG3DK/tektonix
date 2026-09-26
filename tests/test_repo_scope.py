@@ -101,6 +101,7 @@ EXPECTED = [
     ('GET', '/api/projects/{name}/checkout', 'require_admin'),
     ('GET', '/api/projects/{name}/deploy-key', 'require_admin'),
     ('GET', '/api/swebench/runs/{name}', 'require_admin'),   # a benchmark run, not a project; admin-only
+    ('GET', '/api/swebench/runs/{name}/log', 'require_admin'),
     ('GET', '/api/swebench/runs/{name}/tasks/{instance_id}', 'require_admin'),
     ('GET', '/api/tasks', 'check_repo_access'),
     ('GET', '/api/tasks/{task_id}', 'check_repo_access'),
@@ -115,6 +116,7 @@ EXPECTED = [
     ('POST', '/api/projects/{name}/deploy-key', 'require_admin'),
     ('POST', '/api/projects/{name}/deploy-key/generate', 'require_admin'),
     ('POST', '/api/projects/{name}/deploy-key/test', 'require_admin'),
+    ('POST', '/api/swebench/runs/{name}/stop', 'require_admin'),
     ('POST', '/api/tasks', 'check_repo_access'),
     ('POST', '/api/tasks/{task_id}/approve', 'check_repo_access'),
     ('POST', '/api/tasks/{task_id}/edits', 'check_repo_access'),

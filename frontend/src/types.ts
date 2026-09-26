@@ -553,6 +553,15 @@ export interface SwebenchRunSummary {
   shards?: string[];
 }
 
+/** What the Start control sends (POST /swebench/run). sample 500 = the full run. */
+export interface SwebenchStartOptions {
+  sample: number;
+  seed: number;
+  parallel: number;
+  budget_usd: number;
+  notes?: string;
+}
+
 export interface SwebenchOverview {
   runs: SwebenchRunSummary[];
   dataset_size: number;

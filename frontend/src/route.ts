@@ -18,7 +18,7 @@
  * unknown path with index.html, so no server change is needed.
  */
 
-export type View = "new-task" | "task" | "analytics" | "models" | "planning" | "users" | "settings" | "github";
+export type View = "new-task" | "task" | "analytics" | "benchmarks" | "models" | "planning" | "users" | "settings" | "github";
 
 export interface Route {
   view: View;
@@ -31,6 +31,7 @@ const SIMPLE: Record<string, View> = {
   inbox: "github",
   settings: "settings",
   analytics: "analytics",
+  benchmarks: "benchmarks",
   models: "models",
   users: "users",
   planning: "planning",
@@ -41,6 +42,7 @@ const PATH_OF: Partial<Record<View, string>> = {
   github: "inbox",
   settings: "settings",
   analytics: "analytics",
+  benchmarks: "benchmarks",
   models: "models",
   users: "users",
 };

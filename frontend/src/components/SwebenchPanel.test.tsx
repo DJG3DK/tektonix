@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SwebenchHost, SwebenchOverview, SwebenchRunSummary } from "../types";
@@ -7,6 +7,9 @@ import { SwebenchPanel } from "./SwebenchPanel";
 const getSwebench = vi.fn();
 const getSwebenchRun = vi.fn();
 const getSwebenchTask = vi.fn();
+const getSwebenchRunLog = vi.fn();
+const startSwebenchRun = vi.fn();
+const stopSwebenchRun = vi.fn();
 vi.mock("../api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../api")>();
   return {
@@ -14,6 +17,9 @@ vi.mock("../api", async (importOriginal) => {
     getSwebench: () => getSwebench(),
     getSwebenchRun: (n: string) => getSwebenchRun(n),
     getSwebenchTask: (r: string, i: string) => getSwebenchTask(r, i),
+    getSwebenchRunLog: (n: string, l?: number) => getSwebenchRunLog(n, l),
+    startSwebenchRun: (o: unknown) => startSwebenchRun(o),
+    stopSwebenchRun: (n: string) => stopSwebenchRun(n),
   };
 });
 
@@ -66,6 +72,10 @@ beforeEach(() => {
         reference_fails: false, has_trajectory: false, tests: null },
     ],
   }));
+  getSwebenchRunLog.mockReset().mockResolvedValue({ lines: ["task 12 done", "pulling image for task 13"] });
+  startSwebenchRun.mockReset().mockResolvedValue({ ok: true, name: "tektonix-sample50-2", shards: [] });
+  stopSwebenchRun.mockReset().mockResolvedValue({ ok: true, stopped: ["tektonix-sample50"] });
+  vi.spyOn(window, "confirm").mockReturnValue(true);
   getSwebenchTask.mockReset().mockResolvedValue({
     id: "django__django-11265", patch: "--- a/django/db/models/sql/query.py",
     review: { verdict: "READY", summary: "The change handles the nested case too.", findings: [], agentMessage: null },
@@ -139,5 +149,136 @@ describe("SwebenchPanel", () => {
     await userEvent.click(await screen.findByText("sympy__sympy-1"));
     expect(screen.getByText("Not run yet.")).toBeInTheDocument();
     await waitFor(() => expect(getSwebenchTask).not.toHaveBeenCalled());
+  });
+
+  it("offers the Start controls with their defaults", async () => {
+    render(<SwebenchPanel />);
+    const box = await screen.findByRole("group", { name: "Start a run" });
+    expect(within(box).getByLabelText("Sample")).toHaveValue("50");
+    expect(within(box).getByRole("option", { name: "All 500" })).toHaveValue("500");
+    expect(within(box).getByLabelText("Seed")).toHaveValue(1);
+    expect(within(box).getByLabelText("Tasks at once")).toHaveValue(10);
+    expect(within(box).getByLabelText("Per-task budget $")).toHaveValue(3);
+  });
+
+  it("Start is disabled, with the reason, while a real run is in progress", async () => {
+    render(<SwebenchPanel />);
+    const start = await screen.findByRole("button", { name: "Start" });
+    expect(start).toBeDisabled();
+    expect(screen.getByText(/A run is already in progress \(tektonix-sample50\)/)).toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("a diagnostic run does not hold the box", async () => {
+    getSwebench.mockResolvedValue({
+      ...overview(),
+      runs: [summary({ name: "diag-live", kind: "diagnostic", state: "running", graded_count: 0, resolved: null })],
+    });
+    render(<SwebenchPanel />);
+    expect(await screen.findByRole("button", { name: "Start" })).toBeEnabled();
+  });
+
+  it("Start confirms what will happen, then sends the sample, seed, parallelism and budget", async () => {
+    getSwebench.mockResolvedValue({
+      ...overview(),
+      runs: [summary({ state: "done", graded: true, resolved: 20, graded_count: 50, resolved_rate: 40 })],
+    });
+    render(<SwebenchPanel />);
+    await userEvent.click(await screen.findByRole("button", { name: "Start" }));
+    const dialog = screen.getByRole("dialog", { name: "Start a SWE-bench run" });
+    expect(dialog).toHaveTextContent("50 tasks ran about $18 and 4 to 6 hours at ten at once; 500 is roughly ten times that");
+    expect(dialog).toHaveTextContent("roughly $18 and 4 to 6 hours");
+    expect(startSwebenchRun).not.toHaveBeenCalled();
+    await userEvent.click(within(dialog).getByRole("button", { name: "Start run" }));
+    expect(startSwebenchRun).toHaveBeenCalledWith({ sample: 50, seed: 1, parallel: 10, budget_usd: 3 });
+    // The confirm closes and the runs list is reloaded.
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(getSwebench.mock.calls.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("the confirm's rough line and the request follow the fields", async () => {
+    getSwebench.mockResolvedValue({ ...overview(), runs: [] });
+    render(<SwebenchPanel />);
+    const box = await screen.findByRole("group", { name: "Start a run" });
+    await userEvent.selectOptions(within(box).getByLabelText("Sample"), "500");
+    await userEvent.clear(within(box).getByLabelText("Seed"));
+    await userEvent.type(within(box).getByLabelText("Seed"), "7");
+    await userEvent.clear(within(box).getByLabelText("Tasks at once"));
+    await userEvent.type(within(box).getByLabelText("Tasks at once"), "5");
+    await userEvent.click(screen.getByRole("button", { name: "Start" }));
+    const dialog = screen.getByRole("dialog");
+    expect(dialog).toHaveTextContent("roughly $180 and 80 to 120 hours");
+    await userEvent.type(within(dialog).getByPlaceholderText(/What changed/), "new planner prompt");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Start run" }));
+    expect(startSwebenchRun).toHaveBeenCalledWith({ sample: 500, seed: 7, parallel: 5, budget_usd: 3, notes: "new planner prompt" });
+  });
+
+  it("out-of-range fields are clamped to the contract's limits", async () => {
+    getSwebench.mockResolvedValue({ ...overview(), runs: [] });
+    render(<SwebenchPanel />);
+    const box = await screen.findByRole("group", { name: "Start a run" });
+    await userEvent.clear(within(box).getByLabelText("Tasks at once"));
+    await userEvent.type(within(box).getByLabelText("Tasks at once"), "40");
+    await userEvent.clear(within(box).getByLabelText("Per-task budget $"));
+    await userEvent.type(within(box).getByLabelText("Per-task budget $"), "25");
+    await userEvent.click(screen.getByRole("button", { name: "Start" }));
+    expect(screen.getByRole("dialog")).toHaveTextContent("16 at once, up to $10.00 per task");
+    await userEvent.click(screen.getByRole("button", { name: "Start run" }));
+    expect(startSwebenchRun).toHaveBeenCalledWith({ sample: 50, seed: 1, parallel: 16, budget_usd: 10 });
+  });
+
+  it("Cancel closes the confirm without starting anything", async () => {
+    getSwebench.mockResolvedValue({ ...overview(), runs: [] });
+    render(<SwebenchPanel />);
+    await userEvent.click(await screen.findByRole("button", { name: "Start" }));
+    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(startSwebenchRun).not.toHaveBeenCalled();
+  });
+
+  it("a refused start (a run already in progress) shows the server's reason", async () => {
+    getSwebench.mockResolvedValue({ ...overview(), runs: [] });
+    startSwebenchRun.mockRejectedValue(new Error("a run is already in progress: tektonix-sample50"));
+    render(<SwebenchPanel />);
+    await userEvent.click(await screen.findByRole("button", { name: "Start" }));
+    await userEvent.click(screen.getByRole("button", { name: "Start run" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("a run is already in progress: tektonix-sample50");
+  });
+
+  it("Stop on the running headline asks first, then stops the shown run and reloads", async () => {
+    render(<SwebenchPanel />);
+    const progress = await screen.findByRole("status");
+    await userEvent.click(within(progress).getByRole("button", { name: "Stop" }));
+    expect(window.confirm).toHaveBeenCalledWith(
+      "Stop this run? Tasks already finished keep their results; nothing is graded until you grade it later.",
+    );
+    expect(stopSwebenchRun).toHaveBeenCalledWith("tektonix-sample50");
+    await waitFor(() => expect(getSwebench.mock.calls.length).toBeGreaterThanOrEqual(2));
+  });
+
+  it("a declined Stop does nothing", async () => {
+    vi.spyOn(window, "confirm").mockReturnValue(false);
+    render(<SwebenchPanel />);
+    const progress = await screen.findByRole("status");
+    await userEvent.click(within(progress).getByRole("button", { name: "Stop" }));
+    expect(stopSwebenchRun).not.toHaveBeenCalled();
+  });
+
+  it("every running run in the list has its own Stop; finished ones do not", async () => {
+    render(<SwebenchPanel />);
+    await screen.findByRole("status");
+    const list = screen.getByRole("list");
+    expect(within(list).getAllByRole("button", { name: /^Stop / })).toHaveLength(1);
+    await userEvent.click(within(list).getByRole("button", { name: "Stop tektonix-sample50" }));
+    expect(stopSwebenchRun).toHaveBeenCalledWith("tektonix-sample50");
+  });
+
+  it("the runner log is fetched when opened, not before", async () => {
+    render(<SwebenchPanel />);
+    await screen.findByText("django__django-11265");
+    expect(getSwebenchRunLog).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByText(/Runner log/));
+    await waitFor(() => expect(getSwebenchRunLog).toHaveBeenCalledWith("tektonix-sample50", 80));
+    expect(await screen.findByText(/pulling image for task 13/)).toBeInTheDocument();
   });
 });

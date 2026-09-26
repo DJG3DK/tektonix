@@ -8,7 +8,7 @@ import "./EvalsPanel.css";
  * The golden suite: fixed coding tasks, run through the real agent, checks and
  * reviewer, scored by assertions rather than by "it shipped" (evals/README.md).
  *
- * Where the Benchmarks panel above answers "is it doing better on my work?",
+ * Where Analytics' outcome numbers answer "is it doing better on my work?",
  * this answers "did that change make it better?" -- the same questions every
  * time, so a moved number is the change and not the workload. It is also the
  * number worth quoting: the scorecard copies as one paragraph.

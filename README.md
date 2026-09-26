@@ -385,9 +385,11 @@ first. The app lands on **Planning**, not the raw task composer.
   and earn READY having "fixed" the bug by weakening the test, and that is the one failure every
   gate here is blind to. A run is isolated by construction — its own SQLite store, its own
   `projects.json`, its own reviewer pair on free ports — and it stops before crossing a spend
-  ceiling. `--verify` and `--dry-run` cost nothing. A **Golden suite** panel on Analytics runs it
-  from the browser, shows the scorecard and what regressed since the run before. See `evals/README.md`.
-- **SWE-bench Verified** (Analytics) — every run of `scripts/run_swebench.py`, as it goes: the
+  ceiling. `--verify` and `--dry-run` cost nothing. A **Golden suite** panel on the Benchmarks page runs
+  and stops it from the browser, shows the scorecard and what regressed since the run before. See `evals/README.md`.
+- **SWE-bench Verified** (Benchmarks page) — started and stopped from the page (sample size, seed,
+  tasks at once, per-task budget; the same runner an operator uses from a shell, in its own session)
+  or from `scripts/run_swebench.py`; every run, as it goes: the
   scorecard (a sample shows its percentage beside its fraction; only a full run of all 500 is the
   published number), each task's result, patch, reviewer text and conversation, and **Host during
   the run** — memory, CPU, load, disk, containers, OOM kills and the router's in-flight calls and

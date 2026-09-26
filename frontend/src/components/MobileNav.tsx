@@ -11,7 +11,7 @@ import "./MobileNav.css";
  * "Tasks" is not a view — it returns to the list pane, which is what the task
  * list actually is on mobile. That is why it takes `pane` as well as `view`.
  */
-type NavView = "new-task" | "task" | "analytics" | "models" | "planning" | "users" | "settings" | "github";
+type NavView = "new-task" | "task" | "analytics" | "benchmarks" | "models" | "planning" | "users" | "settings" | "github";
 
 interface Tab {
   key: string;
@@ -31,7 +31,7 @@ interface Tab {
  * New Plan, not the raw task composer, which stays reachable from the
  * Building section header. */
 export function MobileNav({
-  view, pane, isAdmin, onTasks, onNewPlan, onAnalytics, onModels, onUsers, onSettings, onGitHub,
+  view, pane, isAdmin, onTasks, onNewPlan, onAnalytics, onBenchmarks, onModels, onUsers, onSettings, onGitHub,
 }: {
   view: NavView;
   pane: "list" | "main";
@@ -39,6 +39,7 @@ export function MobileNav({
   onTasks: () => void;
   onNewPlan: () => void;
   onAnalytics: () => void;
+  onBenchmarks: () => void;
   onModels: () => void;
   onUsers: () => void;
   onSettings: () => void;
@@ -51,6 +52,8 @@ export function MobileNav({
       match: (v, p) => p === "main" && v === "planning", go: onNewPlan },
     { key: "analytics", label: "Stats", icon: "chart", admin: true,
       match: (v, p) => p === "main" && v === "analytics", go: onAnalytics },
+    { key: "benchmarks", label: "Bench", icon: "check", admin: true,
+      match: (v, p) => p === "main" && v === "benchmarks", go: onBenchmarks },
     { key: "models", label: "Models", icon: "cpu", admin: true,
       match: (v, p) => p === "main" && v === "models", go: onModels },
     { key: "users", label: "Users", icon: "users", admin: true,

@@ -24,11 +24,12 @@ interface Props {
   selectedTaskId: string | null;
   planningSessions: PlanningSessionMeta[];
   selectedPlanningSessionId: string | null;
-  view: "new-task" | "task" | "analytics" | "models" | "planning" | "users" | "settings" | "github";
+  view: "new-task" | "task" | "analytics" | "benchmarks" | "models" | "planning" | "users" | "settings" | "github";
   user: CurrentUser;
   onSelect: (task: TaskMeta) => void;
   onNewTask: () => void;
   onAnalytics: () => void;
+  onBenchmarks: () => void;
   onModels: () => void;
   onUsers: () => void;
   onSettings: () => void;
@@ -157,6 +158,7 @@ export function Sidebar({
   onSelect,
   onNewTask,
   onAnalytics,
+  onBenchmarks,
   onModels,
   onUsers,
   onSettings,
@@ -354,6 +356,10 @@ export function Sidebar({
             <button className={`analytics-nav-btn ${view === "analytics" ? "active" : ""}`} onClick={onAnalytics}>
               <Icon name="chart" size={15} />
               <span>Analytics</span>
+            </button>
+            <button className={`analytics-nav-btn ${view === "benchmarks" ? "active" : ""}`} onClick={onBenchmarks}>
+              <Icon name="check" size={15} />
+              <span>Benchmarks</span>
             </button>
             <button className={`analytics-nav-btn ${view === "models" ? "active" : ""}`} onClick={onModels}>
               <Icon name="cpu" size={15} />

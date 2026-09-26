@@ -24,6 +24,10 @@ vi.mock("./api", async (importOriginal) => {
     getGitHubSettings: async () => ({ env_token: false, settings: { tokens: {} } }),
     getPlanningSession: (id: string) => getPlanningSession(id),
     setAuthFailureHandler: () => {},
+    // The Benchmarks page's panels each show their own "couldn't load" note;
+    // the deep-link test only needs the page to open.
+    getEvals: async () => { throw new Error("no evals in this test"); },
+    getSwebench: async () => { throw new Error("no SWE-bench in this test"); },
   };
 });
 
@@ -63,6 +67,14 @@ describe("deep links", () => {
     at("/settings");
     render(<App />);
     expect(await screen.findByRole("heading", { name: "Settings" })).toBeInTheDocument();
+  });
+
+  it("the Benchmarks page has its own URL", async () => {
+    at("/benchmarks");
+    render(<App />);
+    expect(await screen.findByRole("heading", { level: 1, name: "Benchmarks" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { level: 2, name: "SWE-bench Verified" })).toBeInTheDocument();
+    expect(window.location.pathname).toBe("/benchmarks");
   });
 
   it("a task that is not in the list says so rather than showing nothing", async () => {

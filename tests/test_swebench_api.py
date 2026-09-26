@@ -173,3 +173,91 @@ def test_a_run_split_into_shards_shows_as_one_run(client, monkeypatch, tmp_path)
     detail = client.get("/api/swebench/runs/big-run").json()
     assert {t["id"]: t["run"] for t in detail["tasks"]} == {"a__a-1": "big-run-s1", "b__b-2": "big-run-s2",
                                                             "c__c-3": "big-run-s2"}
+
+
+# --- starting and stopping a run from the page (2026-09-26) --------------------
+
+def test_ten_at_once_is_two_processes_of_five_and_never_more_processes_than_tasks():
+    assert sw.plan_shards(50, 10) == [(1, 2, 5), (2, 2, 5)]
+    assert sw.plan_shards(500, 10) == [(1, 2, 5), (2, 2, 5)]
+    assert sw.plan_shards(50, 16) == [(k, 4, 4) for k in (1, 2, 3, 4)]
+    assert sw.plan_shards(3, 10) == [(1, 1, 10)]
+    assert sw.plan_shards(1, 1) == [(1, 1, 1)]
+
+
+async def _no_audit(*a, **k):
+    return None
+
+
+def test_a_sample_starts_as_shards_of_the_runner_with_their_own_names_and_logs(client, monkeypatch):
+    spawned = []
+    monkeypatch.setattr(sw, "_spawn", lambda cmd, log: spawned.append((cmd, log)))
+    monkeypatch.setattr(sw, "_running_runs", lambda: [])
+    monkeypatch.setattr(sw.audit, "record", _no_audit)
+    r = client.post("/api/swebench/run", json={"sample": 50, "seed": 7, "parallel": 10, "budget_usd": 2.5})
+    assert r.status_code == 202, r.text
+    body = r.json()
+    assert body["name"].startswith("tektonix-sample50-seed7-") and body["shards"] == [body["name"] + "-s1", body["name"] + "-s2"]
+    assert len(spawned) == 2
+    cmd, log = spawned[0]
+    assert cmd[1].endswith("scripts/run_swebench.py")
+    assert cmd[2:8] == ["--sample", "50", "--seed", "7", "--parallel", "5"]
+    assert "--budget" in cmd and cmd[cmd.index("--budget") + 1] == "2.5"
+    assert cmd[cmd.index("--run-id") + 1] == body["shards"][0] and cmd[-1] == "1/2"
+    assert log.name == body["shards"][0] + ".runner.log"
+
+
+def test_the_full_run_uses_all_and_a_small_selection_needs_one_process(client, monkeypatch):
+    spawned = []
+    monkeypatch.setattr(sw, "_spawn", lambda cmd, log: spawned.append(cmd))
+    monkeypatch.setattr(sw, "_running_runs", lambda: [])
+    monkeypatch.setattr(sw.audit, "record", _no_audit)
+    body = client.post("/api/swebench/run", json={"sample": 500, "parallel": 10}).json()
+    assert body["name"].startswith("tektonix-all-") and "--all" in spawned[0] and "--sample" not in spawned[0]
+    spawned.clear()
+    body = client.post("/api/swebench/run", json={"sample": 3, "parallel": 10, "seed": 2}).json()
+    assert body["shards"] == [body["name"]] and "--shard" not in spawned[0]
+
+
+def test_a_second_run_is_refused_while_one_is_in_progress(client, monkeypatch):
+    monkeypatch.setattr(sw, "_spawn", lambda cmd, log: pytest.fail("must not spawn"))
+    r = client.post("/api/swebench/run", json={"sample": 50})
+    assert r.status_code == 409 and "live-run" in r.json()["detail"]
+
+
+def test_stop_signals_the_running_run_s_session_and_refuses_a_dead_or_finished_one(client, monkeypatch):
+    signalled = []
+    monkeypatch.setattr(sw.os, "killpg", lambda pid, sig: signalled.append((pid, sig)))
+    monkeypatch.setattr(sw.subprocess, "Popen", lambda *a, **k: None)
+    monkeypatch.setattr(sw.audit, "record", _no_audit)
+    r = client.post("/api/swebench/runs/live-run/stop")
+    assert r.status_code == 200 and r.json()["stopped"] == ["live-run"]
+    assert signalled == [(os.getpid(), sw.signal.SIGTERM)]
+    assert client.post("/api/swebench/runs/dead-run/stop").status_code == 409, "its process is already gone"
+    assert client.post("/api/swebench/runs/done-run/stop").status_code == 409
+    assert client.post("/api/swebench/runs/no-such-run/stop").status_code == 404
+
+
+def test_stopping_a_combined_run_stops_every_shard(client, monkeypatch, tmp_path):
+    for k in (1, 2):
+        _write(tmp_path, f"tektonix-x-s{k}", {"run_id": f"tektonix-x-s{k}", "state": "running", "pid": os.getpid(),
+                                              "selection": {"sample": 4, "shard": f"{k}/2"}, "total": 2,
+                                              "started_at": "2026-09-26T10:00:00Z", "instances": {}})
+    signalled = []
+    monkeypatch.setattr(sw.os, "killpg", lambda pid, sig: signalled.append(pid))
+    monkeypatch.setattr(sw.subprocess, "Popen", lambda *a, **k: None)
+    monkeypatch.setattr(sw.audit, "record", _no_audit)
+    r = client.post("/api/swebench/runs/tektonix-x/stop")
+    assert r.status_code == 200 and r.json()["stopped"] == ["tektonix-x-s1", "tektonix-x-s2"] and len(signalled) == 2
+
+
+def test_the_runner_s_log_tail_is_shown_per_shard(client, tmp_path):
+    (tmp_path / "live-run.runner.log").write_text("\n".join(f"line {i}" for i in range(10)) + "\n")
+    assert client.get("/api/swebench/runs/live-run/log?lines=2").json() == {"lines": ["line 8", "line 9"]}
+    assert client.get("/api/swebench/runs/done-run/log").json() == {"lines": []}
+
+
+def test_starting_and_stopping_are_admin_only(client, monkeypatch):
+    monkeypatch.setitem(srv.app.dependency_overrides, srv.require_full_auth, lambda: _user("user"))
+    assert client.post("/api/swebench/run", json={"sample": 50}).status_code == 403
+    assert client.post("/api/swebench/runs/live-run/stop").status_code == 403

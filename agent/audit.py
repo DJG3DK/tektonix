@@ -62,6 +62,8 @@ ACTIONS: dict[str, str] = {
     "task.operator_edit": "edited a task's files by hand before merge",
     "evals.run": "started a golden eval run",
     "evals.stop": "stopped a golden eval run",
+    "swebench.run": "started a SWE-bench run",
+    "swebench.stop": "stopped a SWE-bench run",
     "settings.auto_approve": "changed auto-approve of commands",
     "settings.merge_review": "changed the final merge review",
     "settings.auto_approve_repos": "changed which projects auto-approve covers",
