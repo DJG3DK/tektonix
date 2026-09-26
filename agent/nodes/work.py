@@ -108,6 +108,8 @@ REJECTED_RETRIES_PER_PASS = 2
 # 2 not 3 since 2026-09-25: EmptyReplyRetryMiddleware now retries an empty
 # length-capped reply on the fallback seat before the pass sees it.
 EMPTY_REPLY_RETRIES = 2
+# How many published message ids a pass hands to the next (see seen_ids).
+STREAMED_IDS_MAX = 20_000
 REJECTED_RETRY_BACKOFF_S = 5
 
 
@@ -559,17 +561,18 @@ async def work_node(state: AgentState, app_config: Config, checkpointer, pg_stor
     rejected = 0
     on_fallback = False
     empty_replies = 0
+    # One set for the whole pass, every consumer and every attempt, seeded
+    # with what earlier passes already published. A fresh set replayed each
+    # projection's entire history (a subagent handle arriving; and, on every
+    # pass that continued the thread, the first state snapshot: 360 of a
+    # task's 999 log entries were its first pass logged twice, 2026-09-26).
+    seen_ids: set = set(state.get("streamed_message_ids") or [])
     try:
         while True:
             try:
                 async with await agent.astream_events(stream_input, config=inner_config, version="v3") as run:
                     root_seen: dict = {}
-                    # One set for the whole run, every consumer. A per-consumer set
-                    # replayed each projection's entire history every time a subagent
-                    # handle arrived -- see this module's docstring.
-                    seen_ids: set = set()
 
-                    # Bound per attempt: a resumed stream starts its own set.
                     async def _consume_subagents(seen_ids: set = seen_ids, tracker=tracker) -> None:
                         async for handle in run.subagents:
                             label = f"work:{handle.name or 'subagent'}"
@@ -774,4 +777,8 @@ async def work_node(state: AgentState, app_config: Config, checkpointer, pg_stor
         # instead of resetting to empty every time. See agent_tools.py.
         "last_failed_edit_signature": last_failed_edit_ref.get("signature"),
         "verifier_runs": int(state.get("verifier_runs") or 0) + int(final_text.get("verifier_calls", 0)),
+        # Bounded: a thread summarised at 250k tokens holds a few thousand
+        # messages at most, and an id that is not in the thread any more
+        # cannot be replayed.
+        "streamed_message_ids": sorted(seen_ids)[-STREAMED_IDS_MAX:],
     }

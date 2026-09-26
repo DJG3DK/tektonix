@@ -162,6 +162,11 @@ class AgentState(TypedDict):
     verifier_nudged: bool
     # Diff patterns the gate has already sent back once (agent/nodes/diff_patterns.py).
     pattern_nudges: list[str]
+    # Ids of the inner thread's messages the stream has already published as
+    # log entries. A pass that continues the thread (review feedback, a
+    # loop-back, a resume) starts from these so the first state snapshot does
+    # not republish the whole earlier conversation (agent/nodes/work.py).
+    streamed_message_ids: list[str]
 
     # Whether the operator who created this task has auto-approve enabled
     # (User.auto_approve_commands). Captured onto the task at creation
@@ -248,6 +253,7 @@ def initial_state(
         verifier_runs=0,
         verifier_nudged=False,
         pattern_nudges=[],
+        streamed_message_ids=[],
         auto_approve_commands=auto_approve_commands,
         require_merge_review=require_merge_review,
         pending_merge_approval=None,
