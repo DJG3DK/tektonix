@@ -24,13 +24,10 @@ const fs = require('fs');
 const path = require('path');
 const http = require('http');
 const crypto = require('crypto');
-const sandbox = require('./sandbox');
 // The base layer: the installation root, the control secret, logging, the
 // process runners, git with hooks off, and the one contained path for
 // agent-authored code. See exec.js.
-const {
-  AGENT_HOME, REVIEW_CONTROL_SECRET, log, run, runSealed, GIT_SAFE, git, runAgentCode,
-} = require('./exec');
+const { AGENT_HOME, REVIEW_CONTROL_SECRET, log, GIT_SAFE, git } = require('./exec');
 // The review checkout: built, provisioned, torn down and swept. See worktree.js.
 const worktree = require('./worktree');
 const {
@@ -38,6 +35,11 @@ const {
   materializeDependencyDirs, installChangedDependencies, packagesNeedingOwnInstall,
   liveInstallIsStale, setupWorktree, cleanupWorktree,
 } = worktree;
+// The mechanical checks, and whose failures they are. See checks.js.
+const {
+  classifyInfrastructureFailures, baselineKey, runChecks, applyBaseline, markPreexistingFailures,
+  runBuildCheck, runDatabaseCheck, runSecretScan,
+} = require('./checks');
 
 // REVIEW_STATE_DIR exists for the bundle, where this service is a container
 // and its verdicts have to outlive it -- and be readable by agent-review,
@@ -54,40 +56,6 @@ const HISTORY_PATH = path.join(STATE_DIR, 'history.jsonl');
 const POLL_MS = 120_000; // 2 min — commits aren't frequent enough to need faster
 const MAX_CONSECUTIVE_FIXES = 3; // this many NEEDS_FIXES in a row marks the record escalated
 
-// A check whose COMMAND was never found did not fail -- it did not run, and
-// nothing was learned about the code. Telling those apart matters because the
-// two need opposite responses: a failing check is the agent's to fix, a
-// missing tool is the harness's, and asking an agent to fix the second is
-// asking it to debug an environment it cannot see. It will try anyway, which
-// is how a correct commit gets rejected round after round.
-//
-// Matches a SHELL failing to locate an executable ("sh: 1: eslint: not found",
-// "prettier: command not found"), never a module-resolution error from inside
-// a program ("Cannot find module './x'") -- that one is usually a real defect
-// in the code under review and must stay the agent's problem.
-const MISSING_TOOL_RE =
-  /(?:\b(?:sh|bash|zsh|dash)(?::\s*\d+)?:\s*\S+:\s*not found)|(?:\S+:\s*command not found)/i;
-
-// A check that could not WRITE where it needed to. EROFS is the kernel's
-// "read-only file system", and nothing in the commit under review can cause
-// it -- it means the review environment handed the tool a read-only path. It
-// is here for the same reason as a missing tool: otherwise the base fails
-// identically, the failure is filed as pre-existing, and the gate never ran
-// the check on either commit. That is exactly what `vite build` did on
-// 2026-09-22 until it was caught by reading the output rather than the label.
-const READ_ONLY_FS_RE = /\bEROFS\b|read-only file system/i;
-
-// Pure, and exported for tests: marks each FAILED check whose output says its
-// own command was missing or its filesystem read-only. Leaves passing checks
-// alone -- output on a passing check may quote anything.
-function classifyInfrastructureFailures(checkResults) {
-  for (const c of checkResults) {
-    if (c.ok) continue;
-    const out = c.output || '';
-    if (MISSING_TOOL_RE.test(out) || READ_ONLY_FS_RE.test(out)) c.infrastructure = true;
-  }
-  return checkResults;
-}
 // MAX_CONSECUTIVE_FIXES only catches straight-line failure — it resets to 0
 // the instant a round comes back READY. Seen live on a monorepo project'
 // variantOptions.ts: 8 rounds total, but verdict kept flipping
@@ -201,8 +169,6 @@ function currentProjects() {
   }
   return projects;
 }
-
-const GITLEAKS_BIN = path.join(__dirname, 'bin', 'gitleaks');
 
 // Confirmed live (2026-08-23, a monorepo project): state.json tracks one rolling
 // review record PER PROJECT, not per task/thread -- if the sandbox branch
@@ -465,266 +431,6 @@ async function detectNewCommit(project, cfg, prev = loadState()[project], reques
     return null;
   }
   return { sha: head, branch: ref, base };
-}
-
-// A baseline result is only an answer about the environment it was measured
-// in, so the cache key names that environment as well as the commit.
-function baselineKey(base, depsChanged) {
-  return `${base}:${depsChanged ? 'install' : 'linked'}`;
-}
-
-async function runChecks(cfg, worktreePath) {
-  const results = [];
-  // `|| []`: a brand-new project has no review.checks yet (its first merge is
-  // what triggers detection), and iterating undefined threw a TypeError out
-  // of reviewProject -- "review failed with an internal error", no verdict,
-  // and the agent's wait_for_review timed out.
-  for (const check of cfg.checks || []) {
-    log(`  running ${check.name} (${check.cmd} ${check.args.join(' ')}) in ${check.dir}`);
-    // A check may declare its own budget; test:review runs 50 suites and
-    // needs more than run()'s 5-minute default.
-    // audit C-2: sealed env -- these run agent-authored code, always in a
-    // sandbox container: started here on a host install, by the agent in
-    // the bundle. See runAgentCode and SECURITY.md.
-    const r = await runAgentCode(cfg, worktreePath, check.dir, check.cmd, check.args,
-                                 check.timeoutMs, check.env, check.network,
-                                 check.stack || cfg.stack);
-    results.push({
-      name: check.name, ok: r.ok, output: r.output.slice(-4000),
-      // Set by runAgentCode when the check could not be RUN -- a missing
-      // toolchain or an uncontainable host. It is not the agent's problem
-      // and must not be handed to it as one.
-      ...(r.infrastructure || r.missingTool ? { infrastructure: true } : {}),
-    });
-  }
-  return results;
-}
-
-// A check that fails on the branch AND fails identically on the base commit is
-// not this change's fault. Seen live 2026-09-09 (storefront, multi-category
-// products): `pnpm audit` reports 14 high vulnerabilities in nodemailer/multer
-// on main itself, the diff touched no package.json, Sonnet wrote "no blocking
-// issues, pre-existing audit failure" -- and the harness forced NEEDS_FIXES
-// on the failed check anyway, round after round, until escalation. True
-// verdict, wrong cause, infinite-loop shape (the packDiff comment above
-// describes the same shape). The gate is for what the DIFF breaks.
-//
-// Only cfg.checks commands are compared (build/db/secrets are not re-run on
-// base). Results are cached in state.json per base sha, so a slow suite is
-// re-run on base once per base, not once per round.
-function applyBaseline(checkResults, baselineForBase) {
-  // Pure: marks each failed check whose baseline entry is a recorded FAILURE
-  // as pre-existing. Returns the same objects, mutated, for the caller.
-  //
-  // NEVER an infrastructure failure. A check whose command was missing failed
-  // on the base for the same reason it failed on the branch -- the tool is
-  // not installed -- so "it also fails on base" says nothing about the code.
-  // It means the gate ran the check on NEITHER commit.
-  //
-  // Treating it as pre-existing is what turned the review into a rubber stamp
-  // on 2026-09-22: a project whose three apps each keep their own
-  // node_modules had none installed in the review worktree, so lint, build
-  // and test all failed with `oxlint: not found` / `vite: not found`, the base
-  // failed identically, every one was marked pre-existing, and every commit
-  // came back "READY -- no issues found" having run nothing at all. The
-  // infrastructure escalation below existed for exactly this and never fired,
-  // because it filters on `!c.preexisting`.
-  for (const c of checkResults) {
-    if (c.infrastructure) continue;
-    if (!c.ok && baselineForBase && baselineForBase[c.name] === false) c.preexisting = true;
-  }
-  return checkResults;
-}
-
-async function markPreexistingFailures(project, cfg, base, checkResults, prevBaseline, branchDepsChanged = null) {
-  const eligible = new Set((cfg.checks || []).map((c) => c.name));
-  const failed = checkResults.filter((c) => !c.ok && eligible.has(c.name));
-  const baseline = { ...(prevBaseline || {}) };
-  // Keyed by base sha AND provisioning mode, never by sha alone. The two modes
-  // produce genuinely different environments, so a result cached from one is
-  // not an answer about the other -- caching across them is the same
-  // apples-to-oranges comparison this function exists to prevent.
-  const baseKey = baselineKey(base, branchDepsChanged);
-  const forBase = { ...(baseline[baseKey] || {}) };
-  const missing = failed.filter((c) => !(c.name in forBase));
-  if (missing.length) {
-    log(`[${project}] ${missing.map((c) => c.name).join(', ')} failed on the branch -- checking the base commit ${base.slice(0, 12)} for a pre-existing failure`);
-    let basePath = null;
-    try {
-      // Provision the base EXACTLY as the branch was provisioned. Without
-      // this the comparison is meaningless: a base worktree diffs against
-      // itself, so depsChanged is always false there, and any check that only
-      // fails under the install path looked branch-specific no matter what.
-      // That is not hypothetical -- it blocked a correct commit for three
-      // rounds until the circuit breaker escalated it, because the base run
-      // inherited tooling from the live checkout that the branch run had to
-      // install for itself.
-      ({ worktreePath: basePath } = await setupWorktree(project, cfg, base, base, { depsChangedOverride: branchDepsChanged }));
-      const only = { ...cfg, checks: cfg.checks.filter((c) => missing.some((m) => m.name === c.name)) };
-      for (const r of await runChecks(only, basePath)) forBase[r.name] = r.ok;
-    } catch (err) {
-      log(`[${project}] baseline check failed to run (treating failures as this change's): ${err.message}`);
-    } finally {
-      if (basePath) await cleanupWorktree(cfg, basePath).catch(() => {});
-    }
-  }
-  baseline[baseKey] = forBase;
-  applyBaseline(checkResults, forBase);
-  const pre = checkResults.filter((c) => c.preexisting).map((c) => c.name);
-  if (pre.length) log(`[${project}] pre-existing failing checks (also fail on base): ${pre.join(', ')}`);
-  return baseline;
-}
-
-// The build itself, then the project's post-build assertions -- each exists
-// because it caught a real incident (see buildCheck.assertions in
-// builtin-projects.local.js.example), not just "did the build not crash".
-async function runBuildCheck(cfg, worktreePath) {
-  const bc = cfg.buildCheck;
-  if (!bc) return [];
-  const results = [];
-  log(`  running build (${bc.cmd} ${bc.args.join(' ')}) in ${bc.dir}`);
-  // audit C-2: sealed env -- the build runs agent-authored code, and is
-  // contained for the same reason the checks are.
-  const build = await runAgentCode(cfg, worktreePath, bc.dir, bc.cmd, bc.args,
-                                   300_000, bc.env, bc.network, bc.stack || cfg.stack);
-  results.push({ name: 'build', ok: build.ok, output: build.output.slice(-4000) });
-  if (!build.ok) return results; // assertions need the build to have actually produced output
-
-  for (const a of bc.assertions) {
-    if (a.kind === 'file-exists') {
-      const exists = fs.existsSync(path.join(worktreePath, a.file));
-      results.push({ name: a.name, ok: exists, output: exists ? '' : `expected ${a.file} to exist` });
-      continue;
-    }
-    log(`  running ${a.name} (${a.cmd} ${a.args.join(' ')}) in ${a.dir}`);
-    const r = await runAgentCode(cfg, worktreePath, a.dir, a.cmd, a.args, 60_000, undefined, a.network);
-    results.push({ name: a.name, ok: r.ok, output: r.output.slice(-4000) });
-  }
-  return results;
-}
-
-// Mirrors ci.yml's `database` job (migrations+drift, seed, e2e) — same
-// commands, but against a throwaway database on the existing local Postgres
-// rather than a fresh container, since that's what's actually available
-// here. Never touches the live database: a brand-new DB is created for this
-// run alone and dropped in the `finally`, regardless of outcome. Connection
-// details (host/port/user/password) are read from the worktree's own copied
-// .env -- the review-only credentials secretFiles provides -- with only the
-// database name swapped for a throwaway one.
-async function runDatabaseCheck(cfg, worktreePath) {
-  const dc = cfg.databaseCheck;
-  if (!dc) return [];
-  if (sandbox.IN_CONTAINER) {
-    // These run the repository's own code outside any sandbox (see below),
-    // and in the bundle "outside" is this container, which holds the merge
-    // secret. There is also no loopback Postgres or Redis here to run them
-    // against, so nothing is lost by refusing.
-    return [{
-      name: 'db-setup', ok: false, infrastructure: true,
-      output: 'SETUP: the database checks run the project\'s code unsandboxed and are not run in '
-            + 'the container bundle. Nothing about the code under review is known either way.',
-    }];
-  }
-  const apiDir = path.join(worktreePath, dc.apiDir);
-  const envPath = path.join(apiDir, '.env');
-  let baseUrl;
-  try {
-    const envText = fs.readFileSync(envPath, 'utf8');
-    const m = envText.match(/^DATABASE_URL\s*=\s*"?([^"\n]+)"?/m);
-    if (!m) throw new Error('DATABASE_URL not found in apps/api/.env');
-    baseUrl = m[1];
-  } catch (err) {
-    return [{ name: 'db-setup', ok: false, output: `could not read DATABASE_URL: ${err.message}` }];
-  }
-  const parsed = baseUrl.match(/^postgresql:\/\/([^:]+):([^@]+)@([^:/]+):(\d+)\/([^?]+)/);
-  if (!parsed) return [{ name: 'db-setup', ok: false, output: `could not parse DATABASE_URL` }];
-  const [, dbUser, dbPass, dbHost, dbPort] = parsed;
-  const throwawayDb = `tektonix_ci_review_${crypto.randomBytes(4).toString('hex')}`;
-  // psql/libpq doesn't understand Prisma's ?schema= query param, so the
-  // admin URL used for CREATE/DROP DATABASE omits it; the app-facing
-  // throwaway URL (passed to pnpm db:drift/db:seed/test:e2e below, which go
-  // through Prisma) keeps it.
-  // audit M-25: no password in the admin URL -- it would be visible in
-  // /proc/<pid>/cmdline to every local user. PGPASSWORD (set on the psql env
-  // below) is sufficient for libpq.
-  const adminUrl = `postgresql://${dbUser}@${dbHost}:${dbPort}/postgres`;
-  const throwawayUrl = `postgresql://${dbUser}:${dbPass}@${dbHost}:${dbPort}/${throwawayDb}?schema=public`;
-  const env = {
-    DATABASE_URL: throwawayUrl,
-    REDIS_URL: 'redis://localhost:6379/15',
-    JWT_ACCESS_SECRET: crypto.randomBytes(32).toString('hex'),
-    SECRETS_ENCRYPTION_KEY: crypto.randomBytes(32).toString('hex'),
-    CORS_ORIGIN_STOREFRONT: 'http://localhost:5173',
-    CORS_ORIGIN_ADMIN: 'http://localhost:5174',
-    ORDER_NOTIFY_EMAIL: 'orders@example.test',
-  };
-
-  const results = [];
-  // Sealed too, though psql is not agent-authored: it costs nothing, and it
-  // means no child of this function sees the reviewer's own variables.
-  const psql = (sql) => runSealed('psql', [adminUrl, '-c', sql], '/', 30_000, { PGPASSWORD: dbPass });
-  try {
-    const create = await psql(`CREATE DATABASE ${throwawayDb};`);
-    if (!create.ok) return [{ name: 'db-setup', ok: false, output: create.output.slice(-2000) }];
-    // Sealed like everything else this function starts, though redis-cli is
-    // not agent-authored: the rule is simpler to hold as "no child of this
-    // function sees the reviewer's environment" than as a list of exceptions.
-    await runSealed('redis-cli', ['-n', '15', 'flushdb'], '/', 10_000);
-
-    // THE ONE PLACE agent-authored code still runs on the host, and it is
-    // deliberate rather than missed. These three talk to Postgres and Redis
-    // on this machine's loopback: inside a container "localhost" is the
-    // container, so containing them means either --network host, which is
-    // not containment, or rewriting each project's DSN to the bridge gateway
-    // and opening those services to it. Both trade a real, working review
-    // for a weaker boundary than the one they would buy.
-    //
-    // What bounds it instead: the commands come from projects.json, which
-    // the agent cannot write; the database is a throwaway created and
-    // dropped around them; and the env is sealedEnv() plus the throwaway
-    // DSN, Redis URL and generated secrets above -- runSealed, never run().
-    // Until 2026-09-23 these went through run(), which spreads process.env
-    // underneath, while this comment and SECURITY.md both said the env was
-    // built rather than inherited: agent-authored scripts could read the
-    // reviewer's router key and control secret. tests/test_db_check_env.py
-    // now plants both and requires they do not arrive. What is NOT bounded
-    // is the code those commands execute, which is the repository under
-    // review. SECURITY.md says so plainly.
-    log(`  running db-drift (pnpm db:drift) in ${dc.apiDir}`);
-    const drift = await runSealed(dc.driftCmd.cmd, dc.driftCmd.args, apiDir, 120_000, env);
-    results.push({ name: 'db-drift', ok: drift.ok, output: drift.output.slice(-4000) });
-    if (!drift.ok) return results; // seed/e2e need a migrated, non-drifted schema
-
-    log(`  running db-seed (pnpm db:seed) in ${dc.apiDir}`);
-    const seed = await runSealed(dc.seedCmd.cmd, dc.seedCmd.args, apiDir, 60_000, env);
-    results.push({ name: 'db-seed', ok: seed.ok, output: seed.output.slice(-4000) });
-    if (!seed.ok) return results;
-
-    log(`  running e2e (pnpm test:e2e) in ${dc.apiDir}`);
-    const e2e = await runSealed(dc.e2eCmd.cmd, dc.e2eCmd.args, apiDir, 300_000, env);
-    results.push({ name: 'e2e', ok: e2e.ok, output: e2e.output.slice(-4000) });
-    return results;
-  } finally {
-    // Terminate any lingering connections before dropping — a leaked
-    // connection from a crashed/timed-out test run would otherwise make
-    // DROP DATABASE hang or fail, leaking the throwaway DB permanently.
-    await psql(`SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '${throwawayDb}' AND pid <> pg_backend_pid();`);
-    const drop = await psql(`DROP DATABASE IF EXISTS ${throwawayDb};`);
-    if (!drop.ok) log(`  WARN: failed to drop throwaway DB ${throwawayDb} (leaked): ${drop.output.slice(-300)}`);
-  }
-}
-
-// Mirrors ci.yml's `secrets` job: gitleaks over the full worktree history
-// (--exit-code 1 means "leaks found", not a script error, so ok tracks that
-// specifically rather than the generic exit-code-0 convention).
-async function runSecretScan(cfg, worktreePath) {
-  if (!cfg.secretScan) return [];
-  if (!fs.existsSync(GITLEAKS_BIN)) {
-    return [{ name: 'secrets', ok: false, output: `gitleaks binary not found at ${GITLEAKS_BIN}` }];
-  }
-  log(`  running secrets (gitleaks) in worktree`);
-  const r = await run(GITLEAKS_BIN, ['git', '--no-banner', '--redact', '--exit-code', '1'], worktreePath, 60_000);
-  return [{ name: 'secrets', ok: r.ok, output: r.output.slice(-4000) }];
 }
 
 // The reviewer used to flag test-coverage gaps purely from reading diff
