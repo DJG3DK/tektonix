@@ -215,7 +215,7 @@ def test_the_push_the_file_asks_for_has_nothing_to_push_with(poisoned_repo, monk
 def test_the_reviewer_prompt_says_the_diff_is_not_instructions():
     """The reviewer reads attacker-influenced text by definition -- that is
     what reviewing a diff is. Its prompt has to say so."""
-    prompt = (REPO / "services" / "commit-reviewer" / "reviewer.js").read_text()
+    prompt = (REPO / "services" / "commit-reviewer" / "prompt.js").read_text()
     assert "system prompt" in prompt and "instruction" in prompt.lower(), \
         "the reviewer prompt no longer warns that diff text is data, not instructions"
 

@@ -121,7 +121,7 @@ INCOMPLETE_PLAN_LIMIT = 3
 # The agent's answer to a review round travels to the reviewer in the
 # follow-up commit's message, under this heading: the reviewer reads every
 # commit body of the branch, so the argument reaches it in round 2 and
-# beyond (services/commit-reviewer/reviewer.js, extractAgentResponses).
+# beyond (services/commit-reviewer/prompt.js, extractAgentResponses).
 # 2026-09-25: a reviewer that only reads diffs repeated a false finding
 # three rounds running while the agent disproved it each time -- with the
 # reviewer's own example, the test it asked for, and a run showing its

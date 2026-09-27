@@ -331,7 +331,7 @@ async function setupWorktree(project, cfg, sha, base, { depsChangedOverride = nu
   // prisma schema?' is answered against the branch's own work rather than
   // against whatever live happens to contain now.
   const diffFiles = (await git(cfg.live, ['diff', '--name-only', base || 'HEAD', sha])).output;
-  // `depsChangedOverride` exists for the baseline run below: a base worktree
+  // `depsChangedOverride` exists for the baseline run (checks.js): a base worktree
   // is built with sha === base, so its own diff is EMPTY and it would always
   // take the symlink path while the branch took the install path. Comparing
   // the two then compares provisioning, not code -- see markPreexistingFailures.

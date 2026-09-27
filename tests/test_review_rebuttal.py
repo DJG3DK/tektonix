@@ -13,6 +13,9 @@ from tests.test_verify_and_ship import (  # noqa: F401 -- the two fixtures are a
 )
 
 REVIEWER_JS = pathlib.Path("services/commit-reviewer/reviewer.js").read_text()
+# The prompt, the marker and the extractor live in prompt.js; reviewer.js is
+# where the extractor is called on the branch's full commit log.
+PROMPT_JS = pathlib.Path("services/commit-reviewer/prompt.js").read_text()
 
 
 def _stub_commit_path(monkeypatch, messages: list, verdict="READY"):
@@ -92,11 +95,11 @@ async def test_a_live_project_still_hands_a_stuck_review_to_a_human(monkeypatch)
 
 
 def test_the_reviewer_reads_the_same_heading_the_gate_writes():
-    m = re.search(r"const REVIEW_RESPONSE_MARKER = '([^']+)'", REVIEWER_JS)
+    m = re.search(r"const REVIEW_RESPONSE_MARKER = '([^']+)'", PROMPT_JS)
     assert m and m.group(1) == vs.REVIEW_RESPONSE_MARKER
 
 
 def test_the_reviewer_is_told_a_disproved_finding_is_withdrawn():
-    assert "The agent's responses to the prior round(s)" in REVIEWER_JS
-    assert "the finding is WITHDRAWN" in REVIEWER_JS
+    assert "The agent's responses to the prior round(s)" in PROMPT_JS
+    assert "the finding is WITHDRAWN" in PROMPT_JS
     assert "extractAgentResponses(fullCommitLog)" in REVIEWER_JS

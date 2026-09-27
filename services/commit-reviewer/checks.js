@@ -112,8 +112,8 @@ function applyBaseline(checkResults, baselineForBase) {
   // and test all failed with `oxlint: not found` / `vite: not found`, the base
   // failed identically, every one was marked pre-existing, and every commit
   // came back "READY -- no issues found" having run nothing at all. The
-  // infrastructure escalation below existed for exactly this and never fired,
-  // because it filters on `!c.preexisting`.
+  // infrastructure escalation in reviewProject existed for exactly this and
+  // never fired, because it filters on `!c.preexisting`.
   for (const c of checkResults) {
     if (c.infrastructure) continue;
     if (!c.ok && baselineForBase && baselineForBase[c.name] === false) c.preexisting = true;

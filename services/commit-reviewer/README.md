@@ -87,7 +87,19 @@ router and talks to OpenRouter directly.
 ## Layout
 
 ```
-reviewer.js        the whole service — detection, worktree setup, checks, review, verdict
+reviewer.js        the entry point — project map, state and history, which branch is the
+                   review unit, the queue, reviewProject's orchestration and verdict, the
+                   control server; re-exports every name the tests import from the modules
+exec.js            how anything is run — run/runSealed, git with hooks off, runAgentCode
+                   (the one contained path for agent-authored code), the control secret
+worktree.js        the review checkout — setup, node_modules and dependency-dir
+                   provisioning, read-only binds, review secrets, cleanup, startup sweep
+checks.js          the mechanical checks, build, database job and secret scan, and whose
+                   failures they are (infrastructure vs pre-existing vs this change's)
+prompt.js          what the model is shown (diff packing, test and referenced files, the
+                   agent's responses, untrusted fencing), the router call, and how its
+                   answer is normalised and turned into the agent's message
+sandbox.js         the sandbox container: probe, run there, or delegate in the bundle
 review-secrets/    non-production credentials per project (gitignored)
 state.json         latest verdict per project and per task branch (gitignored)
 history.jsonl      append-only review log (gitignored)
