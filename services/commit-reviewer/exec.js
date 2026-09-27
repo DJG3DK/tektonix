@@ -98,7 +98,7 @@ const git = (cwd, args) => run('git', [...GIT_SAFE, ...args], cwd);
 // sealedEnv is still applied inside the container: it stops secrets reaching
 // the command, which containment does not do on its own.
 async function runAgentCode(cfg, worktreePath, relDir, cmd, args, timeoutMs, extraEnv, network, stack) {
-  const mode = await sandbox.probe();
+  const mode = await sandbox.probe({ secret: REVIEW_CONTROL_SECRET });
   if (mode.mode === 'sandbox') {
     return sandbox.runSandboxed(cfg, worktreePath, relDir, cmd, args, timeoutMs,
                                 sealedEnv(extraEnv), network, stack);

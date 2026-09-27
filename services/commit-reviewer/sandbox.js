@@ -105,15 +105,24 @@ let _probe = null;
  * `unavailable`, which the caller must refuse on. There is no answer that
  * means "run it here": this process holds the secret that authorises merges.
  */
-async function probe() {
+async function probe({ secret, fetchImpl = fetch } = {}) {
     if (_probe) return _probe;
     if (IN_CONTAINER) {
-        _probe = DELEGATE_URL
-            ? { mode: 'delegated', reason: `checks run in sandbox containers started by the agent (${DELEGATE_URL})` }
-            : { mode: 'unavailable',
-                reason: 'this service runs in a container that is not given the docker socket, and '
-                      + 'AGENT_SANDBOX_URL is unset, so there is no agent to start the sandbox for it' };
-        return _probe;
+        if (!DELEGATE_URL) {
+            _probe = { mode: 'unavailable',
+                       reason: 'this service runs in a container that is not given the docker socket, and '
+                             + 'AGENT_SANDBOX_URL is unset, so there is no agent to start the sandbox for it' };
+            return _probe;
+        }
+        // Asked of the agent, the way a host install asks docker: whether the
+        // image is there. Only a yes is remembered -- a no (the agent down, the
+        // image still building after a failed boot build) is asked again next
+        // review, and the agent builds the image when it is asked and it is
+        // missing (2026-09-27: before this, a missing image failed every check
+        // identically on the base commit and read as pre-existing).
+        const answer = await delegatedProbe({ secret, fetchImpl });
+        if (answer.mode === 'delegated') _probe = answer;
+        return answer;
     }
     const d = await execp('docker', ['version', '--format', '{{.Server.Version}}']);
     if (!d.ok) {
@@ -127,6 +136,32 @@ async function probe() {
     }
     _probe = { mode: 'sandbox', reason: `${IMAGE} on docker ${d.out.trim()}` };
     return _probe;
+}
+
+async function delegatedProbe({ secret, fetchImpl = fetch } = {}) {
+    if (!secret) {
+        return { mode: 'unavailable',
+                 reason: 'REVIEW_CONTROL_SECRET is not configured, so the agent would refuse to run anything' };
+    }
+    let res;
+    try {
+        res = await fetchImpl(`${DELEGATE_URL}/api/internal/review-sandbox/probe`, {
+            headers: { 'x-review-secret': secret }, signal: AbortSignal.timeout(30_000),
+        });
+    } catch (err) {
+        return { mode: 'unavailable',
+                 reason: `the agent's sandbox endpoint did not answer (${String(err && err.message || err).slice(0, 200)})` };
+    }
+    let data = null;
+    try { data = await res.json(); } catch { /* reported below */ }
+    if (!res.ok || !data || typeof data !== 'object') {
+        const detail = data && (data.detail || data.error);
+        return { mode: 'unavailable',
+                 reason: `the agent refused the probe (HTTP ${res.status}${detail ? `: ${String(detail).slice(0, 200)}` : ''})` };
+    }
+    if (!data.ok) return { mode: 'unavailable', reason: String(data.reason || 'the agent cannot run a sandbox right now') };
+    return { mode: 'delegated', image: data.image,
+             reason: `checks run in ${data.image || 'the sandbox image'} started by the agent (${DELEGATE_URL})` };
 }
 
 function resetProbe() { _probe = null; }   // tests only
@@ -458,6 +493,6 @@ function missingTool(output) {
     return m ? m[1] : null;
 }
 
-module.exports = { probe, resetProbe, runSandboxed, runDelegated, delegatedRequest, dockerArgs, mountArgs,
+module.exports = { probe, delegatedProbe, resetProbe, runSandboxed, runDelegated, delegatedRequest, dockerArgs, mountArgs,
                    mountSpecs, nodeModulesLinks, isInside, missingTool, imageFor, STACKS, IMAGE, IN_CONTAINER,
                    DELEGATE_URL };

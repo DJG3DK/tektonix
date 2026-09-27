@@ -48,6 +48,13 @@ class _RunBody(BaseModel):
     timeoutMs: int = 300_000
 
 
+@router.get("/api/internal/review-sandbox/probe")
+async def probe_review_sandbox(_auth: None = Depends(require_review_secret)):
+    """What the reviewer asks before delegating: can a check run here now.
+    A missing image starts a build; the reviewer asks again next review."""
+    return await rs.probe()
+
+
 @router.post("/api/internal/review-sandbox/run")
 async def run_review_check(body: _RunBody, _auth: None = Depends(require_review_secret)):
     req = rs.CheckRequest(

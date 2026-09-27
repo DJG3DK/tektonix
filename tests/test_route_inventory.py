@@ -215,6 +215,7 @@ EXPECTED: list[tuple[str, str, str | None]] = [
     ('GET', '/api/github/approve', None),
     ('GET', '/api/github/inbox', 'require_full_auth'),
     ('GET', '/api/health', None),
+    ('GET', '/api/internal/review-sandbox/probe', 'require_review_secret'),
     ('GET', '/api/model-config', 'require_full_auth'),
     ('GET', '/api/model-config/catalog', 'require_full_auth'),
     ('GET', '/api/model-config/endpoints', 'require_full_auth'),

@@ -28,10 +28,13 @@ reviewer already holds and the checks it starts never see.
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import re
 import uuid
 from dataclasses import dataclass, field
+
+from agent import paths
 
 from agent.tools import sandbox as sb
 
@@ -228,11 +231,100 @@ def clamp_timeout_ms(value) -> int:
     return max(1_000, min(ms, MAX_TIMEOUT_MS))
 
 
+# --- the probe: what the reviewer asks before it trusts this path (2026-09-27) ---
+#
+# A host install's reviewer probes docker and the image itself before every
+# review and refuses with a SETUP result when either is missing. The delegated
+# path had no probe: a missing image became docker's "Unable to find image"
+# on the check's own output, which matched no infrastructure pattern, failed
+# identically on the base commit, and was filed as pre-existing -- the check
+# silently never ran. Now the reviewer asks here first, and a run without the
+# image is a refusal, not a check result. The image is built here on demand
+# (the same build the entrypoint does at boot) so one failed boot build does
+# not leave every review refused until a restart.
+
+logger = logging.getLogger("tektonix")
+
+SANDBOX_CONTEXT = paths.REPO_ROOT / "docker" / "agent-sandbox"
+_BUILD_TIMEOUT_S = 1800
+_builds: dict[str, asyncio.Task] = {}
+
+
+async def _docker(*args: str, timeout_s: float = 30) -> tuple[bool, str]:
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "docker", *args, stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
+        result = await asyncio.wait_for(proc.communicate(), timeout=timeout_s)
+    except (OSError, TimeoutError) as e:
+        return False, str(e)
+    out = result[0] if result else b""
+    return proc.returncode == 0, (out or b"").decode("utf-8", errors="replace").strip()
+
+
+async def image_present(image: str) -> bool:
+    ok, _ = await _docker("image", "inspect", image, "--format", "{{.Id}}")
+    return ok
+
+
+def _building(image: str) -> bool:
+    task = _builds.get(image)
+    return task is not None and not task.done()
+
+
+async def _build(image: str) -> None:
+    ok, out = await _docker("build", "-q", "-t", image, str(SANDBOX_CONTEXT), timeout_s=_BUILD_TIMEOUT_S)
+    if ok:
+        logger.info("review sandbox: built %s", image)
+    else:
+        logger.error("review sandbox: building %s failed: %s", image, out[-500:])
+
+
+def start_build(image: str) -> bool:
+    """Kick off one build of `image` from the sandbox context, if there is one
+    and none is running. True when a build is now in progress."""
+    if _building(image):
+        return True
+    if image != sb.SANDBOX_IMAGE or not (SANDBOX_CONTEXT / "Dockerfile").is_file():
+        return False
+    _builds[image] = asyncio.get_running_loop().create_task(_build(image))
+    return True
+
+
+async def probe(image: str | None = None) -> dict:
+    """Whether a check could run here right now: docker reachable and the
+    image present. {ok, mode, image, docker, reason} in sandbox.js's terms."""
+    image = image or sb.SANDBOX_IMAGE
+    ok, version = await _docker("version", "--format", "{{.Server.Version}}")
+    if not ok:
+        return {"ok": False, "mode": "unavailable", "image": image, "docker": None,
+                "reason": f"docker is not usable from the agent: {version[:200]}"}
+    if not await image_present(image):
+        building = start_build(image)
+        reason = (f"the sandbox image {image} is not built; the agent is building it now, so try again "
+                  f"in a few minutes" if building else
+                  f"the sandbox image {image} is not built, and the agent has no docker/agent-sandbox "
+                  f"context to build it from")
+        return {"ok": False, "mode": "unavailable", "image": image, "docker": version, "reason": reason}
+    return {"ok": True, "mode": "delegated", "image": image, "docker": version,
+            "reason": f"{image} on docker {version}"}
+
+
+def _refusal(image: str, why: str) -> dict:
+    return {"ok": False, "code": 1, "infrastructure": True, "image": image,
+            "output": f"SETUP: this check could not be sandboxed by the agent -- {why}. It was not run, "
+                      f"and nothing about the code under review is known either way."}
+
+
 async def run_check(req: CheckRequest) -> dict:
     """Run one check; {ok, code, output, image} in sandbox.js's own shape."""
     name = f"rvw-{uuid.uuid4().hex[:12]}"
     argv, image = build_docker_argv(req, name)
     timeout_s = clamp_timeout_ms(req.timeout_ms) / 1000
+    if not await image_present(image):
+        building = start_build(image)
+        return _refusal(image, f"the sandbox image {image} is not built"
+                        + (" (the agent is building it now)" if building else ""))
     try:
         proc = await asyncio.create_subprocess_exec(
             *argv,

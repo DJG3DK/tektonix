@@ -64,12 +64,51 @@ const REVIEWER_SRC = fs.readdirSync(REVIEWER_DIR)
     .map((f) => fs.readFileSync(path.join(REVIEWER_DIR, f), 'utf8'))
     .join('\n');
 
-test('inside the bundle with an agent to ask, checks are delegated', async () => {
+test('inside the bundle with an agent to ask, checks are delegated once the agent says the image is there', async () => {
     const s = freshSandbox('1', 'http://agent:8100/');
     assert.equal(s.IN_CONTAINER, true);
-    const p = await s.probe();
+    const asked = [];
+    const agent = (data, status = 200) => async (url, init) => {
+        asked.push({ url, init });
+        return { ok: status < 300, status, json: async () => data };
+    };
+    const p = await s.probe({ secret: 's3cret', fetchImpl: agent({ ok: true, mode: 'delegated', image: 'tektonix-sandbox:latest', docker: '27.1' }) });
     assert.equal(p.mode, 'delegated');
+    assert.ok(/tektonix-sandbox:latest/.test(p.reason), p.reason);
+    assert.equal(asked[0].url, 'http://agent:8100/api/internal/review-sandbox/probe');
+    assert.equal(asked[0].init.headers['x-review-secret'], 's3cret');
     assert.equal(s.DELEGATE_URL, 'http://agent:8100');
+    // A yes is remembered: the next check does not ask again.
+    const again = await s.probe({ secret: 's3cret', fetchImpl: agent({ ok: false, reason: 'gone' }) });
+    assert.equal(again.mode, 'delegated');
+    assert.equal(asked.length, 1);
+});
+
+test('inside the bundle, a missing image or a silent agent is asked again next time, never remembered', async () => {
+    const s = freshSandbox('1', 'http://agent:8100');
+    const answers = [
+        { ok: false, reason: 'the sandbox image tektonix-sandbox:latest is not built; the agent is building it now, so try again in a few minutes' },
+        { ok: true, mode: 'delegated', image: 'tektonix-sandbox:latest' },
+    ];
+    let calls = 0;
+    const fetchImpl = async () => ({ ok: true, status: 200, json: async () => answers[calls++] });
+    const first = await s.probe({ secret: 's3cret', fetchImpl });
+    assert.equal(first.mode, 'unavailable');
+    assert.ok(/building it now/.test(first.reason), first.reason);
+    const second = await s.probe({ secret: 's3cret', fetchImpl });
+    assert.equal(second.mode, 'delegated', 'the image was built in between; the second ask sees it');
+    assert.equal(calls, 2);
+
+    const t = freshSandbox('1', 'http://agent:8100');
+    const down = await t.probe({ secret: 's3cret', fetchImpl: async () => { throw new Error('ECONNREFUSED'); } });
+    assert.equal(down.mode, 'unavailable');
+    assert.ok(/did not answer/.test(down.reason), down.reason);
+    const refused = await t.probe({ secret: 's3cret', fetchImpl: async () => ({ ok: false, status: 401, json: async () => ({ detail: 'invalid or missing X-Review-Secret' }) }) });
+    assert.equal(refused.mode, 'unavailable');
+    assert.ok(/HTTP 401/.test(refused.reason), refused.reason);
+    const noSecret = await t.probe({ secret: '', fetchImpl: async () => { throw new Error('must not be called'); } });
+    assert.equal(noSecret.mode, 'unavailable');
+    assert.ok(/REVIEW_CONTROL_SECRET/.test(noSecret.reason), noSecret.reason);
 });
 
 test('inside the bundle with no agent to ask, it refuses rather than running in-process', async () => {

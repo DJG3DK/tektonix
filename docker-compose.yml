@@ -201,7 +201,8 @@ services:
       # Checks run agent-authored code, and THIS container holds the secret
       # that authorises a merge -- so they never run here. The agent, which
       # has the docker socket, starts a sandbox container for each one
-      # (services/commit-reviewer/sandbox.js). Unset, every check refuses.
+      # (services/commit-reviewer/sandbox.js), after a probe that the image is
+      # there; the agent builds it on demand. Unset, every check refuses.
       AGENT_SANDBOX_URL: http://agent:8100
       # Under /projects so the agent can hand it to the host daemon, and the
       # same value the agent validates against.

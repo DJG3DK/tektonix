@@ -114,6 +114,8 @@ does not take the request's word for what the container can see: the worktree
 must be this project's review worktree under `REVIEW_WORKTREE_ROOT`, every
 extra mount must come from the live checkout and is forced read-only, the
 image comes from server-owned config, and the hardening flags are fixed.
+Before each review the reviewer asks the agent's probe whether docker and
+the image are there, and a missing image starts a build on the agent's side.
 Without `AGENT_SANDBOX_URL` the bundle's reviewer refuses, like any other
 deployment that cannot contain the code. The database checks below are
 refused outright in the bundle.

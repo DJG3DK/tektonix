@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### The bundle's reviewer probes the sandbox before it trusts it
+
+In the compose bundle the reviewer asks the agent to run each check in a
+sandbox, and that path had no probe: a missing sandbox image became docker's
+own error on the check's output, which failed identically on the base commit
+and was filed as pre-existing, so the check silently never ran. The reviewer
+now asks the agent first, the way a host install asks docker, and remembers
+only a yes; the agent refuses a run without the image as a setup problem
+rather than a check result, and builds the image on demand from
+docker/agent-sandbox, so one failed boot build no longer leaves every review
+refused until a restart.
+
 ### Three files split at their seams
 
 `agent/server.py` was 3,642 lines; its auth, project, upload and review-proxy

@@ -258,6 +258,90 @@ def test_a_timed_out_check_kills_its_container(bundle, monkeypatch):
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
     monkeypatch.setattr(rs.sb, "_kill_container", fake_kill)
     monkeypatch.setattr(rs, "clamp_timeout_ms", lambda _v: 50)
+
+    async def present(image):
+        return True
+
+    monkeypatch.setattr(rs, "image_present", present)   # this test is about the run, not the probe
     out = asyncio.run(rs.run_check(_req(bundle)))
     assert out["ok"] is False and out["code"] == 124
     assert killed and killed[0].startswith("rvw-")
+
+
+# --- the probe, and a run without the image (2026-09-27) ---------------------
+
+def _fake_docker(answers):
+    """`answers`: {"version": (ok, out), "image": (ok, out)} for the two probes."""
+    async def fake(*args, timeout_s=30):
+        key = "version" if args[0] == "version" else "image"
+        return answers[key]
+    return fake
+
+
+def test_the_probe_reports_docker_and_the_image_and_builds_a_missing_one(bundle, monkeypatch):
+    c = _client()
+    h = {"X-Review-Secret": "the-secret"}
+    url = "/api/internal/review-sandbox/probe"
+    assert c.get(url).status_code == 401
+    monkeypatch.setattr(rs, "_docker", _fake_docker({"version": (True, "27.1"), "image": (True, "sha256:abc")}))
+    r = c.get(url, headers=h)
+    assert r.status_code == 200 and r.json()["ok"] is True and r.json()["mode"] == "delegated"
+    assert r.json()["image"] == "tektonix-sandbox:latest" and r.json()["docker"] == "27.1"
+
+    builds = []
+    monkeypatch.setattr(rs, "start_build", lambda image: builds.append(image) or True)
+    monkeypatch.setattr(rs, "_docker", _fake_docker({"version": (True, "27.1"), "image": (False, "No such image")}))
+    r = c.get(url, headers=h).json()
+    assert r["ok"] is False and r["mode"] == "unavailable" and "building it now" in r["reason"]
+    assert builds == ["tektonix-sandbox:latest"]
+
+    monkeypatch.setattr(rs, "_docker", _fake_docker({"version": (False, "Cannot connect to the Docker daemon"), "image": (True, "")}))
+    r = c.get(url, headers=h).json()
+    assert r["ok"] is False and "docker is not usable" in r["reason"]
+
+
+def test_a_run_without_the_image_is_a_setup_refusal_not_a_check_result(bundle, monkeypatch):
+    async def absent(image):
+        return False
+
+    spawned = []
+
+    async def fake_exec(*argv, **_kw):
+        spawned.append(argv)
+        raise AssertionError("docker run must not be attempted without the image")
+
+    monkeypatch.setattr(rs, "image_present", absent)
+    monkeypatch.setattr(rs, "start_build", lambda image: True)
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+    c = _client()
+    r = c.post("/api/internal/review-sandbox/run", json=_body(bundle), headers={"X-Review-Secret": "the-secret"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is False and body["infrastructure"] is True
+    assert body["output"].startswith("SETUP:") and "not built" in body["output"] and "building it now" in body["output"]
+    assert spawned == []
+
+
+def test_a_build_starts_once_and_only_for_the_default_image_with_a_context(bundle, monkeypatch, tmp_path):
+    ctx = tmp_path / "ctx"
+    ctx.mkdir()
+    (ctx / "Dockerfile").write_text("FROM scratch\n")
+    monkeypatch.setattr(rs, "SANDBOX_CONTEXT", ctx)
+    started = []
+
+    async def fake_build(image):
+        started.append(image)
+        await asyncio.sleep(0.05)
+
+    monkeypatch.setattr(rs, "_build", fake_build)
+    rs._builds.clear()
+
+    async def go():
+        assert rs.start_build("tektonix-sandbox:latest") is True
+        assert rs.start_build("tektonix-sandbox:latest") is True, "a second ask joins the build in progress"
+        assert rs.start_build("some-other:image") is False, "only the default image has a context to build from"
+        await asyncio.sleep(0.1)
+        assert started == ["tektonix-sandbox:latest"]
+
+    asyncio.run(go())
+    rs._builds.clear()
