@@ -341,7 +341,13 @@ function runSealed(cmd, args, cwd, timeoutMs = 300_000, extraEnv) {
     });
   });
 }
-const git = (cwd, args) => run('git', args, cwd);
+// On every git call, as in agent/tools/git.py: the tree git runs in is
+// agent-authored. A project using husky has core.hooksPath=.husky in its
+// config, and .husky/* is tracked content an agent commit changes -- so a
+// hook would run agent code as this service. fsmonitor is the same shape:
+// config that names a program git runs on status/diff.
+const GIT_SAFE = ['-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false'];
+const git = (cwd, args) => run('git', [...GIT_SAFE, ...args], cwd);
 
 // Confirmed live (2026-08-23, a monorepo project): state.json tracks one rolling
 // review record PER PROJECT, not per task/thread -- if the sandbox branch
@@ -833,7 +839,7 @@ async function setupWorktree(project, cfg, sha, base, { depsChangedOverride = nu
     log(`  stale-mount sweep failed (continuing): ${err.message}`);
   }
   fs.rmSync(worktreePath, { recursive: true, force: true });
-  await run('git', ['worktree', 'prune'], cfg.live);
+  await git(cfg.live, ['worktree', 'prune']);
   const add = await git(cfg.live, ['worktree', 'add', '--detach', worktreePath, sha]);
   if (!add.ok) throw new Error(`worktree add failed: ${add.output.slice(0, 500)}`);
 
@@ -1164,7 +1170,7 @@ async function cleanupWorktree(cfg, worktreePath) {
   for (const rel of cfg.dependencyDirs || []) {
     await run('umount', [path.join(worktreePath, rel)], '/');
   }
-  await run('git', ['worktree', 'remove', worktreePath, '--force'], cfg.live);
+  await git(cfg.live, ['worktree', 'remove', worktreePath, '--force']);
 }
 
 // Where agent-authored code runs. Everything below that executes something
@@ -1602,7 +1608,7 @@ function gatherReferencedFiles(worktreePath, commitLog, diff) {
       // bare filename -- resolve against the worktree, unique match only
       try {
         const { execFileSync } = require('node:child_process');
-        const matches = execFileSync('git', ['ls-files', `*/${token}`, token], { cwd: worktreePath })
+        const matches = execFileSync('git', [...GIT_SAFE, 'ls-files', `*/${token}`, token], { cwd: worktreePath })
           .toString().trim().split('\n').filter(Boolean);
         if (matches.length === 1) rel = matches[0];
       } catch { /* unresolvable token -- skip */ }
@@ -1646,7 +1652,7 @@ function gatherReferencedFiles(worktreePath, commitLog, diff) {
     if (depFiles.size >= 4) break;
     try {
       const hits = execFileSync(
-        'git', ['grep', '-lE', `(async +)?${sym} *\\(`, '--', '*.ts', '*.tsx', '*.js'],
+        'git', [...GIT_SAFE, 'grep', '-lE', `(async +)?${sym} *\\(`, '--', '*.ts', '*.tsx', '*.js'],
         { cwd: worktreePath },
       ).toString().trim().split('\n').filter((f) => f && !changed.has(f) && !f.includes('.spec.') && !f.includes('/generated/'));
       if (hits.length >= 1 && hits.length <= 3) hits.forEach((h) => depFiles.size < 4 && depFiles.add(h));
@@ -2417,10 +2423,10 @@ async function sweepLeftoverWorktrees(root = WORKTREE_ROOT, projects = currentPr
     }
     const owner = Object.entries(projects).find(([p]) => name.startsWith(`${p}-`));
     if (owner && owner[1].live) {
-      await run('git', ['worktree', 'remove', '--force', dir], owner[1].live);
+      await git(owner[1].live, ['worktree', 'remove', '--force', dir]);
     }
     fs.rmSync(dir, { recursive: true, force: true });
-    if (owner && owner[1].live) await run('git', ['worktree', 'prune'], owner[1].live);
+    if (owner && owner[1].live) await git(owner[1].live, ['worktree', 'prune']);
     swept.push(name);
   }
   if (swept.length) log(`removed ${swept.length} review worktree(s) left by earlier runs: ${swept.join(', ')}`);

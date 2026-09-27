@@ -85,7 +85,12 @@ function run(cmd, args, cwd) {
         });
     });
 }
-const git = (cwd, args) => run('git', args, cwd);
+// Hooks and fsmonitor off on every call (services/commit-reviewer/reviewer.js,
+// GIT_SAFE): `merge --ff-only` brings agent-authored files into the live
+// tree, and a project with core.hooksPath=.husky would then run the agent's
+// own post-merge hook as this service.
+const GIT_SAFE = ['-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false'];
+const git = (cwd, args) => run('git', [...GIT_SAFE, ...args], cwd);
 
 function projectOr404(req, res) {
     const p = currentProjects()[req.params.name];
