@@ -100,19 +100,19 @@ def _reports() -> list[tuple[str, dict]]:
 
 def _suite() -> dict:
     """The suite as it stands on disk: how many tasks, in which categories.
-    A broken spec is part of the answer, in the words of the spec loader;
-    anything else is the server log's, and the page gets one sentence."""
+    A broken spec is part of the answer, named by file; the reason and
+    anything else that goes wrong are the server log's."""
     from agent.evals import spec   # noqa: PLC0415 -- light, but only here
     try:
         if not spec.TASKS_DIR.is_dir():
             return {"tasks": 0, "by_category": {}, "ids": [], "error": f"no tasks directory at {spec.TASKS_DIR}"}
-        tasks, errors = spec.load_suite_report(spec.TASKS_DIR)
+        tasks, broken = spec.broken_task_files(spec.TASKS_DIR)
     except Exception:  # noqa: BLE001 -- a bad spec is an answer, not a 500
         logger.exception("the eval suite could not be read")
         return {"tasks": 0, "by_category": {}, "ids": [], "error": "the eval suite could not be read; see the server log"}
-    if errors:
+    if broken:
         return {"tasks": 0, "by_category": {}, "ids": [],
-                "error": ("the eval suite has broken task specs: " + "; ".join(errors))[:300]}
+                "error": ("broken task specs, reasons in the server log: " + ", ".join(broken))[:300]}
     if not tasks:
         return {"tasks": 0, "by_category": {}, "ids": [], "error": f"{spec.TASKS_DIR}: no .yaml task files"}
     cats: dict[str, int] = {}

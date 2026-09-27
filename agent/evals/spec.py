@@ -14,6 +14,7 @@ at the point of use, which on a twelve-task run is twenty minutes later.
 """
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -54,6 +55,9 @@ ASSERTION_KINDS = (
     "diff_excludes",   # the diff changed none of these globs
     "max_iterations",  # it got there without N redos
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 class SpecError(ValueError):
@@ -255,9 +259,8 @@ def load_task(path: Path, fixtures_dir: Path | None = None) -> TaskSpec:
 
 
 def load_suite_report(base: Path, fixtures_dir: Path | None = None) -> tuple[list[TaskSpec], list[str]]:
-    """Every task that loads, and one line per task that does not: the
-    dashboard shows the second list as the suite's own state, which is why
-    it is data here and an exception only in load_suite."""
+    """Every task that loads, and the full complaint about each one that
+    does not, in load order."""
     tasks, errors = [], []
     for path in sorted(base.glob("*.yaml")):
         try:
@@ -265,6 +268,22 @@ def load_suite_report(base: Path, fixtures_dir: Path | None = None) -> tuple[lis
         except SpecError as e:
             errors.append(str(e))
     return tasks, errors
+
+
+def broken_task_files(base: Path, fixtures_dir: Path | None = None) -> tuple[list[TaskSpec], list[str]]:
+    """Every task that loads, and the NAME of each file that does not, with
+    the reason in the log. This is what the dashboard shows: which files
+    are broken, in words that come from the file name and nothing an
+    exception said (code scanning, 2026-09-27). `python scripts/run_evals.py`
+    prints the reasons in full."""
+    tasks, broken = [], []
+    for path in sorted(base.glob("*.yaml")):
+        try:
+            tasks.append(load_task(path, fixtures_dir))
+        except SpecError:
+            logger.warning("eval suite: %s is broken", path, exc_info=True)
+            broken.append(path.name)
+    return tasks, broken
 
 
 def load_suite(tasks_dir: Path | None = None, fixtures_dir: Path | None = None,

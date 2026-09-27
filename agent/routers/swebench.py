@@ -211,7 +211,7 @@ def combined(base: str, parts: list[dict]) -> dict:
 
 def _harness_tests(run_dir: Path, run_id: str, iid: str) -> dict | None:
     """Which graded tests failed, from the official harness's own report."""
-    rep = _load(run_dir / "logs" / "run_evaluation" / run_id / "tektonix" / iid / "report.json")
+    rep = _load(safe_path.under(run_dir, "logs", "run_evaluation", run_id, "tektonix", iid, "report.json"))
     if not rep or iid not in rep:
         return None
     ts = rep[iid].get("tests_status") or {}
@@ -229,7 +229,7 @@ def _harness_notes(run_dir: Path, s: dict, run_id: str) -> dict:
     in its report), for runs graded before the runner kept it in the
     summary. `no_tests_collected` on pytest's own suite is the inner
     sessions printing "collected 0 items", not our failure (2026-09-25)."""
-    rep = _load(run_dir / (s.get("official_report") or f"tektonix.{run_id}.json")) or {}
+    rep = _load(safe_path.under(run_dir, str(s.get("official_report") or f"tektonix.{run_id}.json"))) or {}
     notes = rep.get("failure_reasons")
     return notes if isinstance(notes, dict) else {}
 
@@ -314,7 +314,9 @@ def _host_combined(hosts: list[dict | None]) -> dict | None:
 def _run_tasks(name: str) -> dict:
     d = _run_dir(name)
     s = _load(d / "summary.json") or {}
-    run_id = s.get("run_id") or name
+    run_id = str(s.get("run_id") or name)
+    if not _RUN_NAME.match(run_id):
+        raise HTTPException(400, "not a run name")
     fails = set(_gold_checks()["reference_fails"])
     notes = _harness_notes(d, s, run_id)
     tasks = []

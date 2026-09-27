@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.8.0 — every check contained, the gate reads the diff, benchmarks from a page
 
 ### Twenty-two code scanning alerts closed
 
