@@ -18,13 +18,18 @@
 // mirror that call site rather than inventing a second hardening policy --
 // two policies drift, and the weaker one is the one that matters.
 //
-// WHY THE BUNDLE IS EXEMPT. In the compose bundle this service runs INSIDE a
+// THE BUNDLE DELEGATES. In the compose bundle this service runs INSIDE a
 // container that is not given /var/run/docker.sock (docker-compose.yml gives
-// it to `agent` alone). It cannot start a container, and handing it the
-// socket so that it could would give that container host-root equivalent --
-// strictly worse than the containment it already has. So on the bundle the
-// caller keeps running checks in-process, and only a host install, where the
-// reviewer really is root on the real machine, routes through here.
+// it to `agent` alone), and handing it the socket would give it host-root
+// equivalent. It used to run checks in-process instead, on the theory that
+// the container was containment enough. It was not: this container holds the
+// review-control secret and can reach the merge endpoint, so a test file that
+// read the secret and POSTed `force: true` merged its own branch past the
+// gate. Now the bundle asks the agent -- which has the socket, and runs the
+// same checks for its own run_checks tool -- to start the same hardened
+// container (agent/review_sandbox.py, which re-validates every path). Without
+// AGENT_SANDBOX_URL the bundle refuses, like any other host that cannot
+// contain the code.
 //
 // FAIL CLOSED. If Docker or the image is missing on a host install, a check
 // does not quietly run on the host instead: "fall back when the sandbox
@@ -80,6 +85,7 @@ const CPUS = '2';
 const PIDS = '512';
 
 const IN_CONTAINER = process.env.TEKTONIX_BUNDLE === '1';
+const DELEGATE_URL = (process.env.AGENT_SANDBOX_URL || '').replace(/\/+$/, '');
 
 function execp(cmd, args, opts = {}) {
     return new Promise((resolve) => {
@@ -94,14 +100,19 @@ let _probe = null;
 /**
  * Whether checks can be sandboxed here, cached for the process.
  *
- * Three answers, not two: `bundle` is "already contained, do not try", which
- * a caller must not confuse with `unavailable` -- one is correct operation
- * and the other is a host install that has to refuse.
+ * Three answers: `sandbox` (a host install with docker and the image),
+ * `delegated` (the bundle, where the agent starts the container), and
+ * `unavailable`, which the caller must refuse on. There is no answer that
+ * means "run it here": this process holds the secret that authorises merges.
  */
 async function probe() {
     if (_probe) return _probe;
     if (IN_CONTAINER) {
-        _probe = { mode: 'bundle', reason: 'this service runs in a container that is not given the docker socket' };
+        _probe = DELEGATE_URL
+            ? { mode: 'delegated', reason: `checks run in sandbox containers started by the agent (${DELEGATE_URL})` }
+            : { mode: 'unavailable',
+                reason: 'this service runs in a container that is not given the docker socket, and '
+                      + 'AGENT_SANDBOX_URL is unset, so there is no agent to start the sandbox for it' };
         return _probe;
     }
     const d = await execp('docker', ['version', '--format', '{{.Server.Version}}']);
@@ -168,15 +179,27 @@ function nodeModulesLinks(root, depth = 0, rel = '') {
     return out;
 }
 
+/** The -v arguments, for a container this process starts itself. */
 function mountArgs(cfg, worktreePath) {
     const args = ['-v', `${worktreePath}:/workspace`];
+    for (const m of mountSpecs(cfg, worktreePath)) args.push('-v', `${m.src}:${m.dst}:ro`);
+    return args;
+}
+
+/**
+ * Every read-only mount beyond the worktree itself, as {src, dst}. The
+ * delegated path sends these to the agent as data rather than as -v strings,
+ * so nothing has to split a path on ':' to get them back.
+ */
+function mountSpecs(cfg, worktreePath) {
+    const specs = [];
     const seen = new Set();
 
     for (const rel of [...(cfg.dependencyDirs || []), ...(cfg.readOnlyMounts || [])]) {
         const src = path.join(cfg.live, rel);
         if (seen.has(rel) || !fs.existsSync(src)) continue;
         seen.add(rel);
-        args.push('-v', `${src}:${path.posix.join('/workspace', rel)}:ro`);
+        specs.push({ src, dst: path.posix.join('/workspace', rel) });
     }
 
     // The other half of the same problem, and the one that actually bit:
@@ -205,7 +228,7 @@ function mountArgs(cfg, worktreePath) {
         // only the project's own live checkout is an acceptable destination.
         if (!isInside(target, cfg.live) || seen.has(target)) continue;
         seen.add(target);
-        args.push('-v', `${target}:${target}:ro`);
+        specs.push({ src: target, dst: target });
     }
 
     // ...and the layout the loop above cannot see. When a project's package
@@ -232,7 +255,7 @@ function mountArgs(cfg, worktreePath) {
         }
         if (!isInside(target, cfg.live) || seen.has(target)) continue;
         seen.add(target);
-        args.push('-v', `${target}:${target}:ro`);
+        specs.push({ src: target, dst: target });
     }
 
     const dotgit = path.join(worktreePath, '.git');
@@ -248,7 +271,7 @@ function mountArgs(cfg, worktreePath) {
                 // Only the live checkout's own .git is accepted.
                 const expected = path.join(cfg.live, '.git');
                 if (path.resolve(mainGit) === path.resolve(expected) && fs.existsSync(mainGit)) {
-                    args.push('-v', `${mainGit}:${mainGit}:ro`);
+                    specs.push({ src: mainGit, dst: mainGit });
                 }
             }
         }
@@ -256,7 +279,7 @@ function mountArgs(cfg, worktreePath) {
         // An unreadable pointer means git will not work inside; a check that
         // needs git fails loudly there rather than silently running on the host.
     }
-    return args;
+    return specs;
 }
 
 /**
@@ -335,6 +358,74 @@ function dockerArgs(cfg, worktreePath, relDir, cmd, args, extraEnv, network, sta
 async function runSandboxed(cfg, worktreePath, relDir, cmd, args, timeoutMs, extraEnv, network, stack) {
     const { docker, image } = dockerArgs(cfg, worktreePath, relDir, cmd, args, extraEnv, network, stack);
     const r = await execp('docker', docker, { timeout: timeoutMs || 300_000 });
+    return classify(r, image);
+}
+
+/**
+ * The body POSTed to the agent for one check. Pure and exported, so what the
+ * bundle sends can be asserted without an agent to send it to.
+ *
+ * The env is the check's own and the fixed CI variables -- never PATH or
+ * HOME: those are THIS container's, and a toolchain image (Go puts its
+ * binaries in /usr/local/go/bin) needs its own.
+ */
+function delegatedRequest(cfg, worktreePath, relDir, cmd, args, timeoutMs, extraEnv, network, stack) {
+    const env = { LANG: 'C.UTF-8', CI: 'true', DEBIAN_FRONTEND: 'noninteractive', ...(extraEnv || {}) };
+    delete env.PATH;
+    delete env.HOME;
+    const base = path.basename(worktreePath);
+    const m = /^(.+)-[0-9a-f]{7,40}$/.exec(base);
+    return {
+        project: cfg.name || (m ? m[1] : base),
+        worktree: worktreePath,
+        relDir: relDir || '.',
+        cmd,
+        args: args || [],
+        env,
+        network: network === 'bridge' ? 'bridge' : 'none',
+        stack: stack || null,
+        mounts: mountSpecs(cfg, worktreePath),
+        timeoutMs: timeoutMs || 300_000,
+    };
+}
+
+/**
+ * Run one check in a container the AGENT starts. See the header: this is
+ * how the bundle contains agent-authored code without this service holding
+ * the docker socket or running the code itself.
+ */
+async function runDelegated(cfg, worktreePath, relDir, cmd, args, timeoutMs, extraEnv, network, stack,
+                            { secret, fetchImpl = fetch } = {}) {
+    const body = delegatedRequest(cfg, worktreePath, relDir, cmd, args, timeoutMs, extraEnv, network, stack);
+    const setup = (why) => ({
+        ok: false, code: 1, infrastructure: true,
+        output: `SETUP: this check runs code the agent wrote and could not be sandboxed -- ${why}. `
+              + 'It was not run here, and nothing about the code under review is known either way.',
+    });
+    if (!secret) return setup('REVIEW_CONTROL_SECRET is not configured, so the agent would refuse the request');
+    let res;
+    try {
+        res = await fetchImpl(`${DELEGATE_URL}/api/internal/review-sandbox/run`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json', 'x-review-secret': secret },
+            body: JSON.stringify(body),
+            signal: AbortSignal.timeout(body.timeoutMs + 60_000),
+        });
+    } catch (err) {
+        return setup(`the agent's sandbox endpoint did not answer (${String(err && err.message || err).slice(0, 200)})`);
+    }
+    let data = null;
+    try { data = await res.json(); } catch { /* reported below */ }
+    if (!res.ok || !data || typeof data !== 'object') {
+        const detail = data && (data.detail || data.error);
+        return setup(`the agent refused it (HTTP ${res.status}${detail ? `: ${String(detail).slice(0, 300)}` : ''})`);
+    }
+    if (data.infrastructure) return { ok: false, code: data.code ?? 1, infrastructure: true, output: String(data.output || '') };
+    return classify({ ok: Boolean(data.ok), code: data.code ?? (data.ok ? 0 : 1), out: String(data.output || '') },
+                    data.image || imageFor(stack || cfg.stack).image);
+}
+
+function classify(r, image) {
     const missing = missingTool(r.out);
     if (missing) {
         // A toolchain the image does not carry is a SETUP problem, not a
@@ -367,5 +458,6 @@ function missingTool(output) {
     return m ? m[1] : null;
 }
 
-module.exports = { probe, resetProbe, runSandboxed, dockerArgs, mountArgs, nodeModulesLinks, isInside,
-                   missingTool, imageFor, STACKS, IMAGE, IN_CONTAINER };
+module.exports = { probe, resetProbe, runSandboxed, runDelegated, delegatedRequest, dockerArgs, mountArgs,
+                   mountSpecs, nodeModulesLinks, isInside, missingTool, imageFor, STACKS, IMAGE, IN_CONTAINER,
+                   DELEGATE_URL };

@@ -102,6 +102,54 @@ async def test_build_declares_a_general_purpose_spec_to_suppress_the_auto_add(bu
     assert "general-purpose" in {s["name"] for s in captured["subagents"]}
 
 
+async def _run_chain(chain, replies, request, i=0):
+    """Middleware in list order: the first wraps the rest, the model is last."""
+    from langchain.agents.middleware.types import ModelResponse
+    if i == len(chain):
+        return ModelResponse(result=[replies.pop(0)])
+    return await chain[i].awrap_model_call(request, lambda r: _run_chain(chain, replies, r, i + 1))
+
+
+async def test_a_discarded_empty_reply_is_still_charged_on_every_stack(build_args, monkeypatch):
+    """EmptyReplyRetryMiddleware throws the empty reply away and asks again.
+    A guard outside it only ever saw the reply that was kept, so the 32k
+    reasoning tokens of the discarded one never reached the ceiling -- the
+    coordinator had it that way round while every subagent had it right.
+    Composed in each stack's declared order, both calls must be charged."""
+    from types import SimpleNamespace
+
+    from langchain_core.messages import AIMessage, HumanMessage
+
+    from agent.middleware.budget_guard import BudgetTracker
+    from agent.middleware.empty_reply import EmptyReplyRetryMiddleware
+
+    cfg, repo, cp, store = build_args
+    captured = _capture(monkeypatch, da)
+    await da.build_deep_agent(cfg, repo, 5.0, cp, store)
+    stacks = {"coordinator": captured["middleware"],
+              **{s["name"]: s["middleware"] for s in captured["subagents"]}}
+
+    def _req(messages=None):
+        req = SimpleNamespace(model="coder", messages=list(messages or [HumanMessage(content="go")]))
+        req.override = lambda **kw: _req(kw.get("messages", req.messages))
+        return req
+
+    def _reply(content, cost):
+        return AIMessage(content=content, response_metadata={
+            "finish_reason": "length" if not content else "stop",
+            "token_usage": {"cost": cost, "completion_tokens": 32768 if not content else 10}})
+
+    for name, stack in stacks.items():
+        kept = [m for m in stack if isinstance(m, (EmptyReplyRetryMiddleware, BudgetGuardMiddleware))]
+        assert len(kept) == 2, f"{name}: expected one retry and one guard"
+        tracker = BudgetTracker(100.0, ledger=SimpleNamespace(actual_costs=lambda ids: {}))
+        chain = [type(m)(m.fallback_model, name) if isinstance(m, EmptyReplyRetryMiddleware)
+                 else BudgetGuardMiddleware(tracker) for m in kept]
+        await _run_chain(chain, [_reply("", 0.04), _reply("done", 0.01)], _req())
+        assert tracker.total_cost == pytest.approx(0.05), \
+            f"{name}: charged ${tracker.total_cost:.2f}, the discarded reply went unmetered"
+
+
 # ---------------------------------------------------------------------------
 # planning: no subagents at all
 # ---------------------------------------------------------------------------

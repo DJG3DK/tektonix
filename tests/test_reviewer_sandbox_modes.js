@@ -1,48 +1,77 @@
 'use strict';
 /**
  * The reviewer decides where agent-authored code runs, and there are three
- * answers -- not two.
+ * answers -- none of which is "here".
  *
  *   sandbox      a host install: contain it
- *   bundle       already inside a container with no docker socket: leave it
- *   unavailable  a host install that cannot contain it: REFUSE
+ *   delegated    the bundle: the agent, which has the docker socket, starts
+ *                the same hardened container
+ *   unavailable  anything that cannot contain it: REFUSE
  *
- * The third is the one worth a test. "Fall back to the host when the sandbox
- * is unavailable" is the path anyone attacking this would engineer, and it is
- * also the change a future maintainer makes to stop a red build. The refusal
- * has to be load-bearing and it has to say why.
+ * The bundle used to have a fourth, `bundle`, which ran checks in this
+ * process on the theory that the container was containment enough. It was
+ * not: this container holds the review-control secret and can reach the
+ * merge endpoint, so a test file could merge its own branch with
+ * `force: true`. The tests below pin that the in-process path is gone.
  *
  * Run: node tests/test_reviewer_sandbox_modes.js
  */
 
 const assert = require('assert');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
 
 let passed = 0;
-function test(name, fn) { fn(); passed++; console.log(`  ok  ${name}`); }
+const pending = [];
+function test(name, fn) {
+    pending.push((async () => {
+        await fn();
+        passed++;
+        console.log(`  ok  ${name}`);
+    })().catch((err) => {
+        console.error(`  FAIL ${name}\n${err.stack}`);
+        process.exitCode = 1;
+    }));
+}
 
 console.log('reviewer sandbox modes');
 
-function freshSandbox(env) {
+function freshSandbox(env, delegateUrl) {
     for (const k of Object.keys(require.cache)) {
         if (k.includes('commit-reviewer/sandbox')) delete require.cache[k];
     }
-    const saved = process.env.TEKTONIX_BUNDLE;
+    const saved = { b: process.env.TEKTONIX_BUNDLE, u: process.env.AGENT_SANDBOX_URL };
     if (env === undefined) delete process.env.TEKTONIX_BUNDLE;
     else process.env.TEKTONIX_BUNDLE = env;
+    if (delegateUrl === undefined) delete process.env.AGENT_SANDBOX_URL;
+    else process.env.AGENT_SANDBOX_URL = delegateUrl;
     const s = require('../services/commit-reviewer/sandbox');
-    if (saved === undefined) delete process.env.TEKTONIX_BUNDLE;
-    else process.env.TEKTONIX_BUNDLE = saved;
+    for (const [k, v] of [['TEKTONIX_BUNDLE', saved.b], ['AGENT_SANDBOX_URL', saved.u]]) {
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v;
+    }
     return s;
 }
 
-test('inside the bundle it reports bundle, without asking docker anything', async () => {
-    const s = freshSandbox('1');
+const REVIEWER_SRC = fs.readFileSync(
+    path.join(__dirname, '..', 'services', 'commit-reviewer', 'reviewer.js'), 'utf8');
+
+test('inside the bundle with an agent to ask, checks are delegated', async () => {
+    const s = freshSandbox('1', 'http://agent:8100/');
     assert.equal(s.IN_CONTAINER, true);
     const p = await s.probe();
-    assert.equal(p.mode, 'bundle');
+    assert.equal(p.mode, 'delegated');
+    assert.equal(s.DELEGATE_URL, 'http://agent:8100');
+});
+
+test('inside the bundle with no agent to ask, it refuses rather than running in-process', async () => {
+    const s = freshSandbox('1', undefined);
+    const p = await s.probe();
+    assert.equal(p.mode, 'unavailable');
     // The reason has to name WHY, because the next person to read it is
     // deciding whether to "fix" it by mounting the socket.
-    assert.ok(/docker socket/.test(p.reason), p.reason);
+    assert.ok(/docker socket/.test(p.reason) && /AGENT_SANDBOX_URL/.test(p.reason), p.reason);
 });
 
 test('outside the bundle it looks for a real docker and a built image', async () => {
@@ -63,6 +92,85 @@ test('the image is overridable, so a bundle build can pin its own', () => {
     freshSandbox(undefined);
 });
 
+function fixtureWorktree() {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rvw-'));
+    const live = path.join(root, 'live');
+    const wt = path.join(root, 'worktrees', 'shop-0123456789ab');
+    fs.mkdirSync(path.join(live, '.git', 'worktrees', 'shop-0123456789ab'), { recursive: true });
+    fs.mkdirSync(path.join(live, 'node_modules'), { recursive: true });
+    fs.mkdirSync(path.join(live, 'data'), { recursive: true });
+    fs.mkdirSync(wt, { recursive: true });
+    fs.writeFileSync(path.join(wt, '.git'), `gitdir: ${path.join(live, '.git', 'worktrees', 'shop-0123456789ab')}\n`);
+    fs.symlinkSync(path.join(live, 'node_modules'), path.join(wt, 'node_modules'));
+    return { root, live: fs.realpathSync(live), wt };
+}
+
+test('the delegated request carries the check, the mounts as data, and none of this container\'s env', () => {
+    const s = freshSandbox('1', 'http://agent:8100');
+    const { live, wt } = fixtureWorktree();
+    const body = s.delegatedRequest({ live, readOnlyMounts: ['data'] }, wt, 'frontend', 'npm', ['test'],
+        120_000, { PATH: '/usr/bin', HOME: '/root', FOO: 'bar' }, 'bridge', 'go');
+    assert.equal(body.project, 'shop');
+    assert.equal(body.worktree, wt);
+    assert.equal(body.relDir, 'frontend');
+    assert.equal(body.cmd, 'npm');
+    assert.deepEqual(body.args, ['test']);
+    assert.equal(body.network, 'bridge');
+    assert.equal(body.stack, 'go');
+    assert.equal(body.timeoutMs, 120_000);
+    assert.equal(body.env.FOO, 'bar');
+    assert.equal(body.env.CI, 'true');
+    assert.ok(!('PATH' in body.env) && !('HOME' in body.env), JSON.stringify(body.env));
+    const dsts = body.mounts.map((m) => m.dst).sort();
+    assert.deepEqual(dsts, [path.join(live, '.git'), path.join(live, 'node_modules'), '/workspace/data'].sort());
+});
+
+test('anything but "bridge" is sent as no network at all', () => {
+    const s = freshSandbox('1', 'http://agent:8100');
+    const { live, wt } = fixtureWorktree();
+    for (const n of [undefined, 'host', 'none', 'container:x']) {
+        assert.equal(s.delegatedRequest({ live }, wt, '.', 'npm', [], 1, {}, n).network, 'none');
+    }
+});
+
+test('a delegated run authenticates, and a refusal or an outage is infrastructure, never a pass', async () => {
+    const s = freshSandbox('1', 'http://agent:8100');
+    const { live, wt } = fixtureWorktree();
+    const seen = [];
+    const answer = (status, data) => async (url, init) => {
+        seen.push({ url, init });
+        return { ok: status < 300, status, json: async () => data };
+    };
+
+    const ok = await s.runDelegated({ live }, wt, '.', 'npm', ['test'], 5_000, {}, 'none', null,
+        { secret: 's3cret', fetchImpl: answer(200, { ok: true, code: 0, output: 'all green', image: 'img' }) });
+    assert.deepEqual(ok, { ok: true, code: 0, output: 'all green' });
+    assert.equal(seen[0].url, 'http://agent:8100/api/internal/review-sandbox/run');
+    assert.equal(seen[0].init.headers['x-review-secret'], 's3cret');
+
+    const failing = await s.runDelegated({ live }, wt, '.', 'npm', ['test'], 5_000, {}, 'none', null,
+        { secret: 's3cret', fetchImpl: answer(200, { ok: false, code: 1, output: '1 failing' }) });
+    assert.equal(failing.ok, false);
+    assert.ok(!failing.infrastructure, 'a real failing check is the code\'s problem');
+
+    const missing = await s.runDelegated({ live }, wt, '.', 'go', ['test'], 5_000, {}, 'none', null,
+        { secret: 's3cret', fetchImpl: answer(200, {
+            ok: false, code: 127, image: 'tektonix-sandbox:latest',
+            output: 'exec: "go": executable file not found in $PATH' }) });
+    assert.equal(missing.missingTool, 'go');
+
+    for (const [label, opts] of [
+        ['refused', { secret: 's3cret', fetchImpl: answer(400, { detail: 'refused: mount outside live' }) }],
+        ['down', { secret: 's3cret', fetchImpl: async () => { throw new Error('ECONNREFUSED'); } }],
+        ['no secret', { secret: '', fetchImpl: answer(200, { ok: true, code: 0, output: '' }) }],
+    ]) {
+        const r = await s.runDelegated({ live }, wt, '.', 'npm', ['test'], 5_000, {}, 'none', null, opts);
+        assert.equal(r.ok, false, label);
+        assert.equal(r.infrastructure, true, label);
+        assert.ok(/^SETUP: /.test(r.output), `${label}: ${r.output}`);
+    }
+});
+
 test('a check that could not be RUN is flagged as infrastructure, not as failing', () => {
     // The distinction decides whose problem it is. Everything downstream
     // reads `.infrastructure`; without it, "the sandbox image has no go" is
@@ -71,60 +179,63 @@ test('a check that could not be RUN is flagged as infrastructure, not as failing
     // MISSING_TOOL_RE was written to stop. That regex matches a SHELL saying
     // "not found" and never matches our own SETUP message, which is why this
     // is carried structurally instead of matched again.
-    const src = require('fs').readFileSync(
-        require('path').join(__dirname, '..', 'services', 'commit-reviewer', 'reviewer.js'), 'utf8');
-    assert.ok(/infrastructure: true/.test(src), 'the runner never flags a setup failure');
-    assert.ok(/r\.infrastructure \|\| r\.missingTool/.test(src),
+    assert.ok(/infrastructure: true/.test(REVIEWER_SRC), 'the runner never flags a setup failure');
+    assert.ok(/r\.infrastructure \|\| r\.missingTool/.test(REVIEWER_SRC),
         'the check loop must carry the runner\'s own verdict rather than re-deriving it');
-    assert.ok(!/REFUSED:/.test(src),
+    assert.ok(!/REFUSED:/.test(REVIEWER_SRC),
         'the refusal says SETUP:, like the missing-toolchain message, so both read the same way');
 });
 
 test('the refusal text tells an operator what to do and that nothing ran', () => {
-    // Asserted against the reviewer's source rather than by driving a whole
-    // review: what matters is that the refusal path exists, says it did not
-    // run on the host, and names the fix.
-    const src = require('fs').readFileSync(
-        require('path').join(__dirname, '..', 'services', 'commit-reviewer', 'reviewer.js'), 'utf8');
-    assert.ok(src.includes('SETUP: this check runs code the agent wrote'), 'no refusal path');
-    assert.ok(/It was not run on the host/.test(src), 'the refusal must say nothing ran');
-    assert.ok(/docker\/agent-sandbox/.test(src), 'the refusal must name the fix');
+    assert.ok(REVIEWER_SRC.includes('SETUP: this check runs code the agent wrote'), 'no refusal path');
+    assert.ok(/It was not run on the host/.test(REVIEWER_SRC), 'the refusal must say nothing ran');
+    assert.ok(/docker\/agent-sandbox/.test(REVIEWER_SRC), 'the refusal must name the fix');
 });
 
-test('nothing executes agent code through runSealed any more', () => {
-    // The whole point: one place decides containment. A new call site that
-    // goes straight to runSealed is the regression this catches.
-    const src = require('fs').readFileSync(
-        require('path').join(__dirname, '..', 'services', 'commit-reviewer', 'reviewer.js'), 'utf8');
-    // Its definition, and exactly one call: the bundle branch inside
-    // runAgentCode. Any other call site is agent-authored code running
-    // wherever this process happens to be, which is the hole being closed.
+test('nothing executes agent code through runSealed outside runDatabaseCheck', () => {
+    // The whole point: one place decides containment, and it never answers
+    // "this process". A call site that goes straight to runSealed is the
+    // regression this catches -- including the in-process bundle branch
+    // runAgentCode used to have.
     //
-    // With ONE documented exception, counted separately: runDatabaseCheck,
-    // whose three commands stay on the host because they need loopback
-    // Postgres and Redis (SECURITY.md, "The database checks, which stay on
-    // the host"). They use runSealed rather than run() since 2026-09-23 --
-    // run() spread the reviewer's whole environment into them -- so that
-    // function is cut out before counting, and its own calls are pinned.
-    const dbStart = src.indexOf('async function runDatabaseCheck(');
-    const dbEnd = src.indexOf('\n}\n', dbStart);
+    // runDatabaseCheck is the one documented exception on a HOST install
+    // (SECURITY.md, "The database checks, which stay on the host"), cut out
+    // before counting, with its own calls pinned.
+    const dbStart = REVIEWER_SRC.indexOf('async function runDatabaseCheck(');
+    const dbEnd = REVIEWER_SRC.indexOf('\n}\n', dbStart);
     assert.ok(dbStart > 0 && dbEnd > dbStart, 'runDatabaseCheck not found');
-    const dbCheck = src.slice(dbStart, dbEnd);
-    const rest = src.slice(0, dbStart) + src.slice(dbEnd);
+    const dbCheck = REVIEWER_SRC.slice(dbStart, dbEnd);
+    const rest = REVIEWER_SRC.slice(0, dbStart) + REVIEWER_SRC.slice(dbEnd);
     const calls = (rest.match(/[^\w]runSealed\(/g) || []).length;
-    assert.equal(calls, 2,
-        `runSealed appears ${calls} times outside runDatabaseCheck (expect its definition + one call); `
+    assert.equal(calls, 1,
+        `runSealed appears ${calls} times outside runDatabaseCheck (expect only its definition); `
         + 'agent-authored code must go through runAgentCode');
-    // Inside it: the psql helper, redis-cli and the three project commands,
-    // and no run() of anything at all.
+    assert.ok(!/mode\.mode === 'bundle'/.test(REVIEWER_SRC), 'the in-process bundle branch is back');
     assert.equal((dbCheck.match(/[^\w]runSealed\(/g) || []).length, 5);
-    // Comments stripped first: the function's own comments explain why it
-    // never calls run(), and name it doing so.
     const code = dbCheck.replace(/\/\/.*$/gm, '');
     assert.ok(!/[^\w]run\(/.test(code), 'runDatabaseCheck calls run(), which inherits process.env');
-    assert.ok(!/await run\(dc\./.test(dbCheck), 'a database check went back to run(), which inherits process.env');
+    // ...and in the bundle it refuses before any of them: there, "outside
+    // the sandbox" is the container holding the merge secret.
+    const refuse = dbCheck.indexOf('sandbox.IN_CONTAINER');
+    assert.ok(refuse > 0 && refuse < dbCheck.indexOf('runSealed('),
+        'runDatabaseCheck must refuse in the bundle before it runs anything');
 });
 
-(async () => {
+test('a file pulled into the review prompt cannot be a way out of the worktree', () => {
+    const { root, wt } = fixtureWorktree();
+    const secret = path.join(root, 'secret.json');
+    fs.writeFileSync(secret, 'the-merge-secret');
+    fs.writeFileSync(path.join(wt, 'ok.ts'), 'export const x = 1;');
+    fs.symlinkSync(secret, path.join(wt, 'config.json'));
+    process.env.REVIEW_CONTROL_SECRET = process.env.REVIEW_CONTROL_SECRET || 'unused';
+    const reviewer = require('../services/commit-reviewer/reviewer');
+    assert.equal(reviewer.readWorktreeFile(wt, 'ok.ts', 100), 'export const x = 1;');
+    assert.equal(reviewer.readWorktreeFile(wt, 'config.json', 100), null, 'followed a symlink out');
+    assert.equal(reviewer.readWorktreeFile(wt, '../../secret.json', 100), null, 'followed ../');
+    const out = reviewer.gatherReferencedFiles(wt, 'touches ../../secret.json and ./config.json', '');
+    assert.ok(!out.includes('the-merge-secret'), out);
+});
+
+Promise.all(pending).then(() => {
     console.log(`\n${passed} passed`);
-})();
+});

@@ -32,6 +32,7 @@ class PushSubscribeRequest(BaseModel):
 
 class PushUnsubscribeRequest(BaseModel):
     endpoint: str
+    auth: str | None = None
 
 
 def _pool(request: Request):
@@ -70,11 +71,13 @@ async def push_subscribe(req: PushSubscribeRequest, request: Request,
 @router.post("/unsubscribe")
 async def push_unsubscribe(req: PushUnsubscribeRequest, request: Request,
                            user: User = Depends(require_full_auth)):
-    """Drop one endpoint. Deliberately not scoped to the caller's own rows: an
-    endpoint is issued by a push service to one browser, so whoever is holding
-    it IS that browser, and a device signing out must be able to stop its own
-    notifications even if the account it was bound to has since changed."""
-    await auth.delete_push_subscription(_pool(request), req.endpoint)
+    """Drop one endpoint: the caller's own, or any whose subscription `auth`
+    secret the caller presents. A device signing out must be able to stop its
+    own notifications even if the account it was bound to has since changed,
+    and the browser holding the subscription holds that secret; an endpoint
+    URL alone, which shows up in logs and push-service errors, is not enough."""
+    await auth.delete_push_subscription(_pool(request), req.endpoint,
+                                        user_id=user.id, auth_key=req.auth)
     return {"ok": True, "subscriptions": await auth.count_push_subscriptions(
         _pool(request), user.id)}
 

@@ -52,6 +52,7 @@ if (process.env.REVIEW_ONLY_PROJECTS_JSON !== '1') {
 // See services/shared/projects-config.js: projects.json supplies onboarded
 // projects (deploy section), these built-ins stay authoritative.
 const { loadProjects, healthProjectsCheck } = require('../shared/projects-config');
+const { updateJson } = require('../shared/json-state');
 
 // Set by the bundle's compose file. Not sniffed from /.dockerenv: an operator
 // running this service in a container of their own, with pm2 inside it, is
@@ -85,7 +86,12 @@ function run(cmd, args, cwd) {
         });
     });
 }
-const git = (cwd, args) => run('git', args, cwd);
+// Hooks and fsmonitor off on every call (services/commit-reviewer/reviewer.js,
+// GIT_SAFE): `merge --ff-only` brings agent-authored files into the live
+// tree, and a project with core.hooksPath=.husky would then run the agent's
+// own post-merge hook as this service.
+const GIT_SAFE = ['-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false'];
+const git = (cwd, args) => run('git', [...GIT_SAFE, ...args], cwd);
 
 function projectOr404(req, res) {
     const p = currentProjects()[req.params.name];
@@ -130,25 +136,23 @@ function branchRecord(projectState, branch) {
     return null;
 }
 
+// Under the same lock commit-reviewer writes with (shared/json-state): a
+// verdict it records mid-merge is kept, not overwritten by this stale copy.
 async function clearReviewState(project, branch = null) {
-    const state = await readReviewState();
-    if (!Object.hasOwn(state, project)) return;
-    const current = state[project] || {};
-    const branches = { ...(current.branches || {}) };
-    if (branch) delete branches[branch];
-    if (!branch || current.branch === branch || !Object.keys(branches).length) {
-        // The dashboard's card showed the merged branch: back to idle, keeping
-        // the records of branches that have not merged.
-        if (Object.keys(branches).length) state[project] = { branches };
-        else delete state[project];
-    } else {
-        state[project] = { ...current, branches };
-    }
-    // audit M-11: atomic temp-file + rename, matching commit-reviewer's
-    // saveState -- a reader (or a crash) never sees a partial state.json.
-    const tmp = `${REVIEW_STATE_PATH}.tmp-${process.pid}-${Date.now()}`;
-    await fs.promises.writeFile(tmp, JSON.stringify(state, null, 2));
-    await fs.promises.rename(tmp, REVIEW_STATE_PATH);
+    await updateJson(REVIEW_STATE_PATH, (state) => {
+        if (!Object.hasOwn(state, project)) return false;
+        const current = state[project] || {};
+        const branches = { ...(current.branches || {}) };
+        if (branch) delete branches[branch];
+        if (!branch || current.branch === branch || !Object.keys(branches).length) {
+            // The dashboard's card showed the merged branch: back to idle, keeping
+            // the records of branches that have not merged.
+            if (Object.keys(branches).length) state[project] = { branches };
+            else delete state[project];
+        } else {
+            state[project] = { ...current, branches };
+        }
+    });
 }
 
 const { installMismatch, frozenInstall } = require('../shared/deps-state');

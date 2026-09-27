@@ -99,12 +99,28 @@ they could do once running.
 | where | what runs checks | why |
 |---|---|---|
 | host install | the sandbox container | the reviewer is root on the real machine |
-| compose bundle | the reviewer process | it is already in a container, and `docker-compose.yml` deliberately gives the socket to `agent` alone |
+| compose bundle | the same sandbox container, started by `agent` on the reviewer's behalf | the reviewer's container holds the merge secret; only `agent` has the socket |
 | neither available | **nothing — the review refuses** | see below |
 
-Handing the bundle's reviewer the Docker socket so it could start a sandbox
-would give that container host-root equivalent, which is worse than the
-containment it already has. That is why the bundle is not "not done yet".
+Until 2026-09-26 the bundle ran checks **in the reviewer's own process**, on
+the theory that its container was containment enough. It was not: that
+container reads `review_control_secret` from the shared data volume and can
+reach `agent-review`'s merge endpoint, so a test file the agent wrote could
+read the secret and POST `{"force": true}` — merging its own branch past the
+gate. Now the reviewer sends a structured request to
+`POST /api/internal/review-sandbox/run` on the agent (authenticated with the
+same secret), and `agent/review_sandbox.py` starts the container. The agent
+does not take the request's word for what the container can see: the worktree
+must be this project's review worktree under `REVIEW_WORKTREE_ROOT`, every
+extra mount must come from the live checkout and is forced read-only, the
+image comes from server-owned config, and the hardening flags are fixed.
+Without `AGENT_SANDBOX_URL` the bundle's reviewer refuses, like any other
+deployment that cannot contain the code. The database checks below are
+refused outright in the bundle.
+
+Handing the bundle's reviewer the Docker socket instead would give that
+container host-root equivalent, which is why the agent — already holding the
+socket for its own sandboxes — starts the container rather than the reviewer.
 
 **It fails closed.** If Docker or the sandbox image is missing on a host
 install, the check does not run on the host instead — it returns a refusal
@@ -168,7 +184,9 @@ commit is rejected round after round.
 
 Three commands still run outside the sandbox on a host install: a project's
 `db:drift`, `db:seed` and `test:e2e`. They are agent-authored code, and they
-are the exception to everything above.
+are the exception to everything above. In the compose bundle they are not run
+at all: there, "outside the sandbox" would be the reviewer's container, which
+holds the merge secret.
 
 They talk to Postgres and Redis on this machine's loopback. Inside a
 container `localhost` is the container, so containing them means one of two

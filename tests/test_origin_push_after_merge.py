@@ -15,7 +15,8 @@ import pytest
 from agent.tools import review_gate
 
 
-def _wire(monkeypatch, *, origin, token="tok", push_ok=True, live="/tmp/live"):
+def _wire(monkeypatch, *, origin, token="tok", push_ok=True, live="/tmp/live",
+          push_raises=None):
     import agent.config as agent_config
     import agent.tools.git as gitmod
     from agent import github_settings
@@ -28,13 +29,17 @@ def _wire(monkeypatch, *, origin, token="tok", push_ok=True, live="/tmp/live"):
 
     seen = {}
 
-    async def fake_git(cmd, root, timeout=30):
+    async def fake_git(cmd, root, timeout=30, extra_env=None):
         if cmd.startswith("config --local"):
             return {"ok": True, "output": origin}
-        if cmd.startswith("push"):
+        if " push " in f" {cmd} ":
             seen["cmd"] = cmd
+            seen["env"] = extra_env
+            if push_raises is not None:
+                raise push_raises
+            secret = (extra_env or {}).get(gitmod.GIT_TOKEN_ENV, "")
             return {"ok": push_ok,
-                    "output": "" if push_ok else f"fatal: denied for {cmd.split()[1]}"}
+                    "output": "" if push_ok else f"fatal: Authentication failed ({secret})"}
         return {"ok": True, "output": ""}
 
     monkeypatch.setattr(gitmod, "_git", fake_git)
@@ -42,11 +47,34 @@ def _wire(monkeypatch, *, origin, token="tok", push_ok=True, live="/tmp/live"):
 
 
 def test_an_https_origin_is_pushed_with_the_token(monkeypatch):
+    import agent.tools.git as gitmod
     seen = _wire(monkeypatch, origin="https://github.com/o/r.git")
     r = asyncio.run(review_gate._push_https_origin_if_needed("demo"))
     assert r == {"ok": True, "pushed": "main"}
-    assert "x-access-token:tok@github.com/o/r.git" in seen["cmd"]
+    assert "https://github.com/o/r.git" in seen["cmd"]
     assert seen["cmd"].endswith("main"), "the base branch, not a task branch"
+    assert seen["env"][gitmod.GIT_TOKEN_ENV] == "tok"
+
+
+def test_the_token_is_never_on_the_push_command_line(monkeypatch):
+    """/proc/<pid>/cmdline is readable by every local user for as long as the
+    push runs, and a hung push put the whole command in ShellTimeout's text."""
+    seen = _wire(monkeypatch, origin="https://github.com/o/r.git", token="s3cret-tok")
+    asyncio.run(review_gate._push_https_origin_if_needed("demo"))
+    assert "s3cret-tok" not in seen["cmd"]
+    assert "x-access-token:" not in seen["cmd"]
+
+
+def test_a_push_that_times_out_does_not_fail_the_merged_task(monkeypatch):
+    """The merge has already landed. A hung push used to raise out of here
+    with the tokenised command in the exception text."""
+    from agent.tools.shell import ShellTimeout
+    _wire(monkeypatch, origin="https://github.com/o/r.git", token="s3cret-tok",
+          push_raises=ShellTimeout("git push https://x-access-token:s3cret-tok@github.com/o/r.git main", 300))
+    r = asyncio.run(review_gate._push_https_origin_if_needed("demo"))
+    assert r["ok"] is False
+    assert "merge itself succeeded" in r["reason"]
+    assert "s3cret-tok" not in r["reason"]
 
 
 def test_an_ssh_origin_is_left_to_its_deploy_key(monkeypatch):

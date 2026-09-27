@@ -36,6 +36,7 @@ from urllib.parse import parse_qs, urlparse
 
 from langchain_core.tools import tool
 
+from agent.tools.egress_proxy import REFUSED_HEADER, EgressProxy
 from agent.tools.url_guard import UnsafeUrlError, assert_public_url, make_route_guard
 
 from agent import runtime_settings as _rs
@@ -51,7 +52,9 @@ from agent.tools.vision import describe_image_bytes
 # on; a network-position attacker could otherwise substitute page content.
 # --no-sandbox is retained (the container/user story is tracked in M-10) but
 # is no longer paired with disabled cert checks.
-_LAUNCH_ARGS = ["--no-sandbox", "--disable-setuid-sandbox"]
+_LAUNCH_ARGS = ["--no-sandbox", "--disable-setuid-sandbox",
+                # WebRTC's UDP does not go through an HTTP proxy.
+                "--force-webrtc-ip-handling-policy=disable_non_proxied_udp"]
 _USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/120.0 Safari/537.36"
@@ -93,17 +96,22 @@ _READ_MIN_WINDOW = 500
 
 
 @asynccontextmanager
-async def _browser_page(viewport=None):
+async def _browser_page(viewport=None, allow_origin: str | None = None):
     """One headless Chromium page per call -- tool calls here are
     infrequent enough (a handful per planning turn, not a hot loop) that
     launching fresh each time is simpler and safer than managing a shared
-    long-lived browser instance across concurrent planning sessions."""
+    long-lived browser instance across concurrent planning sessions.
+
+    The browser reaches the network only through EgressProxy, which connects
+    to the address it checked (agent/tools/egress_proxy.py). The page carries
+    the proxy as `page.egress` so a caller can say why a load failed."""
     from playwright.async_api import async_playwright
 
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True, args=_LAUNCH_ARGS)
+    async with EgressProxy(allow_origin=allow_origin) as proxy, async_playwright() as p:
+        browser = await p.chromium.launch(headless=True, args=_LAUNCH_ARGS, **proxy.launch_kwargs())
         try:
             page = await browser.new_page(user_agent=_USER_AGENT, viewport=viewport or {"width": 1280, "height": 800})
+            page.egress = proxy
             yield page
         finally:
             await browser.close()
@@ -222,7 +230,10 @@ async def _run_browse_page(url: str, want_screenshot: bool, question: str,
     # check alone is not enough: Playwright follows redirects internally, so
     # a public URL that 302s to 127.0.0.1 or 169.254.169.254 would never come
     # back through here. The route guard re-checks every request the page
-    # makes -- initial navigation, each redirect hop, and subresources.
+    # makes -- initial navigation, each redirect hop, and subresources. Both
+    # resolve the name and then let Chromium resolve it again; the egress
+    # proxy _browser_page puts under the browser is what makes the address
+    # checked the address connected to.
     if not allow_origin:
         try:
             await assert_public_url(url)
@@ -231,20 +242,24 @@ async def _run_browse_page(url: str, want_screenshot: bool, question: str,
 
     blocked: list[str] = []
 
-    async with _browser_page() as page:
+    async with _browser_page(allow_origin=allow_origin) as page:
         await page.route("**/*", make_route_guard(
             lambda u, why: blocked.append(f"{u} ({why})"), allow_origin=allow_origin))
         try:
-            await page.goto(url, wait_until="load", timeout=_NAV_TIMEOUT_MS)
+            response = await page.goto(url, wait_until="load", timeout=_NAV_TIMEOUT_MS)
         except (TimeoutError, PlaywrightTimeoutError):
             # audit M-28: catch Playwright's own TimeoutError too (not an
             # asyncio.TimeoutError subclass), otherwise this was a dead branch.
             return f"ERROR: timed out loading {url!r} (over {_NAV_TIMEOUT_MS // 1000}s)"
         except Exception as e:  # noqa: BLE001 -- bad URL, DNS failure, refused connection, etc.
+            if page.egress.blocked:
+                return f"ERROR: blocked: {url!r} reached a non-public address -- {page.egress.blocked[0]}"
             return f"ERROR: failed to load {url!r}: {e}"
 
         if blocked and not page.url.startswith(("http://", "https://")):
             return f"ERROR: blocked redirect to a non-public address -- {blocked[0]}"
+        if page.egress.blocked and response is not None and response.headers.get(REFUSED_HEADER):
+            return f"ERROR: blocked: {url!r} reached a non-public address -- {page.egress.blocked[0]}"
 
         title = await page.title()
         try:

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { getRuntimeSettings } from "./api";
+import { getTaskDefaults } from "./api";
 
 /** The budget a new task starts with, from Settings → Runtime limits
  *  ("Default task budget"). The Build Now popup and the New Task form used to
@@ -14,9 +14,9 @@ let inflight: Promise<number> | null = null;
 function load(): Promise<number> {
   if (cached !== null) return Promise.resolve(cached);
   if (!inflight) {
-    inflight = getRuntimeSettings()
+    inflight = getTaskDefaults()
       .then((r) => {
-        const v = r.values?.default_task_budget_usd;
+        const v = r.default_task_budget_usd;
         cached = typeof v === "number" && v > 0 ? v : FALLBACK_TASK_BUDGET_USD;
         return cached;
       })

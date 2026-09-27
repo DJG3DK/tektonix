@@ -34,7 +34,8 @@ from langchain_core.tools import tool
 from deepagents.backends.protocol import BackendProtocol
 from deepagents.middleware._message_eviction import _create_content_preview
 
-from agent.tools.files import BinaryFileError, PathEscapeError, _resolve, read_file, str_replace, write_file
+from agent.tools.files import (BinaryFileError, PathEscapeError, _resolve, read_bytes, read_file,
+                               str_replace, write_file)
 from agent.tools import bash_advice
 from agent.tools.sandbox import run_shell_sandboxed
 from agent.tools.tool_errors import tool_errors_to_text
@@ -279,7 +280,13 @@ def make_agent_tools(
         # to LangSmith regardless of call volume, which is why vision usage
         # never showed up in the model-usage-by-role dashboard before.
         try:
-            return await describe_image_bytes(open(real, "rb").read(), mime, question)
+            data = read_bytes(repo_root, _repo_path(path))
+        except (OSError, PathEscapeError) as e:
+            return f"ERROR: cannot read {path!r}: {e}"
+        if len(data) > 20 * 1024 * 1024:
+            return "ERROR: image exceeds 20MB"
+        try:
+            return await describe_image_bytes(data, mime, question)
         except Exception as e:  # noqa: BLE001 -- surfaced to the calling agent as a tool result, not raised
             return f"ERROR: vision call failed: {e}"
 

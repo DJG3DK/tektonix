@@ -126,7 +126,15 @@ export function usePlanningStream(sessionId: string | null) {
       ws.onerror = () => reject(new Error("connection failed"));
       ws.onmessage = (ev) => {
         lastMessageAt.current = Date.now();
-        const event: PlanningStreamEvent = JSON.parse(ev.data);
+        let event: PlanningStreamEvent;
+        try {
+          event = JSON.parse(ev.data);
+        } catch {
+          // Same as the task stream: one bad frame is dropped, not a thrown
+          // handler that leaves the turn looking stuck.
+          console.error("planning stream: discarding unparseable frame");
+          return;
+        }
         if (event.type === "ping") return; // server heartbeat, not content
         if (event.type === "cost") {
           // Live per-call spend, same contract as the task stream.

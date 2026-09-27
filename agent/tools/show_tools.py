@@ -15,7 +15,7 @@ import logging
 from langchain_core.tools import tool
 
 from agent import artifacts
-from agent.tools.files import PathEscapeError, _resolve
+from agent.tools.files import PathEscapeError, _resolve, read_bytes
 from agent.tools.tool_errors import tool_errors_to_text
 
 logger = logging.getLogger("tektonix")
@@ -92,9 +92,11 @@ def make_show_images_tool(repo: str, root_for_reads, *, show_state: dict | None 
                     source = "svg"
                 elif item.get("path"):
                     target = _resolve(root_for_reads(), str(item["path"]))
-                    if not target.is_file():
-                        raise artifacts.ArtifactError(f"{item['path']!r} is not a file in this project")
-                    raw = target.read_bytes()
+                    try:
+                        raw = read_bytes(root_for_reads(), str(item["path"]))
+                    except OSError:
+                        raise artifacts.ArtifactError(
+                            f"{item['path']!r} is not a file in this project") from None
                     if target.suffix.lower() == ".svg" or b"<svg" in raw[:2000]:
                         data = await _render_svg(raw.decode("utf-8", "replace"), background, width, height)
                     else:

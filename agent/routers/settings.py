@@ -60,7 +60,16 @@ async def get_runtime_settings(request: Request, user: User = Depends(require_fu
     """Admin-only: these are deployment-wide, not per-user preferences. Ships
     the spec alongside the values so the UI renders labels, help, units and
     bounds from one source instead of duplicating them."""
+    auth.require_admin(user)
     return {"knobs": runtime_settings.KNOBS, "values": runtime_settings.all_values()}
+
+
+@router.get("/api/settings/task-defaults")
+async def get_task_defaults(request: Request, user: User = Depends(require_full_auth)):
+    """What a new-task form prefills, for every account. The only runtime
+    value a non-admin needs; the rest of the knobs stay behind the admin
+    route above."""
+    return {"default_task_budget_usd": runtime_settings.value("default_task_budget_usd")}
 
 
 @router.get("/api/audit")

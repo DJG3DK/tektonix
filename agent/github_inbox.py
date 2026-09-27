@@ -31,6 +31,7 @@ and the POST behind that button is single-use: once an item leaves
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import hmac
@@ -738,6 +739,28 @@ OpenAutoCount = Callable[[str], Awaitable[int]]                       # repo -> 
 LiveTasks = Callable[[str], Awaitable[set]]                           # repo -> task ids still in flight
 
 
+# One lock per item, held by everything that reads an item, acts on it and
+# writes it back: an approve link submitted twice, the dashboard button and a
+# link at once, or a poll pass that read the item before either. Without it
+# each saw the same "proposed" item across its own awaits and each started a
+# task. One process serves the API (docker/agent/entrypoint.sh), so an asyncio
+# lock is the whole of it.
+_ITEM_LOCKS: dict[tuple[str, str], asyncio.Lock] = {}
+
+
+def item_lock(repo: str, key: str) -> asyncio.Lock:
+    return _ITEM_LOCKS.setdefault((repo, key), asyncio.Lock())
+
+
+async def _unchanged_since(store, repo: str, key: str, snapshot: dict | None) -> bool:
+    """Whether the stored item is still the one a poll pass decided from."""
+    current = await store.aget((NAMESPACE, repo), key)
+    now = current.value if current is not None else None
+    if snapshot is None:
+        return now is None
+    return now is not None and now.get("updated_at") == snapshot.get("updated_at")
+
+
 async def list_items(store, repo: str) -> dict[str, dict]:
     out: dict[str, dict] = {}
     for it in await store.asearch((NAMESPACE, repo), limit=200):
@@ -795,46 +818,62 @@ async def poll_project(
                              live_tasks=in_flight)
     summary = {"repo": repo, "found": len(found), "proposed": 0, "created": 0, "resolved": 0}
     for d in decisions:
-        item = d.item
-        item.reason = d.reason
-        if d.action == "create":
-            try:
-                item.task_id = await create_task_for_item(item.to_dict(), settings, config, create_task)
-                summary["created"] += 1
-                await put_item(store, item)
-                # The one entry in this log with no person behind it, and the
-                # one most worth having: a task appeared, nobody clicked
-                # anything, and the only trace otherwise is a Telegram
-                # message. The actor names the policy, not an account -- the
-                # operator who set the source to Auto is already recorded
-                # under settings, at the time they set it.
-                await audit.record(
-                    store, actor="github-inbox", action="inbox.auto_start",
-                    target=f"{repo}/{item.key}", detail=(item.title or "")[:160],
-                    extra={"task_id": item.task_id},
-                )
-                await notify(created_text(item, item.task_id, float(proj["budget_usd"])), repo)
-            except Exception as e:  # noqa: BLE001 -- fall back to a proposal rather than lose the item
-                logger.exception("github inbox: auto task for %s %s failed", repo, item.key)
-                item.state = "proposed"
-                item.reason = f"auto start failed: {e}"
-                d.action = "propose"
-        if d.action == "propose":
-            item.approval_nonce = secrets.token_urlsafe(12)
-            await put_item(store, item)
-            summary["proposed"] += 1
-            approve = approval_url(settings, sign_approval(config, repo, item.key, item.approval_nonce, "approve"))
-            dismiss = approval_url(settings, sign_approval(config, repo, item.key, item.approval_nonce, "dismiss"))
-            await notify(proposal_text(item, approve, dismiss, float(proj["budget_usd"])), repo)
-        elif d.action == "none":
-            await put_item(store, item)
+        async with item_lock(repo, d.item.key):
+            # An operator approved or dismissed it since `existing` was read:
+            # their decision stands, and writing ours would undo it.
+            if not await _unchanged_since(store, repo, d.item.key, existing.get(d.item.key)):
+                summary["skipped"] = summary.get("skipped", 0) + 1
+                continue
+            await _apply_decision(store, config, settings, repo, proj, d, summary,
+                                  create_task=create_task, notify=notify)
     for key in gone:
-        prev = existing[key]
-        prev["state"] = "resolved"
-        prev["reason"] = "no longer open on GitHub"
-        await put_item(store, prev)
-        summary["resolved"] += 1
+        async with item_lock(repo, key):
+            if not await _unchanged_since(store, repo, key, existing[key]):
+                summary["skipped"] = summary.get("skipped", 0) + 1
+                continue
+            prev = existing[key]
+            prev["state"] = "resolved"
+            prev["reason"] = "no longer open on GitHub"
+            await put_item(store, prev)
+            summary["resolved"] += 1
     return summary
+
+
+async def _apply_decision(store, config: Config, settings: dict, repo: str, proj: dict, d, summary: dict, *,
+                          create_task: CreateTask, notify: Notify) -> None:
+    item = d.item
+    item.reason = d.reason
+    if d.action == "create":
+        try:
+            item.task_id = await create_task_for_item(item.to_dict(), settings, config, create_task)
+            summary["created"] += 1
+            await put_item(store, item)
+            # The one entry in this log with no person behind it, and the
+            # one most worth having: a task appeared, nobody clicked
+            # anything, and the only trace otherwise is a Telegram
+            # message. The actor names the policy, not an account -- the
+            # operator who set the source to Auto is already recorded
+            # under settings, at the time they set it.
+            await audit.record(
+                store, actor="github-inbox", action="inbox.auto_start",
+                target=f"{repo}/{item.key}", detail=(item.title or "")[:160],
+                extra={"task_id": item.task_id},
+            )
+            await notify(created_text(item, item.task_id, float(proj["budget_usd"])), repo)
+        except Exception as e:  # noqa: BLE001 -- fall back to a proposal rather than lose the item
+            logger.exception("github inbox: auto task for %s %s failed", repo, item.key)
+            item.state = "proposed"
+            item.reason = f"auto start failed: {e}"
+            d.action = "propose"
+    if d.action == "propose":
+        item.approval_nonce = secrets.token_urlsafe(12)
+        await put_item(store, item)
+        summary["proposed"] += 1
+        approve = approval_url(settings, sign_approval(config, repo, item.key, item.approval_nonce, "approve"))
+        dismiss = approval_url(settings, sign_approval(config, repo, item.key, item.approval_nonce, "dismiss"))
+        await notify(proposal_text(item, approve, dismiss, float(proj["budget_usd"])), repo)
+    elif d.action == "none":
+        await put_item(store, item)
 
 
 async def poll_all(store, config: Config, *, create_task: CreateTask, notify: Notify,

@@ -1,7 +1,10 @@
 """File read/write, scoped strictly under a repo root — no path traversal."""
 
 from agent.harness_voice import HARNESS
+import errno
+import os
 import re
+import stat
 from pathlib import Path
 
 
@@ -38,9 +41,102 @@ def _resolve(repo_root: str, rel_path: str) -> Path:
     return target
 
 
+_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
+_DIRECTORY = getattr(os, "O_DIRECTORY", 0)
+_CLOEXEC = getattr(os, "O_CLOEXEC", 0)
+_DIR_FDS = os.open in os.supports_dir_fd and os.mkdir in os.supports_dir_fd and bool(_NOFOLLOW)
+
+
+def _swapped(rel_path: str) -> PathEscapeError:
+    return PathEscapeError(
+        f"{HARNESS} {rel_path!r} became a symbolic link while it was being opened -- "
+        f"paths are opened without following links, so it was refused. Use the real path."
+    )
+
+
+def _open_contained(repo_root: str, rel_path: str, flags: int, *, mkdirs: bool = False) -> int:
+    """An fd for `rel_path`, opened so that nothing can redirect it outside
+    `repo_root` between the check and the open.
+
+    _resolve alone is check-then-use: it resolves symlinks, confirms the
+    result is inside the root, and the caller opens the path afterwards. The
+    workspace is written concurrently by the agent's own sandboxed shell, so
+    a directory swapped for a symlink in that window sent reads and writes to
+    any file this process could reach -- measured at about one read in four
+    returning a host secret under a tight swap loop.
+
+    So the resolved path is walked one component at a time, each opened
+    relative to its parent's fd with O_NOFOLLOW. _resolve has already
+    followed every legitimate in-repo link, so the walk meets none; one that
+    appears mid-walk is the race, and is refused.
+    """
+    target = _resolve(repo_root, rel_path)
+    if not _DIR_FDS:
+        return os.open(target, flags | _CLOEXEC, 0o666)
+    root = Path(repo_root).resolve()
+    parts = target.relative_to(root).parts
+    if not parts:
+        raise IsADirectoryError(f"{rel_path!r} is the repo root, not a file")
+
+    def _refuse_if_link(err: OSError, name: str, dirfd: int) -> None:
+        if err.errno in (errno.ELOOP, errno.ENOTDIR, errno.EMLINK):
+            try:
+                if stat.S_ISLNK(os.lstat(name, dir_fd=dirfd).st_mode):
+                    raise _swapped(rel_path) from err
+            except OSError:
+                pass
+
+    dirfd = os.open(root, os.O_RDONLY | _DIRECTORY | _CLOEXEC)
+    try:
+        for name in parts[:-1]:
+            dir_flags = os.O_RDONLY | _DIRECTORY | _NOFOLLOW | _CLOEXEC
+            try:
+                nxt = os.open(name, dir_flags, dir_fd=dirfd)
+            except FileNotFoundError:
+                if not mkdirs:
+                    raise
+                try:
+                    os.mkdir(name, 0o777, dir_fd=dirfd)
+                except FileExistsError:
+                    pass
+                try:
+                    nxt = os.open(name, dir_flags, dir_fd=dirfd)
+                except OSError as e:
+                    _refuse_if_link(e, name, dirfd)
+                    raise
+            except OSError as e:
+                _refuse_if_link(e, name, dirfd)
+                raise
+            os.close(dirfd)
+            dirfd = nxt
+        try:
+            return os.open(parts[-1], flags | _NOFOLLOW | _CLOEXEC, 0o666, dir_fd=dirfd)
+        except OSError as e:
+            _refuse_if_link(e, parts[-1], dirfd)
+            raise
+    finally:
+        os.close(dirfd)
+
+
+def read_bytes(repo_root: str, rel_path: str) -> bytes:
+    """The bytes of a file inside `repo_root`, race-free (see _open_contained)."""
+    # O_NONBLOCK so a FIFO planted in the workspace cannot hang the open;
+    # it has no effect on the regular file this insists on below.
+    fd = _open_contained(repo_root, rel_path, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
+    with os.fdopen(fd, "rb") as fh:
+        if not stat.S_ISREG(os.fstat(fh.fileno()).st_mode):
+            raise IsADirectoryError(f"{rel_path!r} is not a regular file")
+        return fh.read()
+
+
+def _write_bytes(repo_root: str, rel_path: str, data: bytes) -> None:
+    fd = _open_contained(repo_root, rel_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mkdirs=True)
+    with os.fdopen(fd, "wb") as fh:
+        fh.write(data)
+
+
 def read_file(repo_root: str, rel_path: str, max_chars: int = 40_000) -> str:
-    path = _resolve(repo_root, rel_path)
-    raw = path.read_bytes()
+    raw = read_bytes(repo_root, rel_path)
     if _looks_binary(raw):
         # Decoding a binary file with errors="replace" doesn't raise -- it
         # silently produces a same-length wall of garbage text, which then
@@ -62,21 +158,19 @@ def read_file(repo_root: str, rel_path: str, max_chars: int = 40_000) -> str:
 
 
 def write_file(repo_root: str, rel_path: str, content: str) -> None:
-    path = _resolve(repo_root, rel_path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content, encoding="utf-8")
+    _write_bytes(repo_root, rel_path, content.encode("utf-8"))
 
 
 def str_replace(repo_root: str, rel_path: str, old: str, new: str) -> None:
     """Same contract as Claude Code's own Edit tool: old must be unique."""
-    path = _resolve(repo_root, rel_path)
-    if _looks_binary(path.read_bytes()):
+    raw = read_bytes(repo_root, rel_path)
+    if _looks_binary(raw):
         raise BinaryFileError(f"{rel_path!r} looks like a binary file -- it cannot be text-edited.")
     # No errors="replace" here, deliberately: a genuine decode failure on a
     # file that passed the binary sniff should abort loudly (caught as a
     # ValueError below), not silently write lossy replacement characters
     # back over whatever the original bytes actually were.
-    text = path.read_text(encoding="utf-8")
+    text = raw.decode("utf-8")
     count = text.count(old)
     if count == 0:
         # A model can guess old_string's indentation wrong (e.g. matching a
@@ -103,4 +197,4 @@ def str_replace(repo_root: str, rel_path: str, old: str, new: str) -> None:
         )
     if count > 1:
         raise ValueError(f"old_string is not unique in {rel_path} ({count} occurrences)")
-    path.write_text(text.replace(old, new, 1), encoding="utf-8")
+    _write_bytes(repo_root, rel_path, text.replace(old, new, 1).encode("utf-8"))

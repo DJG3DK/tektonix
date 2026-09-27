@@ -31,6 +31,7 @@ signature can't cover all of them without real risk of silently missing one.
 
 import base64
 import hashlib
+import hmac
 import logging
 import secrets
 import time
@@ -566,9 +567,23 @@ async def save_push_subscription(pool: AsyncConnectionPool, user_id: int, endpoi
             (endpoint, user_id, p256dh, auth_key, label))
 
 
-async def delete_push_subscription(pool: AsyncConnectionPool, endpoint: str) -> None:
+async def delete_push_subscription(pool: AsyncConnectionPool, endpoint: str, *,
+                                   user_id: int | None = None, auth_key: str | None = None) -> None:
+    """Unscoped when the server prunes an endpoint the push service reported
+    gone. A request from a user is scoped: the row must be theirs, or they
+    must hold the subscription's own `auth` secret -- which only the browser
+    that subscribed has, so a device signed into another account can still
+    stop its own alerts but nobody can delete someone else's by endpoint."""
+    sql = "DELETE FROM agent_push_subscriptions WHERE endpoint = %s"
+    params: tuple = (endpoint,)
+    if user_id is not None and auth_key:
+        sql += " AND (user_id = %s OR auth = %s)"
+        params = (endpoint, user_id, auth_key)
+    elif user_id is not None:
+        sql += " AND user_id = %s"
+        params = (endpoint, user_id)
     async with pool.connection() as conn:
-        await conn.execute("DELETE FROM agent_push_subscriptions WHERE endpoint = %s", (endpoint,))
+        await conn.execute(sql, params)
 
 
 async def count_push_subscriptions(pool: AsyncConnectionPool, user_id: int) -> int:
@@ -625,6 +640,12 @@ async def change_password(pool: AsyncConnectionPool, user_id: int, new_password:
         await conn.execute(
             "UPDATE agent_users SET password_hash = %s, must_change_password = FALSE WHERE id = %s",
             (hash_password(new_password), user_id),
+        )
+        # An outstanding reset code would still set a new password over the
+        # one just chosen -- the same reason the sessions below go.
+        await conn.execute(
+            "UPDATE agent_password_resets SET used_at = now() WHERE user_id = %s AND used_at IS NULL",
+            (user_id,),
         )
     # audit H-4: revoke every other session on a password change, exactly as
     # reset_password does. A password change is often a response to a suspected
@@ -796,17 +817,18 @@ async def verify_totp_or_recovery(pool: AsyncConnectionPool, config: Config, use
             )
             return bool(cur.rowcount)
     # TOTP didn't match at all (wrong or expired code) -- fall back to a one-time recovery code.
+    # One conditional UPDATE, so two logins racing with the same code cannot
+    # both read it unused before either marks it.
     code_hash = _hash_token(code.strip())
     async with pool.connection() as conn:
         cur = await conn.execute(
-            "SELECT id FROM agent_recovery_codes WHERE user_id = %s AND code_hash = %s AND used_at IS NULL",
+            """UPDATE agent_recovery_codes SET used_at = now()
+               WHERE id = (SELECT id FROM agent_recovery_codes
+                           WHERE user_id = %s AND code_hash = %s AND used_at IS NULL LIMIT 1)
+                 AND used_at IS NULL""",
             (user_id, code_hash),
         )
-        recovery_row = await cur.fetchone()
-        if not recovery_row:
-            return False
-        await conn.execute("UPDATE agent_recovery_codes SET used_at = now() WHERE id = %s", (recovery_row["id"],))
-    return True
+        return bool(cur.rowcount)
 
 
 # --- password reset ----------------------------------------------------
@@ -848,20 +870,28 @@ async def reset_password(pool: AsyncConnectionPool, email: str, code: str, new_p
     if not row:
         return False
     async with pool.connection() as conn:
+        # The attempt is counted BEFORE the guess is compared, in the same
+        # statement that checks the limit: a burst of concurrent guesses each
+        # used to read attempts < max and all get compared, so the limit of
+        # five guesses at a six-digit code was only a limit on sequential ones.
         cur = await conn.execute(
-            """SELECT * FROM agent_password_resets WHERE user_id = %s AND used_at IS NULL
-               AND expires_at > now() AND attempts < %s ORDER BY id DESC LIMIT 1""",
-            (row["id"], RESET_CODE_MAX_ATTEMPTS),
+            """UPDATE agent_password_resets SET attempts = attempts + 1
+               WHERE id = (SELECT id FROM agent_password_resets WHERE user_id = %s AND used_at IS NULL
+                           AND expires_at > now() AND attempts < %s ORDER BY id DESC LIMIT 1)
+                 AND used_at IS NULL AND attempts < %s
+               RETURNING id, code_hash""",
+            (row["id"], RESET_CODE_MAX_ATTEMPTS, RESET_CODE_MAX_ATTEMPTS),
         )
         reset_row = await cur.fetchone()
         if not reset_row:
             return False
-        if reset_row["code_hash"] != _hash_token(code.strip()):
-            await conn.execute(
-                "UPDATE agent_password_resets SET attempts = attempts + 1 WHERE id = %s", (reset_row["id"],)
-            )
+        if not hmac.compare_digest(reset_row["code_hash"], _hash_token(code.strip())):
             return False
-        await conn.execute("UPDATE agent_password_resets SET used_at = now() WHERE id = %s", (reset_row["id"],))
+        cur = await conn.execute(
+            "UPDATE agent_password_resets SET used_at = now() WHERE id = %s AND used_at IS NULL",
+            (reset_row["id"],))
+        if not cur.rowcount:
+            return False   # a concurrent reset with the same code got there first
     await change_password(pool, row["id"], new_password)
     await revoke_all_sessions(pool, row["id"])
     return True

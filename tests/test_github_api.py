@@ -142,6 +142,106 @@ def test_approve_link_get_only_shows_a_button_and_post_is_single_use(wired):
     assert "expired" in client.get(f"/api/github/approve?t={expired}").text
 
 
+def test_one_link_submitted_twice_at_once_starts_one_task(wired, monkeypatch):
+    """Both submissions read the item before either wrote it back, across the
+    await in create_task_for_item, so both passed the nonce check and each
+    started a task. A double-tap on a phone does exactly this."""
+    import asyncio
+
+    from agent.routers import github as github_routes
+
+    _seed_proposed(wired["store"], nonce="n1")
+    started = []
+
+    async def slow_create(repo, goal, budget, route):
+        started.append(repo)
+        await asyncio.sleep(0.05)
+        return f"task-{len(started)}"
+
+    monkeypatch.setattr(srv.app.state, "github_create_task", slow_create)
+
+    async def both():
+        return await asyncio.gather(
+            github_routes._github_act(srv.app, "proj", "pr:7", "approve", nonce="n1"),
+            github_routes._github_act(srv.app, "proj", "pr:7", "approve", nonce="n1"),
+            return_exceptions=True)
+
+    results = asyncio.run(both())
+    assert started == ["proj"], f"{len(started)} tasks started from one link"
+    ok = [r for r in results if isinstance(r, dict)]
+    refused = [r for r in results if not isinstance(r, dict)]
+    assert len(ok) == 1 and ok[0]["task_id"] == "task-1"
+    assert len(refused) == 1 and getattr(refused[0], "status_code", None) == 409
+
+
+def test_the_dashboard_and_a_link_at_once_start_one_task(wired, monkeypatch):
+    import asyncio
+
+    from agent.routers import github as github_routes
+
+    _seed_proposed(wired["store"], nonce="n1")
+    started = []
+
+    async def slow_create(repo, goal, budget, route):
+        started.append(repo)
+        await asyncio.sleep(0.05)
+        return "task-1"
+
+    monkeypatch.setattr(srv.app.state, "github_create_task", slow_create)
+
+    async def both():
+        return await asyncio.gather(
+            github_routes._github_act(srv.app, "proj", "pr:7", "approve"),
+            github_routes._github_act(srv.app, "proj", "pr:7", "approve", nonce="n1"),
+            return_exceptions=True)
+
+    asyncio.run(both())
+    assert started == ["proj"]
+
+
+def test_a_poll_pass_does_not_undo_an_approval_made_during_it(wired, monkeypatch):
+    """The poller decides from a snapshot read at the start of its pass. An
+    item approved after that snapshot was written back as "proposed", with a
+    fresh approve link, while its task was already running."""
+    import asyncio
+
+    from agent.routers import github as github_routes
+
+    store = wired["store"]
+    item = _seed_proposed(store, nonce="n1")
+    store.data[(("github_inbox", "proj"), "pr:7")]["updated_at"] = 1.0
+    settings = gs.apply_patch(srv.config, gs.normalize(None), {
+        "projects": {"proj": {"policies": {"dependabot_prs": "propose"}}}})
+    monkeypatch.setattr(gi, "discover", lambda *a, **k: _async([dataclasses.replace(item, fingerprint="f2")]))
+    monkeypatch.setattr(gs, "token_for", lambda *a: "tok")
+    monkeypatch.setattr(gi, "pr_text_for", lambda *a: _async(None))
+
+    async def approve_mid_pass(repo):
+        # Runs after `existing` was read and before any decision is written.
+        await github_routes._github_act(srv.app, "proj", "pr:7", "approve", nonce="n1")
+        return 0
+
+    _checks(monkeypatch, True)
+    notes = []
+
+    async def notify(text, repo):
+        notes.append(text)
+
+    summary = asyncio.run(gi.poll_project(
+        store, srv.config, settings, "proj", create_task=srv.app.state.github_create_task,
+        notify=notify, open_auto_count=approve_mid_pass, client=object()))
+    stored = store.data[(("github_inbox", "proj"), "pr:7")]
+    assert stored["state"] == "task_created" and stored["task_id"] == "task-1", summary
+    assert summary.get("skipped") == 1
+    assert notes == [], "no fresh approve link for an item that already has a task"
+
+
+def _async(value):
+    async def f():
+        return value
+    return f()
+
+
 def test_dismiss_link_dismisses(wired):
     client = TestClient(srv.app)
     _seed_proposed(wired["store"], nonce="n2")

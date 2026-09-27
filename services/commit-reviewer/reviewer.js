@@ -173,6 +173,7 @@ if (process.env.REVIEW_ONLY_PROJECTS_JSON !== '1') {
 // editing any file here; the built-in entries stay authoritative. See
 // services/shared/projects-config.js for the merge rule.
 const { loadProjects, healthProjectsCheck } = require('../shared/projects-config');
+const { readJson, updateJsonSync } = require('../shared/json-state');
 
 // Directories that need their own node_modules, read from the tree AS IT IS
 // NOW rather than recorded once at onboarding.
@@ -311,7 +312,7 @@ function run(cmd, args, cwd, timeoutMs = 300_000) {
 // -- npm scripts and the test-writer's own test files. Since 2026-09-21
 // checks, the build, package-manager installs, schema generation and the
 // build assertions all go through runAgentCode: a sandbox container on a
-// host install, this already-contained process in the bundle.
+// host install, one the agent starts for us in the bundle.
 //
 // sealedEnv is applied inside it as well, and is not redundant: containment
 // stops the code reaching the machine, the sealed environment stops it
@@ -341,7 +342,13 @@ function runSealed(cmd, args, cwd, timeoutMs = 300_000, extraEnv) {
     });
   });
 }
-const git = (cwd, args) => run('git', args, cwd);
+// On every git call, as in agent/tools/git.py: the tree git runs in is
+// agent-authored. A project using husky has core.hooksPath=.husky in its
+// config, and .husky/* is tracked content an agent commit changes -- so a
+// hook would run agent code as this service. fsmonitor is the same shape:
+// config that names a program git runs on status/diff.
+const GIT_SAFE = ['-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false'];
+const git = (cwd, args) => run('git', [...GIT_SAFE, ...args], cwd);
 
 // Confirmed live (2026-08-23, a monorepo project): state.json tracks one rolling
 // review record PER PROJECT, not per task/thread -- if the sandbox branch
@@ -362,22 +369,12 @@ async function isAncestor(cfg, ancestorSha, sha) {
 }
 
 function loadState() {
-  try {
-    return JSON.parse(fs.readFileSync(STATE_PATH, 'utf8'));
-  } catch {
-    return {};
-  }
+  return readJson(STATE_PATH);
 }
-function saveState(state) {
-  // audit M-11: write to a temp file in the same dir and rename over the
-  // target, so a reader (or a crash mid-write) never sees a truncated/partial
-  // state.json -- the ".bak-*" gitignore entry is evidence corruption has bitten
-  // here before. (The cross-process read-modify-write race between this service
-  // and agent-review still exists; the full fix is per-project files or a shared
-  // lock -- but this removes the corruption/truncation failure mode.)
-  const tmp = `${STATE_PATH}.tmp-${process.pid}-${Date.now()}`;
-  fs.writeFileSync(tmp, JSON.stringify(state, null, 2));
-  fs.renameSync(tmp, STATE_PATH);
+// Every write goes through here: agent-review writes the same file, and a
+// load/save pair outside the lock can undo its write (see shared/json-state).
+function updateState(mutate) {
+  return updateJsonSync(STATE_PATH, mutate);
 }
 
 // A verdict belongs to a BRANCH. Each task has its own branch and, since
@@ -475,6 +472,14 @@ function getOpenRouterKey() {
   // the router is a sibling container. On a host install nothing changes:
   // pm2 does not export it, so the file is still what answers.
   if (process.env[name]) return process.env[name].trim();
+  // The bundle generates the router key on first boot and hands it to each
+  // consumer as a file, so it is never a compose default anyone can guess.
+  const keyFile = process.env[`${name}_FILE`];
+  if (keyFile) {
+    const key = fs.readFileSync(keyFile, 'utf8').trim();
+    if (!key) throw new Error(`${name}_FILE (${keyFile}) is empty`);
+    return key;
+  }
   const env = fs.readFileSync(ROUTER_ENV_PATH, 'utf8');
   const m = env.match(new RegExp(`^${name}=(.+)$`, 'm'));
   if (!m) throw new Error(`${name} is set neither in the environment nor in ${ROUTER_ENV_PATH}`);
@@ -825,7 +830,7 @@ async function setupWorktree(project, cfg, sha, base, { depsChangedOverride = nu
     log(`  stale-mount sweep failed (continuing): ${err.message}`);
   }
   fs.rmSync(worktreePath, { recursive: true, force: true });
-  await run('git', ['worktree', 'prune'], cfg.live);
+  await git(cfg.live, ['worktree', 'prune']);
   const add = await git(cfg.live, ['worktree', 'add', '--detach', worktreePath, sha]);
   if (!add.ok) throw new Error(`worktree add failed: ${add.output.slice(0, 500)}`);
 
@@ -1156,7 +1161,7 @@ async function cleanupWorktree(cfg, worktreePath) {
   for (const rel of cfg.dependencyDirs || []) {
     await run('umount', [path.join(worktreePath, rel)], '/');
   }
-  await run('git', ['worktree', 'remove', worktreePath, '--force'], cfg.live);
+  await git(cfg.live, ['worktree', 'remove', worktreePath, '--force']);
 }
 
 // Where agent-authored code runs. Everything below that executes something
@@ -1164,10 +1169,11 @@ async function cleanupWorktree(cfg, worktreePath) {
 // rather than calling runSealed directly, so there is ONE answer to "is this
 // contained" instead of one per call site. That answer has three outcomes,
 // by deployment: a host install runs it in a sandbox container; the compose
-// bundle runs it in this process, which is already a container (a different
-// isolation, NOT a fall-back to the host); anything else refuses. The one
-// exception is runDatabaseCheck's three commands -- SECURITY.md, "The
-// database checks, which stay on the host".
+// bundle asks the agent to start the same container (sandbox.js, "THE BUNDLE
+// DELEGATES"); anything else refuses. Never this process: it holds the
+// secret that authorises a merge. The one exception is runDatabaseCheck's
+// three commands on a host install -- SECURITY.md, "The database checks,
+// which stay on the host" -- and the bundle refuses those outright.
 //
 // sealedEnv is still applied inside the container: it stops secrets reaching
 // the command, which containment does not do on its own.
@@ -1177,6 +1183,10 @@ async function runAgentCode(cfg, worktreePath, relDir, cmd, args, timeoutMs, ext
     return sandbox.runSandboxed(cfg, worktreePath, relDir, cmd, args, timeoutMs,
                                 sealedEnv(extraEnv), network, stack);
   }
+  if (mode.mode === 'delegated') {
+    return sandbox.runDelegated(cfg, worktreePath, relDir, cmd, args, timeoutMs,
+                                extraEnv, network, stack, { secret: REVIEW_CONTROL_SECRET });
+  }
   if (mode.mode === 'unavailable') {
     // Flagged as infrastructure at the source. Everything downstream that
     // decides whose problem a failure is reads `.infrastructure`; deriving
@@ -1185,13 +1195,6 @@ async function runAgentCode(cfg, worktreePath, relDir, cmd, args, timeoutMs, ext
     // debugging an environment it cannot see.
     const r = await unavailable(mode);
     return { ...r, infrastructure: true };
-  }
-  if (mode.mode === 'bundle') {
-    // Already inside a container that is deliberately NOT given the docker
-    // socket (docker-compose.yml gives it to `agent` alone). Starting a
-    // container from here would mean handing this service host-root
-    // equivalent to gain isolation it already has.
-    return runSealed(cmd, args, path.join(worktreePath, relDir || '.'), timeoutMs, extraEnv);
   }
   return { ...(await unavailable(mode)), infrastructure: true };
 }
@@ -1207,7 +1210,7 @@ async function unavailable(mode) {
     ok: false,
     code: 1,
     output: `SETUP: this check runs code the agent wrote and cannot be contained here -- ${mode.reason}. `
-          + `Build the sandbox image (docker/agent-sandbox) or run the reviewer in the bundle. `
+          + `Build the sandbox image (docker/agent-sandbox), or in the bundle set AGENT_SANDBOX_URL. `
           + `It was not run on the host, and nothing about the code under review is known either way.`,
   };
 }
@@ -1223,10 +1226,9 @@ async function runChecks(cfg, worktreePath) {
     log(`  running ${check.name} (${check.cmd} ${check.args.join(' ')}) in ${check.dir}`);
     // A check may declare its own budget; test:review runs 50 suites and
     // needs more than run()'s 5-minute default.
-    // audit C-2: sealed env -- these run agent-authored code. Since
-    // 2026-09-21 they also run inside the sandbox on a host install, and in
-    // the bundle in this already-contained process; see runAgentCode and
-    // SECURITY.md.
+    // audit C-2: sealed env -- these run agent-authored code, always in a
+    // sandbox container: started here on a host install, by the agent in
+    // the bundle. See runAgentCode and SECURITY.md.
     const r = await runAgentCode(cfg, worktreePath, check.dir, check.cmd, check.args,
                                  check.timeoutMs, check.env, check.network,
                                  check.stack || cfg.stack);
@@ -1355,6 +1357,17 @@ async function runBuildCheck(cfg, worktreePath) {
 async function runDatabaseCheck(cfg, worktreePath) {
   const dc = cfg.databaseCheck;
   if (!dc) return [];
+  if (sandbox.IN_CONTAINER) {
+    // These run the repository's own code outside any sandbox (see below),
+    // and in the bundle "outside" is this container, which holds the merge
+    // secret. There is also no loopback Postgres or Redis here to run them
+    // against, so nothing is lost by refusing.
+    return [{
+      name: 'db-setup', ok: false, infrastructure: true,
+      output: 'SETUP: the database checks run the project\'s code unsandboxed and are not run in '
+            + 'the container bundle. Nothing about the code under review is known either way.',
+    }];
+  }
   const apiDir = path.join(worktreePath, dc.apiDir);
   const envPath = path.join(apiDir, '.env');
   let baseUrl;
@@ -1478,6 +1491,23 @@ function testFileCandidates(srcPath) {
   ];
 }
 
+// A worktree file's content for the review prompt, or null. The worktree is
+// agent-written, so `rel` (from a diff or a commit message) and any symlink
+// along it are agent-chosen: `config.json -> /app/data/review_control_secret`
+// or a `../../` path would otherwise put this process's own files in front
+// of the reviewing model, which can quote them back into findings the agent
+// reads.
+function readWorktreeFile(worktreePath, rel, maxChars) {
+  try {
+    const root = fs.realpathSync(worktreePath);
+    const real = fs.realpathSync(path.join(worktreePath, rel));
+    if (real === root || !real.startsWith(root + path.sep)) return null;
+    return fs.readFileSync(real, 'utf8').slice(0, maxChars);
+  } catch {
+    return null;
+  }
+}
+
 function gatherExistingTestCoverage(worktreePath, diff) {
   const changedFiles = [...diff.matchAll(/^\+\+\+ b\/(.+)$/gm)].map((m) => m[1]);
   const seen = new Set();
@@ -1490,10 +1520,11 @@ function gatherExistingTestCoverage(worktreePath, diff) {
       const fullPath = path.join(worktreePath, candidate);
       if (!fs.existsSync(fullPath)) continue;
       seen.add(candidate);
-      try {
-        const content = fs.readFileSync(fullPath, 'utf8').slice(0, 15_000);
+      // best-effort — a missing/unreadable test file just isn't shown
+      const content = readWorktreeFile(worktreePath, candidate, 15_000);
+      if (content !== null) {
         sections.push(`### ${candidate} (current, post-diff content)\n\`\`\`\n${content}\n\`\`\``);
-      } catch { /* best-effort — a missing/unreadable test file just isn't shown */ }
+      }
     }
   }
   return sections.join('\n\n');
@@ -1568,20 +1599,20 @@ function gatherReferencedFiles(worktreePath, commitLog, diff) {
       // bare filename -- resolve against the worktree, unique match only
       try {
         const { execFileSync } = require('node:child_process');
-        const matches = execFileSync('git', ['ls-files', `*/${token}`, token], { cwd: worktreePath })
+        const matches = execFileSync('git', [...GIT_SAFE, 'ls-files', `*/${token}`, token], { cwd: worktreePath })
           .toString().trim().split('\n').filter(Boolean);
         if (matches.length === 1) rel = matches[0];
       } catch { /* unresolvable token -- skip */ }
     }
     if (!rel || changed.has(rel)) continue;
-    try {
-      // 40k, not 15k -- the first live use of this feature (2026-08-20) hit a
-      // file of 15,874 chars whose decisive evidence (the tab markup) sat in
-      // the final ~900 chars: the cap handed the reviewer everything EXCEPT
-      // the part that mattered, and it kept the deadlock alive one more round.
-      const content = fs.readFileSync(path.join(worktreePath, rel), 'utf8').slice(0, 40_000);
+    // 40k, not 15k -- the first live use of this feature (2026-08-20) hit a
+    // file of 15,874 chars whose decisive evidence (the tab markup) sat in
+    // the final ~900 chars: the cap handed the reviewer everything EXCEPT
+    // the part that mattered, and it kept the deadlock alive one more round.
+    const content = readWorktreeFile(worktreePath, rel, 40_000);
+    if (content !== null) {
       sections.push(`### ${rel} (current content -- referenced in the commit message, NOT part of this diff)\n` + '```\n' + content + '\n```');
-    } catch { /* best-effort */ }
+    }
   }
 
   // Definitions of symbols the diff's ADDED lines import or call, so an
@@ -1612,17 +1643,17 @@ function gatherReferencedFiles(worktreePath, commitLog, diff) {
     if (depFiles.size >= 4) break;
     try {
       const hits = execFileSync(
-        'git', ['grep', '-lE', `(async +)?${sym} *\\(`, '--', '*.ts', '*.tsx', '*.js'],
+        'git', [...GIT_SAFE, 'grep', '-lE', `(async +)?${sym} *\\(`, '--', '*.ts', '*.tsx', '*.js'],
         { cwd: worktreePath },
       ).toString().trim().split('\n').filter((f) => f && !changed.has(f) && !f.includes('.spec.') && !f.includes('/generated/'));
       if (hits.length >= 1 && hits.length <= 3) hits.forEach((h) => depFiles.size < 4 && depFiles.add(h));
     } catch { /* symbol not found anywhere -- genuinely missing, leave it to the model */ }
   }
   for (const rel of depFiles) {
-    try {
-      const content = fs.readFileSync(path.join(worktreePath, rel), 'utf8').slice(0, 40_000);
+    const content = readWorktreeFile(worktreePath, rel, 40_000);
+    if (content !== null) {
       sections.push(`### ${rel} (current content -- imported or CALLED by this diff's changes, NOT part of this diff)\n` + '```\n' + content + '\n```');
-    } catch { /* best-effort */ }
+    }
   }
   return sections.join('\n\n');
 }
@@ -1984,10 +2015,10 @@ function runNextQueued(project, routerKey) {
 }
 
 function setStep(project, step) {
-  const state = loadState();
-  if (!state[project]?.inProgress) return; // review already finished/aborted
-  state[project].inProgress.step = step;
-  saveState(state);
+  updateState((state) => {
+    if (!state[project]?.inProgress) return false; // review already finished/aborted
+    state[project].inProgress.step = step;
+  });
 }
 
 async function reviewProject(project, cfg, routerKey, requested = null) {
@@ -2011,9 +2042,9 @@ async function reviewProject(project, cfg, routerKey, requested = null) {
     // at start left the record naming one branch while `lastReviewedSha`
     // still belonged to another, and agent-review's merge gate read that
     // pair as "newer commits since the last review" on the real task.
-    const state = loadState();
-    state[project] = { ...state[project], inProgress: { sha, branch, base, startedAt: new Date().toISOString(), step: 'setting up worktree' } };
-    saveState(state);
+    updateState((state) => {
+      state[project] = { ...state[project], inProgress: { sha, branch, base, startedAt: new Date().toISOString(), step: 'setting up worktree' } };
+    });
   }
 
   let worktreePath;
@@ -2152,7 +2183,6 @@ async function reviewProject(project, cfg, routerKey, requested = null) {
     const churn = verdict === 'READY' ? null : computeFileChurn(project, review.findings, branch);
     const escalated = verdict === 'READY' ? false : (wasEscalated || infraFailed || consecutiveNeedsFixes >= MAX_CONSECUTIVE_FIXES || Boolean(churn));
 
-    const state = loadState();
     const record = {
       // The review unit, recorded in full: a verdict is only meaningful for the
       // branch and base it was produced against. agent-review's merge endpoint
@@ -2185,8 +2215,9 @@ async function reviewProject(project, cfg, routerKey, requested = null) {
       consecutiveNeedsFixes,
       escalated,
     };
-    state[project] = { ...record, branches: withBranchRecord(state[project], branch, record) };
-    saveState(state);
+    updateState((state) => {
+      state[project] = { ...record, branches: withBranchRecord(state[project], branch, record) };
+    });
     appendHistory(project, record);
 
     if (verdict === 'NEEDS_FIXES' && !wasEscalated) {
@@ -2199,11 +2230,12 @@ async function reviewProject(project, cfg, routerKey, requested = null) {
     return { started: true };
   } catch (err) {
     log(`[${project}] review failed with an internal error: ${err.message}`);
-    const state = loadState();
-    // Own-property check first: `project` came in over HTTP, and a key like
-    // __proto__ must never reach the delete (CodeQL js/prototype-polluting-assignment).
-    if (Object.hasOwn(state, project) && state[project]?.inProgress?.sha === sha) delete state[project].inProgress;
-    saveState(state);
+    updateState((state) => {
+      // Own-property check first: `project` came in over HTTP, and a key like
+      // __proto__ must never reach the delete (CodeQL js/prototype-polluting-assignment).
+      if (!(Object.hasOwn(state, project) && state[project]?.inProgress?.sha === sha)) return false;
+      delete state[project].inProgress;
+    });
     return { started: true, error: err.message };
   } finally {
     if (worktreePath) await cleanupWorktree(cfg, worktreePath);
@@ -2383,10 +2415,10 @@ async function sweepLeftoverWorktrees(root = WORKTREE_ROOT, projects = currentPr
     }
     const owner = Object.entries(projects).find(([p]) => name.startsWith(`${p}-`));
     if (owner && owner[1].live) {
-      await run('git', ['worktree', 'remove', '--force', dir], owner[1].live);
+      await git(owner[1].live, ['worktree', 'remove', '--force', dir]);
     }
     fs.rmSync(dir, { recursive: true, force: true });
-    if (owner && owner[1].live) await run('git', ['worktree', 'prune'], owner[1].live);
+    if (owner && owner[1].live) await git(owner[1].live, ['worktree', 'prune']);
     swept.push(name);
   }
   if (swept.length) log(`removed ${swept.length} review worktree(s) left by earlier runs: ${swept.join(', ')}`);
@@ -2431,6 +2463,6 @@ module.exports = {
   classifyInfrastructureFailures, packagesNeedingOwnInstall, baselineKey,
   detectNodeModulesDirs, NM_BUILD_CACHES,
   branchRecord, withBranchRecord, computeFileChurn, queueReview, pendingReviews, sweepLeftoverWorktrees,
-  liveInstallIsStale,
+  liveInstallIsStale, readWorktreeFile, gatherReferencedFiles,
   extractAgentResponses, stripLeakedMarkup, REVIEW_RESPONSE_MARKER,
 };

@@ -115,6 +115,16 @@ describe("planning socket liveness", () => {
     expect(sockets.every((s) => !s.closed)).toBe(true);
   });
 
+  it("drops an unparseable frame and keeps reading the stream", async () => {
+    const hook = await startTurn();
+    const ws = sockets[sockets.length - 1];
+    const quiet = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    expect(() => act(() => ws.onmessage?.({ data: "not json at all" }))).not.toThrow();
+    quiet.mockRestore();
+    act(() => ws.onmessage?.({ data: JSON.stringify({ type: "closed" }) }));
+    await waitFor(() => expect(hook.result.current.running).toBe(false));
+  });
+
   it("still clears running on an ordinary in-band close", async () => {
     const hook = await startTurn();
     const ws = sockets[sockets.length - 1];

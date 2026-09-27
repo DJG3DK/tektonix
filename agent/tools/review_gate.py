@@ -8,6 +8,7 @@ deterministic; this is the real pre-merge gate.
 import asyncio
 import logging
 import os
+import shlex
 import subprocess
 import sys
 
@@ -298,10 +299,21 @@ async def _push_https_origin_if_needed(project: str) -> dict | None:
     """Push the base branch to an https origin the review service could not.
 
     None when there is nothing to do: no origin, an SSH origin (a deploy key
-    already carries it), or no token. Never raises.
+    already carries it), or no token. Never raises: the merge has already
+    happened, and a push that hangs or errors must not turn a merged task into
+    a failed one.
     """
+    try:
+        return await _push_https_origin(project)
+    except Exception as e:  # noqa: BLE001 -- reported, never raised; see above
+        logger.warning("origin push after merge failed for %s: %s", project, type(e).__name__)
+        return {"ok": False, "reason": f"origin push did not complete ({type(e).__name__}); "
+                                       f"the merge itself succeeded"}
+
+
+async def _push_https_origin(project: str) -> dict | None:
     from agent.config import PROJECTS, load_config  # noqa: PLC0415
-    from agent.tools.git import _git  # noqa: PLC0415
+    from agent.tools.git import _git, token_credential_args, token_env  # noqa: PLC0415
     from agent import github_settings  # noqa: PLC0415
 
     cfg = PROJECTS.get(project) or {}
@@ -329,8 +341,8 @@ async def _push_https_origin_if_needed(project: str) -> dict | None:
     if not token:
         return {"ok": False, "reason": "no GitHub token, so origin stays behind"}
 
-    r = await _git(f"push https://x-access-token:{token}@github.com/{slug}.git {base}",
-                   live, timeout=300)
+    r = await _git(shlex.join([*token_credential_args(), "push", f"https://github.com/{slug}.git", base]),
+                   live, timeout=300, extra_env=token_env(token))
     if not r["ok"]:
         # Same refusal, different push: a merge that brings a workflow file
         # onto the base branch is rejected for the same reason.
@@ -417,7 +429,8 @@ async def ship_as_pull_request(project: str, branch: str, sha: str, title: str) 
     outcomes identically apart from what it tells the operator.
     """
     from agent.config import PROJECTS, load_config  # noqa: PLC0415
-    from agent.tools.git import _git  # noqa: PLC0415
+    from agent.tools.git import _git, token_credential_args, token_env  # noqa: PLC0415
+    from agent.tools.shell import ShellTimeout  # noqa: PLC0415
     from agent import github_repos  # noqa: PLC0415
     from agent.tools import github_tools  # noqa: PLC0415
 
@@ -486,9 +499,10 @@ async def ship_as_pull_request(project: str, branch: str, sha: str, title: str) 
     #
     # A project cloned from a URL has a plain https origin with no credentials
     # on it -- the token is deliberately not written into .git/config, which
-    # anyone who can read the checkout can read. So the token goes on the
-    # command line for this one push and nowhere else: `git push <url>` takes
-    # a URL in place of a remote name, and nothing about it is stored.
+    # anyone who can read the checkout can read. So the token reaches this
+    # one push through a credential helper reading the child's environment
+    # (agent/tools/git.py, token_credential_args) -- never the command line,
+    # where every local user can read it.
     #
     # A project with an SSH origin already has a deploy key configured through
     # core.sshCommand, so the plain remote name is right and adding a token
@@ -496,11 +510,16 @@ async def ship_as_pull_request(project: str, branch: str, sha: str, title: str) 
     configured = await _git("config --local --get remote.origin.url", live, timeout=15)
     origin = configured["output"].strip() if configured["ok"] else ""
     if origin.startswith("https://"):
-        target = f"https://x-access-token:{token}@github.com/{slug}.git"
+        push_args = [*token_credential_args(), "push", "--quiet", f"https://github.com/{slug}.git", branch]
+        push_env = token_env(token)
     else:
-        target = "origin"
+        push_args = ["push", "--quiet", "origin", branch]
+        push_env = None
 
-    push = await _git(f"push --quiet {target} {branch}", live, timeout=300)
+    try:
+        push = await _git(shlex.join(push_args), live, timeout=300, extra_env=push_env)
+    except ShellTimeout:
+        return {"ok": False, "stage": "ship", "error": f"could not push {branch}: timed out after 300s"}
     if not push["ok"]:
         # git echoes the URL it was given, token and all.
         detail = push["output"].replace(token, "***")[:300]

@@ -36,3 +36,16 @@ def test_attachment_without_path_is_rejected():
 def test_valid_attachment_parses():
     a = AttachmentEntry(kind="pdf", path=".uploads/b/x.pdf", pages=3)
     assert a.path.endswith("x.pdf") and a.pages == 3
+
+
+def test_a_planning_message_validates_its_attachments_the_same_way():
+    """The planning route took `list[dict]` and handed it to the same
+    attachments note the task route validates for."""
+    from agent.routers.planning import PlanningMessageRequest
+
+    with pytest.raises(ValidationError):
+        PlanningMessageRequest(text="look", attachments=[{"kind": "image"}])
+    with pytest.raises(ValidationError):
+        PlanningMessageRequest(text="look", attachments=[{"kind": "image", "path": {"x": 1}}])
+    ok = PlanningMessageRequest(text="look", attachments=[{"kind": "image", "path": ".uploads/b/a.png"}])
+    assert ok.attachments[0].path == ".uploads/b/a.png"

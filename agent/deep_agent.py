@@ -2287,7 +2287,6 @@ async def build_deep_agent(
             # the pass with RepeatLoopError and the work node moves the task
             # to the fallback seat.
             RepeatCallGuardMiddleware(),
-            BudgetGuardMiddleware(tracker),
             # Planner on the thread's first turn, coder after -- see model_pin.py.
             PlanCodeModelMiddleware(planner_model, coordinator_model),
             # INSIDE the plan/code pick, not outside it: that middleware sets
@@ -2296,6 +2295,10 @@ async def build_deep_agent(
             # made it a "planning turn", so 17 of 19 retries went to the
             # planner at full effort (2026-09-25, first hour of a run).
             EmptyReplyRetryMiddleware(empty_reply_model, "coordinator"),
+            # Inside the retry, as on every subagent: outside it the guard saw
+            # only the reply the retry kept, so the discarded empty call --
+            # 32k reasoning tokens -- was never charged against the ceiling.
+            BudgetGuardMiddleware(tracker),
             SummarizationMiddleware(
                 # Meter callback, not middleware: this model is ainvoke()d
                 # directly by SummarizationMiddleware, a path no agent

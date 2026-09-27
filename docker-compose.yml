@@ -13,12 +13,22 @@ name: three-d-agent
 services:
   postgres:
     image: postgres:16-alpine
+    # First, so the generated secrets exist before any service that reads
+    # them starts: everything else waits for this one to be healthy. See
+    # docker/postgres/init-secrets.sh.
+    entrypoint: ["/bin/sh", "/tektonix/init-secrets.sh"]
+    command: ["postgres"]
     environment:
       POSTGRES_USER: agent
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-agent}
+      # Blank means "generate one". The old compose defaults (`agent`,
+      # `sk-local-dev`) were the same in every installation.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-}
+      MODEL_ROUTER_KEY: ${MODEL_ROUTER_KEY:-}
       POSTGRES_DB: three_d_agent
     volumes:
       - pgdata:/var/lib/postgresql/data
+      - bundlesecrets:/run/tektonix-secrets
+      - ./docker/postgres/init-secrets.sh:/tektonix/init-secrets.sh:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U agent -d three_d_agent"]
       interval: 5s
@@ -30,9 +40,12 @@ services:
     build:
       context: .
       dockerfile: docker/router/Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
     environment:
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:?set OPENROUTER_API_KEY in .env}
-      MODEL_ROUTER_KEY: ${MODEL_ROUTER_KEY:-sk-local-dev}
+      MODEL_ROUTER_KEY_FILE: /run/tektonix-secrets/model_router_key
     # Image HEALTHCHECK already probes /health/liveliness. Named here so the
     # agent's depends_on can wait on it: a first task that starts while the
     # router is still booting dies mid-call with "peer closed connection".
@@ -53,6 +66,7 @@ services:
       # ROUTER_CONFIG in .env to use your own.
       - ${ROUTER_CONFIG:-./services/model-router/config.example.yaml}:/app/config.yaml:ro
       - routerlogs:/app/logs
+      - bundlesecrets:/run/tektonix-secrets:ro
     restart: unless-stopped
 
   agent:
@@ -65,9 +79,11 @@ services:
       router:
         condition: service_healthy
     environment:
-      LANGGRAPH_PG_DSN: postgresql://agent:${POSTGRES_PASSWORD:-agent}@postgres:5432/three_d_agent
+      # The entrypoint builds LANGGRAPH_PG_DSN and MODEL_ROUTER_KEY from these
+      # generated files; set LANGGRAPH_PG_DSN yourself to use another database.
+      POSTGRES_PASSWORD_FILE: /run/tektonix-secrets/postgres_password
+      MODEL_ROUTER_KEY_FILE: /run/tektonix-secrets/model_router_key
       MODEL_ROUTER_URL: http://router:4001
-      MODEL_ROUTER_KEY: ${MODEL_ROUTER_KEY:-sk-local-dev}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:?set OPENROUTER_API_KEY in .env}
       ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@example.com}
       DEFAULT_BUDGET_USD: ${DEFAULT_BUDGET_USD:-2.00}
@@ -94,6 +110,12 @@ services:
       # is covered by the mapping already there, and nothing scans this root,
       # so a dot-directory stays out of the way.
       AGENT_SANDBOX_ROOT: /projects/.tektonix-workspaces
+      # The commit reviewer's worktrees, which it asks this service to run
+      # checks in (agent/review_sandbox.py). Under /projects for the same
+      # reason as the workspaces above, and the same value the reviewer uses:
+      # a request naming a worktree anywhere else is refused. Setting it is
+      # also what enables that endpoint at all.
+      REVIEW_WORKTREE_ROOT: /projects/.tektonix-review-worktrees
       # The review services are siblings here, not localhost.
       REVIEW_SERVICE_HOST: agent-review
       REVIEW_CONTROL_HOST: commit-reviewer
@@ -103,6 +125,7 @@ services:
       - ${PROJECTS_DIR:?set PROJECTS_DIR in .env}:/projects
       - agentdata:/app/data
       - agentlogs:/app/logs
+      - bundlesecrets:/run/tektonix-secrets:ro
       # The sandbox image is built on first run from this context.
       - ./docker/agent-sandbox:/app/docker/agent-sandbox:ro
     ports:
@@ -173,12 +196,21 @@ services:
       # The reviewer's own model call goes through the router like every other
       # call, so its choice and its spend are visible in one place.
       MODEL_ROUTER_URL: http://router:4001/v1
-      MODEL_ROUTER_KEY: ${MODEL_ROUTER_KEY:-sk-local-dev}
+      MODEL_ROUTER_KEY_FILE: /run/tektonix-secrets/model_router_key
       TEKTONIX_BUNDLE: "1"
+      # Checks run agent-authored code, and THIS container holds the secret
+      # that authorises a merge -- so they never run here. The agent, which
+      # has the docker socket, starts a sandbox container for each one
+      # (services/commit-reviewer/sandbox.js). Unset, every check refuses.
+      AGENT_SANDBOX_URL: http://agent:8100
+      # Under /projects so the agent can hand it to the host daemon, and the
+      # same value the agent validates against.
+      REVIEW_WORKTREE_ROOT: /projects/.tektonix-review-worktrees
     volumes:
       - ${PROJECTS_DIR:?set PROJECTS_DIR in .env}:/projects
       - agentdata:/app/data:ro
       - reviewstate:/app/review-state
+      - bundlesecrets:/run/tektonix-secrets:ro
     restart: unless-stopped
 
 volumes:
@@ -186,6 +218,9 @@ volumes:
   # Verdicts and their history. Separate from agentdata because the agent owns
   # that one and these two write this one.
   reviewstate:
+  # The generated database password and router key. Written by postgres's
+  # entrypoint wrapper, read-only everywhere else.
+  bundlesecrets:
   agentdata:
   agentlogs:
   routerlogs:

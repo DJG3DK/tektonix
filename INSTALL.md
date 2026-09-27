@@ -184,6 +184,13 @@ appends the real peer **last**, which is the hop the app's rate limiter reads.
 A proxy that passes the client's own `X-Forwarded-For` through untouched lets a
 caller spoof past the login rate limit.
 
+The app believes `X-Real-IP` and `X-Forwarded-For` only from a peer it trusts:
+loopback by default, which is nginx on the same machine. If your proxy runs on
+another address, name it (or its network) in `AGENT_TRUSTED_PROXIES`, comma
+separated, e.g. `AGENT_TRUSTED_PROXIES=10.0.0.5,::1`. That list replaces the
+default rather than adding to it. From any other peer the headers are ignored
+and the connection's own address is what gets rate limited.
+
 #### If you publish it on a domain
 
 The app has its own login, TOTP 2FA for admins, and auth rate limiting — but it

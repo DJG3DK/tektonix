@@ -1459,10 +1459,15 @@ def detect_project(live_path: str, sandbox_root: str | None = None,
 # provisioning
 # --------------------------------------------------------------------------
 
-def _run_git(args: list[str], cwd: str, timeout: int = 120) -> tuple[bool, str]:
+def _run_git(args: list[str], cwd: str, timeout: int = 120,
+             extra_env: dict | None = None) -> tuple[bool, str]:
+    env = {**os.environ, **extra_env} if extra_env else None
     try:
         res = subprocess.run(["git", *args], cwd=cwd, capture_output=True,
-                             text=True, timeout=timeout)
+                             text=True, timeout=timeout, env=env)
+    except subprocess.TimeoutExpired:
+        # Not str(e): that is the whole argv.
+        return False, f"git timed out after {timeout}s"
     except (subprocess.SubprocessError, OSError) as e:
         return False, str(e)
     return res.returncode == 0, (res.stdout + res.stderr).strip()
@@ -1867,9 +1872,9 @@ def clone_repository(source: str, parent: str | None = None, *, name: str | None
     against the path -- nothing downstream knows or cares how the directory got
     there.
 
-    A token is used for the URL only when one is supplied, and never written to
-    disk: the remote is rewritten to the plain https URL immediately after, so
-    the credential does not end up in .git/config for anyone to find.
+    A token is used only when one is supplied, and never written to disk or
+    put on a command line: the clone URL is the plain https one, so the
+    credential does not end up in .git/config for anyone to find.
     """
     parsed = parse_github_source(source)
     if not parsed:
@@ -1888,20 +1893,20 @@ def clone_repository(source: str, parent: str | None = None, *, name: str | None
         raise ProvisioningError(f"{parent} does not exist or is not a directory")
 
     public_url = f"https://github.com/{owner}/{repo}.git"
-    clone_url = (f"https://x-access-token:{token}@github.com/{owner}/{repo}.git"
-                 if token else public_url)
+    from agent.tools.git import token_credential_args, token_env  # noqa: PLC0415
 
-    ok, out = _run_git(["clone", "--quiet", clone_url, real], cwd=parent)
+    # The token reaches git through a credential helper reading the child's
+    # environment, never the URL: an argv is readable by every local user,
+    # and a URL with credentials in it is written into .git/config.
+    if token:
+        ok, out = _run_git([*token_credential_args(), "clone", "--quiet", public_url, real],
+                           cwd=parent, extra_env=token_env(token))
+    else:
+        ok, out = _run_git(["clone", "--quiet", public_url, real], cwd=parent)
     if not ok:
         shutil.rmtree(real, ignore_errors=True)
-        # The token, if there was one, is in the URL git echoes back.
         safe = out.replace(token, "***") if token else out
         raise ProvisioningError(f"clone of {owner}/{repo} failed: {safe}"[:800])
-
-    if token:
-        # Same reason the token is not in the clone URL on disk: .git/config is
-        # world-readable to anyone who can read the checkout.
-        _run_git(["remote", "set-url", "origin", public_url], cwd=real)
 
     if not os.path.isdir(os.path.join(real, ".git")):
         shutil.rmtree(real, ignore_errors=True)

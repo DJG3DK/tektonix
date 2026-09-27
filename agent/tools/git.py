@@ -65,12 +65,35 @@ def _trusted_git_dir_error(repo_root: str) -> str | None:
     return None
 
 
-async def _git(cmd: str, repo_root: str, timeout: int = 30) -> dict:
+async def _git(cmd: str, repo_root: str, timeout: int = 30, extra_env: dict | None = None) -> dict:
     """Run one git command with hooks disabled and the pointer verified."""
     problem = _trusted_git_dir_error(repo_root)
     if problem is not None:
         return {"ok": False, "output": f"refusing to run git: {problem}"}
-    return await run_shell(f"{_GIT} {cmd}", repo_root, timeout=timeout)
+    return await run_shell(f"{_GIT} {cmd}", repo_root, timeout=timeout, extra_env=extra_env)
+
+
+# A GitHub token for one git command, without putting it in the command.
+#
+# `https://x-access-token:<token>@github.com/...` as the push/clone URL put the
+# token in git's argv, where /proc/<pid>/cmdline shows it to every local user
+# for the length of the push, and in ShellTimeout's message when the push hung
+# -- which verify_and_ship then escalated verbatim. A `!` credential helper is
+# run by git through sh, which expands the variable from the child's own
+# environment, so the token is only ever in that environment.
+GIT_TOKEN_ENV = "TEKTONIX_GIT_TOKEN"
+_TOKEN_HELPER = ('!f() { test "$1" = get || exit 0; echo username=x-access-token; '
+                 'echo "password=$' + GIT_TOKEN_ENV + '"; }; f')
+
+
+def token_credential_args() -> list[str]:
+    """`-c` options that make git authenticate with $TEKTONIX_GIT_TOKEN. The
+    empty helper first clears any helper the host has configured."""
+    return ["-c", "credential.helper=", "-c", f"credential.helper={_TOKEN_HELPER}"]
+
+
+def token_env(token: str) -> dict[str, str]:
+    return {GIT_TOKEN_ENV: token, "GIT_TERMINAL_PROMPT": "0"}
 
 
 async def git_diff(repo_root: str, staged: bool = False) -> str:

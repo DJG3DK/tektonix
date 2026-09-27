@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { actOnGitHubItem, getGitHubInbox, pollGitHubNow, type GitHubInboxItem, type GitHubItemState } from "../api";
 import "./GitHubInboxView.css";
+import { safeHref } from "../safeHref";
 
 /* The GitHub inbox: everything the poller found, what policy decided, and
  * the buttons to decide the rest.
@@ -165,7 +166,7 @@ export function GitHubInboxView({ isAdmin, onOpenTask }: { isAdmin: boolean; onO
                 <span className={`ghi-state ghi-state--${item.state}`}>{STATE_LABEL[item.state]}</span>
                 <span className="ghi-when" title={new Date(item.updated_at * 1000).toLocaleString()}>{ago(item.updated_at)}</span>
               </div>
-              <a className="ghi-item-title" href={item.url || undefined} target="_blank" rel="noreferrer">
+              <a className="ghi-item-title" href={safeHref(item.url)} target="_blank" rel="noreferrer">
                 {item.number ? `#${item.number} ` : ""}{item.title}
               </a>
               {item.summary && <div className="ghi-summary ghi-summary--multiline">{item.summary}</div>}
