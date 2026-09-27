@@ -16,6 +16,7 @@ import { StopButton } from "./StopButton";
 import { DiffPanel } from "./DiffPanel";
 import "./TaskView.css";
 import { idleMessage } from "./activityPhase";
+import { safeHref } from "../safeHref";
 
 // Rows mounted at once, and how many more a click reveals. 200 covers more
 // than a viewport at any realistic row height, so the common case -- watching
@@ -224,7 +225,7 @@ export function TaskView({ task, stream, setGeneration }: Props) {
               <span className="task-pr-label">Opened a pull request</span>
               <a
                 className="task-pr-link"
-                href={task.pull_request_url}
+                href={safeHref(task.pull_request_url)}
                 target="_blank"
                 rel="noopener noreferrer"
               >

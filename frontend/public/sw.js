@@ -100,20 +100,34 @@ self.addEventListener('push', (event) => {
     // another on the lock screen instead of stacking into a wall.
     tag: data.tag || 'tektonix',
     renotify: true,
-    data: { url: data.url || '/' },
+    data: { url: sameOriginPath(data.url) },
   }));
 });
 
+/* A path on this origin, or '/'. The URL is whatever the push payload said,
+ * and a notification that opens another site -- or a javascript: URL -- in
+ * the app's window is a phishing page wearing the app's name. */
+function sameOriginPath(raw) {
+  try {
+    const u = new URL(raw || '/', self.location.origin);
+    if (u.origin !== self.location.origin) return '/';
+    return u.pathname + u.search + u.hash;
+  } catch {
+    return '/';
+  }
+}
+
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
-  const target = (event.notification.data && event.notification.data.url) || '/';
+  const target = sameOriginPath(event.notification.data && event.notification.data.url);
   // Focus the window the operator already has open rather than opening a
   // second copy of a dashboard that holds live WebSocket streams.
   event.waitUntil(
     self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((wins) => {
       for (const w of wins) {
         if (new URL(w.url).origin === self.location.origin && 'focus' in w) {
-          if (w.navigate && new URL(w.url).pathname !== target) w.navigate(target);
+          const here = new URL(w.url);
+          if (w.navigate && here.pathname + here.search + here.hash !== target) w.navigate(target);
           return w.focus();
         }
       }
