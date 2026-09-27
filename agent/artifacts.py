@@ -22,6 +22,8 @@ import json
 import re
 import time
 import uuid
+
+from agent import safe_path
 from pathlib import Path
 
 from agent import paths
@@ -56,7 +58,7 @@ def _dir(repo: str) -> Path:
     from agent.config import PROJECTS  # noqa: PLC0415 -- config reads env at import
     if repo not in PROJECTS:
         raise ArtifactError(f"unknown project {repo!r}")
-    return ROOT / repo
+    return safe_path.under(ROOT, repo)
 
 
 def save(repo: str, data: bytes, caption: str = "", source: str = "") -> str:
@@ -88,8 +90,13 @@ def load(repo: str, artifact_id: str) -> tuple[bytes, str] | None:
         folder = _dir(repo)
     except ArtifactError:
         return None
-    for path in folder.glob(f"{artifact_id}.*"):
-        if path.suffix == ".json":
+    try:
+        entries = list(folder.iterdir())
+    except OSError:
+        return None
+    for path in entries:
+        # Compared, not globbed: the id names nothing until a stored file matches it.
+        if path.suffix == ".json" or path.stem != artifact_id:
             continue
         data = path.read_bytes()
         kind = sniff(data)

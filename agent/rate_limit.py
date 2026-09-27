@@ -83,7 +83,7 @@ def _parse_trusted(raw: str) -> tuple:
         try:
             nets.append(ipaddress.ip_network(part, strict=False))
         except ValueError:
-            logger.warning("%s: ignoring %r, not an address or network", TRUSTED_PROXIES_ENV, part)
+            logger.warning("AGENT_TRUSTED_PROXIES: ignoring an entry that is not an address or network")
     return tuple(nets)
 
 

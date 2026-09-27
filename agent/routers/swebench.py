@@ -31,7 +31,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from agent import audit, auth, paths
+from agent import audit, auth, paths, safe_path
 from agent.evals import host_metrics
 from agent.auth import User, require_full_auth
 from agent.routers import audit_store
@@ -47,7 +47,14 @@ DATASET_SIZE = 500
 # ran (evals/SWEBENCH.md, --shard).
 TASKS_PER_PROCESS = 5
 _RUN_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,120}$")
-_INSTANCE = re.compile(r"^[A-Za-z0-9_.-]+__[A-Za-z0-9_.-]+-\d+$")
+_INSTANCE_CHARS = re.compile(r"^[A-Za-z0-9_.-]{1,200}$")
+
+
+def _is_instance_id(s: str) -> bool:
+    """`owner__repo-NNNN`: one character class and two plain checks, where a
+    regex with two overlapping groups either side of `__` went quadratic on
+    a crafted id."""
+    return bool(_INSTANCE_CHARS.match(s)) and "__" in s and "-" in s and s.rsplit("-", 1)[1].isdigit()
 # A message's text and a tool call's arguments, cut to this for the page.
 # The file on disk keeps everything; this is for reading, not for the record.
 _TEXT_LIMIT = 6000
@@ -68,11 +75,19 @@ def _alive(pid) -> bool:
         return False
 
 
+def _run_path(*parts: str) -> Path:
+    """A path under RUNS_DIR from request values, or a 400."""
+    try:
+        return safe_path.under(RUNS_DIR, *parts)
+    except safe_path.PathOutsideRoot:
+        raise HTTPException(400, "not a run name") from None
+
+
 def _run_dir(name: str) -> Path:
     # Matched, not joined: the name becomes a path.
     if not _RUN_NAME.match(name):
         raise HTTPException(400, "not a run name")
-    d = RUNS_DIR / name
+    d = _run_path(name)
     if not (d / "summary.json").is_file():
         raise HTTPException(404, "no such run")
     return d
@@ -250,7 +265,7 @@ async def get_run(name: str, user: User = Depends(require_full_auth)):
         raise HTTPException(400, "not a run name")
     all_s = _all_summaries()
     shards = _groups(all_s).get(name)
-    if shards and not (RUNS_DIR / name / "summary.json").is_file():
+    if shards and not (_run_path(name) / "summary.json").is_file():
         parts = [_run_tasks(n) for n in shards]
         return {"summary": combined(name, [p["summary"] for p in parts]),
                 "tasks": [t for p in parts for t in p["tasks"]],
@@ -357,7 +372,7 @@ def _conversation(traj: dict) -> list[dict]:
 async def get_task(name: str, instance_id: str, user: User = Depends(require_full_auth)):
     auth.require_admin(user)
     d = _run_dir(name)
-    if not _INSTANCE.match(instance_id):
+    if not _is_instance_id(instance_id):
         raise HTTPException(400, "not an instance id")
     patch = None
     try:
@@ -457,12 +472,12 @@ async def start_swebench_run(req: StartSwebenchRequest, request: Request, user: 
     full = req.sample >= DATASET_SIZE
     stamp = time.strftime("%Y%m%dT%H%M", time.gmtime())
     base = f"tektonix-{'all' if full else f'sample{req.sample}'}-seed{req.seed}-{stamp}"
-    if not _RUN_NAME.match(base) or (RUNS_DIR / base).exists():
+    if not _RUN_NAME.match(base) or _run_path(base).exists():
         raise HTTPException(409, "a run with this name already exists; try again in a minute")
     notes = req.notes.strip() or f"started from the dashboard by {user.email}"
     names = []
     for name, cmd in run_commands(req, base, notes):
-        _spawn(cmd, RUNS_DIR / f"{name}.runner.log")
+        _spawn(cmd, _run_path(f"{name}.runner.log"))
         names.append(name)
     await audit.record(audit_store(request), actor=user.email, action="swebench.run", target=base,
                        detail=f"{'all 500' if full else f'{req.sample} tasks, seed {req.seed}'}, "
@@ -538,7 +553,7 @@ async def swebench_run_log(name: str, lines: int = 80, user: User = Depends(requ
     lines = max(1, min(int(lines), 500))
     out: list[str] = []
     for run in _run_names(name):
-        path = RUNS_DIR / f"{run}.runner.log"
+        path = _run_path(f"{run}.runner.log")
         try:
             tail = path.read_text(errors="replace").splitlines()[-lines:]
         except OSError:

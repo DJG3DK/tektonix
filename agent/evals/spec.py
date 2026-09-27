@@ -254,6 +254,19 @@ def load_task(path: Path, fixtures_dir: Path | None = None) -> TaskSpec:
     )
 
 
+def load_suite_report(base: Path, fixtures_dir: Path | None = None) -> tuple[list[TaskSpec], list[str]]:
+    """Every task that loads, and one line per task that does not: the
+    dashboard shows the second list as the suite's own state, which is why
+    it is data here and an exception only in load_suite."""
+    tasks, errors = [], []
+    for path in sorted(base.glob("*.yaml")):
+        try:
+            tasks.append(load_task(path, fixtures_dir))
+        except SpecError as e:
+            errors.append(str(e))
+    return tasks, errors
+
+
 def load_suite(tasks_dir: Path | None = None, fixtures_dir: Path | None = None,
                only: list[str] | None = None) -> list[TaskSpec]:
     """Every golden task, in a stable order, or a refusal listing ALL the
@@ -269,12 +282,7 @@ def load_suite(tasks_dir: Path | None = None, fixtures_dir: Path | None = None,
     if not files:
         raise SpecError(f"{base}: no .yaml task files")
 
-    tasks, errors = [], []
-    for path in files:
-        try:
-            tasks.append(load_task(path, fixtures_dir))
-        except SpecError as e:
-            errors.append(str(e))
+    tasks, errors = load_suite_report(base, fixtures_dir)
     if errors:
         raise SpecError("the eval suite has broken task specs:\n  - " + "\n  - ".join(errors))
 

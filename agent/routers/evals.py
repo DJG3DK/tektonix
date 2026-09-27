@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import calendar
 import json
+import logging
 import os
 import re
 import shutil
@@ -28,11 +29,12 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from agent import audit, auth, paths
+from agent import audit, auth, paths, safe_path
 from agent.auth import User, require_full_auth
 from agent.evals import status as ev_status
 from agent.routers import audit_store
 
+logger = logging.getLogger(__name__)
 router = APIRouter(tags=["evals"])
 
 REPORT_DIR = paths.REPO_ROOT / "logs" / "evals"
@@ -97,12 +99,22 @@ def _reports() -> list[tuple[str, dict]]:
 
 
 def _suite() -> dict:
-    """The suite as it stands on disk: how many tasks, in which categories."""
-    from agent.evals.spec import load_suite   # noqa: PLC0415 -- light, but only here
+    """The suite as it stands on disk: how many tasks, in which categories.
+    A broken spec is part of the answer, in the words of the spec loader;
+    anything else is the server log's, and the page gets one sentence."""
+    from agent.evals import spec   # noqa: PLC0415 -- light, but only here
     try:
-        tasks = load_suite()
-    except Exception as e:  # noqa: BLE001 -- a bad spec is an answer, not a 500
-        return {"tasks": 0, "by_category": {}, "ids": [], "error": str(e)[:300]}
+        if not spec.TASKS_DIR.is_dir():
+            return {"tasks": 0, "by_category": {}, "ids": [], "error": f"no tasks directory at {spec.TASKS_DIR}"}
+        tasks, errors = spec.load_suite_report(spec.TASKS_DIR)
+    except Exception:  # noqa: BLE001 -- a bad spec is an answer, not a 500
+        logger.exception("the eval suite could not be read")
+        return {"tasks": 0, "by_category": {}, "ids": [], "error": "the eval suite could not be read; see the server log"}
+    if errors:
+        return {"tasks": 0, "by_category": {}, "ids": [],
+                "error": ("the eval suite has broken task specs: " + "; ".join(errors))[:300]}
+    if not tasks:
+        return {"tasks": 0, "by_category": {}, "ids": [], "error": f"{spec.TASKS_DIR}: no .yaml task files"}
     cats: dict[str, int] = {}
     for t in tasks:
         cats[t.category] = cats.get(t.category, 0) + 1
@@ -138,7 +150,7 @@ async def get_eval_run(name: str, user: User = Depends(require_full_auth)):
     # run's own timestamp may name one.
     if not _REPORT_NAME.match(name):
         raise HTTPException(400, "not a run name")
-    rep = _load(REPORT_DIR / f"{name}.json")
+    rep = _load(safe_path.under(REPORT_DIR, f"{name}.json"))
     if rep is None:
         raise HTTPException(404, "no such run")
     return {**rep, "summary": summary(name, rep)}

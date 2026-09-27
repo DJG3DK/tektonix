@@ -160,3 +160,23 @@ def test_the_previous_run_is_a_report_never_the_progress_file(tmp_path):
     (tmp_path / "2026-09-23T16-43-24Z.json").write_text(_json.dumps({"tasks_passed": 12}))
     (tmp_path / "status.json").write_text(_json.dumps({"started_at": 1790185940.4}))
     assert ev_report.latest_report(tmp_path) == {"tasks_passed": 12}
+
+
+def test_a_broken_suite_is_reported_in_the_spec_loader_s_words_never_a_traceback(monkeypatch, tmp_path):
+    """Code scanning: str(e) of any exception went to the page. The loader's
+    per-task errors are data now; anything else is one sentence and a log line."""
+    from agent.evals import spec
+    from agent.routers import evals as ev
+
+    (tmp_path / "bad.yaml").write_text("id: [\n")
+    monkeypatch.setattr(spec, "TASKS_DIR", tmp_path)
+    out = ev._suite()
+    assert out["tasks"] == 0 and out["error"].startswith("the eval suite has broken task specs: ")
+    assert "Traceback" not in out["error"] and "bad.yaml" in out["error"]
+
+    def boom(*a, **k):
+        raise RuntimeError("secret internals /srv/x line 9")
+
+    monkeypatch.setattr(spec, "load_suite_report", boom)
+    out = ev._suite()
+    assert out["error"] == "the eval suite could not be read; see the server log"

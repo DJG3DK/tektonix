@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### Twenty-two code scanning alerts closed
+
+GitHub's scanner read the routes that turn a request value into a file
+name as path injection, although each matches the value against a pattern
+without a separator first. They go through one helper now that normalises
+the joined path and checks it stays under its root, which is the same
+guarantee said the way the scanner recognises. Alongside: the SWE-bench
+instance-id pattern is linear where two overlapping groups could go
+quadratic; an artifact id is compared against stored names instead of
+globbed; the eval suite's broken-spec message comes from the loader as data
+and any other failure is one sentence and a log line; the review server's
+lookups by project name are own-property only, where `__proto__` found
+Object.prototype; an artifact image URL is rebuilt from its validated parts
+before it reaches an href or src; the trusted-proxies warning no longer
+prints the entry; and the prototype-pollution finding in the golden-suite
+fixture is dismissed on the alert as the bug that fixture exists to hold.
+
 ### The database checks' network holds the throwaway services and nothing else
 
 The agent sat on the `checks` network to create each review's database,

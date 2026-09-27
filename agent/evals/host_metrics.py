@@ -20,6 +20,8 @@ import threading
 import time
 from pathlib import Path
 
+from agent import safe_path
+
 from agent import paths
 
 INTERVAL_S = 60
@@ -198,7 +200,7 @@ class Sampler:
 
 def read_samples(run_dir: Path, limit: int = 300) -> list[dict]:
     """The series for the page, thinned to at most `limit` points."""
-    path = Path(run_dir) / "host.jsonl"
+    path = safe_path.under(run_dir, "host.jsonl")
     try:
         rows = [json.loads(ln) for ln in path.read_text().splitlines() if ln.strip()]
     except (OSError, ValueError):

@@ -68,6 +68,13 @@ function currentProjects() {
     return loadProjects(BUILTIN_PROJECTS, { section: 'deploy' });
 }
 
+// A record by a name the request chose. `state[name]` alone answers
+// "__proto__" with Object.prototype, and a property set on that record would
+// then land on every object in the process.
+function own(record, name) {
+    return record && typeof name === 'string' && Object.hasOwn(record, name) ? record[name] : undefined;
+}
+
 // The router's ledger, one line per model call (services/model-router/router/ledger.py).
 const ROUTING_LOG = path.join(AGENT_HOME, 'services/model-router/logs/routing.jsonl');
 
@@ -94,7 +101,7 @@ const GIT_SAFE = ['-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false'
 const git = (cwd, args) => run('git', [...GIT_SAFE, ...args], cwd);
 
 function projectOr404(req, res) {
-    const p = currentProjects()[req.params.name];
+    const p = own(currentProjects(), req.params.name);
     if (!p) { res.status(404).json({ error: `unknown project "${req.params.name}"` }); return null; }
     return p;
 }
@@ -190,7 +197,7 @@ async function agentRefFor(p, name) {
     // worktrees, and trusting it unconditionally made this endpoint 500 on a
     // ref that no longer resolves.
     try {
-        const st = (await readReviewState())[name];
+        const st = own(await readReviewState(), name);
         if (st?.branch) {
             try {
                 await git(p.live, ['rev-parse', '--verify', `${st.branch}^{commit}`]);
@@ -329,7 +336,7 @@ app.post('/api/projects/:name/merge', requireControlSecret, async (req, res) => 
         const tipSha = (await git(p.live, ['rev-parse', agentRef])).trim();
 
         if (!req.body?.force) {
-            const projectState = (await readReviewState())[req.params.name];
+            const projectState = own(await readReviewState(), req.params.name);
             const review = requested ? branchRecord(projectState, requested) : projectState;
             if (review && projectState?.inProgress) review.inProgress = projectState.inProgress;
             if (!review) {

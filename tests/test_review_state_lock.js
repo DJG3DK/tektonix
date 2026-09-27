@@ -109,3 +109,14 @@ function bothServicesWriteThroughTheLock() {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
 })().catch((e) => { console.error(e); process.exit(1); });
+
+// Code scanning (2026-09-27): a project name of "__proto__" in the URL found
+// Object.prototype in the state file's record, and the merge endpoint then
+// set a property on it. Lookups by a request value are own-property only.
+{
+    const src = fs.readFileSync(path.join(__dirname, '..', 'services', 'agent-review', 'server.js'), 'utf8');
+    assert.match(src, /function own\(record, name\)[\s\S]*Object\.hasOwn\(record, name\)/);
+    assert.doesNotMatch(src, /\)\[req\.params\.name\]/, 'a raw [req.params.name] lookup remains');
+    assert.doesNotMatch(src, /readReviewState\(\)\)\[name\]/, 'a raw [name] lookup on the review state remains');
+    console.log('own-property lookups by request name: ok');
+}

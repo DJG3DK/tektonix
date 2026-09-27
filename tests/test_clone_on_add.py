@@ -7,6 +7,7 @@ downstream knows how the directory got there, which is the point.
 from __future__ import annotations
 
 import subprocess
+from urllib.parse import urlparse
 
 import pytest
 
@@ -81,7 +82,7 @@ def _git_with_local_source(local: str, seen: list | None = None):
         if seen is not None:
             seen.append((list(args), kw.get("extra_env")))
         if "clone" in args:
-            url = next(a for a in args if isinstance(a, str) and "github.com" in a)
+            url = next(a for a in args if isinstance(a, str) and urlparse(a).hostname == "github.com")
             args = ["-c", f"url.{local}.insteadOf={url}", *args]
         return real(args, cwd=cwd, **kw)
 
