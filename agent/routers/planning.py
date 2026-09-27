@@ -32,6 +32,7 @@ from agent.frontend_route import normalize_override
 from agent.graph import read_with_retry
 from agent.planning_chat import planning_thread_config
 from agent.planning_chat import _translate_message as _translate_planning_message
+from agent.tasks import AttachmentEntry
 
 logger = logging.getLogger("tektonix")
 
@@ -54,7 +55,7 @@ class CreatePlanningSessionRequest(BaseModel):
 
 class PlanningMessageRequest(BaseModel):
     text: str
-    attachments: list[dict] | None = None  # manifest entries from /api/uploads
+    attachments: list[AttachmentEntry] | None = None  # manifest entries from /api/uploads
 
 @router.post("/api/planning/sessions", status_code=201)
 async def create_planning_session(request: Request, req: CreatePlanningSessionRequest, user: User = Depends(require_full_auth)):
@@ -199,7 +200,8 @@ async def send_planning_message(request: Request, session_id: str, req: Planning
         if not req.text.strip():
             raise HTTPException(400, "message text is required")
         _running_planning_turns[session_id] = asyncio.create_task(
-            request.app.state.run_planning_turn_bg(session_id, repo, req.text.strip(), req.attachments,
+            request.app.state.run_planning_turn_bg(session_id, repo, req.text.strip(),
+                                  [a.model_dump() for a in req.attachments] if req.attachments else None,
                                   allowed_repos=user.allowed_repos,
                                   # role, not allowed_repos: None there means admin OR legacy unscoped
                                   is_admin=user.role == "admin", actor=user.email)

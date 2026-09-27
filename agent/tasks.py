@@ -25,6 +25,7 @@ import time
 import uuid
 
 from fastapi import HTTPException
+from pydantic import BaseModel
 
 from agent import live_state, runtime_settings
 from agent.classify import TEST_REMINDER_NOTE, TaskClassification, classify_task
@@ -59,6 +60,20 @@ async def write_task_meta(store, repo: str, task_id: str, **updates) -> dict:
     record.setdefault("created_at", time.time())
     await store.aput(("tasks", repo), task_id, record)
     return record
+
+
+class AttachmentEntry(BaseModel):
+    # audit M-33: attachments were `list[dict]`, entirely unvalidated, and
+    # _attachments_note indexed a['path'] unconditionally -- so {"kind":"image"}
+    # (no path) was an unhandled KeyError -> 500, and the raw values landed in
+    # the goal text the model reads. A real model rejects a malformed entry at
+    # the API boundary with a 422 instead. Shared by the task and planning
+    # routes: both hand the entries to attachments_note.
+    kind: str
+    path: str
+    pages: int | None = None
+    extracted_text: str | None = None
+    note: str | None = None
 
 
 def attachments_note(attachments: list[dict]) -> str:

@@ -56,17 +56,7 @@ write_task_meta = tasks.write_task_meta
 _apply_transition = task_runtime.apply_transition
 
 
-class AttachmentEntry(BaseModel):
-    # audit M-33: attachments were `list[dict]`, entirely unvalidated, and
-    # _attachments_note indexed a['path'] unconditionally -- so {"kind":"image"}
-    # (no path) was an unhandled KeyError -> 500, and the raw values landed in
-    # the goal text the model reads. A real model rejects a malformed entry at
-    # the API boundary with a 422 instead.
-    kind: str
-    path: str
-    pages: int | None = None
-    extracted_text: str | None = None
-    note: str | None = None
+AttachmentEntry = tasks.AttachmentEntry
 
 class CreateTaskRequest(BaseModel):
     # audit M-33: goal was accepted empty/whitespace (send_planning_message
