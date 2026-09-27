@@ -20,7 +20,15 @@ import subprocess
 
 from agent import paths
 
-REVIEWER = paths.REPO_ROOT / "services" / "commit-reviewer" / "reviewer.js"
+REVIEWER_DIR = paths.REPO_ROOT / "services" / "commit-reviewer"
+REVIEWER = REVIEWER_DIR / "reviewer.js"   # the entry point node tests require
+# The service is several modules since 2026-09-27 (reviewer.js, exec.js,
+# worktree.js, checks.js, prompt.js); a source assertion reads them all.
+_MODULES = ("reviewer.js", "exec.js", "worktree.js", "checks.js", "prompt.js")
+
+
+def _reviewer_source() -> str:
+    return "\n".join((REVIEWER_DIR / m).read_text() for m in _MODULES)
 
 
 def node(expr: str) -> str:
@@ -72,7 +80,7 @@ def test_the_escalation_that_should_have_fired_now_can():
     """The filter that let it through: infrastructure AND not preexisting.
     With applyBaseline no longer setting preexisting on a missing tool, a
     missing tool reaches the escalation."""
-    src = REVIEWER.read_text()
+    src = _reviewer_source()
     assert "!c.ok && !c.preexisting && c.infrastructure" in src   # the escalation's own filter
     assert "if (c.infrastructure) continue;" in src               # ...which applyBaseline now respects
 
@@ -98,27 +106,27 @@ def test_build_caches_are_not_linked_but_dependency_structure_is():
     assert {".vite", ".vite-temp", ".cache", ".tmp"} <= caches
     # pnpm's store and the bin shims are how the checks find their tools at all.
     assert not caches & {".bin", ".pnpm", ".modules.yaml", ".package-lock.json"}
-    src = REVIEWER.read_text()
+    src = _reviewer_source()
     assert "if (NM_BUILD_CACHES.has(entry)) continue;" in src
 
 # --- reviewing the branch you were asked about ------------------------------
 
 def test_check_splits_the_query_before_matching_the_project():
     """`[^/]+` would read "proj?branch=agent/..." as the project name."""
-    src = REVIEWER.read_text()
+    src = _reviewer_source()
     assert "new URL(req.url" in src
     assert "parsed.searchParams.get('branch')" in src
 
 
 def test_a_requested_branch_wins_over_the_guess():
-    src = REVIEWER.read_text()
+    src = _reviewer_source()
     assert "let ref = (requested && candidates.includes(requested)) ? requested : null;" in src
 
 
 def test_only_a_real_task_branch_can_be_requested():
     """Anything else falls back to the old choice rather than reviewing an
     arbitrary ref -- `candidates` is already filtered by TASK_BRANCH_RE."""
-    src = REVIEWER.read_text()
+    src = _reviewer_source()
     i = src.index("const candidates = all.filter((r) => TASK_BRANCH_RE.test(r));")
     j = src.index("let ref = (requested && candidates.includes(requested))")
     assert i < j

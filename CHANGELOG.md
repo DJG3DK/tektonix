@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### Three files split at their seams
+
+`agent/server.py` was 3,642 lines; its auth, project, upload and review-proxy
+routes are routers now and it is 2,069, with every named seam out (docs/todo.md
+has the history). `agent/deep_agent.py` was 2,353; its prompts, the model
+client and the project-memory layer have their own modules and it is 1,329,
+re-exporting every name so nothing that imports it changed. The commit
+reviewer's `reviewer.js` was 2,468; process running, the review checkout, the
+mechanical checks and what the model is shown are four modules and it is 864,
+with the same exports. Guards, route paths and prompt text are byte-identical;
+the route inventories did not change.
+
 ### An outside audit, merged
 
 Eighteen commits from a security and correctness audit of the public
