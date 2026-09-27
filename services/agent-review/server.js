@@ -372,7 +372,14 @@ app.post('/api/projects/:name/merge', requireControlSecret, async (req, res) => 
         const mergedFrom = (await git(p.live, ['rev-parse', 'HEAD'])).trim();
 
         const output = await git(p.live, ['merge', '--ff-only', agentRef]);
-        await clearReviewState(req.params.name, agentRef);
+        // The merge has landed whatever happens next: a verdict that cannot
+        // be cleared (the state lock held past its wait, 2026-09-27) is logged
+        // and the response stays a 200 with the push below still made.
+        try {
+            await clearReviewState(req.params.name, agentRef);
+        } catch (e) {
+            log(`[${req.params.name}] merged, but the review verdict was not cleared: ${e.message}`);
+        }
 
         // Push to the real GitHub remote as part of the merge, not as a
         // separate manual step afterwards. Before this, a merge only ever

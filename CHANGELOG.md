@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### An outside audit, merged
+
+Eighteen commits from a security and correctness audit of the public
+repository, reviewed against this deployment and merged. Among them: the rate
+limiter believes forwarded-for headers only from a trusted proxy
+(`AGENT_TRUSTED_PROXIES`, loopback by default, which is nginx on the same
+box); the headless browser reaches the network only through a local proxy
+that connects to the address it checked, closing DNS rebinding; file tools
+open paths without following a link swapped in after the check; the GitHub
+token never appears on a git command line; one-time codes are consumed
+atomically and a password change voids reset codes; the two review services
+update their shared state under one lock and run git with hooks off; the
+compose bundle generates its database password and router key instead of
+shipping defaults, and its reviewer asks the agent to start the sandbox for
+its checks rather than running agent code itself. On top of the merge: the
+audit's two new node suites now run in CI, and a merge whose verdict cannot
+be cleared still answers 200 and pushes.
+
 ### The reliability chart is a fortnight wide again
 
 The errors-per-day series carried only the days with errors, so one busy day
