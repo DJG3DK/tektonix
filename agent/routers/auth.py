@@ -230,9 +230,11 @@ async def get_me(user: User = Depends(auth.get_current_user)):
 
 @router.post("/api/auth/change-password")
 async def change_password_endpoint(request: Request, req: ChangePasswordRequest, user: User = Depends(auth.get_current_user)):
+    rate_limit.check_rate_limit(request, "password-recheck")
     row = await auth.get_user_by_id(request.app.state.auth_pool, user.id)
     if not auth.verify_password(req.current_password, row["password_hash"]):
         raise HTTPException(401, "current password is incorrect")
+    rate_limit.clear_rate_limit(request, "password-recheck")
     error = auth.validate_password_strength(req.new_password)
     if error:
         raise HTTPException(400, error)
@@ -249,9 +251,11 @@ async def setup_2fa(request: Request, req: Setup2FARequest = Setup2FARequest(), 
     # when 2FA is already enabled. First-time setup (2FA off) needs no password:
     # the session already proves who they are, and there is nothing to protect.
     if user.totp_enabled:
+        rate_limit.check_rate_limit(request, "password-recheck")
         row = await auth.get_user_by_id(request.app.state.auth_pool, user.id)
         if not req.password or not auth.verify_password(req.password, row["password_hash"]):
             raise HTTPException(403, "current password required to re-initialize 2FA")
+        rate_limit.clear_rate_limit(request, "password-recheck")
     # Once-only by construction: every call mints a NEW secret (start_totp_setup
     # overwrites the pending one), so this response is the only time a given
     # secret leaves the server -- no GET returns it later. The raw secret rides
@@ -285,9 +289,11 @@ async def disable_2fa_endpoint(request: Request, req: Disable2FARequest,
     """
     if user.role == "admin":
         raise HTTPException(403, "2FA cannot be disabled on the admin account")
+    rate_limit.check_rate_limit(request, "password-recheck")
     row = await auth.get_user_by_id(request.app.state.auth_pool, user.id)
     if not req.password or not auth.verify_password(req.password, row["password_hash"]):
         raise HTTPException(403, "current password required to disable 2FA")
+    rate_limit.clear_rate_limit(request, "password-recheck")
     await auth.disable_totp(request.app.state.auth_pool, user.id)
     return {"ok": True}
 

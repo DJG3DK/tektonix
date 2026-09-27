@@ -189,12 +189,18 @@ Three commands run outside the sandbox on a host install: a project's
 are the exception to everything above. **In the compose bundle they are
 contained** (since 2026-09-27): the bundle carries a throwaway
 `checks-postgres` and `checks-redis` on an internal network with no gateway,
-the agent creates a database on the first and flushes a scratch database on
-the second, and the three commands run in the same hardened container as
-every other check, joined to that network alone -- no route to the agent,
-the router, the reviewer or the internet -- with a DSN and secrets built for
-the run. The database is dropped whatever happened. A bundle without those
-services gets the refusal it always did.
+and the three commands run in the same hardened container as every other
+check, joined to that network alone. The only other members of that network
+are the two throwaway services: the agent is not on it. It sets each run up
+with `docker exec` into the two containers -- a plain role owning a database
+created from `template0`, and one of the Redis databases, flushed -- and
+the checks get that role's DSN and secrets built for the run. The server's
+superuser password is replaced at start with one nobody holds
+(`docker/checks-postgres/init.sh`), so a check that reads the bootstrap
+value in the compose file gets nothing with it. Runs in flight each have
+their own database on both servers. The database and the role are dropped
+whatever happened. A bundle without those services gets the refusal it
+always did.
 
 They talk to Postgres and Redis on this machine's loopback. Inside a
 container `localhost` is the container, so containing them means one of two

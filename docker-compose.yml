@@ -82,9 +82,6 @@ services:
         condition: service_healthy
       checks-redis:
         condition: service_started
-    networks:
-      - default
-      - checks
     environment:
       # The entrypoint builds LANGGRAPH_PG_DSN and MODEL_ROUTER_KEY from these
       # generated files; set LANGGRAPH_PG_DSN yourself to use another database.
@@ -124,13 +121,19 @@ services:
       # also what enables that endpoint at all.
       REVIEW_WORKTREE_ROOT: /projects/.tektonix-review-worktrees
       # A project's db:drift, db:seed and test:e2e run in the checks
-      # container on this private network, against these two throwaway
-      # services (agent/review_sandbox.py). The network is internal: a check
-      # can reach the two of them and nothing else. All three unset means the
-      # reviewer refuses the database checks, as it did before 2026-09-27.
+      # container on the private `checks` network, against the two throwaway
+      # services below (agent/review_sandbox.py). The network is internal and
+      # this service is NOT on it: a check can reach the two of them and
+      # nothing else, and the agent sets each run up with `docker exec` into
+      # the two containers (their names, and the URLs as a check sees them;
+      # no password -- each run gets its own plain role). All five unset
+      # means the reviewer refuses the database checks, as it did before
+      # 2026-09-27.
       REVIEW_CHECKS_NETWORK: three-d-agent_checks
-      REVIEW_CHECKS_POSTGRES_URL: postgresql://checks:checks@checks-postgres:5432/postgres
+      REVIEW_CHECKS_POSTGRES_URL: postgresql://checks@checks-postgres:5432/postgres
       REVIEW_CHECKS_REDIS_URL: redis://checks-redis:6379
+      REVIEW_CHECKS_POSTGRES_CONTAINER: tektonix-checks-postgres
+      REVIEW_CHECKS_REDIS_CONTAINER: tektonix-checks-redis
       # The review services are siblings here, not localhost.
       REVIEW_SERVICE_HOST: agent-review
       REVIEW_CONTROL_HOST: commit-reviewer
@@ -230,19 +233,25 @@ services:
     restart: unless-stopped
 
   # The database checks' own Postgres and Redis: throwaway, on the internal
-  # `checks` network only, reached by nothing but the agent (which creates
-  # and drops each review's database) and the check containers it starts.
-  # Data lives in memory; nothing here outlives a restart, and nothing here is
-  # yours. The fixed password is fine for a server no other network can
-  # reach and whose every database is disposable.
+  # `checks` network only, where the only other thing is the check container
+  # of a review in flight. The agent is not on the network; it creates and
+  # drops each review's role and database with `docker exec` into these
+  # containers (fixed names, so it can). Data lives in memory; nothing here
+  # outlives a restart, and nothing here is yours. The bootstrap password is
+  # replaced with one nobody holds the moment the server is up
+  # (docker/checks-postgres/init.sh): a check gets its own plain role, not
+  # the superuser.
   checks-postgres:
     image: postgres:16-alpine
+    container_name: tektonix-checks-postgres
     environment:
       POSTGRES_USER: checks
       POSTGRES_PASSWORD: checks
       POSTGRES_DB: postgres
     tmpfs:
       - /var/lib/postgresql/data
+    volumes:
+      - ./docker/checks-postgres/init.sh:/docker-entrypoint-initdb.d/init.sh:ro
     networks:
       - checks
     healthcheck:
@@ -254,6 +263,7 @@ services:
 
   checks-redis:
     image: redis:7-alpine
+    container_name: tektonix-checks-redis
     command: ["redis-server", "--save", "", "--appendonly", "no"]
     networks:
       - checks

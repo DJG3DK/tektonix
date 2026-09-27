@@ -113,8 +113,9 @@ connection". `depends_on: service_healthy` is what closes that.
   image is there (the agent builds it on demand). A project's `db:drift`,
   `db:seed` and `test:e2e` run the same way against the bundle's own
   throwaway `checks-postgres` and `checks-redis`, on an internal network the
-  check container shares with those two services and nothing else. See
-  `SECURITY.md`.
+  check container shares with those two services and nothing else -- not
+  the agent, which sets a run up with `docker exec` into them and hands
+  the checks a plain role of their own. See `SECURITY.md`.
 * **The logo tools.** `logo_render`, `logo_export_brand_kit` and the rest call
   LogoLoom's Node modules, and the agent image is Python-only — no Node, and
   60MB of image libraries for a feature most installs never touch. The agent

@@ -351,8 +351,10 @@ def test_a_build_starts_once_and_only_for_the_default_image_with_a_context(bundl
 
 def _db_env(monkeypatch, tmp_path):
     monkeypatch.setenv(rs.CHECKS_NETWORK_ENV, "three-d-agent_checks")
-    monkeypatch.setenv(rs.CHECKS_POSTGRES_ENV, "postgresql://checks:pw@checks-postgres:5432/postgres")
+    monkeypatch.setenv(rs.CHECKS_POSTGRES_ENV, "postgresql://checks@checks-postgres:5432/postgres")
     monkeypatch.setenv(rs.CHECKS_REDIS_ENV, "redis://checks-redis:6379")
+    monkeypatch.setenv(rs.CHECKS_POSTGRES_CONTAINER_ENV, "tektonix-checks-postgres")
+    monkeypatch.setenv(rs.CHECKS_REDIS_CONTAINER_ENV, "tektonix-checks-redis")
 
 
 def _db_project(bundle, monkeypatch):
@@ -372,7 +374,7 @@ def _fake_db_layer(monkeypatch, outcomes):
     async def admin(statement):
         sql.append(statement)
 
-    async def flush(db=rs.CHECKS_REDIS_DB):
+    async def flush(db):
         flushed.append(db)
 
     async def run(req):
@@ -399,13 +401,19 @@ def test_the_three_steps_run_in_order_in_the_checks_container_against_a_throwawa
     assert [r.timeout_ms for r in runs] == [120_000, 60_000, 300_000]
     assert all(r.network == rs.CHECKS_NETWORK and r.rel_dir == "apps/api" and r.mounts for r in runs)
     dsn = runs[0].env["DATABASE_URL"]
-    assert dsn.startswith("postgresql://checks:pw@checks-postgres:5432/tektonix_ci_review_") and dsn.endswith("?schema=public")
+    assert dsn.startswith("postgresql://tektonix_ci_review_") and dsn.endswith("?schema=public")
     throwaway = dsn.split("/")[-1].split("?")[0]
-    assert runs[0].env["REDIS_URL"] == "redis://checks-redis:6379/15" and flushed == [15]
+    role, password = dsn.split("//")[1].split("@")[0].split(":")
+    assert role == throwaway and len(password) == 32, "the run's own plain role, not the server's superuser"
+    assert "checks" not in dsn.split("@")[0] and "@checks-postgres:5432/" in dsn
+    redis_db = int(runs[0].env["REDIS_URL"].rsplit("/", 1)[1])
+    assert runs[0].env["REDIS_URL"] == f"redis://checks-redis:6379/{redis_db}" and flushed == [redis_db]
     assert len(runs[0].env["JWT_ACCESS_SECRET"]) == 64 and runs[0].env["JWT_ACCESS_SECRET"] != runs[0].env["SECRETS_ENCRYPTION_KEY"]
     assert "PATH" not in runs[0].env and "REVIEW_CONTROL_SECRET" not in runs[0].env
-    assert sql[0] == f"CREATE DATABASE {throwaway};"
-    assert "pg_terminate_backend" in sql[1] and sql[2] == f"DROP DATABASE IF EXISTS {throwaway};"
+    assert sql[0] == (f"CREATE ROLE {throwaway} LOGIN PASSWORD '{password}' "
+                      f"NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT;")
+    assert sql[1] == f"CREATE DATABASE {throwaway} OWNER {throwaway} TEMPLATE template0;"
+    assert sql[2] == f"DROP DATABASE IF EXISTS {throwaway} WITH (FORCE);" and sql[3] == f"DROP ROLE IF EXISTS {throwaway};"
 
 
 def test_a_failing_step_stops_the_rest_and_the_database_is_still_dropped(bundle, monkeypatch):
@@ -415,7 +423,7 @@ def test_a_failing_step_stops_the_rest_and_the_database_is_still_dropped(bundle,
     rows = asyncio.run(rs.run_database_check(rs.DbCheckRequest(project="shop", worktree=bundle["wt"])))
     assert [(r["name"], r["ok"]) for r in rows] == [("db-drift", True), ("db-seed", False)]
     assert [r.args for r in runs] == [["db:drift"], ["db:seed"]], "e2e needs a seeded schema; it was not run"
-    assert sql[-1].startswith("DROP DATABASE IF EXISTS tektonix_ci_review_")
+    assert sql[-2].startswith("DROP DATABASE IF EXISTS tektonix_ci_review_") and sql[-1].startswith("DROP ROLE IF EXISTS")
 
 
 def test_the_checks_network_is_server_config_and_a_request_cannot_choose_it(bundle, monkeypatch):
@@ -429,7 +437,7 @@ def test_the_checks_network_is_server_config_and_a_request_cannot_choose_it(bund
 
 
 def test_without_the_checks_services_the_route_is_503_and_the_runner_refuses(bundle, monkeypatch):
-    for k in (rs.CHECKS_NETWORK_ENV, rs.CHECKS_POSTGRES_ENV, rs.CHECKS_REDIS_ENV):
+    for k in rs._CHECKS_ENVS:
         monkeypatch.delenv(k, raising=False)
     _db_project(bundle, monkeypatch)
     c = _client()
@@ -465,3 +473,63 @@ def test_a_database_that_cannot_be_created_is_a_setup_refusal(bundle, monkeypatc
     monkeypatch.setattr(rs, "_admin_sql", broken)
     rows = asyncio.run(rs.run_database_check(rs.DbCheckRequest(project="shop", worktree=bundle["wt"])))
     assert rows[0]["name"] == "db-setup" and rows[0]["infrastructure"] is True and "connection refused" in rows[0]["output"]
+
+
+def test_the_setup_is_docker_exec_into_the_two_containers_never_a_connection_from_the_agent(bundle, monkeypatch):
+    """The agent used to sit on the checks network and connect to the two
+    services itself, which put its own API one hop from every check. Now it
+    is not on that network at all: psql and redis-cli run inside the service
+    containers, with the SQL on stdin."""
+    _db_env(monkeypatch, bundle["tmp"])
+    calls = []
+
+    async def docker(*args, timeout_s=30, stdin=None):
+        calls.append((args, stdin))
+        return True, "OK"
+
+    monkeypatch.setattr(rs, "_docker", docker)
+    asyncio.run(rs._admin_sql("CREATE ROLE r;"))
+    asyncio.run(rs._flush_redis(7))
+    assert calls[0][0] == ("exec", "-i", "tektonix-checks-postgres", "psql", "-v", "ON_ERROR_STOP=1", "-q",
+                           "-U", "checks", "-d", "postgres") and calls[0][1] == b"CREATE ROLE r;"
+    assert calls[1] == (("exec", "tektonix-checks-redis", "redis-cli", "-n", "7", "FLUSHDB"), None)
+
+    async def refused(*args, timeout_s=30, stdin=None):
+        return False, "ERROR:  role already exists"
+
+    monkeypatch.setattr(rs, "_docker", refused)
+    with pytest.raises(RuntimeError, match="already exists"):
+        asyncio.run(rs._admin_sql("CREATE ROLE r;"))
+
+
+def test_concurrent_runs_get_their_own_redis_database_and_give_it_back(bundle, monkeypatch):
+    """Two reviews at once shared database 15: one's flush emptied the
+    other's keys mid-run."""
+    _db_env(monkeypatch, bundle["tmp"])
+    _db_project(bundle, monkeypatch)
+    sql, runs, flushed = _fake_db_layer(monkeypatch, {})
+    gate = {}
+
+    async def slow_run(req):
+        runs.append(req)
+        gate.setdefault("started", asyncio.Event()).set()
+        await gate.setdefault("release", asyncio.Event()).wait()
+        return {"ok": True, "code": 0, "output": "fine", "image": "tektonix-sandbox:latest"}
+
+    monkeypatch.setattr(rs, "run_check", slow_run)
+
+    async def go():
+        req = rs.DbCheckRequest(project="shop", worktree=bundle["wt"])
+        a = asyncio.create_task(rs.run_database_check(req))
+        b = asyncio.create_task(rs.run_database_check(req))
+        await asyncio.sleep(0.05)
+        gate["release"].set()
+        return await asyncio.gather(a, b)
+
+    before = set(rs._redis_pool["free"])
+    rows_a, rows_b = asyncio.run(go())
+    assert all(r["ok"] for r in rows_a + rows_b)
+    dbs = {int(r.env["REDIS_URL"].rsplit("/", 1)[1]) for r in runs}
+    assert len(dbs) == 2 and sorted(flushed) == sorted(dbs), "each run flushed and used its own database"
+    assert set(rs._redis_pool["free"]) == before, "both databases are back in the pool"
+    assert len({r.env["DATABASE_URL"] for r in runs}) == 2, "and each has its own role and database"

@@ -2,6 +2,33 @@
 
 ## Unreleased
 
+### The database checks' network holds the throwaway services and nothing else
+
+The agent sat on the `checks` network to create each review's database,
+which put its own API, listening on every interface, one hop from every
+database check. It is off that network now: it sets a run up with
+`docker exec` into the two service containers instead, and holds no
+connection and no password. Each run also gets a plain role of its own
+owning a database created from `template0`, in place of the server's
+superuser, whose bootstrap password an init script replaces at start; and
+its own Redis database from a pool, where two reviews at once used to share
+database 15 and one's flush emptied the other's keys. The end-to-end test
+now proves the check runs as a plain role, that the superuser with the
+compose file's password is refused, and that the agent opens no connection
+of its own during a run.
+
+### The password re-check on three authenticated routes is rate limited
+
+Changing the password and setting up or disabling 2FA re-check the current
+password, and nothing slowed a stolen session guessing it. They now share
+the login brake: five wrong tries a minute, then five minutes locked, and a
+right password clears the window.
+
+### Stopping a benchmark run removes its containers without a shell
+
+The cleanup ran a `docker ps | xargs docker rm` pipeline through a shell. It
+is two argv calls in a background thread now.
+
 ### The bundle runs the database checks, contained
 
 `db:drift`, `db:seed` and `test:e2e` were refused in the compose bundle: they

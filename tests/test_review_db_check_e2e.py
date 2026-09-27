@@ -1,6 +1,8 @@
 """End to end: a project's db:drift, db:seed and test:e2e run in the sandbox
 against a throwaway Postgres and Redis on an internal network, the way the
-compose bundle runs them (agent/review_sandbox.py, checks.js's bundle branch).
+compose bundle runs them (agent/review_sandbox.py, checks.js's bundle branch):
+the agent off that network, setting the run up over `docker exec`, each run
+as its own plain role, the bootstrap superuser password rotated away.
 
 Real containers, the real sandbox image, real `pg` and `redis` clients in
 the fixture project, and the reviewer's own module calling the agent's
@@ -75,7 +77,14 @@ const reach = (host, port) => new Promise((resolve) => {
   const back = await redis.get('e2e');
   await redis.quit();
   if (back !== 'ok') throw new Error('redis roundtrip failed');
-  console.log('e2e ok; internet ' + await reach('1.1.1.1', 53) + '; agent ' + await reach(process.env.E2E_AGENT_HOST || '127.0.0.1', Number(process.env.E2E_AGENT_PORT || 8100)));
+  const u = new URL(process.env.DATABASE_URL);
+  const me = new Client({ connectionString: process.env.DATABASE_URL.replace(/\\?schema=public$/, '') });
+  await me.connect();
+  const who = await me.query('SELECT current_user AS u, rolsuper AS su FROM pg_roles WHERE rolname = current_user');
+  await me.end();
+  const su = new Client({ host: u.hostname, port: Number(u.port || 5432), user: 'checks', password: 'checks', database: 'postgres' });
+  const suLogin = await su.connect().then(() => su.end().then(() => 'ACCEPTED'), (e) => 'refused ' + e.code);
+  console.log('e2e ok; internet ' + await reach('1.1.1.1', 53) + '; role ' + who.rows[0].u + (who.rows[0].su ? ' SUPERUSER' : ' plain') + '; superuser login ' + suLogin);
   if (!process.env.JWT_ACCESS_SECRET || process.env.REVIEW_CONTROL_SECRET) throw new Error('env not built for the run');
 })().catch((e) => { console.error('e2e failed:', e.message); process.exit(1); });
 """,
@@ -104,11 +113,16 @@ def checks_services():
     pg, rd = f"{net}-pg", f"{net}-redis"
     _sh("docker", "network", "create", "--internal", net)
     try:
+        init = paths.REPO_ROOT / "docker" / "checks-postgres" / "init.sh"
         _sh("docker", "run", "-d", "--rm", "--name", pg, "--network", net, "-e", "POSTGRES_USER=checks",
-            "-e", "POSTGRES_PASSWORD=checks", "postgres:16-alpine")
+            "-e", "POSTGRES_PASSWORD=checks", "-v", f"{init}:/docker-entrypoint-initdb.d/init.sh:ro", "postgres:16-alpine")
         _sh("docker", "run", "-d", "--rm", "--name", rd, "--network", net, "redis:7-alpine")
         for _ in range(60):
-            if subprocess.run(["docker", "exec", pg, "pg_isready", "-U", "checks"], capture_output=True).returncode == 0:
+            # The entrypoint restarts the server after the init scripts; ready
+            # means the log says so, not just that a socket answers.
+            up = subprocess.run(["docker", "logs", pg], capture_output=True, text=True)
+            if "superuser password replaced" in up.stdout + up.stderr and subprocess.run(
+                    ["docker", "exec", pg, "pg_isready", "-U", "checks"], capture_output=True).returncode == 0:
                 break
             time.sleep(1)
         else:
@@ -157,8 +171,10 @@ def bundle_env(monkeypatch, checks_services, fixture_project):
     monkeypatch.setenv(rs.WORKTREE_ROOT_ENV, fixture_project["root"])
     monkeypatch.setenv("REVIEW_CONTROL_SECRET", "e2e-secret")
     monkeypatch.setenv(rs.CHECKS_NETWORK_ENV, checks_services["network"])
-    monkeypatch.setenv(rs.CHECKS_POSTGRES_ENV, f"postgresql://checks:checks@{checks_services['pg_ip']}:5432/postgres")
+    monkeypatch.setenv(rs.CHECKS_POSTGRES_ENV, f"postgresql://checks@{checks_services['pg_ip']}:5432/postgres")
     monkeypatch.setenv(rs.CHECKS_REDIS_ENV, f"redis://{checks_services['redis_ip']}:6379")
+    monkeypatch.setenv(rs.CHECKS_POSTGRES_CONTAINER_ENV, checks_services["pg"])
+    monkeypatch.setenv(rs.CHECKS_REDIS_CONTAINER_ENV, checks_services["redis"])
     monkeypatch.delenv("AGENT_HOST_PATH_MAP", raising=False)
     return checks_services
 
@@ -168,8 +184,14 @@ def _databases(pg):
                "SELECT datname FROM pg_database WHERE datname LIKE 'tektonix_ci_review_%'")
 
 
+def _roles(pg):
+    return _sh("docker", "exec", pg, "psql", "-U", "checks", "-d", "postgres", "-tAc",
+               "SELECT rolname FROM pg_roles WHERE rolname LIKE 'tektonix_ci_review_%'")
+
+
 def _plant_redis_leftover(rd):
-    _sh("docker", "exec", rd, "redis-cli", "-n", "15", "set", "left-over", "yes")
+    for db in range(rs.CHECKS_REDIS_DATABASES):
+        _sh("docker", "exec", rd, "redis-cli", "-n", str(db), "set", "left-over", "yes")
 
 
 def test_the_three_checks_run_contained_and_the_throwaway_database_is_dropped(bundle_env, fixture_project, monkeypatch):
@@ -177,16 +199,19 @@ def test_the_three_checks_run_contained_and_the_throwaway_database_is_dropped(bu
 
     _plant_redis_leftover(bundle_env["redis"])
     mounts = [(f"{fixture_project['live']}/node_modules", "/workspace/node_modules")]
-    # The e2e script also proves the network: it tries the internet and the
-    # host's agent port, and both must be unreachable from the checks container.
+    # The e2e script also proves the boundary: the internet is unreachable
+    # from the checks container, the check runs as a plain role of its own,
+    # and the superuser with the compose file's bootstrap password is refused.
     rows = asyncio.run(rs.run_database_check(rs.DbCheckRequest(project="shop", worktree=fixture_project["wt"], mounts=mounts)))
     print("\n[direct] " + json.dumps(rows, indent=1))
     assert [(r["name"], r["ok"]) for r in rows] == [("db-drift", True), ("db-seed", True), ("e2e", True)], rows
     assert "no drift" in rows[0]["output"] and "seeded 2" in rows[1]["output"]
     assert "e2e ok" in rows[2]["output"]
     assert "internet unreachable" in rows[2]["output"], rows[2]["output"]
-    assert "agent unreachable" in rows[2]["output"], rows[2]["output"]
+    assert "role tektonix_ci_review_" in rows[2]["output"] and " plain;" in rows[2]["output"], rows[2]["output"]
+    assert "superuser login refused" in rows[2]["output"], rows[2]["output"]
     assert _databases(bundle_env["pg"]) == "", "the throwaway database must be dropped afterwards"
+    assert _roles(bundle_env["pg"]) == "", "and its role with it"
 
 
 def test_a_failing_seed_stops_before_e2e_and_still_drops_the_database(bundle_env, fixture_project, monkeypatch):
@@ -198,7 +223,7 @@ def test_a_failing_seed_stops_before_e2e_and_still_drops_the_database(bundle_env
     print("\n[failing seed] " + json.dumps(rows, indent=1))
     assert [(r["name"], r["ok"]) for r in rows] == [("db-drift", True), ("db-seed", False)], rows
     assert "seed exploded" in rows[1]["output"]
-    assert _databases(bundle_env["pg"]) == ""
+    assert _databases(bundle_env["pg"]) == "" and _roles(bundle_env["pg"]) == ""
 
 
 def test_the_reviewer_s_own_module_gets_the_rows_from_the_agent_over_http(bundle_env, fixture_project):
@@ -238,3 +263,28 @@ def test_the_reviewer_s_own_module_gets_the_rows_from_the_agent_over_http(bundle
         server.should_exit = True
         thread.join(timeout=10)
     assert _databases(bundle_env["pg"]) == ""
+
+
+def test_the_agent_never_connects_to_the_checks_services_itself(bundle_env, fixture_project, monkeypatch):
+    """The setup goes through `docker exec`: with every outbound connection
+    from this process forbidden, the run still succeeds. This is what lets
+    the bundle keep the agent off the checks network."""
+    import asyncio
+
+    real = asyncio.open_connection
+
+    async def forbidden(*a, **k):
+        raise AssertionError(f"the agent opened a connection itself: {a} {k}")
+
+    monkeypatch.setattr(asyncio, "open_connection", forbidden)
+    try:
+        import psycopg  # noqa: PLC0415
+
+        monkeypatch.setattr(psycopg.AsyncConnection, "connect", classmethod(lambda cls, *a, **k: forbidden()))
+    except ImportError:
+        pass
+    mounts = [(f"{fixture_project['live']}/node_modules", "/workspace/node_modules")]
+    rows = asyncio.run(rs.run_database_check(rs.DbCheckRequest(project="shop", worktree=fixture_project["wt"], mounts=mounts)))
+    monkeypatch.setattr(asyncio, "open_connection", real)
+    print("\n[no connections from the agent] " + json.dumps([(r["name"], r["ok"]) for r in rows]))
+    assert [(r["name"], r["ok"]) for r in rows] == [("db-drift", True), ("db-seed", True), ("e2e", True)], rows

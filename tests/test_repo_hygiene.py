@@ -487,3 +487,28 @@ def test_the_bundle_sets_variable_names_the_code_actually_reads():
         "the bundle sets these and nothing reads them, so their default silently "
         "applies:\n  " + "\n  ".join(unread)
     )
+
+
+def test_the_checks_network_holds_the_two_throwaway_services_and_nothing_that_matters():
+    """A check container joins the `checks` network alone. The agent used to
+    be on it too (its API listens on 0.0.0.0), one hop from every check. Now
+    the only members are the two throwaway services; the agent sets a run up
+    over `docker exec` into them by fixed container names, hands each run its
+    own plain role rather than the superuser (whose bootstrap password the
+    init script replaces at start), and the env the agent reads names all of
+    that. Cursor's re-audit, 2026-09-27."""
+    compose = yaml.safe_load((REPO / "docker-compose.yml").read_text())
+    services = compose["services"]
+    assert compose["networks"]["checks"] == {"internal": True}
+    on_checks = {name for name, svc in services.items() if "checks" in (svc.get("networks") or [])}
+    assert on_checks == {"checks-postgres", "checks-redis"}, on_checks
+    for name in on_checks:
+        assert services[name].get("networks") == ["checks"], f"{name} must be on the checks network only"
+    env = services["agent"]["environment"]
+    assert env["REVIEW_CHECKS_POSTGRES_CONTAINER"] == services["checks-postgres"]["container_name"]
+    assert env["REVIEW_CHECKS_REDIS_CONTAINER"] == services["checks-redis"]["container_name"]
+    assert "@checks-postgres:" in env["REVIEW_CHECKS_POSTGRES_URL"] and ":checks@" not in env["REVIEW_CHECKS_POSTGRES_URL"], (
+        "the agent holds no superuser password; a check gets its own role")
+    init = "./docker/checks-postgres/init.sh:/docker-entrypoint-initdb.d/init.sh:ro"
+    assert init in (services["checks-postgres"].get("volumes") or []), "the bootstrap superuser password must be rotated at start"
+    assert "ALTER USER" in (REPO / "docker/checks-postgres/init.sh").read_text()

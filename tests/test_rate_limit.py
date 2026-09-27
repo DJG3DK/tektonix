@@ -151,3 +151,54 @@ def test_an_internal_failure_lets_the_request_through_and_says_so(monkeypatch, c
 
 def test_the_single_process_assumption_is_written_where_it_would_break():
     assert "SINGLE PROCESS IS AN ASSUMPTION" in rl.__doc__
+
+
+@pytest.mark.parametrize("path, body, wrong_status", [
+    ("/api/auth/change-password", {"current_password": "nope", "new_password": "Long-enough-passw0rd!"}, 401),
+    ("/api/auth/2fa/setup", {"password": "nope"}, 403),
+    ("/api/auth/2fa/disable", {"password": "nope"}, 403),
+])
+def test_the_password_recheck_on_an_authenticated_route_is_rate_limited(monkeypatch, path, body, wrong_status):
+    """Cursor's re-audit (2026-09-27): a stolen session could guess the
+    password at full speed on these three, and the password is what turns a
+    session into everything else. Same brake as login, cleared on success."""
+    from fastapi.testclient import TestClient
+
+    import agent.server as srv
+    from agent.auth import User
+
+    me = User(id=7, email="u@b.co", role="user", allowed_repos=[], totp_enabled=True, must_change_password=False)
+
+    async def user_row(pool, uid):
+        return {"id": 7, "password_hash": "hash"}
+
+    async def nothing(*a, **k):
+        return None
+
+    async def totp(*a, **k):
+        return "secret", "otpauth://x"
+
+    monkeypatch.setattr(srv.auth, "get_user_by_id", user_row)
+    monkeypatch.setattr(srv.auth, "verify_password", lambda pw, h: pw == "right")
+    monkeypatch.setattr(srv.auth, "change_password", nothing)
+    monkeypatch.setattr(srv.auth, "disable_totp", nothing)
+    monkeypatch.setattr(srv.auth, "start_totp_setup", totp)
+    monkeypatch.setattr(srv.app.state, "auth_pool", object(), raising=False)
+    monkeypatch.setitem(srv.app.dependency_overrides, srv.auth.get_current_user, lambda: me)
+    monkeypatch.setitem(srv.app.dependency_overrides, srv.auth.require_full_auth, lambda: me)
+
+    client = TestClient(srv.app, client=("127.0.0.1", 50000))
+    headers = {"X-Real-IP": "203.0.113.9"}
+    for _ in range(5):
+        assert client.post(path, json=body, headers=headers).status_code == wrong_status
+    res = client.post(path, json=body, headers=headers)
+    assert res.status_code == 429, res.text
+    assert ("203.0.113.9", "password-recheck") in rl._locked_until
+
+    rl._locked_until.clear()
+    rl._attempts.clear()
+    for _ in range(3):
+        client.post(path, json=body, headers=headers)
+    ok = client.post(path, json={**body, "current_password": "right", "password": "right"}, headers=headers)
+    assert ok.status_code == 200, ok.text
+    assert ("203.0.113.9", "password-recheck") not in rl._attempts, "a good password clears the window"

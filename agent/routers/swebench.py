@@ -24,6 +24,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -480,6 +481,19 @@ def _run_names(name: str) -> list[str]:
     raise HTTPException(404, "no such run")
 
 
+def _remove_run_containers(run: str) -> None:
+    """The harness's leftover containers for one run, removed in the
+    background: two argv calls, no shell."""
+    try:
+        listed = subprocess.run(["docker", "ps", "-aq", "--filter", f"name=.{run}"],
+                                capture_output=True, text=True, timeout=60)
+        ids = listed.stdout.split()
+        if ids:
+            subprocess.run(["docker", "rm", "-f", *ids], capture_output=True, timeout=300)
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+
 @router.post("/api/swebench/runs/{name}/stop")
 async def stop_swebench_run(name: str, request: Request, user: User = Depends(require_full_auth)):
     auth.require_admin(user)
@@ -509,8 +523,7 @@ async def stop_swebench_run(name: str, request: Request, user: User = Depends(re
         raise HTTPException(409, "this run is not running")
     for run in stopped:
         # Best effort: the harness names its containers `sweb.eval.<task>.<run>`.
-        subprocess.Popen(f"docker ps -aq --filter name=.{run} | xargs -r docker rm -f", shell=True,
-                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        threading.Thread(target=_remove_run_containers, args=(run,), daemon=True).start()
     await audit.record(audit_store(request), actor=user.email, action="swebench.stop", target=name,
                        detail=", ".join(stopped))
     return {"ok": True, "stopped": stopped}

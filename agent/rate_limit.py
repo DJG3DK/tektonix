@@ -52,6 +52,11 @@ _LIMITS = {
     # the token is the credential -- so it gets the same brake as a password
     # guess. Each token is single-use; this bounds how fast anyone can try.
     "github-approve": (10, 60, 300),
+    # The password re-check on an authenticated route (change-password, and
+    # 2FA setup/disable): a stolen session could otherwise guess the password
+    # at full speed, and the password is what turns that session into
+    # everything else. Same brake as login.
+    "password-recheck": (5, 60, 300),
 }
 
 # (ip, action) -> list[timestamp]  and  (ip, action) -> locked_until

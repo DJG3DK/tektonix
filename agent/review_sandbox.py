@@ -75,14 +75,23 @@ class CheckRequest:
 # used to refuse them instead. Now the bundle gives them a throwaway
 # checks-postgres and checks-redis on a private, internal compose network,
 # and the three commands run in the same hardened container as every other
-# check, joined to that network alone: no route to the agent, the router,
-# the reviewer or the internet. The names below are server config; a request
-# never chooses the network or the DSN.
+# check, joined to that network alone. The agent is NOT on that network: it
+# sets the run up over `docker exec` into the two service containers (psql
+# and redis-cli on their own sockets), so nothing a check can reach has a
+# route to the agent, the router, the reviewer or the internet. Each run
+# gets its own plain role owning its own database, and its own Redis
+# database from a pool, so runs neither see each other nor the server's
+# superuser. The names below are server config; a request never chooses the
+# network, the containers or the DSN.
 CHECKS_NETWORK = "checks"          # the request-side name; mapped to the real network here
 CHECKS_NETWORK_ENV = "REVIEW_CHECKS_NETWORK"
-CHECKS_POSTGRES_ENV = "REVIEW_CHECKS_POSTGRES_URL"   # postgresql://user:pass@host:port/postgres
+CHECKS_POSTGRES_ENV = "REVIEW_CHECKS_POSTGRES_URL"   # postgresql://<superuser>@host:port/postgres, as a check sees it; no password
 CHECKS_REDIS_ENV = "REVIEW_CHECKS_REDIS_URL"         # redis://host:port
-CHECKS_REDIS_DB = 15
+CHECKS_POSTGRES_CONTAINER_ENV = "REVIEW_CHECKS_POSTGRES_CONTAINER"   # the container `docker exec psql` runs in
+CHECKS_REDIS_CONTAINER_ENV = "REVIEW_CHECKS_REDIS_CONTAINER"         # the container `docker exec redis-cli` runs in
+CHECKS_REDIS_DATABASES = 16        # redis-server's default; one per concurrent run
+_CHECKS_ENVS = (CHECKS_NETWORK_ENV, CHECKS_POSTGRES_ENV, CHECKS_REDIS_ENV,
+                CHECKS_POSTGRES_CONTAINER_ENV, CHECKS_REDIS_CONTAINER_ENV)
 _DB_STEPS = (("db-drift", "driftCmd", 120_000), ("db-seed", "seedCmd", 60_000), ("e2e", "e2eCmd", 300_000))
 
 
@@ -91,7 +100,7 @@ def checks_network() -> str | None:
 
 
 def db_checks_enabled() -> bool:
-    return all(os.environ.get(k) for k in (CHECKS_NETWORK_ENV, CHECKS_POSTGRES_ENV, CHECKS_REDIS_ENV))
+    return all(os.environ.get(k) for k in _CHECKS_ENVS)
 
 
 def worktree_root() -> str | None:
@@ -278,12 +287,13 @@ _BUILD_TIMEOUT_S = 1800
 _builds: dict[str, asyncio.Task] = {}
 
 
-async def _docker(*args: str, timeout_s: float = 30) -> tuple[bool, str]:
+async def _docker(*args: str, timeout_s: float = 30, stdin: bytes | None = None) -> tuple[bool, str]:
     try:
         proc = await asyncio.create_subprocess_exec(
-            "docker", *args, stdin=asyncio.subprocess.DEVNULL,
+            "docker", *args, stdin=asyncio.subprocess.PIPE if stdin is not None else asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
-        result = await asyncio.wait_for(proc.communicate(), timeout=timeout_s)
+        result = await asyncio.wait_for(proc.communicate(stdin) if stdin is not None else proc.communicate(),
+                                        timeout=timeout_s)
     except (OSError, TimeoutError) as e:
         return False, str(e)
     out = result[0] if result else b""
@@ -398,15 +408,16 @@ def _parse_dsn(url: str) -> dict:
             "port": int(m.group(4) or 5432), "db": m.group(5) or "postgres"}
 
 
-def check_env(throwaway_db: str) -> dict[str, str]:
-    """What the three commands see: the throwaway DSN, a scratch Redis
-    database and freshly generated secrets -- built for the run, as the host
-    path builds its own (services/commit-reviewer/checks.js), never inherited."""
+def check_env(throwaway_db: str, role: str, password: str, redis_db: int) -> dict[str, str]:
+    """What the three commands see: the throwaway DSN as its own plain role,
+    the run's Redis database and freshly generated secrets -- built for the
+    run, as the host path builds its own (services/commit-reviewer/checks.js),
+    never inherited. The server's superuser and its password never appear."""
     pg = _parse_dsn(os.environ[CHECKS_POSTGRES_ENV])
     redis = os.environ[CHECKS_REDIS_ENV].rstrip("/")
     return {
-        "DATABASE_URL": f"postgresql://{pg['user']}:{pg['password']}@{pg['host']}:{pg['port']}/{throwaway_db}?schema=public",
-        "REDIS_URL": f"{redis}/{CHECKS_REDIS_DB}",
+        "DATABASE_URL": f"postgresql://{role}:{password}@{pg['host']}:{pg['port']}/{throwaway_db}?schema=public",
+        "REDIS_URL": f"{redis}/{redis_db}",
         "JWT_ACCESS_SECRET": secrets.token_hex(32),
         "SECRETS_ENCRYPTION_KEY": secrets.token_hex(32),
         "CORS_ORIGIN_STOREFRONT": "http://localhost:5173",
@@ -416,33 +427,52 @@ def check_env(throwaway_db: str) -> dict[str, str]:
 
 
 async def _admin_sql(sql: str) -> None:
-    """One statement on the checks server's maintenance database, autocommit
-    (CREATE/DROP DATABASE cannot run in a transaction)."""
-    import psycopg  # noqa: PLC0415 -- the agent's own driver; the sandbox image has none
-
+    """One statement on the checks server's maintenance database, run by
+    psql INSIDE the postgres container over `docker exec`: the superuser on
+    its own unix socket, which is trusted locally. The agent opens no
+    connection and holds no password, and needs no route to the server."""
     pg = _parse_dsn(os.environ[CHECKS_POSTGRES_ENV])
-    conninfo = (f"host={pg['host']} port={pg['port']} user={pg['user']} password={pg['password']} "
-                f"dbname={pg['db']} connect_timeout=10")
-    async with await psycopg.AsyncConnection.connect(conninfo, autocommit=True) as conn:
-        await conn.execute(sql)
+    ok, out = await _docker("exec", "-i", os.environ[CHECKS_POSTGRES_CONTAINER_ENV],
+                            "psql", "-v", "ON_ERROR_STOP=1", "-q", "-U", pg["user"], "-d", pg["db"],
+                            stdin=sql.encode(), timeout_s=60)
+    if not ok:
+        raise RuntimeError(out[-300:] or "psql failed")
 
 
-async def _flush_redis(db: int = CHECKS_REDIS_DB) -> None:
-    """SELECT db; FLUSHDB, spoken directly: the agent carries no redis client."""
-    url = os.environ[CHECKS_REDIS_ENV]
-    m = re.match(r"^redis://([^:/]+)(?::(\d+))?", url)
-    if not m:
-        raise RejectedRequest(f"{CHECKS_REDIS_ENV} is not a redis:// URL")
-    reader, writer = await asyncio.wait_for(asyncio.open_connection(m.group(1), int(m.group(2) or 6379)), timeout=10)
-    try:
-        writer.write(f"*2\r\n$6\r\nSELECT\r\n${len(str(db))}\r\n{db}\r\n*1\r\n$7\r\nFLUSHDB\r\n".encode())
-        await writer.drain()
-        for _ in range(2):
-            line = await asyncio.wait_for(reader.readline(), timeout=10)
-            if not line.startswith(b"+OK"):
-                raise RuntimeError(f"redis answered {line!r}")
-    finally:
-        writer.close()
+async def _flush_redis(db: int) -> None:
+    """FLUSHDB on the run's database, by redis-cli inside the redis container."""
+    ok, out = await _docker("exec", os.environ[CHECKS_REDIS_CONTAINER_ENV], "redis-cli", "-n", str(db), "FLUSHDB",
+                            timeout_s=30)
+    if not ok or out.strip() != "OK":
+        raise RuntimeError(f"redis answered {out[-200:]!r}")
+
+
+# One Redis database per run in flight. Two reviews at once used to share
+# database 15: one's flush emptied the other's keys mid-run. The pool is
+# this process's; the agent is the only thing that starts these runs.
+_redis_pool: dict = {"loop": None, "cond": None, "free": set(range(CHECKS_REDIS_DATABASES))}
+
+
+def _redis_cond() -> asyncio.Condition:
+    loop = asyncio.get_running_loop()
+    if _redis_pool["loop"] is not loop:
+        _redis_pool["loop"], _redis_pool["cond"] = loop, asyncio.Condition()
+    return _redis_pool["cond"]
+
+
+async def _take_redis_db() -> int:
+    cond = _redis_cond()
+    async with cond:
+        while not _redis_pool["free"]:
+            await cond.wait()
+        return _redis_pool["free"].pop()
+
+
+async def _give_back_redis_db(db: int) -> None:
+    cond = _redis_cond()
+    async with cond:
+        _redis_pool["free"].add(db)
+        cond.notify()
 
 
 def _setup_failure(what: str) -> list[dict]:
@@ -452,13 +482,13 @@ def _setup_failure(what: str) -> list[dict]:
 
 
 async def run_database_check(req: DbCheckRequest) -> list[dict]:
-    """The host path's runDatabaseCheck, in the sandbox: a throwaway database
-    created on checks-postgres, the scratch Redis flushed, then db-drift,
-    db-seed and e2e in order in the checks container, stopping at the first
-    failure, and the database dropped whatever happened. Rows in the same
-    shape the host path returns."""
+    """The host path's runDatabaseCheck, in the sandbox: a plain role and a
+    database it owns created on checks-postgres, the run's Redis database
+    flushed, then db-drift, db-seed and e2e in order in the checks container,
+    stopping at the first failure, and the database and role dropped whatever
+    happened. Rows in the same shape the host path returns."""
     if not db_checks_enabled():
-        return _setup_failure(f"{CHECKS_NETWORK_ENV}, {CHECKS_POSTGRES_ENV} and {CHECKS_REDIS_ENV} are not all set")
+        return _setup_failure(", ".join(_CHECKS_ENVS) + " are not all set")
     live, cfg = _project_live(req.project)
     dc = cfg.get("databaseCheck")
     if not dc:
@@ -473,16 +503,22 @@ async def run_database_check(req: DbCheckRequest) -> list[dict]:
             raise RejectedRequest(f"databaseCheck.{key} has no cmd")
         steps.append((name, cmd, [str(a) for a in (spec.get("args") or [])], timeout_ms))
     image = None
+    # One name for the role and its database; hex only, so it needs no quoting
+    # in SQL and the password (hex too) needs none in the DSN.
     throwaway = f"tektonix_ci_review_{secrets.token_hex(4)}"
-    env = check_env(throwaway)
+    password = secrets.token_hex(16)
+    redis_db = await _take_redis_db()
+    env = check_env(throwaway, throwaway, password, redis_db)
     results: list[dict] = []
     try:
         try:
-            await _admin_sql(f"CREATE DATABASE {throwaway};")
+            await _admin_sql(f"CREATE ROLE {throwaway} LOGIN PASSWORD '{password}' "
+                             f"NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT;")
+            await _admin_sql(f"CREATE DATABASE {throwaway} OWNER {throwaway} TEMPLATE template0;")
         except Exception as e:  # noqa: BLE001 -- the reviewer needs the reason, not a stack trace
             return _setup_failure(f"could not create the throwaway database: {str(e)[:300]}")
         try:
-            await _flush_redis()
+            await _flush_redis(redis_db)
         except Exception as e:  # noqa: BLE001
             return _setup_failure(f"could not reach the checks redis: {str(e)[:300]}")
         for name, cmd, args, timeout_ms in steps:
@@ -501,8 +537,8 @@ async def run_database_check(req: DbCheckRequest) -> list[dict]:
         return results
     finally:
         try:
-            await _admin_sql(f"SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
-                             f"WHERE datname = '{throwaway}' AND pid <> pg_backend_pid();")
-            await _admin_sql(f"DROP DATABASE IF EXISTS {throwaway};")
+            await _admin_sql(f"DROP DATABASE IF EXISTS {throwaway} WITH (FORCE);")
+            await _admin_sql(f"DROP ROLE IF EXISTS {throwaway};")
         except Exception as e:  # noqa: BLE001 -- a leaked throwaway is logged, never raised over a result
             logger.warning("review db check: throwaway database %s not dropped: %s", throwaway, e)
+        await _give_back_redis_db(redis_db)
