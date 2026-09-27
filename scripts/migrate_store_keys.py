@@ -4,7 +4,7 @@ route-stripped keys.
 Background: app code (seeding, prompt reads) used full agent-visible paths as
 raw store keys ('/memories/AGENTS.md'), while the agent's own file tools go
 through the CompositeBackend, whose route stripping produces '/AGENTS.md'
-(see agent/deep_agent.py's route_local_path). The two halves could not see
+(see agent/project_memory.py's route_local_path). The two halves could not see
 each other's writes -- agent-written memory was invisible to prompts, and
 seeded skills were unreadable by the agent. App code now uses stripped keys
 everywhere; this migrates any existing full-path data over.

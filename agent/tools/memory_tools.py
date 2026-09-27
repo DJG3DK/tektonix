@@ -29,6 +29,11 @@ from deepagents.backends import StoreBackend
 from deepagents.backends.utils import file_data_to_string
 
 from agent import episode_recall, memory_sections
+# A top-level import, where these used to be fetched inside three one-line
+# helpers to dodge a cycle through agent/deep_agent.py (which imports this
+# module to build a seat's tools). The store layer lives in
+# agent/project_memory.py now, which imports nothing that leads back here.
+from agent.project_memory import MEMORY_PATH, gather_memory_sections, project_namespace, route_local_path
 
 logger = logging.getLogger("tektonix")
 
@@ -49,7 +54,7 @@ def make_memory_tools(repo: str, store: BaseStore | None, entries: list[memory_s
     if store is None or not entries:
         return []
 
-    backend = StoreBackend(namespace=_project_namespace(repo), store=store)
+    backend = StoreBackend(namespace=project_namespace(repo), store=store)
     by_slug = {e.slug: e for e in entries}
 
     @tool
@@ -89,28 +94,6 @@ def make_memory_tools(repo: str, store: BaseStore | None, entries: list[memory_s
     return [read_memory_section]
 
 
-def _project_namespace(repo: str):
-    # Imported here, not at module import: agent/deep_agent.py imports this
-    # module to build a seat's tools, so a top-level import of it would close
-    # the cycle. The same lazy-import shape the other tool factories it builds
-    # are reached by.
-    from agent.deep_agent import project_namespace  # noqa: PLC0415
-
-    return project_namespace(repo)
-
-
-def _store_key(path: str) -> str:
-    from agent.deep_agent import route_local_path  # noqa: PLC0415
-
-    return route_local_path("/memories/", path)
-
-
-def _memory_path() -> str:
-    from agent.deep_agent import MEMORY_PATH  # noqa: PLC0415
-
-    return MEMORY_PATH
-
-
 async def _read_text(backend: StoreBackend, key: str) -> str | None:
     """The file's text, or None when it is not there. An empty file is text,
     not absence -- a memory that opens straight into `## ` has no preamble and
@@ -122,7 +105,7 @@ async def _read_text(backend: StoreBackend, key: str) -> str | None:
 
 
 async def _read_section(backend: StoreBackend, slug: str) -> str | None:
-    body = await _read_text(backend, _store_key(memory_sections.section_path(slug)))
+    body = await _read_text(backend, route_local_path("/memories/", memory_sections.section_path(slug)))
     if body is None:
         logger.warning("memory section %s is indexed but unreadable", slug)
     return body
@@ -143,8 +126,6 @@ async def _read_everything(backend: StoreBackend, entries: list[memory_sections.
     out loud if it is not. The escape hatch's entire value is being the answer
     a model can trust without checking.
     """
-    from agent.deep_agent import gather_memory_sections  # noqa: PLC0415
-
     parts, missing = await gather_memory_sections(backend, entries)
     if not missing:
         return "".join(parts) or "(nothing recorded yet)"
@@ -152,7 +133,7 @@ async def _read_everything(backend: StoreBackend, entries: list[memory_sections.
     # outlives the split (the migration writes only new keys; the pointer stub
     # replaces it later, and only after every project has been verified), so
     # for as long as it is real memory it is the better answer.
-    whole = await _read_text(backend, _store_key(_memory_path()))
+    whole = await _read_text(backend, route_local_path("/memories/", MEMORY_PATH))
     if whole:
         logger.warning("memory sections %s are missing; served /AGENTS.md instead", ", ".join(missing))
         return whole

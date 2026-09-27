@@ -207,6 +207,7 @@ agent/
   backends.py          the ONLY place a DSN decides postgres vs sqlite
   store_paging.py      one pager; four hand-rolled loops used to disagree
   episodes.py          the single episode writer
+  project_memory.py    the memory/skills store layer and the prompt block a seat carries
   memory_sections.py   splitting a project's memory; what stays in the prompt
   history_index.py     full-text over episodes, tasks and build transcripts
   episode_recall.py    the retrieval legs and their fusion, plus telemetry
