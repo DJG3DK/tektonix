@@ -52,13 +52,13 @@ def project(tmp_path, monkeypatch):
 async def test_a_branch_on_the_current_tip_ships_normally(project, monkeypatch):
     pushed = {}
 
-    async def fake_git(cmd, cwd, timeout=None):
-        if cmd.startswith("push"):
+    async def fake_git(cmd, cwd, timeout=None, extra_env=None):
+        if " push " in f" {cmd} ":
             pushed["cmd"] = cmd
             return {"ok": True, "output": ""}
         if "remote get-url" in cmd:
             return {"ok": True, "output": "https://github.com/OWNER/REPO.git"}
-        return await real(cmd, cwd, timeout=timeout)
+        return await real(cmd, cwd, timeout=timeout, extra_env=extra_env)
 
     real = git_mod._git
     monkeypatch.setattr(git_mod, "_git", fake_git)
@@ -81,13 +81,13 @@ async def test_a_branch_whose_base_moved_reports_diverged_instead_of_pushing(pro
 
     pushed = []
 
-    async def fake_git(cmd, cwd, timeout=None):
-        if cmd.startswith("push"):
+    async def fake_git(cmd, cwd, timeout=None, extra_env=None):
+        if " push " in f" {cmd} ":
             pushed.append(cmd)
             return {"ok": True, "output": ""}
         if "remote get-url" in cmd:
             return {"ok": True, "output": "https://github.com/OWNER/REPO.git"}
-        return await real(cmd, cwd, timeout=timeout)
+        return await real(cmd, cwd, timeout=timeout, extra_env=extra_env)
 
     real = git_mod._git
     monkeypatch.setattr(git_mod, "_git", fake_git)
@@ -132,10 +132,10 @@ async def test_an_unreadable_commit_count_does_not_block_the_ship(project, monke
     refusing on "unknown" turns an unrelated git hiccup into a task that can
     never finish. It proceeds, exactly as it did before this check existed.
     """
-    async def blank_git(cmd, cwd, timeout=None):
+    async def blank_git(cmd, cwd, timeout=None, extra_env=None):
         if "remote get-url" in cmd:
             return {"ok": True, "output": "https://github.com/OWNER/REPO.git"}
-        if cmd.startswith("push"):
+        if " push " in f" {cmd} ":
             return {"ok": True, "output": ""}
         return {"ok": True, "output": ""}      # including rev-list --count
 
