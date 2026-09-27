@@ -357,10 +357,27 @@ def test_revoking_one_consumer_does_not_affect_the_others(monkeypatch):
     assert app_module._authorise("Bearer sk-master") == "master"
 
 
-def test_no_keys_configured_is_still_an_open_dev_run(monkeypatch):
+def test_no_keys_configured_fails_closed(monkeypatch):
+    """A missing variable used to mean an open router; now it means a closed
+    one, and an open dev run is something asked for by name."""
     monkeypatch.setattr(app_module, "MASTER_KEY", "")
     monkeypatch.setattr(app_module, "CONSUMER_KEYS", {})
+    monkeypatch.setattr(app_module, "ALLOW_UNAUTHENTICATED", False)
+    with pytest.raises(HTTPException) as e:
+        app_module._authorise(None)
+    assert e.value.status_code == 503
+    monkeypatch.setattr(app_module, "ALLOW_UNAUTHENTICATED", True)
     assert app_module._authorise(None) == "dev"
+
+
+def test_the_master_key_can_come_from_a_file(monkeypatch, tmp_path):
+    key = tmp_path / "model_router_key"
+    key.write_text("sk-from-file\n")
+    monkeypatch.delenv("MODEL_ROUTER_KEY", raising=False)
+    monkeypatch.setenv("MODEL_ROUTER_KEY_FILE", str(key))
+    assert app_module._read_master_key() == "sk-from-file"
+    monkeypatch.setenv("MODEL_ROUTER_KEY", "sk-env-wins")
+    assert app_module._read_master_key() == "sk-env-wins"
 
 
 def test_the_ledger_records_which_consumer_called(tmp_path):

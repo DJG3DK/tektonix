@@ -46,6 +46,9 @@ COPY scripts/ ./scripts/
 COPY skills/ ./skills/
 COPY memory/ ./memory/
 COPY pytest.ini ruff.toml ./
+# The stack -> image map. Without it every project's checks, the agent's own
+# and the reviewer's it runs for them, fall back to the default image.
+COPY docker/stack-images.json ./docker/stack-images.json
 COPY --from=frontend /build/dist ./frontend/dist
 
 COPY docker/agent/entrypoint.sh /usr/local/bin/entrypoint.sh

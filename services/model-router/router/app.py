@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import hmac
 import os
 import random
 import time
@@ -45,7 +46,26 @@ from router.fastest import FastestProviders
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("model-router")
 
-MASTER_KEY = os.environ.get("MODEL_ROUTER_KEY") or ""
+def _read_master_key() -> str:
+    """MODEL_ROUTER_KEY, or the file MODEL_ROUTER_KEY_FILE names -- the
+    bundle generates the key on first boot and hands it over as a file
+    (docker/postgres/init-secrets.sh)."""
+    key = (os.environ.get("MODEL_ROUTER_KEY") or "").strip()
+    path = os.environ.get("MODEL_ROUTER_KEY_FILE")
+    if not key and path:
+        try:
+            with open(path, encoding="utf-8") as fh:
+                key = fh.read().strip()
+        except OSError as e:
+            logger.error("MODEL_ROUTER_KEY_FILE %s is unreadable: %s", path, e)
+    return key
+
+
+MASTER_KEY = _read_master_key()
+# No key at all used to mean "open to anyone who can reach the port". That is
+# now an explicit choice for a throwaway local run, never the silent result of
+# a missing variable.
+ALLOW_UNAUTHENTICATED = os.environ.get("MODEL_ROUTER_ALLOW_UNAUTHENTICATED") == "1"
 
 
 def _parse_consumer_keys(raw: str) -> dict[str, str]:
@@ -102,18 +122,21 @@ app = FastAPI(title="Tektonix model router", lifespan=lifespan)
 def _authorise(authorization: str | None) -> str:
     """Returns the CALLER LABEL, which the ledger records.
 
-    Unset master key still means an unguarded local dev run. A consumer key
-    authorises exactly the same surface as the master key today -- the point
-    of the split is attribution and independent revocation, not a narrower
-    grant. Per-alias scoping can hang off the same label later if it is ever
-    wanted.
+    No key configured fails closed unless MODEL_ROUTER_ALLOW_UNAUTHENTICATED=1
+    says an open dev run is intended. A consumer key authorises exactly the
+    same surface as the master key today -- the point of the split is
+    attribution and independent revocation, not a narrower grant. Per-alias
+    scoping can hang off the same label later if it is ever wanted.
     """
     if not MASTER_KEY and not CONSUMER_KEYS:
-        return "dev"
+        if ALLOW_UNAUTHENTICATED:
+            return "dev"
+        raise HTTPException(503, "no MODEL_ROUTER_KEY configured; set one, or "
+                                 "MODEL_ROUTER_ALLOW_UNAUTHENTICATED=1 for a local dev run")
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(401, "missing bearer token")
     token = authorization.split(" ", 1)[1].strip()
-    if MASTER_KEY and token == MASTER_KEY:
+    if MASTER_KEY and hmac.compare_digest(token.encode("utf-8"), MASTER_KEY.encode("utf-8")):
         return "master"
     label = CONSUMER_KEYS.get(token)
     if label:

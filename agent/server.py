@@ -53,6 +53,7 @@ from agent.routers import model_config as model_config_routes
 from agent.routers import audit_store as _routers_audit_store
 from agent.routers import analytics as analytics_routes
 from agent.routers import push as push_routes
+from agent.routers import review_sandbox as review_sandbox_routes
 from agent.tools.model_rates import warm_rates
 from agent.classify import classify_task
 from agent import runtime_settings
@@ -465,6 +466,7 @@ app.include_router(planning_routes.router)
 app.include_router(evals_routes.router)
 app.include_router(swebench_routes.router)
 app.include_router(artifact_routes.router)
+app.include_router(review_sandbox_routes.router)
 
 
 # audit M-9: response security headers (defence-in-depth behind React's escaping,

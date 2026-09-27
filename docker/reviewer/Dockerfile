@@ -30,6 +30,7 @@ RUN cd services/agent-review && npm ci --omit=dev --ignore-scripts
 COPY services/agent-review/ ./services/agent-review/
 COPY services/commit-reviewer/ ./services/commit-reviewer/
 COPY services/shared/ ./services/shared/
+COPY docker/stack-images.json ./docker/stack-images.json
 
 # projects.json is the OPERATOR's file. The image ships the example so a
 # container started without one still answers rather than crashing on a

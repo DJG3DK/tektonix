@@ -261,6 +261,7 @@ EXPECTED: list[tuple[str, str, str | None]] = [
     ('POST', '/api/github/inbox/{repo}/{key}/{action}', 'require_full_auth'),
     ('POST', '/api/github/poll', 'require_full_auth'),
     ('POST', '/api/github/repos', 'require_full_auth'),
+    ('POST', '/api/internal/review-sandbox/run', 'require_review_secret'),
     ('POST', '/api/model-config', 'require_full_auth'),
     ('POST', '/api/model-config/probe-forced-tool-call', 'require_full_auth'),
     ('POST', '/api/model-config/providers', 'require_full_auth'),

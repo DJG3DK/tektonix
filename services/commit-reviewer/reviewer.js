@@ -311,7 +311,7 @@ function run(cmd, args, cwd, timeoutMs = 300_000) {
 // -- npm scripts and the test-writer's own test files. Since 2026-09-21
 // checks, the build, package-manager installs, schema generation and the
 // build assertions all go through runAgentCode: a sandbox container on a
-// host install, this already-contained process in the bundle.
+// host install, one the agent starts for us in the bundle.
 //
 // sealedEnv is applied inside it as well, and is not redundant: containment
 // stops the code reaching the machine, the sealed environment stops it
@@ -475,6 +475,14 @@ function getOpenRouterKey() {
   // the router is a sibling container. On a host install nothing changes:
   // pm2 does not export it, so the file is still what answers.
   if (process.env[name]) return process.env[name].trim();
+  // The bundle generates the router key on first boot and hands it to each
+  // consumer as a file, so it is never a compose default anyone can guess.
+  const keyFile = process.env[`${name}_FILE`];
+  if (keyFile) {
+    const key = fs.readFileSync(keyFile, 'utf8').trim();
+    if (!key) throw new Error(`${name}_FILE (${keyFile}) is empty`);
+    return key;
+  }
   const env = fs.readFileSync(ROUTER_ENV_PATH, 'utf8');
   const m = env.match(new RegExp(`^${name}=(.+)$`, 'm'));
   if (!m) throw new Error(`${name} is set neither in the environment nor in ${ROUTER_ENV_PATH}`);
@@ -1164,10 +1172,11 @@ async function cleanupWorktree(cfg, worktreePath) {
 // rather than calling runSealed directly, so there is ONE answer to "is this
 // contained" instead of one per call site. That answer has three outcomes,
 // by deployment: a host install runs it in a sandbox container; the compose
-// bundle runs it in this process, which is already a container (a different
-// isolation, NOT a fall-back to the host); anything else refuses. The one
-// exception is runDatabaseCheck's three commands -- SECURITY.md, "The
-// database checks, which stay on the host".
+// bundle asks the agent to start the same container (sandbox.js, "THE BUNDLE
+// DELEGATES"); anything else refuses. Never this process: it holds the
+// secret that authorises a merge. The one exception is runDatabaseCheck's
+// three commands on a host install -- SECURITY.md, "The database checks,
+// which stay on the host" -- and the bundle refuses those outright.
 //
 // sealedEnv is still applied inside the container: it stops secrets reaching
 // the command, which containment does not do on its own.
@@ -1177,6 +1186,10 @@ async function runAgentCode(cfg, worktreePath, relDir, cmd, args, timeoutMs, ext
     return sandbox.runSandboxed(cfg, worktreePath, relDir, cmd, args, timeoutMs,
                                 sealedEnv(extraEnv), network, stack);
   }
+  if (mode.mode === 'delegated') {
+    return sandbox.runDelegated(cfg, worktreePath, relDir, cmd, args, timeoutMs,
+                                extraEnv, network, stack, { secret: REVIEW_CONTROL_SECRET });
+  }
   if (mode.mode === 'unavailable') {
     // Flagged as infrastructure at the source. Everything downstream that
     // decides whose problem a failure is reads `.infrastructure`; deriving
@@ -1185,13 +1198,6 @@ async function runAgentCode(cfg, worktreePath, relDir, cmd, args, timeoutMs, ext
     // debugging an environment it cannot see.
     const r = await unavailable(mode);
     return { ...r, infrastructure: true };
-  }
-  if (mode.mode === 'bundle') {
-    // Already inside a container that is deliberately NOT given the docker
-    // socket (docker-compose.yml gives it to `agent` alone). Starting a
-    // container from here would mean handing this service host-root
-    // equivalent to gain isolation it already has.
-    return runSealed(cmd, args, path.join(worktreePath, relDir || '.'), timeoutMs, extraEnv);
   }
   return { ...(await unavailable(mode)), infrastructure: true };
 }
@@ -1207,7 +1213,7 @@ async function unavailable(mode) {
     ok: false,
     code: 1,
     output: `SETUP: this check runs code the agent wrote and cannot be contained here -- ${mode.reason}. `
-          + `Build the sandbox image (docker/agent-sandbox) or run the reviewer in the bundle. `
+          + `Build the sandbox image (docker/agent-sandbox), or in the bundle set AGENT_SANDBOX_URL. `
           + `It was not run on the host, and nothing about the code under review is known either way.`,
   };
 }
@@ -1223,10 +1229,9 @@ async function runChecks(cfg, worktreePath) {
     log(`  running ${check.name} (${check.cmd} ${check.args.join(' ')}) in ${check.dir}`);
     // A check may declare its own budget; test:review runs 50 suites and
     // needs more than run()'s 5-minute default.
-    // audit C-2: sealed env -- these run agent-authored code. Since
-    // 2026-09-21 they also run inside the sandbox on a host install, and in
-    // the bundle in this already-contained process; see runAgentCode and
-    // SECURITY.md.
+    // audit C-2: sealed env -- these run agent-authored code, always in a
+    // sandbox container: started here on a host install, by the agent in
+    // the bundle. See runAgentCode and SECURITY.md.
     const r = await runAgentCode(cfg, worktreePath, check.dir, check.cmd, check.args,
                                  check.timeoutMs, check.env, check.network,
                                  check.stack || cfg.stack);
@@ -1355,6 +1360,17 @@ async function runBuildCheck(cfg, worktreePath) {
 async function runDatabaseCheck(cfg, worktreePath) {
   const dc = cfg.databaseCheck;
   if (!dc) return [];
+  if (sandbox.IN_CONTAINER) {
+    // These run the repository's own code outside any sandbox (see below),
+    // and in the bundle "outside" is this container, which holds the merge
+    // secret. There is also no loopback Postgres or Redis here to run them
+    // against, so nothing is lost by refusing.
+    return [{
+      name: 'db-setup', ok: false, infrastructure: true,
+      output: 'SETUP: the database checks run the project\'s code unsandboxed and are not run in '
+            + 'the container bundle. Nothing about the code under review is known either way.',
+    }];
+  }
   const apiDir = path.join(worktreePath, dc.apiDir);
   const envPath = path.join(apiDir, '.env');
   let baseUrl;
@@ -1478,6 +1494,23 @@ function testFileCandidates(srcPath) {
   ];
 }
 
+// A worktree file's content for the review prompt, or null. The worktree is
+// agent-written, so `rel` (from a diff or a commit message) and any symlink
+// along it are agent-chosen: `config.json -> /app/data/review_control_secret`
+// or a `../../` path would otherwise put this process's own files in front
+// of the reviewing model, which can quote them back into findings the agent
+// reads.
+function readWorktreeFile(worktreePath, rel, maxChars) {
+  try {
+    const root = fs.realpathSync(worktreePath);
+    const real = fs.realpathSync(path.join(worktreePath, rel));
+    if (real === root || !real.startsWith(root + path.sep)) return null;
+    return fs.readFileSync(real, 'utf8').slice(0, maxChars);
+  } catch {
+    return null;
+  }
+}
+
 function gatherExistingTestCoverage(worktreePath, diff) {
   const changedFiles = [...diff.matchAll(/^\+\+\+ b\/(.+)$/gm)].map((m) => m[1]);
   const seen = new Set();
@@ -1490,10 +1523,11 @@ function gatherExistingTestCoverage(worktreePath, diff) {
       const fullPath = path.join(worktreePath, candidate);
       if (!fs.existsSync(fullPath)) continue;
       seen.add(candidate);
-      try {
-        const content = fs.readFileSync(fullPath, 'utf8').slice(0, 15_000);
+      // best-effort — a missing/unreadable test file just isn't shown
+      const content = readWorktreeFile(worktreePath, candidate, 15_000);
+      if (content !== null) {
         sections.push(`### ${candidate} (current, post-diff content)\n\`\`\`\n${content}\n\`\`\``);
-      } catch { /* best-effort — a missing/unreadable test file just isn't shown */ }
+      }
     }
   }
   return sections.join('\n\n');
@@ -1574,14 +1608,14 @@ function gatherReferencedFiles(worktreePath, commitLog, diff) {
       } catch { /* unresolvable token -- skip */ }
     }
     if (!rel || changed.has(rel)) continue;
-    try {
-      // 40k, not 15k -- the first live use of this feature (2026-08-20) hit a
-      // file of 15,874 chars whose decisive evidence (the tab markup) sat in
-      // the final ~900 chars: the cap handed the reviewer everything EXCEPT
-      // the part that mattered, and it kept the deadlock alive one more round.
-      const content = fs.readFileSync(path.join(worktreePath, rel), 'utf8').slice(0, 40_000);
+    // 40k, not 15k -- the first live use of this feature (2026-08-20) hit a
+    // file of 15,874 chars whose decisive evidence (the tab markup) sat in
+    // the final ~900 chars: the cap handed the reviewer everything EXCEPT
+    // the part that mattered, and it kept the deadlock alive one more round.
+    const content = readWorktreeFile(worktreePath, rel, 40_000);
+    if (content !== null) {
       sections.push(`### ${rel} (current content -- referenced in the commit message, NOT part of this diff)\n` + '```\n' + content + '\n```');
-    } catch { /* best-effort */ }
+    }
   }
 
   // Definitions of symbols the diff's ADDED lines import or call, so an
@@ -1619,10 +1653,10 @@ function gatherReferencedFiles(worktreePath, commitLog, diff) {
     } catch { /* symbol not found anywhere -- genuinely missing, leave it to the model */ }
   }
   for (const rel of depFiles) {
-    try {
-      const content = fs.readFileSync(path.join(worktreePath, rel), 'utf8').slice(0, 40_000);
+    const content = readWorktreeFile(worktreePath, rel, 40_000);
+    if (content !== null) {
       sections.push(`### ${rel} (current content -- imported or CALLED by this diff's changes, NOT part of this diff)\n` + '```\n' + content + '\n```');
-    } catch { /* best-effort */ }
+    }
   }
   return sections.join('\n\n');
 }
@@ -2431,6 +2465,6 @@ module.exports = {
   classifyInfrastructureFailures, packagesNeedingOwnInstall, baselineKey,
   detectNodeModulesDirs, NM_BUILD_CACHES,
   branchRecord, withBranchRecord, computeFileChurn, queueReview, pendingReviews, sweepLeftoverWorktrees,
-  liveInstallIsStale,
+  liveInstallIsStale, readWorktreeFile, gatherReferencedFiles,
   extractAgentResponses, stripLeakedMarkup, REVIEW_RESPONSE_MARKER,
 };
