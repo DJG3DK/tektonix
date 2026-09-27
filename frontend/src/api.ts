@@ -114,7 +114,7 @@ export async function changePassword(currentPassword: string, newPassword: strin
 
 /** Auto mode and the projects it covers. `repos` is required by the server
  *  when turning it ON: a switch whose blast radius nobody chose should not be
- *  the widest one (agent/server.py's _validated_auto_repos). */
+ *  the widest one (agent/routers/auth.py's _validated_auto_repos). */
 export async function setAutoApprove(
   autoApproveCommands: boolean, repos?: string[],
 ): Promise<{ auto_approve_repos: string[] }> {

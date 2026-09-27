@@ -1,6 +1,6 @@
 """Per-seam route modules, included by agent/server.py.
 
-`server.py` is still the pile (3,684 lines on 2026-09-25, after eight seams,
+`server.py` is still the pile (2,069 lines on 2026-09-27, after twelve seams,
 task creation and the task run state came out), split one seam at a time.
 docs/playbooks/README.md forbids flattening it in one pass, and
 `tests/test_route_inventory.py` is the reason that rule is safe to follow: it
@@ -9,7 +9,8 @@ is either identical afterwards or the snapshot fails.
 
 Each module here owns one `APIRouter` and the request models only its own
 handlers use. What stays in `server.py` is everything the seams share --
-`app`, its state, `require_full_auth`, the audit helper -- which is why a
+`app`, its state and lifespan, the machinery the routers reach on
+`app.state` -- which is why a
 router takes what it needs through `Depends` or reads it off `request.app`
 rather than importing `app` back from `server` and making the import a cycle.
 

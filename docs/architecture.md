@@ -191,9 +191,12 @@ removed, and the supervisor sweeps up any left behind.
 
 ```
 agent/
-  server.py            the API: auth, tasks, planning, github, settings, uploads.
-                       Being split one seam at a time into routers/ -- never in
-                       one pass; tests/test_route_inventory.py is the net
+  server.py            the app: lifespan, middleware, health, and the machinery
+                       the routers reach on app.state. The routes live in
+                       routers/, one module per seam (auth, tasks, planning,
+                       projects, github, settings, uploads, the review proxy),
+                       moved one seam at a time -- never in one pass;
+                       tests/test_route_inventory.py is the net
   outer_graph.py       the two-node graph and its routing
   nodes/               work.py, verify_and_ship.py, diff_patterns.py
   deep_agent.py        the build agent: seats, tools, the approval gate

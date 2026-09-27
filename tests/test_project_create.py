@@ -28,12 +28,14 @@ import pytest
 from fastapi.testclient import TestClient
 
 import agent.server as srv
+from agent import cartographer
 from agent import config as agent_config
 from agent import deploy_keys as dk
 from agent import github_repos
 from agent import github_settings as gs
 from agent import provisioning as prov
 from agent.auth import User
+from agent.routers import projects as projects_routes
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -357,6 +359,7 @@ def wired(tmp_path, monkeypatch):
     monkeypatch.setattr(agent_config, "PROJECTS", {}, raising=False)
     monkeypatch.setattr(srv, "PROJECTS", agent_config.PROJECTS, raising=False)
     monkeypatch.setattr(srv, "config", dataclasses.replace(srv.config, auth_secret_key=key, github_token=None))
+    monkeypatch.setattr(srv.app.state, "config", srv.config)
     monkeypatch.setenv("AGENT_PROJECT_ROOTS", str(tmp_path))
     monkeypatch.setenv("AGENT_SANDBOX_ROOT", str(workspaces))
     monkeypatch.setitem(srv.app.dependency_overrides, srv.require_full_auth, lambda: _ADMIN)
@@ -370,7 +373,7 @@ def wired(tmp_path, monkeypatch):
 
     import agent.deep_agent as da
     monkeypatch.setattr(da, "seed_memory", fake_seed_memory)
-    monkeypatch.setattr(srv.cartographer, "run_cartographer", fake_cartographer)
+    monkeypatch.setattr(cartographer, "run_cartographer", fake_cartographer)
     monkeypatch.setattr(srv.app.state, "store", store, raising=False)
     monkeypatch.setattr(srv.app.state, "auth_pool", object(), raising=False)
     return {"projects_file": projects_file, "workspaces": workspaces, "store": store,
@@ -541,6 +544,7 @@ def test_create_with_github_falls_back_to_the_env_token(wired, monkeypatch):
     calls: dict = {}
     _fake_github(monkeypatch, calls)
     monkeypatch.setattr(srv, "config", dataclasses.replace(srv.config, github_token=_TOKEN))
+    monkeypatch.setattr(srv.app.state, "config", srv.config)
     res = TestClient(srv.app).post("/api/projects/create", json={"name": "svc", "github": True})
     assert res.status_code == 200, res.text
     by_step = {s["step"]: s for s in res.json()["steps"]}
@@ -559,6 +563,7 @@ def test_a_github_failure_is_a_failed_step_not_an_abort(wired, monkeypatch):
 
     monkeypatch.setattr(github_repos, "create_private_repo", refused)
     monkeypatch.setattr(srv, "config", dataclasses.replace(srv.config, github_token=_TOKEN))
+    monkeypatch.setattr(srv.app.state, "config", srv.config)
     res = TestClient(srv.app).post("/api/projects/create", json={"name": "svc", "github": True})
     assert res.status_code == 200, res.text
     body = res.json()
@@ -578,6 +583,7 @@ def test_a_repo_name_taken_on_github_is_reported_plainly(wired, monkeypatch):
 
     monkeypatch.setattr(github_repos, "create_private_repo", taken)
     monkeypatch.setattr(srv, "config", dataclasses.replace(srv.config, github_token=_TOKEN))
+    monkeypatch.setattr(srv.app.state, "config", srv.config)
     res = TestClient(srv.app).post("/api/projects/create", json={"name": "svc", "github": True})
     by_step = {s["step"]: s for s in res.json()["steps"]}
     assert by_step["github"]["ok"] is False and "already exists" in by_step["github"]["detail"]
@@ -785,7 +791,7 @@ def test_a_stored_token_is_used_when_no_env_token_is_set(wired, monkeypatch):
     was offered and the request died with 'no GitHub token is configured'."""
     monkeypatch.setattr(gs, "_cache",
                         gs.apply_patch(srv.config, gs.current(), {"add_tokens": {"main": _TOKEN}}))
-    token, name = srv._resolve_github_token(None)
+    token, name = projects_routes._resolve_github_token(srv.config, None)
     assert token == _TOKEN
     assert name == "main", "the project must be bound to the token that created it"
 
@@ -795,16 +801,17 @@ def test_several_stored_tokens_and_no_choice_is_refused_by_name(wired, monkeypat
     monkeypatch.setattr(gs, "_cache", gs.apply_patch(
         srv.config, gs.current(), {"add_tokens": {"main": _TOKEN, "other": _TOKEN}}))
     with pytest.raises(srv.HTTPException) as e:
-        srv._resolve_github_token(None)
+        projects_routes._resolve_github_token(srv.config, None)
     assert e.value.status_code == 400
     assert "main" in e.value.detail and "other" in e.value.detail
 
 
 def test_env_token_still_wins_when_no_single_stored_token_applies(wired, monkeypatch):
     monkeypatch.setattr(srv, "config", dataclasses.replace(srv.config, github_token=_TOKEN))
+    monkeypatch.setattr(srv.app.state, "config", srv.config)
     monkeypatch.setattr(gs, "_cache", gs.apply_patch(
         srv.config, gs.current(), {"add_tokens": {"main": "x" * 20, "other": "y" * 20}}))
-    token, name = srv._resolve_github_token(None)
+    token, name = projects_routes._resolve_github_token(srv.config, None)
     assert token == _TOKEN
     assert name is None, "an env token is nobody's stored token"
 

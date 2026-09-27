@@ -9,6 +9,7 @@ import pytest
 
 import agent.nodes.verify_and_ship as vas
 import agent.server as server
+from agent import audit
 from agent.routers import tasks as tasks_routes
 
 # The routes read the app off the request (agent/routers/tasks.py).
@@ -169,7 +170,7 @@ def wired(monkeypatch):
         monkeypatch.setattr(server.app.state, "graph", gr, raising=False)
         monkeypatch.setattr(server.app.state, "store", object(), raising=False)
         monkeypatch.setattr(tasks_routes, "check_repo_access", lambda *a, **k: None)
-        monkeypatch.setattr(server.audit, "record", _record)
+        monkeypatch.setattr(audit, "record", _record)
         monkeypatch.setattr(server.app.state, "stream_graph", _stream, raising=False)
         return gr, _User()
     return _wire

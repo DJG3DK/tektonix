@@ -6,23 +6,19 @@ opening a fresh connection per request would be wasteful and race-prone).
 """
 
 import asyncio
-import functools
 import contextlib
 import json
 import logging
 import os
-import shutil
 import time
 import traceback
-import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Literal
 
 logger = logging.getLogger("tektonix")
 
 import httpx
-from fastapi import Cookie, Depends, FastAPI, File, HTTPException, Request, Response, UploadFile
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -32,36 +28,34 @@ from pydantic import BaseModel
 
 FRONTEND_DIST = Path(__file__).resolve().parent.parent / "frontend" / "dist"
 
-from agent import cartographer
-from agent import paths
-from agent import rate_limit
 from agent.config import PROJECTS, load_config, require_server_config
 from agent.observability import install_langsmith
 from agent import tasks
 from agent import task_runtime
 from agent.outer_graph import build_outer_graph, open_checkpointer, open_store
 from agent.graph import project_slot
+from agent.routers import auth as auth_routes
 from agent.routers import env_config as env_config_routes
 from agent.routers import github as github_routes
 from agent.routers import tasks as tasks_routes
 from agent.routers import planning as planning_routes
+from agent.routers import projects as projects_routes
 from agent.routers import evals as evals_routes
 from agent.routers import swebench as swebench_routes
 from agent.routers import artifacts as artifact_routes
 from agent.routers import settings as settings_routes
 from agent.routers import model_config as model_config_routes
-from agent.routers import audit_store as _routers_audit_store
 from agent.routers import analytics as analytics_routes
 from agent.routers import push as push_routes
+from agent.routers import review_proxy as review_proxy_routes
 from agent.routers import review_sandbox as review_sandbox_routes
+from agent.routers import uploads as uploads_routes
 from agent.tools.model_rates import warm_rates
 from agent.classify import classify_task
 from agent import runtime_settings
 from agent import github_inbox, github_settings
-from agent import audit
 from agent import live_state
 from agent import workspaces
-from agent.backends import backend_for_dsn
 from agent.store_paging import all_items
 from agent import health as health_checks
 from agent import episode_vectors, history_index
@@ -71,8 +65,8 @@ from agent.middleware.budget_guard import BudgetExceededError
 from agent.frontend_route import RouteDecision, classify_frontend
 from agent.planning_chat import build_planning_agent, classify_planning_difficulty, planning_thread_config, run_planning_turn
 from agent import auth
-from agent.auth import SESSION_COOKIE_NAME, User, check_repo_access
-from agent.notify import notify_operators, notify_operators_bg, send_telegram, task_alert, watch_services
+from agent.auth import User
+from agent.notify import notify_operators, notify_operators_bg, task_alert, watch_services
 from agent.mailer import send_plain_email
 
 config = load_config()
@@ -422,13 +416,6 @@ app = FastAPI(lifespan=lifespan)
 # such test fail on a missing attribute rather than on anything real.
 app.state.config = config
 
-
-class _AppShim:
-    """Just enough of a Request for routers.audit_store: it reads
-    `request.app.state`, and the routes still in this module have the app
-    itself rather than a request in scope."""
-
-    app = app
 # CORS was allow_origins=["*"] with a comment claiming nginx tightened it in
 # production. nginx sets no CORS headers at all, so nothing did -- the comment
 # described a control that did not exist. Real exposure was limited (credentials
@@ -455,6 +442,7 @@ if config.cors_allow_origins:
 # seam that moves either looks identical from outside or fails the snapshot.
 # Included here, after the middleware and before the routes that are still in
 # this file, so the order a request passes through is unchanged.
+app.include_router(auth_routes.router)
 app.include_router(push_routes.router)
 app.include_router(analytics_routes.router)
 app.include_router(model_config_routes.router)
@@ -463,10 +451,13 @@ app.include_router(env_config_routes.router)
 app.include_router(github_routes.router)
 app.include_router(tasks_routes.router)
 app.include_router(planning_routes.router)
+app.include_router(projects_routes.router)
 app.include_router(evals_routes.router)
 app.include_router(swebench_routes.router)
 app.include_router(artifact_routes.router)
 app.include_router(review_sandbox_routes.router)
+app.include_router(review_proxy_routes.router)
+app.include_router(uploads_routes.router)
 
 
 # audit M-9: response security headers (defence-in-depth behind React's escaping,
@@ -488,6 +479,11 @@ _CSP = (
 
 
 from starlette.responses import JSONResponse as _JSONResponse
+
+# The body ceiling belongs to the upload limits it is derived from, which
+# moved with the route to agent/routers/uploads.py (2026-09-27); the same
+# value under the name the middleware and its test read.
+REQUEST_BODY_MAX_BYTES = uploads_routes.REQUEST_BODY_MAX_BYTES
 from datetime import UTC
 from datetime import datetime as _dt
 
@@ -563,118 +559,11 @@ async def _security_headers(request, call_next):
 # they're operator/global concerns (aggregate spend across every project,
 # which LLM model each pinned role uses), not something a restricted
 # per-project account should see or change.
+#
+# The /api/auth/* routes themselves live in agent/routers/auth.py (2026-09-27).
 # ---------------------------------------------------------------------------
 
 
-class LoginRequest(BaseModel):
-    email: str
-    password: str
-
-
-class Verify2FARequest(BaseModel):
-    temp_token: str
-    code: str
-
-
-class Setup2FARequest(BaseModel):
-    password: str | None = None
-
-
-class Confirm2FARequest(BaseModel):
-    code: str
-
-
-class ChangePasswordRequest(BaseModel):
-    current_password: str
-    new_password: str
-
-
-class ForgotPasswordRequest(BaseModel):
-    email: str
-
-
-class ResetPasswordRequest(BaseModel):
-    email: str
-    code: str
-    new_password: str
-
-
-class CreateUserRequest(BaseModel):
-    email: str
-    password: str
-    role: str
-    allowed_repos: list[str] | None = None
-    auto_approve_commands: bool = False
-    auto_approve_repos: list[str] | None = None
-
-
-class UpdateAutoApproveRequest(BaseModel):
-    auto_approve_commands: bool
-    # Which projects it covers. Required when turning it ON: a switch whose
-    # blast radius nobody chose should not be the widest one.
-    repos: list[str] | None = None
-
-
-class UpdateUserAccessRequest(BaseModel):
-    allowed_repos: list[str] | None = None
-    auto_approve_commands: bool | None = None
-    auto_approve_repos: list[str] | None = None
-
-
-def _validated_auto_repos(target: User, repos: list[str] | None, *, turning_on: bool) -> list[str] | None:
-    """The projects an auto-approve switch may cover, or None to leave the
-    stored scope alone.
-
-    Turning it ON must name projects. The alternative -- an empty or absent
-    list meaning "everywhere" -- is exactly the inheritance this scoping
-    exists to stop: a second account handed the switch would silently get it
-    for production as well as for the sandbox it was meant for.
-    """
-    if repos is None:
-        if turning_on and not (target.auto_approve_repos or []):
-            raise HTTPException(400, (
-                "auto mode needs the projects it covers -- send `repos` with at least one, "
-                "so turning it on cannot quietly mean every project"))
-        return None
-    unknown = [r for r in repos if r not in PROJECTS]
-    if unknown:
-        raise HTTPException(400, f"unknown project(s): {', '.join(sorted(unknown))}")
-    denied = [r for r in repos if not target.can_access(r)]
-    if denied:
-        raise HTTPException(403, f"{target.email} has no access to: {', '.join(sorted(denied))}")
-    if turning_on and not repos:
-        raise HTTPException(400, "auto mode with no projects does nothing -- name at least one")
-    return repos
-
-
-def _user_public(user: User) -> dict:
-    return {
-        "id": user.id, "email": user.email, "role": user.role,
-        "allowed_repos": user.allowed_repos, "totp_enabled": user.totp_enabled,
-        "must_change_password": user.must_change_password,
-        "require_totp_setup": user.role == "admin" and not user.totp_enabled,
-        "auto_approve_commands": user.auto_approve_commands,
-        "auto_approve_repos": user.auto_approve_repos or [],
-        "require_merge_review": user.require_merge_review,
-        # None until the account picks one; the frontend maps that to the
-        # default rather than the server writing the default into every row.
-        "theme": user.theme or auth.DEFAULT_THEME,
-    }
-
-
-def _set_session_cookie(response: Response, token: str) -> None:
-    # SameSite=strict is this app's whole CSRF defence for the session API:
-    # there are no CSRF tokens, because a strict cookie is never sent on a
-    # request another site starts, and the SPA only ever calls same-origin.
-    # That coupling is load-bearing. Loosening this to lax or none (for an
-    # embed, an OAuth return, a subdomain) makes CSRF tokens -- or a
-    # Sec-Fetch-Site check on every mutating route -- required in the same
-    # change. The one unauthenticated acting POST, the approve link, has its
-    # own Sec-Fetch-Site check (_approve_is_cross_site) for this reason.
-    response.set_cookie(
-        SESSION_COOKIE_NAME, token, max_age=auth.SESSION_TTL_SECONDS,
-        httponly=True, samesite="strict", secure=True, path="/",
-    )
 # Both live in agent/auth.py now: a route module under agent/routers/ cannot
 # import them from here without making the import a cycle. Re-exported rather
 # than redefined so require_full_auth stays the SAME object -- the route
@@ -684,23 +573,10 @@ _forced_screen_block = auth.forced_screen_block
 require_full_auth = auth.require_full_auth
 
 
-# audit M-32: asyncio keeps only a WEAK reference to a bare create_task, so a
-# fire-and-forget background refresh could be garbage-collected mid-run and
-# silently never happen. Hold a strong reference until the task finishes, and
-# log any exception it raised (bare create_task also swallows those).
-_background_tasks = live_state.background_tasks   # see agent/live_state.py
-
-
-def _spawn_background(coro, label: str) -> None:
-    task = asyncio.create_task(coro)
-    _background_tasks.add(task)
-
-    def _done(t: asyncio.Task) -> None:
-        _background_tasks.discard(t)
-        if not t.cancelled() and t.exception() is not None:
-            logger.warning("background task %s failed: %r", label, t.exception())
-
-    task.add_done_callback(_done)
+# In agent/live_state.py with the set it guards (2026-09-27): the projects
+# router starts the cartographer through it and cannot import this module.
+# The same function under the old name.
+_spawn_background = live_state.spawn_background
 
 
 @app.get("/api/health")
@@ -726,163 +602,6 @@ async def health():
         getattr(app.state, "auth_pool", None), config.router_base_url, PROJECTS,
     )
     return _JSONResponse(payload, status_code=200 if payload["ok"] else 503)
-
-
-@app.post("/api/auth/login")
-async def login(req: LoginRequest, response: Response, request: Request):
-    rate_limit.check_rate_limit(request, "login")  # audit H-7
-    row = await auth.get_user_by_email(app.state.auth_pool, req.email.strip().lower())
-    # audit M-1: run argon2 on both branches so an unknown email takes the same
-    # time as a real one (no user-enumeration timing oracle).
-    if not row:
-        auth.verify_password_absent()
-        raise HTTPException(401, "invalid email or password")
-    if not auth.verify_password(req.password, row["password_hash"]):
-        raise HTTPException(401, "invalid email or password")
-    rate_limit.clear_rate_limit(request, "login")
-    if row["totp_enabled"]:
-        # Returned in the body, held in page memory between the two login
-        # steps: short-lived, single-use, and useless without the second
-        # factor. The page that holds it is the one place script injection
-        # would matter most, which is one more reason the dashboard never
-        # renders model- or repo-supplied HTML (ChatMessage renders text, and
-        # the CSP is script-src 'self').
-        temp_token = await auth.create_pending_2fa(app.state.auth_pool, row["id"])
-        return {"requires_2fa": True, "temp_token": temp_token}
-    token = await auth.create_session(app.state.auth_pool, row["id"])
-    _set_session_cookie(response, token)
-    return {"requires_2fa": False, "user": _user_public(auth._row_to_user(row))}
-
-
-@app.post("/api/auth/2fa/verify")
-async def verify_2fa(req: Verify2FARequest, response: Response, request: Request):
-    rate_limit.check_rate_limit(request, "verify-2fa")  # audit H-7
-    pending = await auth.resolve_pending_2fa(app.state.auth_pool, req.temp_token)
-    if not pending:
-        raise HTTPException(401, "2FA challenge expired -- log in again")
-    ok = await auth.verify_totp_or_recovery(app.state.auth_pool, config, pending["user_id"], req.code.strip())
-    if not ok:
-        raise HTTPException(400, "invalid code")
-    rate_limit.clear_rate_limit(request, "verify-2fa")
-    token = await auth.create_session(app.state.auth_pool, pending["user_id"])
-    _set_session_cookie(response, token)
-    row = await auth.get_user_by_id(app.state.auth_pool, pending["user_id"])
-    return {"user": _user_public(auth._row_to_user(row))}
-
-
-@app.post("/api/auth/logout")
-async def logout(response: Response, agent_session: str | None = Cookie(default=None)):
-    if agent_session:
-        await auth.revoke_session(app.state.auth_pool, agent_session)
-    response.delete_cookie(SESSION_COOKIE_NAME, path="/")
-    return {"ok": True}
-
-
-@app.post("/api/auth/forgot-password")
-async def forgot_password(req: ForgotPasswordRequest, request: Request):
-    rate_limit.check_rate_limit(request, "reset-request")  # audit H-7
-    # Always {"ok": true} regardless of whether the email matches a real
-    # account -- auth.request_password_reset itself silently no-ops for an
-    # unknown email; the point is not letting the response tell an attacker
-    # which emails are registered users.
-    try:
-        await auth.request_password_reset(app.state.auth_pool, config, req.email)
-    except Exception:  # noqa: BLE001 -- an SMTP hiccup must not turn into "this email doesn't exist" info leakage either
-        logger.exception("password reset email failed to send for %s", req.email)
-    return {"ok": True}
-
-
-@app.post("/api/auth/reset-password")
-async def reset_password_endpoint(req: ResetPasswordRequest, request: Request):
-    rate_limit.check_rate_limit(request, "reset-password")  # audit H-7
-    error = auth.validate_password_strength(req.new_password)
-    if error:
-        raise HTTPException(400, error)
-    ok = await auth.reset_password(app.state.auth_pool, req.email, req.code, req.new_password)
-    if not ok:
-        raise HTTPException(400, "invalid or expired code")
-    return {"ok": True}
-
-
-@app.get("/api/auth/me")
-async def get_me(user: User = Depends(auth.get_current_user)):
-    return _user_public(user)
-
-
-@app.post("/api/auth/change-password")
-async def change_password_endpoint(req: ChangePasswordRequest, user: User = Depends(auth.get_current_user)):
-    row = await auth.get_user_by_id(app.state.auth_pool, user.id)
-    if not auth.verify_password(req.current_password, row["password_hash"]):
-        raise HTTPException(401, "current password is incorrect")
-    error = auth.validate_password_strength(req.new_password)
-    if error:
-        raise HTTPException(400, error)
-    await auth.change_password(app.state.auth_pool, user.id, req.new_password)
-    return {"ok": True}
-
-
-@app.post("/api/auth/2fa/setup")
-async def setup_2fa(req: Setup2FARequest = Setup2FARequest(), user: User = Depends(auth.get_current_user)):
-    # audit H-3: start_totp_setup clears totp_enabled as it writes the new
-    # secret, so an attacker with a live session could silently DISABLE 2FA by
-    # hitting this endpoint -- bypassing /2fa/disable, which explicitly refuses
-    # for admins. Re-authenticate with the password before re-initiating setup
-    # when 2FA is already enabled. First-time setup (2FA off) needs no password:
-    # the session already proves who they are, and there is nothing to protect.
-    if user.totp_enabled:
-        row = await auth.get_user_by_id(app.state.auth_pool, user.id)
-        if not req.password or not auth.verify_password(req.password, row["password_hash"]):
-            raise HTTPException(403, "current password required to re-initialize 2FA")
-    # Once-only by construction: every call mints a NEW secret (start_totp_setup
-    # overwrites the pending one), so this response is the only time a given
-    # secret leaves the server -- no GET returns it later. The raw secret rides
-    # along with the provisioning URI for someone who cannot scan a QR code.
-    secret, uri = await auth.start_totp_setup(app.state.auth_pool, config, user.id)
-    return {"secret": secret, "uri": uri}
-
-
-@app.post("/api/auth/2fa/confirm")
-async def confirm_2fa(req: Confirm2FARequest, user: User = Depends(auth.get_current_user)):
-    codes = await auth.confirm_totp_setup(app.state.auth_pool, config, user.id, req.code.strip())
-    return {"recovery_codes": codes}
-
-
-class Disable2FARequest(BaseModel):
-    password: str = ""
-
-
-@app.post("/api/auth/2fa/disable")
-async def disable_2fa_endpoint(req: Disable2FARequest,
-                               user: User = Depends(require_full_auth)):
-    """Removing a second factor is exactly the action a stolen session would
-    want, so it is not something a session alone should authorise.
-
-    Two changes over the original: require_full_auth rather than
-    get_current_user (a half-authenticated session must not reach this at
-    all), and the current password, matching what /2fa/setup already demands
-    to RE-initialise. Enabling 2FA needs no password because the session
-    already proves identity and there is nothing yet to protect; disabling it
-    destroys a protection, which is the asymmetry.
-    """
-    if user.role == "admin":
-        raise HTTPException(403, "2FA cannot be disabled on the admin account")
-    row = await auth.get_user_by_id(app.state.auth_pool, user.id)
-    if not req.password or not auth.verify_password(req.password, row["password_hash"]):
-        raise HTTPException(403, "current password required to disable 2FA")
-    await auth.disable_totp(app.state.auth_pool, user.id)
-    return {"ok": True}
-
-
-def _audit_store():
-    """This module's caller-side wrapper around routers.audit_store.
-
-    Two copies of this existed once the first seams moved out -- one here
-    reading `app.state` directly, one there taking a request -- which is one
-    definition of "where does an audit write get its store" too many. The
-    router package owns it; this passes the app in so the routes still in
-    this file read it the same way.
-    """
-    return _routers_audit_store(_AppShim)
 
 
 # ---------------------------------------------------------------------------
@@ -1044,314 +763,11 @@ async def _github_poll_loop(startup_delay: float = 20.0) -> None:
         _github_poll_wake.clear()
 
 
-class RemoveProjectRequest(BaseModel):
-    # What to do with everything the agent LEARNED about this project.
-    memory: Literal["archive", "delete"] = "archive"
-    # And what to do with the checkout. `keep` is the default and the rule the
-    # removal module is built around; `delete` is for a repository Tektonix
-    # cloned by itself and the operator never wanted, and is refused unless
-    # the server can show that nothing would be lost by it.
-    files: Literal["keep", "delete"] = "keep"
-
-
-class UpdateThemeRequest(BaseModel):
-    theme: str
-
-
-class UpdateMergeReviewRequest(BaseModel):
-    require_merge_review: bool
-
-
-@app.post("/api/auth/me/merge-review")
-async def set_own_merge_review(req: UpdateMergeReviewRequest, user: User = Depends(require_full_auth)):
-    """Self-service for the same reason auto-approve is: turning the final
-    look OFF removes a review the operator was doing for their own benefit,
-    not a safety property someone else depends on -- the independent review
-    service still gates every merge regardless. Captured onto each task at
-    creation, so flipping this never changes a task already in flight."""
-    await auth.update_require_merge_review(app.state.auth_pool, user.id, req.require_merge_review)
-    await audit.record(_audit_store(), actor=user.email, action="settings.merge_review",
-                       target=user.email,
-                       detail="on" if req.require_merge_review else "off")
-    return {"ok": True, "require_merge_review": req.require_merge_review}
-
-
-@app.post("/api/auth/me/theme")
-async def set_own_theme(req: UpdateThemeRequest, user: User = Depends(require_full_auth)):
-    """The account's colour scheme. Self-service and unaudited: it grants
-    nothing and reveals nothing, and an audit line per colour change would
-    bury the entries that matter."""
-    try:
-        await auth.update_theme(app.state.auth_pool, user.id, req.theme)
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-    return {"ok": True, "theme": req.theme}
-
-
-@app.post("/api/auth/me/auto-approve")
-async def set_own_auto_approve(req: UpdateAutoApproveRequest, user: User = Depends(require_full_auth)):
-    """Self-service, deliberately not admin-only: this grants no capability
-    the account doesn't already have -- every action it stops prompting for
-    could be approved by hand, one at a time, by this same user today. It
-    only removes the clicking. The destructive-command subset stays gated no
-    matter what this is set to (see deep_agent.py's interrupt_on_for), which
-    is what makes self-service reasonable rather than a way to switch off
-    the safety net.
-    """
-    repos = _validated_auto_repos(user, req.repos, turning_on=req.auto_approve_commands)
-    await auth.update_auto_approve(app.state.auth_pool, user.id, req.auto_approve_commands, repos)
-    await audit.record(_audit_store(), actor=user.email, action="settings.auto_approve",
-                       target=user.email,
-                       detail=("on for " + ", ".join(repos) if req.auto_approve_commands and repos
-                               else "on" if req.auto_approve_commands else "off"))
-    return {"ok": True, "auto_approve_commands": req.auto_approve_commands,
-            "auto_approve_repos": repos if repos is not None else (user.auto_approve_repos or [])}
-
-
-class TelegramSettingsRequest(BaseModel):
-    bot_token: str | None = None  # None/empty clears; masked sentinel keeps existing
-    chat_id: str | None = None
-
-
-@app.get("/api/auth/me/telegram")
-async def get_telegram_settings_endpoint(user: User = Depends(require_full_auth)):
-    """Masked: reports whether a token is configured, never the token."""
-    return await auth.get_telegram_settings(app.state.auth_pool, user.id)
-
-
-@app.post("/api/auth/me/telegram")
-async def set_telegram_settings_endpoint(req: TelegramSettingsRequest, user: User = Depends(require_full_auth)):
-    token = (req.bot_token or "").strip()
-    chat_id = (req.chat_id or "").strip()
-    if token == "__unchanged__":
-        # The Settings page never receives the stored token back (masked
-        # endpoint above), so "save" with an untouched token field must not
-        # blank a working credential -- the sentinel keeps it.
-        existing = await auth.get_telegram_settings(app.state.auth_pool, user.id)
-        if existing["configured"]:
-            await auth.update_telegram_chat_only(app.state.auth_pool, user.id, chat_id or None)
-            return await auth.get_telegram_settings(app.state.auth_pool, user.id)
-        token = ""
-    await auth.update_telegram(app.state.auth_pool, user.id, token or None, chat_id or None)
-    return await auth.get_telegram_settings(app.state.auth_pool, user.id)
-
-
-@app.post("/api/auth/me/telegram/test")
-async def test_telegram_endpoint(user: User = Depends(require_full_auth)):
-    """Sends a real message to THIS user's configured chat so the operator can
-    verify the token/chat pair before trusting it with real alerts."""
-    row = await auth.get_telegram_raw(app.state.auth_pool, user.id)
-    if not row:
-        raise HTTPException(400, "telegram is not configured -- save a bot token and chat id first")
-    token, chat_id = row
-    ok = await send_telegram(token, chat_id, task_alert(
-        "done", "tektonix", "Test alert from the dashboard settings page",
-        0.00, "If you can read this, task alerts will reach you here."))
-    if not ok:
-        raise HTTPException(502, "telegram rejected the send -- check the bot token and chat id (and that you have messaged the bot once)")
-    return {"ok": True}
-
-
-@app.get("/api/auth/users")
-async def list_users_endpoint(user: User = Depends(require_full_auth)):
-    auth.require_admin(user)
-    rows = await auth.list_users(app.state.auth_pool)
-    return [_user_public(auth._row_to_user(r)) for r in rows]
-
-
-@app.post("/api/auth/users", status_code=201)
-async def create_user_endpoint(req: CreateUserRequest, user: User = Depends(require_full_auth)):
-    auth.require_admin(user)
-    if req.role not in ("admin", "user"):
-        raise HTTPException(400, "role must be 'admin' or 'user'")
-    # audit H7: can_access() treats allowed_repos=None as UNRESTRICTED for any
-    # role, and this field defaults to None -- so POST with {"role": "user"}
-    # and no repo list minted an account that could reach every project. The
-    # sibling PATCH endpoint already rejects this; the create path did not.
-    if req.role != "admin" and req.allowed_repos is None:
-        raise HTTPException(
-            400, "a non-admin user needs an explicit allowed_repos list "
-                 "(use [] for no access); omitting it would grant every repo")
-    if req.allowed_repos:
-        for r in req.allowed_repos:
-            if r not in PROJECTS:
-                raise HTTPException(400, f"unknown repo {r!r}")
-    error = auth.validate_password_strength(req.password)
-    if error:
-        raise HTTPException(400, error)
-    if await auth.get_user_by_email(app.state.auth_pool, req.email.strip().lower()):
-        raise HTTPException(409, "a user with this email already exists")
-    row = await auth.create_user(
-        app.state.auth_pool, req.email.strip().lower(), req.password, req.role, req.allowed_repos,
-        must_change_password=True,
-    )
-    if req.auto_approve_commands:
-        # A brand-new account cannot be handed a blanket switch: it is scoped
-        # to the projects it was just granted, and an admin account (whose
-        # allowed_repos is None, meaning everything) must name them.
-        scope = req.auto_approve_repos if req.auto_approve_repos is not None else req.allowed_repos
-        if not scope:
-            raise HTTPException(400, (
-                "auto mode for a new account needs the projects it covers -- send "
-                "`auto_approve_repos`, or create the account with `allowed_repos`"))
-        unknown = [r for r in scope if r not in PROJECTS]
-        if unknown:
-            raise HTTPException(400, f"unknown project(s): {', '.join(sorted(unknown))}")
-        await auth.update_auto_approve(app.state.auth_pool, row["id"], True, list(scope))
-        row = {**row, "auto_approve_commands": True, "auto_approve_repos": sorted(set(scope))}
-        await audit.record(_audit_store(), actor=user.email, action="settings.auto_approve",
-                           target=row["email"],
-                           detail="on at account creation for " + ", ".join(sorted(set(scope))))
-    return _user_public(auth._row_to_user(row))
-
-
-@app.patch("/api/auth/users/{user_id}")
-async def update_user_access_endpoint(user_id: int, req: UpdateUserAccessRequest, user: User = Depends(require_full_auth)):
-    auth.require_admin(user)
-    if req.allowed_repos:
-        for r in req.allowed_repos:
-            if r not in PROJECTS:
-                raise HTTPException(400, f"unknown repo {r!r}")
-    target = await auth.get_user_by_id(app.state.auth_pool, user_id)
-    if not target:
-        raise HTTPException(404, "user not found")
-    # allowed_repos is meaningless for admin (always full access already);
-    # auto_approve_commands is orthogonal to repo scope and applies to any
-    # role, admin included -- it's the one most likely to want it.
-    if req.allowed_repos is not None:
-        if target["role"] == "admin":
-            raise HTTPException(400, "the admin account always has full access")
-        await auth.update_user_access(app.state.auth_pool, user_id, req.allowed_repos)
-    if req.auto_approve_commands is not None or req.auto_approve_repos is not None:
-        target_user = auth._row_to_user(target)
-        enabled = (req.auto_approve_commands if req.auto_approve_commands is not None
-                   else target_user.auto_approve_commands)
-        repos = _validated_auto_repos(target_user, req.auto_approve_repos, turning_on=enabled)
-        await auth.update_auto_approve(app.state.auth_pool, user_id, enabled, repos)
-        # An admin granting someone else the right to skip prompts is the
-        # single most consequential thing on the Users panel, and the person
-        # it is granted to has no other way to learn who did it.
-        await audit.record(
-            app.state.store, actor=user.email,
-            action="settings.auto_approve_repos" if req.auto_approve_repos is not None
-            else "settings.auto_approve",
-            target=target["email"],
-            detail=("on for " + ", ".join(repos)) if enabled and repos
-            else ("on" if enabled else "off"))
-    return {"ok": True}
-
-
-@app.delete("/api/auth/users/{user_id}")
-async def delete_user_endpoint(user_id: int, user: User = Depends(require_full_auth)):
-    auth.require_admin(user)
-    if user_id == user.id:
-        raise HTTPException(400, "cannot delete your own account")
-    target = await auth.get_user_by_id(app.state.auth_pool, user_id)
-    if not target:
-        raise HTTPException(404, "user not found")
-    if target["role"] == "admin":
-        raise HTTPException(400, "cannot delete the admin account")
-    await auth.delete_user(app.state.auth_pool, user_id)
-    return {"ok": True}
-
-
-UPLOADS_DIRNAME = ".uploads"
-UPLOAD_MAX_BYTES = 25 * 1024 * 1024
-# audit M-13: bound the number of files per upload and the absolute request
-# body. Without these, `files: list[UploadFile]` was unbounded and a Content-
-# Length ceiling existed nowhere (so JSON bodies were unbounded too).
-UPLOAD_MAX_FILES = 20
-REQUEST_BODY_MAX_BYTES = UPLOAD_MAX_FILES * UPLOAD_MAX_BYTES + 8 * 1024 * 1024
-UPLOAD_KINDS = {
-    ".png": "image", ".jpg": "image", ".jpeg": "image", ".webp": "image", ".gif": "image",
-    ".pdf": "pdf",
-    ".csv": "text", ".tsv": "text", ".txt": "text", ".json": "text", ".md": "text",
-    ".xlsx": "sheet", ".xls": "sheet",
-}
-
-_GIT_EXCLUDES_PATH = Path(__file__).resolve().parent.parent / ".agent-git-excludes"
-
-
-def _ensure_uploads_ignored(repo_root: str) -> None:
-    """Uploads live inside the sandbox repo (so the agent's /workspace tools
-    reach them) but must never enter a commit/review. A repo-external git
-    excludes file (core.excludesFile) keeps them invisible to git without
-    touching the project's own .gitignore -- zero diff, nothing for the
-    reviewer to see."""
-    import subprocess
-    if not _GIT_EXCLUDES_PATH.exists():
-        _GIT_EXCLUDES_PATH.write_text(f"{UPLOADS_DIRNAME}/\n")
-    subprocess.run(["git", "-C", repo_root, "config", "core.excludesFile", str(_GIT_EXCLUDES_PATH)], check=False)
-
-
-@app.post("/api/uploads")
-async def upload_files(repo: str, files: list[UploadFile] = File(...), user: User = Depends(require_full_auth)):
-    """Store operator attachments in the repo's sandbox under .uploads/<batch>/
-    and return a manifest for the task goal. PDFs get a sibling .txt with the
-    extracted text so the (text-only) coding models can read them directly;
-    images are consumed via the agent's describe_image tool."""
-    if repo not in PROJECTS:
-        raise HTTPException(404, f"unknown repo {repo!r}")
-    check_repo_access(user, repo)
-    repo_root = PROJECTS[repo]["sandbox"]
-    # audit M-34: _ensure_uploads_ignored is synchronous (Path.exists,
-    # write_text, subprocess.run) -- run it off the event loop.
-    await asyncio.to_thread(_ensure_uploads_ignored, repo_root)
-    batch = uuid.uuid4().hex[:8]
-    batch_dir = Path(repo_root) / UPLOADS_DIRNAME / batch
-    batch_dir.mkdir(parents=True, exist_ok=True)
-
-    # audit M-13: bound the file count before touching any of them.
-    if len(files) > UPLOAD_MAX_FILES:
-        raise HTTPException(413, f"too many files ({len(files)}); limit is {UPLOAD_MAX_FILES}")
-
-    manifest = []
-    for f in files:
-        name = Path(f.filename or "file").name  # strip any path components
-        ext = Path(name).suffix.lower()
-        kind = UPLOAD_KINDS.get(ext)
-        if kind is None:
-            raise HTTPException(415, f"unsupported file type {ext!r} ({name})")
-        # audit M-13: stream to disk in chunks with a running counter, aborting
-        # (and deleting the partial file) the moment it exceeds the cap -- the
-        # old `await f.read()` materialized the whole file in memory first.
-        dest = batch_dir / name
-        written = 0
-        with dest.open("wb") as out:
-            while True:
-                chunk = await f.read(1024 * 1024)
-                if not chunk:
-                    break
-                written += len(chunk)
-                if written > UPLOAD_MAX_BYTES:
-                    out.close()
-                    dest.unlink(missing_ok=True)
-                    raise HTTPException(413, f"{name} exceeds {UPLOAD_MAX_BYTES // (1024*1024)}MB")
-                out.write(chunk)
-        rel = f"{UPLOADS_DIRNAME}/{batch}/{name}"
-        entry = {"path": rel, "kind": kind, "bytes": written}
-        if kind == "pdf":
-            # audit M-34: pypdf full-text extraction is CPU-bound for seconds on
-            # a large PDF -- run it in a thread so it doesn't stall the loop.
-            def _extract_pdf(dest_path: str, out_path: str) -> int:
-                import pypdf
-                reader = pypdf.PdfReader(dest_path)
-                text = "\n\n".join((page.extract_text() or "") for page in reader.pages)
-                Path(out_path).write_text(text, encoding="utf-8")
-                return len(reader.pages)
-            try:
-                pages = await asyncio.to_thread(_extract_pdf, str(dest), str(batch_dir / f"{name}.txt"))
-                entry["extracted_text"] = f"{rel}.txt"
-                entry["pages"] = pages
-            except Exception as e:  # noqa: BLE001 -- a scanned/encrypted pdf shouldn't fail the upload
-                entry["extracted_text"] = None
-                logger.info("uploads: text extraction failed for %s: %s", entry.get("name"), e)
-                entry["note"] = "text extraction failed -- possibly scanned; no text layer"
-        manifest.append(entry)
-    return {"repo": repo, "files": manifest}
-
-
 _attachments_note = tasks.attachments_note   # agent/tasks.py
+
+# The review proxy lives in agent/routers/review_proxy.py (2026-09-27); the
+# same handler under its old name, for the test that drives it directly.
+review_proxy = review_proxy_routes.review_proxy
 
 
 
@@ -1766,9 +1182,11 @@ def _late(name: str):
 
 
 async def _create_project_from_fields(fields: dict, user: User) -> dict:
-    """_create_project for a caller that cannot import CreateProjectRequest --
-    the planning router's new-project decision."""
-    return await _create_project(CreateProjectRequest(**fields), user)
+    """The projects router's _create_project, bound to this app, for a caller
+    that cannot import CreateProjectRequest -- the planning router's
+    new-project decision. Looked up on the module at call time, so a test that
+    patches agent.routers.projects._create_project is honoured here too."""
+    return await projects_routes._create_project(app, projects_routes.CreateProjectRequest(**fields), user)
 
 
 # The planning machinery the planning router reaches (see _late).
@@ -2386,341 +1804,11 @@ async def get_router_balance(user: User = Depends(require_full_auth)):
         return resp.json()
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-# ---------------------------------------------------------------------------
-# Project onboarding wizard (agent/provisioning.py)
-#
-# Admin-only, and deliberately three separate calls -- detect, then confirm,
-# then provision. The middle step is not ceremony: detection can propose a
-# check command that would run against a live production service, and the
-# only reliable filter for that is a human who knows the system. See
-# agent/provisioning.py's docstring.
-# ---------------------------------------------------------------------------
-
-
-class DetectProjectRequest(BaseModel):
-    path: str
-
-
-class ProvisionProjectRequest(BaseModel):
-    # Only the path and the operator's answers cross the wire. `live` and
-    # `sandbox` are deliberately NOT accepted: they were a filesystem write
-    # primitive supplied by the client. The server re-runs detection and
-    # derives both, then confirms the answers are a subset of what it just
-    # proposed (agent/provisioning.validate_choices).
-    path: str
-    choices: dict
-    grant_access: bool = True
-    # The filename of an archive to restore into the new project, from the
-    # `archives` list the detect step returned. A name, never a path -- see
-    # project_removal.read_archive for the containment that enforces.
-    restore_archive: str | None = None
-
-
-async def _running_repos() -> set[str]:
-    """Which projects have work in flight right now.
-
-    Removing a project underneath a running task would pull its worktree out
-    from under the agent mid-edit and leave a half-finished branch nobody
-    owns, so removal refuses instead. Resolving each running task's repo from
-    its checkpoint is a handful of reads; there are never many.
-    """
-    repos: set[str] = set()
-    for task_id in list(_running_tasks):
-        repo = await _resolve_task_repo(task_id)
-        if repo:
-            repos.add(repo)
-    for session_id in list(_running_planning_turns):
-        meta = await _find_planning_meta(session_id)
-        if meta and meta.get("repo"):
-            repos.add(meta["repo"])
-    return repos
-
-
-@app.get("/api/projects/archives")
-async def list_project_archives(user: User = Depends(require_full_auth)):
-    """Archived memory from removed projects, newest first."""
-    auth.require_admin(user)
-    from agent import project_removal  # noqa: PLC0415
-    return {"archives": project_removal.list_archives()}
-
-
-@app.delete("/api/projects/archives/{filename}")
-async def delete_project_archive(filename: str, user: User = Depends(require_full_auth)):
-    """Throw away one archive. Separate from removing a project so that
-    forgetting a project and forgetting what it knew are two decisions."""
-    auth.require_admin(user)
-    from agent import project_removal  # noqa: PLC0415
-    try:
-        project_removal.delete_archive(filename)
-    except project_removal.RemovalError as e:
-        raise HTTPException(400, str(e))
-    return {"ok": True}
-
-
-def _checkout_verdict(name: str) -> dict:
-    """Whether `name`'s checkout could be deleted along with the project.
-
-    Split out so the answer the operator is shown and the answer the deletion
-    acts on come from one place; the deletion asks again at the moment it
-    would delete, because a working tree can change between the two.
-    """
-    from agent import project_removal  # noqa: PLC0415
-
-    entry = PROJECTS.get(name) or {}
-    live = entry.get("live", "")
-    secrets = (entry.get("review") or {}).get("secretFiles") or []
-    runs = project_removal.runs_on_this_box(entry)
-    removable, reason = project_removal.checkout_disposable(live, secrets, runs)
-    return {"live": live, "removable": removable, "reason": reason}
-
-
-@app.get("/api/projects/{name}/checkout")
-async def project_checkout_endpoint(name: str, user: User = Depends(require_full_auth)):
-    """What deleting this project's checkout would cost, before anyone picks.
-
-    Asked for when the removal panel opens rather than with the project list:
-    it is several git commands per project, and nobody needs the answer until
-    they are standing in front of the choice.
-    """
-    auth.require_admin(user)
-    if name not in PROJECTS:
-        raise HTTPException(404, f"no project named {name!r}")
-    return await asyncio.to_thread(_checkout_verdict, name)
-
-
-@app.delete("/api/projects/{name}")
-async def remove_project_endpoint(name: str, req: RemoveProjectRequest,
-                                  user: User = Depends(require_full_auth)):
-    """Take a project off the agent.
-
-    What this does NOT do is the important half: the live repository is left
-    exactly as it is -- every file, every branch the agent ever pushed to it,
-    and its remote. Removing a project means Tektonix forgets it, not that
-    anybody's code goes away. The only thing touched inside the live repo is
-    `core.sshCommand`, which is unset because the agent set it when it minted
-    the deploy key, and leaving it would point the operator's own git at a key
-    file that no longer exists.
-
-    Each step reports independently, for the same reason provisioning does: a
-    failure after the worktree is gone must not read as "nothing happened".
-    """
-    auth.require_admin(user)
-    from agent import deploy_keys, project_removal  # noqa: PLC0415
-    from agent.config import _PROJECTS_CONFIG_PATH, reload_projects  # noqa: PLC0415
-
-    entry = PROJECTS.get(name)
-    if entry is None:
-        raise HTTPException(404, f"no project named {name!r}")
-
-    busy = await _running_repos()
-    if name in busy:
-        raise HTTPException(409, (
-            f"{name} has work in flight -- stop the running task or planning turn first, "
-            "or removing it would pull the workspace out from under the agent mid-edit"))
-
-    live, sandbox = entry.get("live", ""), entry.get("sandbox", "")
-    secret_files = (entry.get("review") or {}).get("secretFiles") or []
-    runs_here = project_removal.runs_on_this_box(entry)
-
-    # Checked here, before a single destructive step: a refusal after the
-    # memory is archived and the worktree is gone is a half-removed project
-    # and an operator with no idea which half.
-    if req.files == "delete":
-        ok, reason = await asyncio.to_thread(
-            project_removal.checkout_disposable, live, secret_files, runs_here)
-        if not ok:
-            raise HTTPException(409, f"{live} cannot be deleted: {reason}")
-
-    steps: list[dict] = []
-    archived: str | None = None
-
-    # Knowledge first: while the project is still configured, so a failure
-    # here leaves it whole rather than half-removed and unreachable.
-    store = getattr(app.state, "store", None)
-    if store is not None:
-        # Before anything is archived or purged. On Postgres the index is
-        # where every already-pruned episode lives, so with no index object
-        # in this process the archive would quietly omit those rows AND the
-        # purge would leave every one of the project's rows behind in
-        # agent_history_fts -- the project's own goal text surviving its
-        # removal, which is exactly the leftover the removal tests exist to
-        # catch. Refusing costs a restart; continuing costs both halves.
-        if (backend_for_dsn(config.dsn) == "postgres"
-                and history_index.default_index() is None):
-            raise HTTPException(503, (
-                f"the history index is not open in this process, so {name}'s searchable "
-                "history could be neither archived nor removed -- nothing was removed; "
-                "restart the server and try again"))
-        if req.memory == "archive":
-            try:
-                doc = await project_removal.collect(store, name, history_index.default_index())
-                path = await asyncio.to_thread(project_removal.write_archive, doc)
-                archived = path.name
-                steps.append({"step": "archive", "ok": True,
-                              "detail": f"{doc['item_count']} item(s) saved to {path.name}"})
-            except Exception:  # noqa: BLE001
-                # Refuse rather than continue: the operator asked to keep this,
-                # and deleting it anyway is the one mistake with no undo.
-                logger.exception("remove: archiving %s failed", name)
-                # The reason is in the log, not the response: an arbitrary
-                # exception's text carries paths and internals that a caller
-                # has no business seeing (CodeQL py/stack-trace-exposure).
-                raise HTTPException(500, (
-                    f"could not archive {name}'s memory, so nothing was removed "
-                    "-- see the server log"))
-        removed = await project_removal.purge(store, name, history_index.default_index())
-        steps.append({"step": "memory", "ok": True,
-                      "detail": f"{removed} item(s) {'archived and removed' if archived else 'deleted'}"})
-
-    ok, detail = await asyncio.to_thread(project_removal.remove_worktree, live, sandbox)
-    steps.append({"step": "workspace", "ok": ok, "detail": detail})
-
-    try:
-        deploy_keys.remove_key(name, live)
-        steps.append({"step": "deploy-key", "ok": True,
-                      "detail": "key deleted and the repo's core.sshCommand unset"})
-    except Exception as e:  # noqa: BLE001 -- never fatal; the key is ours, not theirs
-        steps.append({"step": "deploy-key", "ok": False,
-                      "detail": _provisioning_public_error(e)})
-
-    reviewer_state = paths.REPO_ROOT / "services" / "commit-reviewer" / "state.json"
-    if project_removal.clear_reviewer_state(reviewer_state, name):
-        steps.append({"step": "review-state", "ok": True, "detail": "last verdict cleared"})
-
-    try:
-        project_removal.remove_project_entry(_PROJECTS_CONFIG_PATH, name)
-    except project_removal.RemovalError as e:
-        raise HTTPException(500, str(e))
-    reload_projects()
-    steps.append({"step": "config", "ok": True,
-                  "detail": f"{name} removed; the review services drop it on their next poll"})
-
-    # Last, because everything above is recoverable and this is not.
-    deleted = False
-    if req.files == "delete":
-        deleted, detail = await asyncio.to_thread(
-            project_removal.delete_checkout, live, secret_files, runs_here)
-        steps.append({"step": "checkout", "ok": deleted, "detail": detail})
-
-    await audit.record(_audit_store(), actor=user.email, action="project.remove",
-                       target=name, detail=f"memory {req.memory}, files {req.files}",
-                       extra={"archive": archived, "checkout_deleted": deleted})
-
-    return {"ok": True, "name": name, "steps": steps, "archive": archived,
-            "live_untouched": None if deleted else live,
-            "live_removed": live if deleted else None}
-
-
-@app.get("/api/projects")
-async def list_projects_config(user: User = Depends(require_full_auth)):
-    """Every configured project with its full entry -- the wizard's landing
-    view. Admin-only because the entries name host paths and credential
-    filenames."""
-    auth.require_admin(user)
-    from agent.config import _PROJECTS_CONFIG_PATH  # noqa: PLC0415
-
-    return {
-        "projects": PROJECTS,
-        "config_path": str(_PROJECTS_CONFIG_PATH),
-        "restart_required_hint": (
-            "A project added from the dashboard is live immediately, and the review "
-            "and deploy services re-read projects.json on their next poll. A project "
-            "written to this file by hand or by scripts/add_project.py needs "
-            "`pm2 restart tektonix` before the agent process sees it."
-        ),
-    }
-
-
 class GitHubReposRequest(BaseModel):
     name: str | None = None      # a stored token, by label
     token: str | None = None     # or a pasted one, before saving
 
 
-def _project_remote_slugs() -> dict[str, str]:
-    """`owner/repo` (lowercased) -> project name, for every configured project
-    whose checkout has a GitHub origin.
-
-    Read from the checkouts rather than from projects.json, because how a
-    project was added says nothing about where it lives now: one the operator
-    typed a path for is just as likely to be on GitHub as one the agent
-    cloned. Blocking calls -- run it in a thread.
-    """
-    import subprocess  # noqa: PLC0415
-
-    from agent.tools import github_tools  # noqa: PLC0415
-
-    known: dict[str, str] = {}
-    for name, cfg in PROJECTS.items():
-        live = (cfg or {}).get("live")
-        if not live:
-            continue
-        try:
-            out = subprocess.run(
-                ["git", "config", "--local", "--get", "remote.origin.url"],
-                capture_output=True, text=True, cwd=live, timeout=10, check=False,
-            )
-        except Exception:  # noqa: BLE001 -- a project whose checkout is gone is not this route's problem
-            continue
-        slug = github_tools.repo_slug_from_remote((out.stdout or "").strip())
-        if slug:
-            known[slug.lower()] = name
-    return known
-
-
-async def _onboarded_as(slug: str, token: str | None) -> str | None:
-    """The project a repository is ALREADY onboarded as, or None.
-
-    Tries the slug as given, then asks GitHub what each configured project's
-    remote is called now. A repository transferred to an organisation leaves
-    every checkout made before the move pointing at the old path, which GitHub
-    still serves by redirect -- so the remote works, the slug no longer
-    matches, and without this the same repository can be onboarded twice, one
-    copy live and one a fresh clone beside it.
-
-    The resolving loop is bounded by the number of configured projects whose
-    remote did not match outright, and only runs on the manual add path.
-    """
-    from agent import github_repos as gh_repos  # noqa: PLC0415
-
-    known = await asyncio.to_thread(_project_remote_slugs)
-    hit = known.get(slug.lower())
-    if hit or not token:
-        return hit
-    for other, name in known.items():
-        if other == slug.lower():
-            continue
-        current = await gh_repos.resolve_slug(token, other)
-        if current and current.lower() == slug.lower():
-            return name
-    return None
 
 
 @app.post("/api/github/repos")
@@ -2757,7 +1845,7 @@ async def github_repos_endpoint(req: GitHubReposRequest, user: User = Depends(re
         raise HTTPException(502, f"could not reach GitHub: {type(e).__name__}")
 
     # What each configured project's checkout actually points at.
-    known = await asyncio.to_thread(_project_remote_slugs)
+    known = await asyncio.to_thread(projects_routes._project_remote_slugs)
 
     # A checkout made before the repository was renamed or transferred still
     # has the old path in its origin, and GitHub keeps serving that by
@@ -2776,602 +1864,6 @@ async def github_repos_endpoint(req: GitHubReposRequest, user: User = Depends(re
     return {"repos": repos, "onboarded": sorted(set(known.values()))}
 
 
-class OnboardFromGitHubRequest(BaseModel):
-    slug: str                    # owner/repo, from the repo list
-    token_name: str | None = None
-    ship: str | None = None      # push | pr; the default is asked for, not inferred
-
-
-@app.post("/api/projects/onboard-github")
-async def onboard_github_endpoint(req: OnboardFromGitHubRequest,
-                                  user: User = Depends(require_full_auth)):
-    """Clone a repository the token can reach, and provision it in one step.
-
-    The long way round -- clone, read the report, tick the boxes -- still
-    exists and is what somebody wants for a project with unusual checks. This
-    is for the common case: a repository the operator can see in the list,
-    onboarded with exactly the answers the wizard would have pre-ticked.
-    """
-    auth.require_admin(user)
-    from agent import github_settings, provisioning  # noqa: PLC0415
-
-    slug = (req.slug or "").strip()
-    if not provisioning.parse_github_source(slug):
-        raise HTTPException(400, f"{slug!r} is not a GitHub repository")
-
-    token = getattr(config, "github_token", None)
-    if req.token_name:
-        settings = await github_settings.load(app.state.store)
-        entry = settings["tokens"].get(req.token_name)
-        if not entry:
-            raise HTTPException(404, f"no token named {req.token_name!r}")
-        token = github_settings.decrypt_token(config, entry["enc"])
-
-    # A repository that is already a project must not become a second one.
-    # The list this slug was picked from is built when somebody opens it, and
-    # a transfer in GitHub after that moves a project's remote out from under
-    # it -- so the refusal belongs here, where the clone is, and not only in
-    # the list. Without it, adding a repository already onboarded under its
-    # old path clones it again next to the live checkout, and two projects
-    # then point at one repository.
-    duplicate = await _onboarded_as(slug, token)
-    if duplicate:
-        raise HTTPException(
-            409,
-            f"{slug} is already onboarded as {duplicate!r}"
-            + ("" if duplicate.lower() == slug.split("/")[-1].lower()
-               else " (its checkout still has the path this repository had before it moved)"),
-        )
-
-    try:
-        path = await asyncio.to_thread(
-            provisioning.clone_repository, slug, existing_names=list(PROJECTS), token=token,
-        )
-        report = await asyncio.to_thread(
-            provisioning.detect_project, path, existing_names=list(PROJECTS)
-        )
-        choices = provisioning.validate_choices(report, provisioning.recommended_choices(report))
-    except provisioning.ProvisioningError as e:
-        raise HTTPException(400, str(e))
-    # Asked for, not inferred. A repository the agent cloned defaults to
-    # opening pull requests, but the operator chose that in the list.
-    choices["ship"] = req.ship if req.ship in ("push", "pr") else "pr"
-    if report.blockers:
-        raise HTTPException(400, "; ".join(report.blockers))
-
-    ok, steps = await _provision_from_report(report, choices, user, True)
-    return {"ok": ok, "name": report.name, "path": path, "steps": steps,
-            "ship": choices["ship"], "slug": slug}
-
-
-@app.post("/api/projects/clone")
-async def clone_project_endpoint(req: DetectProjectRequest, user: User = Depends(require_full_auth)):
-    """Clone a GitHub repository into an allowed root, then detect it.
-
-    Separate from /detect on purpose: that one promises to create nothing, and
-    an operator who pastes a URL expecting a look is entitled to that promise.
-    This one says in its name that it writes.
-
-    Everything after the clone is the ordinary onboarding path, against the
-    path the clone produced -- the wizard, the worktree and projects.json do
-    not know the directory arrived over the network.
-    """
-    auth.require_admin(user)
-    from agent import provisioning  # noqa: PLC0415
-
-    source = req.path.strip()
-    if not provisioning.parse_github_source(source):
-        raise HTTPException(400, f"{source!r} is not a GitHub URL or owner/repo")
-    try:
-        path = await asyncio.to_thread(
-            provisioning.clone_repository, source,
-            # The project does not exist yet, so there is no per-project token
-            # to prefer -- the environment fallback is the only one there is.
-            existing_names=list(PROJECTS), token=getattr(config, "github_token", None),
-        )
-        report = await asyncio.to_thread(
-            provisioning.detect_project, path, existing_names=list(PROJECTS)
-        )
-    except provisioning.ProvisioningError as e:
-        raise HTTPException(400, str(e))
-    out = report.to_dict()
-    out["cloned_to"] = path
-    # Carried into provisioning so the entry's `ship` default reflects how the
-    # project arrived. A repository the agent cloned is not one it was asked
-    # to own, so it opens pull requests unless the operator says otherwise.
-    out["cloned_from_github"] = True
-    out["recommended_ship"] = "pr"
-    from agent import project_removal  # noqa: PLC0415
-    out["archives"] = project_removal.list_archives(report.name) if report.name else []
-    return out
-
-
-@app.post("/api/projects/detect")
-async def detect_project_endpoint(req: DetectProjectRequest, user: User = Depends(require_full_auth)):
-    """Read-only inspection of a candidate directory. Creates nothing.
-
-    A GitHub URL is reported as such rather than treated as a path, so the
-    wizard can offer to clone instead of failing with "no such directory".
-    """
-    auth.require_admin(user)
-    from agent import provisioning  # noqa: PLC0415
-
-    if provisioning.parse_github_source(req.path.strip(), allow_slug=False):
-        raise HTTPException(
-            400,
-            "that is a GitHub repository, not a path on this machine. "
-            "Use Clone to bring it down first.",
-        )
-    try:
-        report = await asyncio.to_thread(
-            provisioning.detect_project, req.path.strip(), existing_names=list(PROJECTS)
-        )
-    except provisioning.ProvisioningError as e:
-        raise HTTPException(400, str(e))
-    from agent import project_removal  # noqa: PLC0415
-    # A project removed earlier leaves its memory behind on purpose. Surfacing
-    # it HERE is what closes the loop: the operator sees "there is archived
-    # memory for a project called this" at the moment they are deciding to add
-    # it, rather than discovering the file months later with no idea what it is.
-    out = report.to_dict()
-    out["archives"] = project_removal.list_archives(report.name) if report.name else []
-    return out
-
-
-@app.post("/api/projects/provision")
-async def provision_project_endpoint(req: ProvisionProjectRequest, user: User = Depends(require_full_auth)):
-    """Create the worktree, write the config entry, and seed the agent's
-    knowledge for this project. Each step reports independently: a failure
-    after the worktree exists must not read as "nothing happened".
-    """
-    auth.require_admin(user)
-    from agent import provisioning  # noqa: PLC0415
-
-    # Re-detect rather than trust the client's copy of the report: between the
-    # wizard's two calls the directory may have changed, and a hand-made
-    # request could otherwise assert facts (paths, commands) the server never
-    # established.
-    try:
-        report = await asyncio.to_thread(
-            provisioning.detect_project, req.path.strip(), existing_names=list(PROJECTS)
-        )
-    except provisioning.ProvisioningError as e:
-        raise HTTPException(400, str(e))
-    if report.blockers:
-        raise HTTPException(400, "; ".join(report.blockers))
-
-    name = report.name
-    if not name or "/" in name or name.startswith("."):
-        raise HTTPException(400, "invalid project name")
-    if name in PROJECTS:
-        raise HTTPException(400, f"{name!r} is already configured")
-
-    try:
-        choices = provisioning.validate_choices(report, req.choices)
-    except provisioning.ProvisioningError as e:
-        raise HTTPException(400, str(e))
-
-    ok, steps = await _provision_from_report(report, choices, user, req.grant_access)
-    if not ok:
-        return {"ok": False, "steps": steps}
-
-    # Onboarding hands an agent bash and write access to a directory, which
-    # makes "who added this project, and when" a question worth being able to
-    # answer later.
-    if req.restore_archive:
-        # After provisioning, never before: restoring memory into a project
-        # whose worktree or config then failed to land would leave rows for a
-        # project that does not exist.
-        from agent import project_removal  # noqa: PLC0415
-        try:
-            doc = project_removal.read_archive(req.restore_archive)
-            written = await project_removal.restore(app.state.store, name, doc,
-                                                    history_index.default_index())
-            steps.append({"step": "restore", "ok": True,
-                          "detail": f"{written} item(s) restored from {req.restore_archive}"})
-        except Exception as e:  # noqa: BLE001 -- the project is already live; this is additive
-            logger.exception("provision: restoring %s failed", req.restore_archive)
-            steps.append({"step": "restore", "ok": False,
-                          "detail": _provisioning_public_error(e)})
-
-    await audit.record(_audit_store(), actor=user.email, action="project.onboard",
-                       target=name, detail=report.live)
-
-    return {
-        "ok": True,
-        "steps": steps,
-        "message": f"{name} is configured and live in this process.",
-    }
-
-
-def _provisioning_public_error(e: Exception) -> str:
-    """What a step may say about a failure: a ProvisioningError's own
-    message (written for the operator), otherwise a pointer to the log
-    -- an arbitrary exception's text is not for the response (CodeQL
-    py/stack-trace-exposure)."""
-    from agent import provisioning  # noqa: PLC0415
-
-    if isinstance(e, provisioning.ProvisioningError):
-        return e.detail
-    logger.exception("provisioning step failed")
-    return "failed -- see the server log"
-
-
-async def _provision_from_report(report, choices: dict, user: User,
-                                 grant_access: bool, *,
-                                 fresh_workspace: bool = False) -> tuple[bool, list[dict]]:
-    """Everything after the operator's answers are validated: worktree,
-    projects.json entry, in-process reload, knowledge seeding, access.
-
-    Shared verbatim by /api/projects/provision (the wizard) and
-    /api/projects/create (a repo this server just made), so a project that
-    arrives by either door ends up wired identically. Returns (ok, steps);
-    ok is False only when a step the project cannot exist without failed.
-
-    `fresh_workspace` is set by the create door: that project has never run,
-    so an existing workspace at its path is another project's leftover rather
-    than its own, and adopting it would run every task against the wrong repo.
-    """
-    from agent import provisioning  # noqa: PLC0415
-    from agent.config import _PROJECTS_CONFIG_PATH  # noqa: PLC0415
-
-    name = report.name
-    steps: list[dict] = []
-    _public_error = _provisioning_public_error
-
-    def _step(label: str, ok: bool, detail: str = "") -> None:
-        steps.append({"step": label, "ok": ok, "detail": detail})
-
-    logger.info("onboarding: %s provisioning %s from %s", user.email, name, report.live)
-
-    ok, detail = await asyncio.to_thread(
-        functools.partial(provisioning.create_worktree, report.live, report.sandbox,
-                          must_be_new=fresh_workspace))
-    _step("worktree", ok, detail)
-    if not ok:
-        return False, steps
-
-    entry = provisioning.config_from_choices(report.live, report.sandbox, choices)
-    try:
-        await asyncio.to_thread(provisioning.write_project_entry, _PROJECTS_CONFIG_PATH, name, entry)
-        _step("config", True, f"wrote {name} to projects.json")
-    except (provisioning.ProvisioningError, OSError, ValueError) as e:
-        _step("config", False, _public_error(e))
-        return False, steps
-
-    # Load the new entry into the RUNNING process. Without this the project
-    # exists in projects.json and nowhere else -- every consumer holds the
-    # dict read at import, so the cartographer below would KeyError on it and
-    # the project would stay invisible until a restart.
-    from agent.config import reload_projects  # noqa: PLC0415
-
-    reload_projects()
-    _step("reload", True, f"{len(PROJECTS)} projects now live in this process")
-
-    # Knowledge seeding. Best-effort by design: a project whose map failed to
-    # build is still a usable project and the operator can re-run the
-    # cartographer. Never fail the whole onboarding over it.
-    try:
-        from agent.deep_agent import seed_memory  # noqa: PLC0415
-
-        starter = (
-            f"# {name} project memory\n\n"
-            "Durable, cross-task facts about this project. The consolidator appends what "
-            "it learns from completed tasks; add anything an agent must know before "
-            "touching this repo.\n"
-        )
-        await seed_memory(name, app.state.store, starter)
-        _step("memory", True, "seeded starter project memory")
-    except Exception as e:  # noqa: BLE001 -- reported, never fatal
-        _step("memory", False, _public_error(e))
-
-    # Started, not awaited. Reading a whole repository is minutes of model
-    # calls on anything real, and awaiting it here held the HTTP response open
-    # for all of them -- past the browser's own timeout, which aborts the
-    # request while the server carries on and finishes. The operator then sees
-    # a failure next to a project that does in fact exist, and the obvious
-    # next move is to add it again. The map is best-effort by design (a
-    # project without one is a usable project), so it belongs off this path.
-    _spawn_background(
-        cartographer.run_cartographer(config, name, app.state.store, force=True),
-        f"cartographer:{name}",
-    )
-    _step("codebase-map", True,
-          f"building in the background -- agents get it when it lands; "
-          f"scripts/run_cartographer.py {name} re-runs it")
-
-    if grant_access and user.allowed_repos is not None:
-        try:
-            await auth.update_user_access(app.state.auth_pool, user.id,
-                                          [*user.allowed_repos, name])
-            _step("access", True, f"granted {user.email} access to {name}")
-        except Exception as e:  # noqa: BLE001
-            _step("access", False, _public_error(e))
-
-    return True, steps
-
-
-class CreateProjectRequest(BaseModel):
-    # `parent` is the directory the new repo is created UNDER, never the repo
-    # path itself: the name is validated separately (one path component) and
-    # the join is re-checked for containment, so a client cannot pick an
-    # arbitrary location any more than the wizard's `path` can.
-    name: str
-    description: str = ""
-    parent: str | None = None
-    github: bool = False
-    token_name: str | None = None
-
-
-def _resolve_github_token(token_name: str | None) -> tuple[str, str | None]:
-    """Returns (token, stored_name). A named stored token if one was asked
-    for, else the GITHUB_TOKEN env fallback, else the single stored token if
-    that is unambiguous. Raises the HTTP error the endpoint should answer
-    with; the token itself never goes anywhere but the request headers in
-    agent/github_repos.py.
-
-    The unambiguous-stored fallback exists because the dashboard decides
-    whether to offer "create a private GitHub repo" from
-    GET /api/settings/github, which reports stored tokens AND the env one --
-    so on a box with a token saved in Settings and no GITHUB_TOKEN (the
-    normal shape, since Settings is the documented place to put it) the
-    checkbox was offered and the request then died on "no GitHub token is
-    configured". Stored-first also matches github_settings.token_for's own
-    precedence for every other GitHub call.
-    """
-    tokens = github_settings.current()["tokens"]
-    if token_name:
-        entry = tokens.get(token_name)
-        if not entry:
-            raise HTTPException(400, f"no stored GitHub token named {token_name!r} (Settings -> GitHub)")
-        return github_settings.decrypt_token(config, entry["enc"]), token_name
-    if len(tokens) == 1:
-        only = next(iter(tokens))
-        return github_settings.decrypt_token(config, tokens[only]["enc"]), only
-    if len(tokens) > 1 and not getattr(config, "github_token", None):
-        raise HTTPException(400, (
-            f"several GitHub tokens are stored ({', '.join(sorted(tokens))}) and none was chosen -- "
-            "name one in the request, or set GITHUB_TOKEN"))
-    if getattr(config, "github_token", None):
-        return config.github_token, None
-    raise HTTPException(400, "no GitHub token is configured (Settings -> GitHub)")
-
-
-def _rollback_new_project(live: str, name: str, github_info: dict | None, steps: list[dict]) -> None:
-    """Remove the directory this call created when a later step fails, so the
-    retry the dashboard offers is a real retry.
-
-    Without this, "create" was a one-shot: create_repository only cleans up
-    after its own git failure, so a project whose detect/worktree/config step
-    died left <parent>/<name> on disk, and the second attempt -- with the same
-    name, from a form the UI deliberately keeps filled in -- hit "already
-    exists" and could never succeed.
-
-    Not when a GitHub repository was created: that one is not ours to throw
-    away silently, and the local checkout is the only copy of its deploy-key
-    config. The operator gets the path and onboards it with the wizard.
-    """
-    if github_info:
-        steps.append({"step": "rollback", "ok": True,
-                      "detail": f"kept {live} (its GitHub repo {github_info['full_name']} exists); "
-                                "onboard it from Settings -> Projects, or delete both to start over"})
-        return
-    try:
-        shutil.rmtree(live)
-    except OSError as e:
-        steps.append({"step": "rollback", "ok": False,
-                      "detail": f"could not remove {live}: {e}"})
-        return
-    steps.append({"step": "rollback", "ok": True,
-                  "detail": f"removed {live}, so {name} can be created again"})
-
-
-@app.post("/api/projects/create")
-async def create_project_endpoint(req: CreateProjectRequest, user: User = Depends(require_full_auth)):
-    """Start a project from nothing -- see _create_project, which the
-    planner's confirm route (decide_planning_new_project) shares verbatim so
-    a project arrives wired identically whichever door it came through."""
-    auth.require_admin(user)
-    return await _create_project(req, user)
-
-
-async def _create_project(req: CreateProjectRequest, user: User) -> dict:
-    """A git repo with one commit under an allowed root, optionally mirrored
-    to a new PRIVATE GitHub repository, then provisioned exactly as the
-    wizard would with the recommended answers. The caller has already
-    checked the admin role.
-
-    Order matters. The token is resolved before anything is created so a
-    missing token is a clean 400 with no directory left behind; the GitHub
-    steps run before detection so a push failure is reported alongside the
-    local steps rather than losing the project; and the GitHub failure is a
-    failed step, not an abort -- the repo on disk is real and usable, and
-    the operator can connect it from the deploy-key panel later.
-    """
-    from agent import provisioning, github_repos, deploy_keys  # noqa: PLC0415
-
-    try:
-        name = provisioning.validate_project_name(req.name, list(PROJECTS))
-    except provisioning.ProvisioningError as e:
-        raise HTTPException(400, e.detail)
-
-    token: str | None = None
-    stored_token_name: str | None = None
-    if req.github:
-        token, stored_token_name = _resolve_github_token(req.token_name)
-
-    try:
-        live = await asyncio.to_thread(
-            provisioning.create_repository, req.parent, name,
-            description=req.description, existing_names=list(PROJECTS))
-    except provisioning.ProvisioningError as e:
-        raise HTTPException(400, e.detail)
-
-    steps: list[dict] = [{"step": "repository", "ok": True,
-                          "detail": f"initialised {live} with one commit on main"}]
-    github_info: dict | None = None
-
-    if req.github and token:
-        # Host-side push -- see agent/github_repos.py for why this is allowed
-        # here and nowhere an agent runs.
-        try:
-            created = await github_repos.create_private_repo(token, name, req.description)
-            github_info = {"full_name": created["full_name"], "html_url": created["html_url"]}
-            public_key = await asyncio.to_thread(
-                github_repos.connect_origin, live, created["ssh_url"], name)
-            await github_repos.add_deploy_key(token, created["full_name"],
-                                              f"tektonix-{name}", public_key)
-            ok, detail = await asyncio.to_thread(github_repos.push_initial, live, name)
-            steps.append({"step": "github", "ok": ok,
-                          "detail": f"{created['full_name']}: {detail}" if ok else detail})
-        except (PermissionError, LookupError, ValueError, deploy_keys.DeployKeyError) as e:
-            # These messages are written by github_repos/deploy_keys for the
-            # operator and carry neither the token nor a response body.
-            steps.append({"step": "github", "ok": False, "detail": str(e)[:400]})
-        except httpx.HTTPError as e:
-            logger.exception("github: creating the repository for %s failed", name)
-            steps.append({"step": "github", "ok": False,
-                          "detail": f"GitHub request failed ({type(e).__name__}) -- see the server log"})
-        if stored_token_name and github_info:
-            # So token_for(name) -- the inbox poller, the PR tools -- reaches
-            # this repo with the same token that created it.
-            try:
-                await github_settings.save(app.state.store, config,
-                                           {"projects": {name: {"token": stored_token_name}}})
-                steps.append({"step": "github-token", "ok": True,
-                              "detail": f"{name} uses the stored token {stored_token_name!r}"})
-            except Exception as e:  # noqa: BLE001 -- reported, never fatal
-                steps.append({"step": "github-token", "ok": False,
-                              "detail": _provisioning_public_error(e)})
-
-    try:
-        report = await asyncio.to_thread(provisioning.detect_project, live,
-                                         existing_names=list(PROJECTS))
-        if report.blockers:
-            raise provisioning.ProvisioningError("; ".join(report.blockers))
-        choices = provisioning.validate_choices(report, provisioning.recommended_choices(report))
-    except provisioning.ProvisioningError as e:
-        steps.append({"step": "detect", "ok": False, "detail": e.detail})
-        _rollback_new_project(live, name, github_info, steps)
-        return {"ok": False, "name": name, "live": live, "steps": steps, "github": github_info}
-    steps.append({"step": "detect", "ok": True,
-                  "detail": f"{len(report.checks)} check(s), {len(report.warnings)} warning(s)"})
-
-    ok, provision_steps = await _provision_from_report(report, choices, user, True,
-                                                       fresh_workspace=True)
-    steps.extend(provision_steps)
-    if not ok:
-        # Only when nothing was registered: once the projects.json entry is
-        # written the project exists, and removing its checkout underneath a
-        # configured name is worse than leaving a half-provisioned one.
-        if name not in PROJECTS:
-            _rollback_new_project(live, name, github_info, steps)
-        return {"ok": False, "name": name, "live": live, "steps": steps, "github": github_info}
-
-    await audit.record(_audit_store(), actor=user.email, action="project.create",
-                       target=name, detail=live,
-                       extra={"github": github_info["full_name"] if github_info else None})
-
-    return {
-        "ok": True,
-        "name": name,
-        "live": live,
-        "steps": steps,
-        "github": github_info,
-        "message": f"{name} is created, configured and live in this process.",
-    }
-
-
-# ---------------------------------------------------------------------------
-# Per-project deploy keys (agent/deploy_keys.py)
-#
-# The private half is write-only across this API: it can be installed,
-# generated and replaced, and its fingerprint/public half can be read, but
-# nothing here returns it. Admin-only, like every other credential surface.
-# ---------------------------------------------------------------------------
-
-
-class DeployKeyRequest(BaseModel):
-    private_key: str
-
-
-def _project_live_or_404(name: str) -> str:
-    project = PROJECTS.get(name)
-    if not project:
-        raise HTTPException(404, f"unknown project {name!r}")
-    return project["live"]
-
-
-@app.get("/api/projects/{name}/deploy-key")
-async def get_deploy_key_status(name: str, user: User = Depends(require_full_auth)):
-    auth.require_admin(user)
-    from agent import deploy_keys  # noqa: PLC0415
-
-    live = _project_live_or_404(name)
-    try:
-        return (await asyncio.to_thread(deploy_keys.status, name, live)).to_dict()
-    except deploy_keys.DeployKeyError as e:
-        raise HTTPException(400, str(e))
-
-
-@app.post("/api/projects/{name}/deploy-key")
-async def install_deploy_key(name: str, req: DeployKeyRequest,
-                             user: User = Depends(require_full_auth)):
-    """Install a pasted private key for this project."""
-    auth.require_admin(user)
-    from agent import deploy_keys  # noqa: PLC0415
-
-    live = _project_live_or_404(name)
-    try:
-        st = await asyncio.to_thread(deploy_keys.install_key, name, live, req.private_key)
-    except deploy_keys.DeployKeyError as e:
-        raise HTTPException(400, str(e))
-    logger.info("deploy key installed for %s by %s", name, user.email)
-    return st.to_dict()
-
-
-@app.post("/api/projects/{name}/deploy-key/generate")
-async def generate_deploy_key(name: str, user: User = Depends(require_full_auth)):
-    """Mint a fresh keypair. Preferred over pasting: the operator never
-    handles the private half -- they copy the public half out of the
-    response and register it on the remote."""
-    auth.require_admin(user)
-    from agent import deploy_keys  # noqa: PLC0415
-
-    live = _project_live_or_404(name)
-    try:
-        st = await asyncio.to_thread(deploy_keys.generate_key, name, live)
-    except deploy_keys.DeployKeyError as e:
-        raise HTTPException(400, str(e))
-    logger.info("deploy key generated for %s by %s", name, user.email)
-    # A deploy key is push access to the real repository. The log line above
-    # is in a file that rotates; this one is in the store.
-    await audit.record(_audit_store(), actor=user.email, action="deploy_key.generate",
-                       target=name, detail=st.to_dict().get("fingerprint"))
-    return st.to_dict()
-
-
-@app.post("/api/projects/{name}/deploy-key/test")
-async def test_deploy_key(name: str, user: User = Depends(require_full_auth)):
-    """Contact the remote exactly the way the post-merge push will."""
-    auth.require_admin(user)
-    from agent import deploy_keys  # noqa: PLC0415
-
-    live = _project_live_or_404(name)
-    ok, detail = await asyncio.to_thread(deploy_keys.check_remote, name, live)
-    return {"ok": ok, "detail": detail}
-
-
-@app.delete("/api/projects/{name}/deploy-key")
-async def delete_deploy_key(name: str, user: User = Depends(require_full_auth)):
-    auth.require_admin(user)
-    from agent import deploy_keys  # noqa: PLC0415
-
-    live = _project_live_or_404(name)
-    st = await asyncio.to_thread(deploy_keys.remove_key, name, live)
-    logger.info("deploy key removed for %s by %s", name, user.email)
-    await audit.record(_audit_store(), actor=user.email, action="deploy_key.delete", target=name)
-    return st.to_dict()
 
 
 def _tail_lines(path: Path, count: int, block: int = 64 * 1024) -> str:
@@ -3509,71 +2001,6 @@ def _not_modified(request: Request, response: FileResponse) -> bool:
         except (TypeError, ValueError):
             return False
     return False
-
-
-# --- the review dashboard, proxied ------------------------------------------
-
-# The review services listen on 4100/4101 and hold the only write path into a
-# live repo, so they bind loopback and publish nothing. On a host install nginx
-# bridges the console to them at /_review/, injecting the shared secret the
-# browser must never hold. The container bundle has no nginx, so this proxy
-# is the same bridge in the one process that is already the authenticated
-# front door: admin, over the console's session, with the ports still
-# unpublished (until 2026-09-20 Check now, the diff view and the manual merge
-# worked only on a host install).
-_REVIEW_PROXY_HOP_BY_HOP = frozenset({
-    "connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
-    "te", "trailers", "transfer-encoding", "upgrade", "host", "content-length",
-})
-
-# Merge and restart genuinely take minutes on a large project, and nginx allows
-# half an hour for exactly that reason. A shorter limit here would turn a slow
-# deploy into a failed one.
-_REVIEW_PROXY_TIMEOUT = 1800.0
-
-
-@app.api_route("/_review/{path:path}",
-               methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
-               include_in_schema=False)
-async def review_proxy(path: str, request: Request, user: User = Depends(require_full_auth)):
-    auth.require_admin(user)
-
-    from agent.tools.review_gate import REVIEW_SERVICE_HOST, REVIEW_SERVICE_PORT  # noqa: PLC0415
-
-    # The secret is SET here, never forwarded. A client that sends its own
-    # X-Review-Secret must not be able to influence what the review service
-    # sees -- this endpoint's authority comes from the session, not the header.
-    headers = {
-        k: v for k, v in request.headers.items()
-        if k.lower() not in _REVIEW_PROXY_HOP_BY_HOP and k.lower() != "x-review-secret"
-    }
-    secret = os.environ.get("REVIEW_CONTROL_SECRET")
-    if secret:
-        headers["X-Review-Secret"] = secret
-
-    url = f"http://{REVIEW_SERVICE_HOST}:{REVIEW_SERVICE_PORT}/{path}"
-    body = await request.body()
-    try:
-        async with httpx.AsyncClient(timeout=_REVIEW_PROXY_TIMEOUT) as client:
-            upstream = await client.request(
-                request.method, url, params=request.query_params,
-                content=body or None, headers=headers,
-            )
-    except httpx.HTTPError as e:
-        # The service being down is an ordinary state -- a restart, a bundle
-        # where it was not started. Say which service, because "502" from the
-        # console looks like the console.
-        return _JSONResponse(
-            {"ok": False, "error": f"the review service is not reachable: {type(e).__name__}"},
-            status_code=502,
-        )
-
-    passthrough = {
-        k: v for k, v in upstream.headers.items()
-        if k.lower() not in _REVIEW_PROXY_HOP_BY_HOP
-    }
-    return Response(content=upstream.content, status_code=upstream.status_code,
-                    headers=passthrough)
 
 
 if FRONTEND_DIST.is_dir():

@@ -20,6 +20,7 @@ from fastapi.testclient import TestClient
 
 import agent.server as srv
 from agent import auth
+from agent import config as agent_config
 from agent.auth import User
 
 
@@ -67,7 +68,10 @@ def test_scope_does_not_grant_access_on_its_own():
 
 @pytest.fixture
 def client(monkeypatch):
-    monkeypatch.setattr(srv, "PROJECTS", {"sandbox": {}, "production": {}}, raising=False)
+    # The auth routes read PROJECTS off agent.config at call time
+    # (agent/routers/auth.py), so that is where the swap has to land.
+    monkeypatch.setattr(agent_config, "PROJECTS", {"sandbox": {}, "production": {}}, raising=False)
+    monkeypatch.setattr(srv, "PROJECTS", agent_config.PROJECTS, raising=False)
     monkeypatch.setattr(srv.app.state, "store", None, raising=False)
     updates: list[tuple] = []
 

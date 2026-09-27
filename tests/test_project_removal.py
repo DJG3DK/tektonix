@@ -232,6 +232,8 @@ def test_an_invalid_project_name_is_refused_before_any_path_is_built(bad):
 import agent.server as srv  # noqa: E402
 from agent import config as agent_config  # noqa: E402
 from agent import history_index  # noqa: E402
+from agent import paths  # noqa: E402
+from agent.routers import projects as projects_routes  # noqa: E402
 from agent.auth import User  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
@@ -296,7 +298,7 @@ def wired(tmp_path, monkeypatch, store, archives):
     monkeypatch.setitem(srv.app.dependency_overrides, srv.require_full_auth, lambda: _ADMIN)
     monkeypatch.setattr(srv.app.state, "store", store, raising=False)
     monkeypatch.setattr(srv.app.state, "auth_pool", object(), raising=False)
-    monkeypatch.setattr(srv.paths, "REPO_ROOT", tmp_path, raising=False)
+    monkeypatch.setattr(paths, "REPO_ROOT", tmp_path, raising=False)
     # A server that booted properly HAS a history index -- the lifespan
     # installs one -- and the removal route now refuses to archive-and-purge
     # a Postgres installation without it, because the index rows are the only
@@ -325,10 +327,10 @@ def test_removing_an_unknown_project_is_a_404(wired):
 def test_a_project_with_work_in_flight_is_refused(wired, monkeypatch):
     """Pulling the workspace out from under a running task would leave a
     half-finished branch nobody owns."""
-    async def busy():
+    async def busy(app):
         return {"demo"}
 
-    monkeypatch.setattr(srv, "_running_repos", busy)
+    monkeypatch.setattr(projects_routes, "_running_repos", busy)
     res = TestClient(srv.app).request("DELETE", "/api/projects/demo", json={"memory": "archive"})
     assert res.status_code == 409
     assert "in flight" in res.json()["detail"]
