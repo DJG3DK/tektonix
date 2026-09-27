@@ -84,7 +84,7 @@ def _ship(monkeypatch, *, project="demo", cfg=None, token="tok", remote="git@git
     monkeypatch.setitem(agent_config.PROJECTS, project, cfg or {"live": "/tmp/live"})
     monkeypatch.setattr(agent_config, "load_config", lambda: type("C", (), {"github_token": token})())
 
-    async def fake_git(cmd, root, timeout=30):
+    async def fake_git(cmd, root, timeout=30, extra_env=None):
         if cmd.startswith("remote get-url"):
             return {"ok": bool(remote), "output": remote or ""}
         if cmd.startswith("push"):
@@ -134,8 +134,12 @@ def test_a_github_refusal_is_reported_rather_than_raised(monkeypatch):
 
 # --- authenticating the push ------------------------------------------------
 
-def _ship_capturing_push(monkeypatch, origin, token="tok"):
-    """Runs the ship step and returns the push command it issued."""
+def _is_push(cmd):
+    return " push " in f" {cmd} "
+
+
+def _ship_capturing_push(monkeypatch, origin, token="tok", push_raises=None):
+    """Runs the ship step and returns (push command, its extra env, result)."""
     import agent.config as agent_config
     import agent.tools.git as gitmod
 
@@ -147,19 +151,21 @@ def _ship_capturing_push(monkeypatch, origin, token="tok"):
 
     seen = {}
 
-    async def fake_git(cmd, root, timeout=30):
+    async def fake_git(cmd, root, timeout=30, extra_env=None):
         if cmd.startswith("remote get-url"):
             return {"ok": True, "output": "git@github.com:o/r.git"}
         if cmd.startswith("config --local --get remote.origin.url"):
             return {"ok": True, "output": origin}
-        if cmd.startswith("push"):
-            seen["cmd"] = cmd
+        if _is_push(cmd):
+            seen["cmd"], seen["env"] = cmd, extra_env
+            if push_raises is not None:
+                raise push_raises
             return {"ok": True, "output": ""}
         return {"ok": True, "output": ""}
 
     monkeypatch.setattr(gitmod, "_git", fake_git)
-    asyncio.run(review_gate.ship_as_pull_request("demo", "agent/t1", "abc123", "T"))
-    return seen.get("cmd", "")
+    r = asyncio.run(review_gate.ship_as_pull_request("demo", "agent/t1", "abc123", "T"))
+    return seen.get("cmd", ""), seen.get("env"), r
 
 
 def _async(value):
@@ -173,18 +179,39 @@ def test_an_https_origin_is_pushed_with_a_credential(monkeypatch):
     deliberately never written into .git/config. Without this the push fails
     with "authentication required" at the very last step of a finished task.
     """
-    cmd = _ship_capturing_push(monkeypatch, "https://github.com/o/r.git")
-    assert "x-access-token:tok@github.com/o/r.git" in cmd
+    import agent.tools.git as gitmod
+    cmd, env, _ = _ship_capturing_push(monkeypatch, "https://github.com/o/r.git")
+    assert "https://github.com/o/r.git" in cmd
+    assert "credential.helper=" in cmd
+    assert env[gitmod.GIT_TOKEN_ENV] == "tok"
     assert " origin " not in cmd, "the remote name would carry no credentials"
+
+
+def test_the_token_is_never_on_the_push_command_line(monkeypatch):
+    """Every local user can read a process's argv, and a hung push put the
+    whole command in the ShellTimeout message."""
+    cmd, _, _ = _ship_capturing_push(monkeypatch, "https://github.com/o/r.git", token="s3cret")
+    assert "s3cret" not in cmd
+    assert "x-access-token:" not in cmd
+
+
+def test_a_push_that_times_out_is_reported_without_the_command(monkeypatch):
+    from agent.tools.shell import ShellTimeout
+    _, _, r = _ship_capturing_push(
+        monkeypatch, "https://github.com/o/r.git", token="s3cret",
+        push_raises=ShellTimeout("git push https://x-access-token:s3cret@github.com/o/r.git agent/t1", 300))
+    assert r["ok"] is False and "timed out" in r["error"]
+    assert "s3cret" not in r["error"]
 
 
 def test_an_ssh_origin_is_pushed_by_remote_name(monkeypatch):
     """That project already has a deploy key wired through core.sshCommand.
     Putting a token on the command line would do nothing except risk logging
     it."""
-    cmd = _ship_capturing_push(monkeypatch, "git@github.com:o/r.git")
+    cmd, env, _ = _ship_capturing_push(monkeypatch, "git@github.com:o/r.git")
     assert cmd.strip().endswith("origin agent/t1")
-    assert "x-access-token" not in cmd
+    assert "credential.helper" not in cmd
+    assert env is None
 
 
 def test_a_failed_push_does_not_echo_the_token(monkeypatch):
@@ -197,12 +224,12 @@ def test_a_failed_push_does_not_echo_the_token(monkeypatch):
     monkeypatch.setattr(agent_config, "load_config",
                         lambda: type("C", (), {"github_token": "s3cret"})())
 
-    async def fake_git(cmd, root, timeout=30):
+    async def fake_git(cmd, root, timeout=30, extra_env=None):
         if cmd.startswith("remote get-url"):
             return {"ok": True, "output": "git@github.com:o/r.git"}
         if cmd.startswith("config --local"):
             return {"ok": True, "output": "https://github.com/o/r.git"}
-        if cmd.startswith("push"):
+        if _is_push(cmd):
             return {"ok": False,
                     "output": "fatal: could not read from https://x-access-token:s3cret@github.com/o/r.git"}
         return {"ok": True, "output": ""}
@@ -230,13 +257,13 @@ def test_a_projects_own_token_is_preferred_over_the_environment(monkeypatch):
 
     captured = {}
 
-    async def fake_git(cmd, root, timeout=30):
+    async def fake_git(cmd, root, timeout=30, extra_env=None):
         if cmd.startswith("remote get-url"):
             return {"ok": True, "output": "git@github.com:o/r.git"}
         if cmd.startswith("config --local"):
             return {"ok": True, "output": "https://github.com/o/r.git"}
-        if cmd.startswith("push"):
-            captured["push"] = cmd
+        if _is_push(cmd):
+            captured["push"] = (extra_env or {}).get(gitmod.GIT_TOKEN_ENV)
             return {"ok": True, "output": ""}
         return {"ok": True, "output": ""}
 
@@ -245,8 +272,7 @@ def test_a_projects_own_token_is_preferred_over_the_environment(monkeypatch):
                         lambda *a, **k: _async({"number": "1", "url": "u", "state": "open"}))
 
     asyncio.run(review_gate.ship_as_pull_request("demo", "agent/t1", "abc", "T"))
-    assert "the-projects-own-token" in captured["push"]
-    assert "env-token" not in captured["push"]
+    assert captured["push"] == "the-projects-own-token"
 
 
 # --- what the operator is told ---------------------------------------------

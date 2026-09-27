@@ -70,16 +70,19 @@ def test_a_clone_lands_in_the_allowed_root_and_is_a_real_repo(tmp_path, upstream
     assert (root / "thing" / "package.json").is_file(), "the content came with it"
 
 
-def _git_with_local_source(local: str):
-    """Swap the github.com URL for a local path on the CLONE only, leaving
-    every other git call alone -- including `remote set-url`, which is the one
-    the token test is about. The clone is then real (objects, refs, a working
-    tree) without a network."""
+def _git_with_local_source(local: str, seen: list | None = None):
+    """Point the github.com URL at a local path on the CLONE only, with a
+    one-command insteadOf so the remote git stores is still the URL it was
+    given -- which is what the token test is about. The clone is then real
+    (objects, refs, a working tree) without a network."""
     real = provisioning._run_git
 
     def fake(args, cwd=None, **kw):
-        if args and args[0] == "clone":
-            args = [local if isinstance(a, str) and "github.com" in a else a for a in args]
+        if seen is not None:
+            seen.append((list(args), kw.get("extra_env")))
+        if "clone" in args:
+            url = next(a for a in args if isinstance(a, str) and "github.com" in a)
+            args = ["-c", f"url.{local}.insteadOf={url}", *args]
         return real(args, cwd=cwd, **kw)
 
     return fake
@@ -130,6 +133,32 @@ def test_a_token_never_reaches_the_stored_remote(tmp_path, upstream, monkeypatch
     remote = subprocess.run(["git", "remote", "get-url", "origin"], cwd=path,
                             capture_output=True, text=True).stdout.strip()
     assert remote == "https://github.com/someone/thing.git"
+
+
+def test_a_token_is_never_on_the_clone_command_line(tmp_path, upstream, monkeypatch):
+    """Every local user can read a process's argv for as long as it runs."""
+    from agent.tools.git import GIT_TOKEN_ENV
+    root = tmp_path / "projects"
+    root.mkdir()
+    seen: list = []
+    monkeypatch.setattr(provisioning, "allowed_roots", lambda: [str(root)])
+    monkeypatch.setattr(provisioning, "_run_git", _git_with_local_source(str(upstream), seen))
+
+    clone_repository("someone/thing", str(root), token="ghp_secret_value")
+
+    (args, env), = [(a, e) for a, e in seen if "clone" in a]
+    assert not any("ghp_secret_value" in a for a in args)
+    assert env[GIT_TOKEN_ENV] == "ghp_secret_value"
+
+
+def test_a_clone_that_times_out_does_not_report_its_argv(tmp_path, monkeypatch):
+    def hang(*a, **k):
+        raise subprocess.TimeoutExpired(cmd=["git", "clone", "https://x:ghp_secret_value@h"], timeout=1)
+
+    monkeypatch.setattr(subprocess, "run", hang)
+    ok, out = provisioning._run_git(["clone", "x"], cwd=str(tmp_path), timeout=1)
+    assert ok is False and "timed out" in out
+    assert "ghp_secret_value" not in out
 
 
 @pytest.mark.parametrize("text", ["relative/path", "src/components", "owner/repo"])
