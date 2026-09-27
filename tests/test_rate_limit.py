@@ -7,7 +7,8 @@ import pytest
 import agent.rate_limit as rl
 
 
-def _req(headers: dict, peer: str = "10.0.0.9"):
+def _req(headers: dict, peer: str = "127.0.0.1"):
+    """From the host install's nginx unless `peer` says otherwise."""
     return SimpleNamespace(
         headers=SimpleNamespace(get=lambda k, d=None: headers.get(k.lower(), d)),
         client=SimpleNamespace(host=peer),
@@ -47,6 +48,36 @@ def test_rotating_forwarded_for_first_hop_does_not_bypass_the_limit():
             if getattr(e, "status_code", None) == 429:
                 got_429 += 1
     assert got_429 > 0, "rotating X-Forwarded-For bypassed the limiter"
+
+
+def test_a_direct_client_s_own_x_real_ip_is_not_believed(monkeypatch):
+    """The compose bundle publishes the agent's port with nothing in front of
+    it. A client there setting X-Real-IP afresh per request got a fresh bucket
+    per request -- no limit at all."""
+    monkeypatch.delenv(rl.TRUSTED_PROXIES_ENV, raising=False)
+    got_429 = 0
+    for i in range(20):
+        req = _req({"x-real-ip": f"198.51.100.{i}", "x-forwarded-for": f"9.9.9.{i}"}, peer="172.18.0.1")
+        assert rl.client_ip(req) == "172.18.0.1"
+        try:
+            rl.check_rate_limit(req, "login")
+        except Exception as e:  # noqa: BLE001
+            if getattr(e, "status_code", None) == 429:
+                got_429 += 1
+    assert got_429 > 0, "rotating X-Real-IP from a direct client bypassed the limiter"
+
+
+def test_a_proxy_on_another_address_is_named_in_config(monkeypatch):
+    monkeypatch.setenv(rl.TRUSTED_PROXIES_ENV, "10.0.0.0/24, not-an-ip")
+    assert rl.client_ip(_req({"x-real-ip": "203.0.113.7"}, peer="10.0.0.9")) == "203.0.113.7"
+    assert rl.client_ip(_req({"x-real-ip": "203.0.113.7"}, peer="10.0.1.9")) == "10.0.1.9"
+    assert rl.client_ip(_req({"x-real-ip": "203.0.113.7"}, peer="127.0.0.1")) == "127.0.0.1", \
+        "naming a proxy replaces the default rather than adding to it"
+
+
+def test_an_ipv4_mapped_loopback_peer_is_still_loopback(monkeypatch):
+    monkeypatch.delenv(rl.TRUSTED_PROXIES_ENV, raising=False)
+    assert rl.client_ip(_req({"x-real-ip": "203.0.113.7"}, peer="::ffff:127.0.0.1")) == "203.0.113.7"
 
 
 def test_eviction_bounds_the_attempts_dict(monkeypatch):
@@ -96,7 +127,7 @@ def test_a_successful_2fa_clears_the_verify_window(monkeypatch):
     rl.check_rate_limit(prior, "verify-2fa")
     assert ("203.0.113.7", "verify-2fa") in rl._attempts
 
-    res = TestClient(srv.app).post(
+    res = TestClient(srv.app, client=("127.0.0.1", 50000)).post(
         "/api/auth/2fa/verify",
         json={"temp_token": "t", "code": "123456"},
         headers={"X-Real-IP": "203.0.113.7"},

@@ -23,11 +23,18 @@ first hop is attacker-controlled and rotating it defeated the limiter entirely.
 Falls back to the LAST hop of XFF (the one our own proxy appended) and finally
 the socket peer. Not perfect against a botnet, but it turns the measured
 "25 password guesses in a few seconds, all processed" into "5 then locked".
+
+Both headers are read only when the socket peer is a trusted proxy
+(AGENT_TRUSTED_PROXIES, loopback by default). From anyone else they are the
+client's own words, and the socket peer is the key.
 """
 
 from __future__ import annotations
 
+import functools
+import ipaddress
 import logging
+import os
 import time
 from collections import defaultdict
 
@@ -52,7 +59,46 @@ _attempts: dict[tuple[str, str], list[float]] = defaultdict(list)
 _locked_until: dict[tuple[str, str], float] = {}
 
 
+# Peers whose X-Real-IP / X-Forwarded-For are believed. Loopback by default:
+# the host install's nginx runs on the same machine. The compose bundle
+# publishes the agent's port with nothing in front of it, so there a client's
+# own X-Real-IP reached here unchallenged and a new value per request was a
+# fresh bucket per request. A proxy on another address is named here.
+TRUSTED_PROXIES_ENV = "AGENT_TRUSTED_PROXIES"
+_DEFAULT_TRUSTED = "127.0.0.1/32,::1/128"
+
+
+@functools.lru_cache(maxsize=8)
+def _parse_trusted(raw: str) -> tuple:
+    nets = []
+    for part in raw.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            nets.append(ipaddress.ip_network(part, strict=False))
+        except ValueError:
+            logger.warning("%s: ignoring %r, not an address or network", TRUSTED_PROXIES_ENV, part)
+    return tuple(nets)
+
+
+def _peer_is_trusted_proxy(peer: str | None) -> bool:
+    if not peer:
+        return False
+    try:
+        ip = ipaddress.ip_address(peer)
+    except ValueError:
+        return False
+    mapped = getattr(ip, "ipv4_mapped", None)
+    ip = mapped or ip
+    nets = _parse_trusted(os.environ.get(TRUSTED_PROXIES_ENV, _DEFAULT_TRUSTED))
+    return any(ip.version == n.version and ip in n for n in nets)
+
+
 def client_ip(request: Request) -> str:
+    peer = request.client.host if request.client else None
+    if not _peer_is_trusted_proxy(peer):
+        return peer or "unknown"
     # audit N-1: X-Real-IP is set by nginx to $remote_addr and overwrites any
     # header the client sent, so it is the real peer and cannot be spoofed
     # through the proxy. Prefer it.
@@ -67,7 +113,7 @@ def client_ip(request: Request) -> str:
         hops = [h.strip() for h in xff.split(",") if h.strip()]
         if hops:
             return hops[-1]
-    return request.client.host if request.client else "unknown"
+    return peer
 
 
 _last_evict = 0.0
