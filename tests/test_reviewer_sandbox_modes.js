@@ -54,8 +54,15 @@ function freshSandbox(env, delegateUrl) {
     return s;
 }
 
-const REVIEWER_SRC = fs.readFileSync(
-    path.join(__dirname, '..', 'services', 'commit-reviewer', 'reviewer.js'), 'utf8');
+// The whole service, not one file: the assertions below are about call
+// sites, and a call site in any of the reviewer's modules counts. sandbox.js
+// is the runner itself, and builtin-projects.local.js is the operator's.
+const REVIEWER_DIR = path.join(__dirname, '..', 'services', 'commit-reviewer');
+const REVIEWER_SRC = fs.readdirSync(REVIEWER_DIR)
+    .filter((f) => f.endsWith('.js') && f !== 'sandbox.js' && !f.startsWith('builtin-projects'))
+    .sort()
+    .map((f) => fs.readFileSync(path.join(REVIEWER_DIR, f), 'utf8'))
+    .join('\n');
 
 test('inside the bundle with an agent to ask, checks are delegated', async () => {
     const s = freshSandbox('1', 'http://agent:8100/');
