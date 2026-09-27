@@ -26,6 +26,8 @@ import logging
 
 import httpx
 
+from agent import live_state
+
 logger = logging.getLogger("tektonix")
 
 _API = "https://api.telegram.org/bot{token}/sendMessage"
@@ -141,8 +143,7 @@ async def notify_operators(auth_pool, text: str, repo: str | None = None) -> int
 def notify_operators_bg(auth_pool, text: str, repo: str | None = None) -> None:
     """Fire-and-forget wrapper for call sites inside request/stream handlers."""
     try:
-        task = asyncio.create_task(notify_operators(auth_pool, text, repo))
-        task.add_done_callback(lambda t: t.exception())  # retrieve, never surface
+        live_state.fire_and_forget(notify_operators(auth_pool, text, repo))
     except Exception:  # noqa: BLE001
         logger.exception("telegram: could not schedule notification")
 

@@ -54,3 +54,23 @@ planning_recorders: dict[str, planning_log.Recorder] = {}
 # keeps only a WEAK reference to a bare create_task, so a background refresh
 # could vanish halfway and silently never happen.
 background_tasks: set[asyncio.Task] = set()
+
+
+def fire_and_forget(coro) -> asyncio.Task:
+    """Schedule `coro`, held in background_tasks until it finishes. Its
+    exception is retrieved (never raised or logged as unretrieved): callers use
+    this for work whose failure must not reach the code that scheduled it."""
+    try:
+        task = asyncio.create_task(coro)
+    except RuntimeError:   # no running loop
+        coro.close()
+        raise
+    background_tasks.add(task)
+    task.add_done_callback(_release)
+    return task
+
+
+def _release(task: asyncio.Task) -> None:
+    background_tasks.discard(task)
+    if not task.cancelled():
+        task.exception()

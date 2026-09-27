@@ -218,8 +218,7 @@ live_task_log: dict[str, list] = {}
 def flush_task_log_bg(rec: planning_log.Recorder) -> None:
     """Fire and forget: a transcript must never delay the run it describes."""
     try:
-        task = asyncio.create_task(rec.flush())
-        task.add_done_callback(lambda t: t.exception())
+        live_state.fire_and_forget(rec.flush())
     except Exception:  # noqa: BLE001
         pass
 # Monotonic per-task event ids for the socket-first hydrate (log_stream.py).

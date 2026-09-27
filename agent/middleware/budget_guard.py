@@ -168,17 +168,30 @@ class BudgetTracker:
     def reconcile(self) -> None:
         """Swap estimates for the router's billed cost wherever it has landed."""
         pending = self.pending_call_ids
-        if not pending:
-            return
-        for call_id, billed in self._ledger.actual_costs(pending).items():
-            self._calls[call_id][1] = billed
+        if pending:
+            self._apply_billed(self._ledger.actual_costs(pending))
+
+    async def areconcile(self) -> None:
+        """reconcile() with the ledger read in a worker thread: it parses up
+        to half a megabyte of log, and the event loop is serving every other
+        task. A sync `total_cost` read right after finds the file unchanged
+        and costs one stat()."""
+        pending = self.pending_call_ids
+        if pending:
+            self._apply_billed(await asyncio.to_thread(self._ledger.actual_costs, pending))
+
+    def _apply_billed(self, billed: dict[str, float]) -> None:
+        for call_id, cost in billed.items():
+            entry = self._calls.get(call_id)
+            if entry is not None:
+                entry[1] = cost
 
     async def settle(self, timeout_s: float = SETTLE_TIMEOUT_S, poll_s: float = SETTLE_POLL_S) -> bool:
         """Wait briefly for the router to bill whatever is still carried at
         its estimate. True if nothing is pending afterwards."""
         deadline = time.monotonic() + timeout_s
         while True:
-            self.reconcile()
+            await self.areconcile()
             if not self.pending_call_ids:
                 return True
             if time.monotonic() >= deadline:
@@ -221,6 +234,7 @@ class BudgetGuardMiddleware(AgentMiddleware):
         self.tracker = tracker
 
     async def awrap_model_call(self, request: ModelRequest, handler) -> ModelResponse:
+        await self.tracker.areconcile()
         if self.tracker.total_cost >= self.tracker.budget_usd:
             # Refuse before spending on a call that's already over budget --
             # don't wait for this call's own cost to land before tripping.
@@ -233,6 +247,7 @@ class BudgetGuardMiddleware(AgentMiddleware):
         for msg in response.result:
             self.tracker.charge(_estimate_for(msg), call_id_of(msg))
 
+        await self.tracker.areconcile()
         if self.tracker.total_cost >= self.tracker.budget_usd:
             # The estimate for the call that just finished says we are over.
             # The router bills it within milliseconds of the stream closing;
