@@ -57,7 +57,17 @@ async def _github_act(app, repo: str, key: str, action: str, *, nonce: str | Non
     `actor` is who the audit log will name. It defaults to the link because
     that is the honest answer for the path with no session behind it:
     clicking an approve link in Telegram starts a real task, and the log
-    would otherwise show a task appearing with nobody having started it."""
+    would otherwise show a task appearing with nobody having started it.
+
+    Under the item's lock from the read to the write: the nonce check and the
+    state check are only single-use if nobody else can pass them while
+    create_task_for_item is awaited."""
+    async with github_inbox.item_lock(repo, key):
+        return await _github_act_locked(app, repo, key, action, nonce=nonce, days=days, actor=actor)
+
+
+async def _github_act_locked(app, repo: str, key: str, action: str, *, nonce: str | None,
+                             days: float | None, actor: str) -> dict:
     items = await github_inbox.list_items(app.state.store, repo)
     item = items.get(key)
     if not item:
