@@ -1173,6 +1173,13 @@ export async function getRuntimeSettings(): Promise<{ knobs: Record<string, Runt
   return res.json();
 }
 
+/** Open to every account, unlike getRuntimeSettings (admin-only). */
+export async function getTaskDefaults(): Promise<{ default_task_budget_usd: number }> {
+  const res = await apiFetch(`${API_BASE}/settings/task-defaults`);
+  if (!res.ok) throw new Error(`getTaskDefaults failed: ${res.status}`);
+  return res.json();
+}
+
 export async function saveRuntimeSettings(values: Record<string, number>): Promise<{ values: Record<string, number> }> {
   const res = await apiFetch(`${API_BASE}/settings/runtime`, {
     method: "POST",
