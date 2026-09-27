@@ -22,7 +22,7 @@ from typing import Literal
 logger = logging.getLogger("tektonix")
 
 import httpx
-from fastapi import Cookie, Depends, FastAPI, File, HTTPException, Request, Response, UploadFile
+from fastapi import Depends, FastAPI, File, HTTPException, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -34,13 +34,13 @@ FRONTEND_DIST = Path(__file__).resolve().parent.parent / "frontend" / "dist"
 
 from agent import cartographer
 from agent import paths
-from agent import rate_limit
 from agent.config import PROJECTS, load_config, require_server_config
 from agent.observability import install_langsmith
 from agent import tasks
 from agent import task_runtime
 from agent.outer_graph import build_outer_graph, open_checkpointer, open_store
 from agent.graph import project_slot
+from agent.routers import auth as auth_routes
 from agent.routers import env_config as env_config_routes
 from agent.routers import github as github_routes
 from agent.routers import tasks as tasks_routes
@@ -71,8 +71,8 @@ from agent.middleware.budget_guard import BudgetExceededError
 from agent.frontend_route import RouteDecision, classify_frontend
 from agent.planning_chat import build_planning_agent, classify_planning_difficulty, planning_thread_config, run_planning_turn
 from agent import auth
-from agent.auth import SESSION_COOKIE_NAME, User, check_repo_access
-from agent.notify import notify_operators, notify_operators_bg, send_telegram, task_alert, watch_services
+from agent.auth import User, check_repo_access
+from agent.notify import notify_operators, notify_operators_bg, task_alert, watch_services
 from agent.mailer import send_plain_email
 
 config = load_config()
@@ -455,6 +455,7 @@ if config.cors_allow_origins:
 # seam that moves either looks identical from outside or fails the snapshot.
 # Included here, after the middleware and before the routes that are still in
 # this file, so the order a request passes through is unchanged.
+app.include_router(auth_routes.router)
 app.include_router(push_routes.router)
 app.include_router(analytics_routes.router)
 app.include_router(model_config_routes.router)
@@ -563,118 +564,11 @@ async def _security_headers(request, call_next):
 # they're operator/global concerns (aggregate spend across every project,
 # which LLM model each pinned role uses), not something a restricted
 # per-project account should see or change.
+#
+# The /api/auth/* routes themselves live in agent/routers/auth.py (2026-09-27).
 # ---------------------------------------------------------------------------
 
 
-class LoginRequest(BaseModel):
-    email: str
-    password: str
-
-
-class Verify2FARequest(BaseModel):
-    temp_token: str
-    code: str
-
-
-class Setup2FARequest(BaseModel):
-    password: str | None = None
-
-
-class Confirm2FARequest(BaseModel):
-    code: str
-
-
-class ChangePasswordRequest(BaseModel):
-    current_password: str
-    new_password: str
-
-
-class ForgotPasswordRequest(BaseModel):
-    email: str
-
-
-class ResetPasswordRequest(BaseModel):
-    email: str
-    code: str
-    new_password: str
-
-
-class CreateUserRequest(BaseModel):
-    email: str
-    password: str
-    role: str
-    allowed_repos: list[str] | None = None
-    auto_approve_commands: bool = False
-    auto_approve_repos: list[str] | None = None
-
-
-class UpdateAutoApproveRequest(BaseModel):
-    auto_approve_commands: bool
-    # Which projects it covers. Required when turning it ON: a switch whose
-    # blast radius nobody chose should not be the widest one.
-    repos: list[str] | None = None
-
-
-class UpdateUserAccessRequest(BaseModel):
-    allowed_repos: list[str] | None = None
-    auto_approve_commands: bool | None = None
-    auto_approve_repos: list[str] | None = None
-
-
-def _validated_auto_repos(target: User, repos: list[str] | None, *, turning_on: bool) -> list[str] | None:
-    """The projects an auto-approve switch may cover, or None to leave the
-    stored scope alone.
-
-    Turning it ON must name projects. The alternative -- an empty or absent
-    list meaning "everywhere" -- is exactly the inheritance this scoping
-    exists to stop: a second account handed the switch would silently get it
-    for production as well as for the sandbox it was meant for.
-    """
-    if repos is None:
-        if turning_on and not (target.auto_approve_repos or []):
-            raise HTTPException(400, (
-                "auto mode needs the projects it covers -- send `repos` with at least one, "
-                "so turning it on cannot quietly mean every project"))
-        return None
-    unknown = [r for r in repos if r not in PROJECTS]
-    if unknown:
-        raise HTTPException(400, f"unknown project(s): {', '.join(sorted(unknown))}")
-    denied = [r for r in repos if not target.can_access(r)]
-    if denied:
-        raise HTTPException(403, f"{target.email} has no access to: {', '.join(sorted(denied))}")
-    if turning_on and not repos:
-        raise HTTPException(400, "auto mode with no projects does nothing -- name at least one")
-    return repos
-
-
-def _user_public(user: User) -> dict:
-    return {
-        "id": user.id, "email": user.email, "role": user.role,
-        "allowed_repos": user.allowed_repos, "totp_enabled": user.totp_enabled,
-        "must_change_password": user.must_change_password,
-        "require_totp_setup": user.role == "admin" and not user.totp_enabled,
-        "auto_approve_commands": user.auto_approve_commands,
-        "auto_approve_repos": user.auto_approve_repos or [],
-        "require_merge_review": user.require_merge_review,
-        # None until the account picks one; the frontend maps that to the
-        # default rather than the server writing the default into every row.
-        "theme": user.theme or auth.DEFAULT_THEME,
-    }
-
-
-def _set_session_cookie(response: Response, token: str) -> None:
-    # SameSite=strict is this app's whole CSRF defence for the session API:
-    # there are no CSRF tokens, because a strict cookie is never sent on a
-    # request another site starts, and the SPA only ever calls same-origin.
-    # That coupling is load-bearing. Loosening this to lax or none (for an
-    # embed, an OAuth return, a subdomain) makes CSRF tokens -- or a
-    # Sec-Fetch-Site check on every mutating route -- required in the same
-    # change. The one unauthenticated acting POST, the approve link, has its
-    # own Sec-Fetch-Site check (_approve_is_cross_site) for this reason.
-    response.set_cookie(
-        SESSION_COOKIE_NAME, token, max_age=auth.SESSION_TTL_SECONDS,
-        httponly=True, samesite="strict", secure=True, path="/",
-    )
 # Both live in agent/auth.py now: a route module under agent/routers/ cannot
 # import them from here without making the import a cycle. Re-exported rather
 # than redefined so require_full_auth stays the SAME object -- the route
@@ -726,151 +620,6 @@ async def health():
         getattr(app.state, "auth_pool", None), config.router_base_url, PROJECTS,
     )
     return _JSONResponse(payload, status_code=200 if payload["ok"] else 503)
-
-
-@app.post("/api/auth/login")
-async def login(req: LoginRequest, response: Response, request: Request):
-    rate_limit.check_rate_limit(request, "login")  # audit H-7
-    row = await auth.get_user_by_email(app.state.auth_pool, req.email.strip().lower())
-    # audit M-1: run argon2 on both branches so an unknown email takes the same
-    # time as a real one (no user-enumeration timing oracle).
-    if not row:
-        auth.verify_password_absent()
-        raise HTTPException(401, "invalid email or password")
-    if not auth.verify_password(req.password, row["password_hash"]):
-        raise HTTPException(401, "invalid email or password")
-    rate_limit.clear_rate_limit(request, "login")
-    if row["totp_enabled"]:
-        # Returned in the body, held in page memory between the two login
-        # steps: short-lived, single-use, and useless without the second
-        # factor. The page that holds it is the one place script injection
-        # would matter most, which is one more reason the dashboard never
-        # renders model- or repo-supplied HTML (ChatMessage renders text, and
-        # the CSP is script-src 'self').
-        temp_token = await auth.create_pending_2fa(app.state.auth_pool, row["id"])
-        return {"requires_2fa": True, "temp_token": temp_token}
-    token = await auth.create_session(app.state.auth_pool, row["id"])
-    _set_session_cookie(response, token)
-    return {"requires_2fa": False, "user": _user_public(auth._row_to_user(row))}
-
-
-@app.post("/api/auth/2fa/verify")
-async def verify_2fa(req: Verify2FARequest, response: Response, request: Request):
-    rate_limit.check_rate_limit(request, "verify-2fa")  # audit H-7
-    pending = await auth.resolve_pending_2fa(app.state.auth_pool, req.temp_token)
-    if not pending:
-        raise HTTPException(401, "2FA challenge expired -- log in again")
-    ok = await auth.verify_totp_or_recovery(app.state.auth_pool, config, pending["user_id"], req.code.strip())
-    if not ok:
-        raise HTTPException(400, "invalid code")
-    rate_limit.clear_rate_limit(request, "verify-2fa")
-    token = await auth.create_session(app.state.auth_pool, pending["user_id"])
-    _set_session_cookie(response, token)
-    row = await auth.get_user_by_id(app.state.auth_pool, pending["user_id"])
-    return {"user": _user_public(auth._row_to_user(row))}
-
-
-@app.post("/api/auth/logout")
-async def logout(response: Response, agent_session: str | None = Cookie(default=None)):
-    if agent_session:
-        await auth.revoke_session(app.state.auth_pool, agent_session)
-    response.delete_cookie(SESSION_COOKIE_NAME, path="/")
-    return {"ok": True}
-
-
-@app.post("/api/auth/forgot-password")
-async def forgot_password(req: ForgotPasswordRequest, request: Request):
-    rate_limit.check_rate_limit(request, "reset-request")  # audit H-7
-    # Always {"ok": true} regardless of whether the email matches a real
-    # account -- auth.request_password_reset itself silently no-ops for an
-    # unknown email; the point is not letting the response tell an attacker
-    # which emails are registered users.
-    try:
-        await auth.request_password_reset(app.state.auth_pool, config, req.email)
-    except Exception:  # noqa: BLE001 -- an SMTP hiccup must not turn into "this email doesn't exist" info leakage either
-        logger.exception("password reset email failed to send for %s", req.email)
-    return {"ok": True}
-
-
-@app.post("/api/auth/reset-password")
-async def reset_password_endpoint(req: ResetPasswordRequest, request: Request):
-    rate_limit.check_rate_limit(request, "reset-password")  # audit H-7
-    error = auth.validate_password_strength(req.new_password)
-    if error:
-        raise HTTPException(400, error)
-    ok = await auth.reset_password(app.state.auth_pool, req.email, req.code, req.new_password)
-    if not ok:
-        raise HTTPException(400, "invalid or expired code")
-    return {"ok": True}
-
-
-@app.get("/api/auth/me")
-async def get_me(user: User = Depends(auth.get_current_user)):
-    return _user_public(user)
-
-
-@app.post("/api/auth/change-password")
-async def change_password_endpoint(req: ChangePasswordRequest, user: User = Depends(auth.get_current_user)):
-    row = await auth.get_user_by_id(app.state.auth_pool, user.id)
-    if not auth.verify_password(req.current_password, row["password_hash"]):
-        raise HTTPException(401, "current password is incorrect")
-    error = auth.validate_password_strength(req.new_password)
-    if error:
-        raise HTTPException(400, error)
-    await auth.change_password(app.state.auth_pool, user.id, req.new_password)
-    return {"ok": True}
-
-
-@app.post("/api/auth/2fa/setup")
-async def setup_2fa(req: Setup2FARequest = Setup2FARequest(), user: User = Depends(auth.get_current_user)):
-    # audit H-3: start_totp_setup clears totp_enabled as it writes the new
-    # secret, so an attacker with a live session could silently DISABLE 2FA by
-    # hitting this endpoint -- bypassing /2fa/disable, which explicitly refuses
-    # for admins. Re-authenticate with the password before re-initiating setup
-    # when 2FA is already enabled. First-time setup (2FA off) needs no password:
-    # the session already proves who they are, and there is nothing to protect.
-    if user.totp_enabled:
-        row = await auth.get_user_by_id(app.state.auth_pool, user.id)
-        if not req.password or not auth.verify_password(req.password, row["password_hash"]):
-            raise HTTPException(403, "current password required to re-initialize 2FA")
-    # Once-only by construction: every call mints a NEW secret (start_totp_setup
-    # overwrites the pending one), so this response is the only time a given
-    # secret leaves the server -- no GET returns it later. The raw secret rides
-    # along with the provisioning URI for someone who cannot scan a QR code.
-    secret, uri = await auth.start_totp_setup(app.state.auth_pool, config, user.id)
-    return {"secret": secret, "uri": uri}
-
-
-@app.post("/api/auth/2fa/confirm")
-async def confirm_2fa(req: Confirm2FARequest, user: User = Depends(auth.get_current_user)):
-    codes = await auth.confirm_totp_setup(app.state.auth_pool, config, user.id, req.code.strip())
-    return {"recovery_codes": codes}
-
-
-class Disable2FARequest(BaseModel):
-    password: str = ""
-
-
-@app.post("/api/auth/2fa/disable")
-async def disable_2fa_endpoint(req: Disable2FARequest,
-                               user: User = Depends(require_full_auth)):
-    """Removing a second factor is exactly the action a stolen session would
-    want, so it is not something a session alone should authorise.
-
-    Two changes over the original: require_full_auth rather than
-    get_current_user (a half-authenticated session must not reach this at
-    all), and the current password, matching what /2fa/setup already demands
-    to RE-initialise. Enabling 2FA needs no password because the session
-    already proves identity and there is nothing yet to protect; disabling it
-    destroys a protection, which is the asymmetry.
-    """
-    if user.role == "admin":
-        raise HTTPException(403, "2FA cannot be disabled on the admin account")
-    row = await auth.get_user_by_id(app.state.auth_pool, user.id)
-    if not req.password or not auth.verify_password(req.password, row["password_hash"]):
-        raise HTTPException(403, "current password required to disable 2FA")
-    await auth.disable_totp(app.state.auth_pool, user.id)
-    return {"ok": True}
 
 
 def _audit_store():
@@ -1052,207 +801,6 @@ class RemoveProjectRequest(BaseModel):
     # cloned by itself and the operator never wanted, and is refused unless
     # the server can show that nothing would be lost by it.
     files: Literal["keep", "delete"] = "keep"
-
-
-class UpdateThemeRequest(BaseModel):
-    theme: str
-
-
-class UpdateMergeReviewRequest(BaseModel):
-    require_merge_review: bool
-
-
-@app.post("/api/auth/me/merge-review")
-async def set_own_merge_review(req: UpdateMergeReviewRequest, user: User = Depends(require_full_auth)):
-    """Self-service for the same reason auto-approve is: turning the final
-    look OFF removes a review the operator was doing for their own benefit,
-    not a safety property someone else depends on -- the independent review
-    service still gates every merge regardless. Captured onto each task at
-    creation, so flipping this never changes a task already in flight."""
-    await auth.update_require_merge_review(app.state.auth_pool, user.id, req.require_merge_review)
-    await audit.record(_audit_store(), actor=user.email, action="settings.merge_review",
-                       target=user.email,
-                       detail="on" if req.require_merge_review else "off")
-    return {"ok": True, "require_merge_review": req.require_merge_review}
-
-
-@app.post("/api/auth/me/theme")
-async def set_own_theme(req: UpdateThemeRequest, user: User = Depends(require_full_auth)):
-    """The account's colour scheme. Self-service and unaudited: it grants
-    nothing and reveals nothing, and an audit line per colour change would
-    bury the entries that matter."""
-    try:
-        await auth.update_theme(app.state.auth_pool, user.id, req.theme)
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-    return {"ok": True, "theme": req.theme}
-
-
-@app.post("/api/auth/me/auto-approve")
-async def set_own_auto_approve(req: UpdateAutoApproveRequest, user: User = Depends(require_full_auth)):
-    """Self-service, deliberately not admin-only: this grants no capability
-    the account doesn't already have -- every action it stops prompting for
-    could be approved by hand, one at a time, by this same user today. It
-    only removes the clicking. The destructive-command subset stays gated no
-    matter what this is set to (see deep_agent.py's interrupt_on_for), which
-    is what makes self-service reasonable rather than a way to switch off
-    the safety net.
-    """
-    repos = _validated_auto_repos(user, req.repos, turning_on=req.auto_approve_commands)
-    await auth.update_auto_approve(app.state.auth_pool, user.id, req.auto_approve_commands, repos)
-    await audit.record(_audit_store(), actor=user.email, action="settings.auto_approve",
-                       target=user.email,
-                       detail=("on for " + ", ".join(repos) if req.auto_approve_commands and repos
-                               else "on" if req.auto_approve_commands else "off"))
-    return {"ok": True, "auto_approve_commands": req.auto_approve_commands,
-            "auto_approve_repos": repos if repos is not None else (user.auto_approve_repos or [])}
-
-
-class TelegramSettingsRequest(BaseModel):
-    bot_token: str | None = None  # None/empty clears; masked sentinel keeps existing
-    chat_id: str | None = None
-
-
-@app.get("/api/auth/me/telegram")
-async def get_telegram_settings_endpoint(user: User = Depends(require_full_auth)):
-    """Masked: reports whether a token is configured, never the token."""
-    return await auth.get_telegram_settings(app.state.auth_pool, user.id)
-
-
-@app.post("/api/auth/me/telegram")
-async def set_telegram_settings_endpoint(req: TelegramSettingsRequest, user: User = Depends(require_full_auth)):
-    token = (req.bot_token or "").strip()
-    chat_id = (req.chat_id or "").strip()
-    if token == "__unchanged__":
-        # The Settings page never receives the stored token back (masked
-        # endpoint above), so "save" with an untouched token field must not
-        # blank a working credential -- the sentinel keeps it.
-        existing = await auth.get_telegram_settings(app.state.auth_pool, user.id)
-        if existing["configured"]:
-            await auth.update_telegram_chat_only(app.state.auth_pool, user.id, chat_id or None)
-            return await auth.get_telegram_settings(app.state.auth_pool, user.id)
-        token = ""
-    await auth.update_telegram(app.state.auth_pool, user.id, token or None, chat_id or None)
-    return await auth.get_telegram_settings(app.state.auth_pool, user.id)
-
-
-@app.post("/api/auth/me/telegram/test")
-async def test_telegram_endpoint(user: User = Depends(require_full_auth)):
-    """Sends a real message to THIS user's configured chat so the operator can
-    verify the token/chat pair before trusting it with real alerts."""
-    row = await auth.get_telegram_raw(app.state.auth_pool, user.id)
-    if not row:
-        raise HTTPException(400, "telegram is not configured -- save a bot token and chat id first")
-    token, chat_id = row
-    ok = await send_telegram(token, chat_id, task_alert(
-        "done", "tektonix", "Test alert from the dashboard settings page",
-        0.00, "If you can read this, task alerts will reach you here."))
-    if not ok:
-        raise HTTPException(502, "telegram rejected the send -- check the bot token and chat id (and that you have messaged the bot once)")
-    return {"ok": True}
-
-
-@app.get("/api/auth/users")
-async def list_users_endpoint(user: User = Depends(require_full_auth)):
-    auth.require_admin(user)
-    rows = await auth.list_users(app.state.auth_pool)
-    return [_user_public(auth._row_to_user(r)) for r in rows]
-
-
-@app.post("/api/auth/users", status_code=201)
-async def create_user_endpoint(req: CreateUserRequest, user: User = Depends(require_full_auth)):
-    auth.require_admin(user)
-    if req.role not in ("admin", "user"):
-        raise HTTPException(400, "role must be 'admin' or 'user'")
-    # audit H7: can_access() treats allowed_repos=None as UNRESTRICTED for any
-    # role, and this field defaults to None -- so POST with {"role": "user"}
-    # and no repo list minted an account that could reach every project. The
-    # sibling PATCH endpoint already rejects this; the create path did not.
-    if req.role != "admin" and req.allowed_repos is None:
-        raise HTTPException(
-            400, "a non-admin user needs an explicit allowed_repos list "
-                 "(use [] for no access); omitting it would grant every repo")
-    if req.allowed_repos:
-        for r in req.allowed_repos:
-            if r not in PROJECTS:
-                raise HTTPException(400, f"unknown repo {r!r}")
-    error = auth.validate_password_strength(req.password)
-    if error:
-        raise HTTPException(400, error)
-    if await auth.get_user_by_email(app.state.auth_pool, req.email.strip().lower()):
-        raise HTTPException(409, "a user with this email already exists")
-    row = await auth.create_user(
-        app.state.auth_pool, req.email.strip().lower(), req.password, req.role, req.allowed_repos,
-        must_change_password=True,
-    )
-    if req.auto_approve_commands:
-        # A brand-new account cannot be handed a blanket switch: it is scoped
-        # to the projects it was just granted, and an admin account (whose
-        # allowed_repos is None, meaning everything) must name them.
-        scope = req.auto_approve_repos if req.auto_approve_repos is not None else req.allowed_repos
-        if not scope:
-            raise HTTPException(400, (
-                "auto mode for a new account needs the projects it covers -- send "
-                "`auto_approve_repos`, or create the account with `allowed_repos`"))
-        unknown = [r for r in scope if r not in PROJECTS]
-        if unknown:
-            raise HTTPException(400, f"unknown project(s): {', '.join(sorted(unknown))}")
-        await auth.update_auto_approve(app.state.auth_pool, row["id"], True, list(scope))
-        row = {**row, "auto_approve_commands": True, "auto_approve_repos": sorted(set(scope))}
-        await audit.record(_audit_store(), actor=user.email, action="settings.auto_approve",
-                           target=row["email"],
-                           detail="on at account creation for " + ", ".join(sorted(set(scope))))
-    return _user_public(auth._row_to_user(row))
-
-
-@app.patch("/api/auth/users/{user_id}")
-async def update_user_access_endpoint(user_id: int, req: UpdateUserAccessRequest, user: User = Depends(require_full_auth)):
-    auth.require_admin(user)
-    if req.allowed_repos:
-        for r in req.allowed_repos:
-            if r not in PROJECTS:
-                raise HTTPException(400, f"unknown repo {r!r}")
-    target = await auth.get_user_by_id(app.state.auth_pool, user_id)
-    if not target:
-        raise HTTPException(404, "user not found")
-    # allowed_repos is meaningless for admin (always full access already);
-    # auto_approve_commands is orthogonal to repo scope and applies to any
-    # role, admin included -- it's the one most likely to want it.
-    if req.allowed_repos is not None:
-        if target["role"] == "admin":
-            raise HTTPException(400, "the admin account always has full access")
-        await auth.update_user_access(app.state.auth_pool, user_id, req.allowed_repos)
-    if req.auto_approve_commands is not None or req.auto_approve_repos is not None:
-        target_user = auth._row_to_user(target)
-        enabled = (req.auto_approve_commands if req.auto_approve_commands is not None
-                   else target_user.auto_approve_commands)
-        repos = _validated_auto_repos(target_user, req.auto_approve_repos, turning_on=enabled)
-        await auth.update_auto_approve(app.state.auth_pool, user_id, enabled, repos)
-        # An admin granting someone else the right to skip prompts is the
-        # single most consequential thing on the Users panel, and the person
-        # it is granted to has no other way to learn who did it.
-        await audit.record(
-            app.state.store, actor=user.email,
-            action="settings.auto_approve_repos" if req.auto_approve_repos is not None
-            else "settings.auto_approve",
-            target=target["email"],
-            detail=("on for " + ", ".join(repos)) if enabled and repos
-            else ("on" if enabled else "off"))
-    return {"ok": True}
-
-
-@app.delete("/api/auth/users/{user_id}")
-async def delete_user_endpoint(user_id: int, user: User = Depends(require_full_auth)):
-    auth.require_admin(user)
-    if user_id == user.id:
-        raise HTTPException(400, "cannot delete your own account")
-    target = await auth.get_user_by_id(app.state.auth_pool, user_id)
-    if not target:
-        raise HTTPException(404, "user not found")
-    if target["role"] == "admin":
-        raise HTTPException(400, "cannot delete the admin account")
-    await auth.delete_user(app.state.auth_pool, user_id)
-    return {"ok": True}
 
 
 UPLOADS_DIRNAME = ".uploads"
