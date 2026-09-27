@@ -388,7 +388,7 @@ async def get_task(name: str, instance_id: str, user: User = Depends(require_ful
                     patch = p.get("model_patch") or ""
     except OSError:
         pass
-    traj = _load(d / "trajectories" / f"{instance_id}.json")
+    traj = _load(safe_path.under(d, "trajectories", f"{instance_id}.json"))
     # The reviewer's whole verdict -- summary, findings, the message it sent
     # the agent -- as the runner kept it (`review` in summary.json). A run from
     # before it was kept has only the verdict word.
