@@ -77,8 +77,13 @@ test('every list the reviewer iterates survives being absent', () => {
 
 test('the reviewer source has no unguarded cfg.<list> loop left', () => {
     // Belt and braces: the runtime check above only covers keys this test
-    // knows about. This one catches a NEW unguarded loop over cfg.
-    const src = fs.readFileSync(path.join(__dirname, '..', 'services', 'commit-reviewer', 'reviewer.js'), 'utf8');
+    // knows about. This one catches a NEW unguarded loop over cfg -- in any
+    // of the reviewer's modules, since the loops live in worktree.js and
+    // checks.js as much as in reviewer.js.
+    const dir = path.join(__dirname, '..', 'services', 'commit-reviewer');
+    const src = fs.readdirSync(dir)
+        .filter((f) => f.endsWith('.js') && f !== 'sandbox.js' && !f.startsWith('builtin-projects'))
+        .map((f) => fs.readFileSync(path.join(dir, f), 'utf8')).join('\n');
     const unguarded = [...src.matchAll(/for \(const \w+ of (cfg\.\w+)\)/g)].map((m) => m[1]);
     assert.deepStrictEqual(unguarded, [], `unguarded loops: ${unguarded.join(', ')}`);
 });

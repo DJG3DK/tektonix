@@ -95,7 +95,8 @@ def test_the_map_points_at_the_real_secret_files():
     and both services must really read it from the shared module."""
     text = ARCH.read_text()
     assert "services/shared/.env" in text
-    for service in ("services/agent-review/server.js", "services/commit-reviewer/reviewer.js"):
+    # The reviewer reads it in exec.js, the base layer runAgentCode lives in.
+    for service in ("services/agent-review/server.js", "services/commit-reviewer/exec.js"):
         assert "readServiceSecret" in pathlib.Path(service).read_text(), service
 
 

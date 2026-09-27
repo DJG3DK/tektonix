@@ -302,7 +302,7 @@ class DetectionReport:
     # Dependency trees the review checkout needs but git does not carry, for
     # stacks that keep them inside the project instead of in a user-wide
     # cache. The reviewer binds these READ-ONLY from the live checkout --
-    # see dependencyDirs in services/commit-reviewer/reviewer.js. Read-only
+    # see dependencyDirs in services/commit-reviewer/worktree.js. Read-only
     # because the code about to run against them has not been reviewed yet.
     dependency_dirs: list[str] = field(default_factory=list)
     checks: list[dict] = field(default_factory=list)
@@ -446,7 +446,7 @@ def _workspace_dirs(live: Path, pkg: dict) -> list[str]:
     # workspace monorepo, and the patterns above cannot see it at all. Without
     # this, onboarding recorded only ".", the review service installed only at
     # a root that had no dependencies, and every check in every app failed on
-    # a missing tool. services/commit-reviewer/reviewer.js detectNodeModulesDirs
+    # a missing tool. services/commit-reviewer/worktree.js detectNodeModulesDirs
     # applies the SAME rule at review time; tests/test_node_modules_detection.py
     # holds the two to the same fixtures so they cannot drift apart.
     dirs.extend(_standalone_package_dirs(live))

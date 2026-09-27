@@ -21,6 +21,13 @@ from agent import paths
 
 REVIEWER_JS = paths.REPO_ROOT / "services" / "commit-reviewer" / "reviewer.js"
 DASHBOARD_JS = paths.REPO_ROOT / "services" / "agent-review" / "server.js"
+
+
+def _reviewer_source() -> str:
+    """Every module of the reviewer, for a property that may sit in any of
+    them (the worktree root is worktree.js's, the usage log prompt.js's)."""
+    return "\n".join(p.read_text() for p in sorted(REVIEWER_JS.parent.glob("*.js"))
+                     if p.name != "sandbox.js" and not p.name.startswith("builtin-projects"))
 SHARED = paths.REPO_ROOT / "services" / "shared" / "projects-config.js"
 
 
@@ -117,7 +124,7 @@ def test_the_reviewers_mutable_files_are_all_overridable():
     """usage.jsonl is the one that matters: the dashboard's reviewer-spend
     figure is summed from it, so a second instance writing there silently
     inflates the number the eval exists to explain."""
-    source = REVIEWER_JS.read_text()
+    source = _reviewer_source()
     for var in ("REVIEW_STATE_DIR", "REVIEW_USAGE_LOG", "REVIEW_WORKTREE_ROOT"):
         assert var in source, f"{var} is not overridable, so an eval run would share it"
 
