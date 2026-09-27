@@ -25,6 +25,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import agent.server as srv
+from agent import cartographer
 from agent import config as agent_config
 from agent import provisioning as prov
 from agent.auth import User
@@ -75,7 +76,7 @@ def contained(tmp_path, monkeypatch):
 
     import agent.deep_agent as da
     monkeypatch.setattr(da, "seed_memory", fake_seed_memory)
-    monkeypatch.setattr(srv.cartographer, "run_cartographer", fake_cartographer)
+    monkeypatch.setattr(cartographer, "run_cartographer", fake_cartographer)
     monkeypatch.setattr(srv.app.state, "store", object(), raising=False)
     monkeypatch.setattr(srv.app.state, "auth_pool", object(), raising=False)
     return {"allowed": allowed, "outside": outside, "workspaces": workspaces,

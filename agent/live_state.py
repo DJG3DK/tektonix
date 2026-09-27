@@ -20,12 +20,15 @@ detected by a store row with no entry here rather than the other way round.
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from fastapi import WebSocket
 
     from agent import planning_log
+
+logger = logging.getLogger("tektonix")
 
 # task_id -> list of subscriber queues, for fanning live updates out to every
 # connected WS client (a reconnect or a second browser tab both just get a
@@ -74,3 +77,25 @@ def _release(task: asyncio.Task) -> None:
     background_tasks.discard(task)
     if not task.cancelled():
         task.exception()
+
+
+# audit M-32: asyncio keeps only a WEAK reference to a bare create_task, so a
+# fire-and-forget background refresh could be garbage-collected mid-run and
+# silently never happen. Hold a strong reference until the task finishes, and
+# log any exception it raised (bare create_task also swallows those).
+def spawn_background(coro, label: str) -> None:
+    """Schedule `coro` under `label`, held in background_tasks until it ends,
+    and log its exception if it raised one. What server.py's
+    _spawn_background was until 2026-09-27; here because the projects router
+    (the cartographer run after onboarding) needs it and cannot import
+    server.py. fire_and_forget above is the quieter sibling for work whose
+    failure must not even be logged against the caller."""
+    task = asyncio.create_task(coro)
+    background_tasks.add(task)
+
+    def _done(t: asyncio.Task) -> None:
+        background_tasks.discard(t)
+        if not t.cancelled() and t.exception() is not None:
+            logger.warning("background task %s failed: %r", label, t.exception())
+
+    task.add_done_callback(_done)

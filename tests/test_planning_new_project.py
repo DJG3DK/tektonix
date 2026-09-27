@@ -17,6 +17,7 @@ from fastapi.testclient import TestClient
 import agent.server as srv
 from agent import planning_log
 from agent.auth import User
+from agent.routers import projects as projects_routes
 
 _ADMIN = User(id=1, email="admin@example.com", role="admin", allowed_repos=None,
               totp_enabled=True, must_change_password=False,
@@ -77,13 +78,13 @@ def wired(monkeypatch):
     monkeypatch.setattr(srv, "PROJECTS", {"shop": {"sandbox": "/tmp/shop"}, "my-app": {"sandbox": "/tmp/my-app"}})
     created: list = []
 
-    async def _create(req, user):
+    async def _create(app, req, user):
         created.append((req, user))
         return {"ok": True, "name": req.name, "live": f"/srv/{req.name}",
                 "steps": [{"step": "repository", "ok": True, "detail": "one commit"}],
                 "github": None, "message": f"{req.name} is created."}
 
-    monkeypatch.setattr(srv, "_create_project", _create)
+    monkeypatch.setattr(projects_routes, "_create_project", _create)
     srv._running_planning_turns.pop("s1", None)
     return store, created
 
@@ -144,11 +145,11 @@ def test_the_card_can_override_the_github_choice(wired):
 def test_a_failed_create_leaves_the_session_where_it_is(wired, monkeypatch):
     store, _ = wired
 
-    async def _fail(req, user):
+    async def _fail(app, req, user):
         return {"ok": False, "name": req.name, "live": f"/srv/{req.name}",
                 "steps": [{"step": "github", "ok": False, "detail": "422: name taken"}], "github": None}
 
-    monkeypatch.setattr(srv, "_create_project", _fail)
+    monkeypatch.setattr(projects_routes, "_create_project", _fail)
     res = _post({"decision": "confirm"})
     # 200, not an error: the UI renders the step list from the body
     assert res.status_code == 200, res.text

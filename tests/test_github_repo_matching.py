@@ -92,16 +92,17 @@ def _repo_with_origin(tmp_path, name, origin):
 @pytest.fixture
 def two_projects(monkeypatch, tmp_path):
     """One project whose checkout predates a transfer, one that never moved."""
-    from agent import server
+    from agent import config as agent_config
+    from agent.routers import projects as projects_routes
 
     moved = _repo_with_origin(tmp_path, "moved", "git@github.com:olduser/Thing.git")
     stayed = _repo_with_origin(tmp_path, "stayed", "https://github.com/TheOrg/Other.git")
-    monkeypatch.setattr(server, "PROJECTS", {
+    monkeypatch.setattr(agent_config, "PROJECTS", {
         "thing": {"live": moved},
         "other": {"live": stayed},
         "no-checkout": {},
     }, raising=False)
-    return server
+    return projects_routes
 
 
 def test_remote_slugs_read_the_checkouts_not_the_config(two_projects):

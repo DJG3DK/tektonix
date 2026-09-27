@@ -23,6 +23,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import agent.server as srv
+from agent import cartographer
 from agent import config as agent_config
 from agent import provisioning as prov
 from agent.auth import User
@@ -101,7 +102,7 @@ def _stub_side_effects(monkeypatch):
 
     import agent.deep_agent as da
     monkeypatch.setattr(da, "seed_memory", fake_seed_memory)
-    monkeypatch.setattr(srv.cartographer, "run_cartographer", fake_cartographer)
+    monkeypatch.setattr(cartographer, "run_cartographer", fake_cartographer)
     monkeypatch.setattr(srv.app.state, "store", object(), raising=False)
     monkeypatch.setattr(srv.app.state, "auth_pool", object(), raising=False)
 
@@ -393,7 +394,7 @@ def test_provision_does_not_wait_for_the_codebase_map(sample_repo, wired, monkey
         started.append(repo)
         await never_finishes.wait()          # exactly what a long map looks like
 
-    monkeypatch.setattr(srv.cartographer, "run_cartographer", hangs)
+    monkeypatch.setattr(cartographer, "run_cartographer", hangs)
     client = TestClient(srv.app)
 
     report = client.post("/api/projects/detect", json={"path": str(sample_repo)}).json()
