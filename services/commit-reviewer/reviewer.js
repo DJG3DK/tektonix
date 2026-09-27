@@ -173,6 +173,7 @@ if (process.env.REVIEW_ONLY_PROJECTS_JSON !== '1') {
 // editing any file here; the built-in entries stay authoritative. See
 // services/shared/projects-config.js for the merge rule.
 const { loadProjects, healthProjectsCheck } = require('../shared/projects-config');
+const { readJson, updateJsonSync } = require('../shared/json-state');
 
 // Directories that need their own node_modules, read from the tree AS IT IS
 // NOW rather than recorded once at onboarding.
@@ -368,22 +369,12 @@ async function isAncestor(cfg, ancestorSha, sha) {
 }
 
 function loadState() {
-  try {
-    return JSON.parse(fs.readFileSync(STATE_PATH, 'utf8'));
-  } catch {
-    return {};
-  }
+  return readJson(STATE_PATH);
 }
-function saveState(state) {
-  // audit M-11: write to a temp file in the same dir and rename over the
-  // target, so a reader (or a crash mid-write) never sees a truncated/partial
-  // state.json -- the ".bak-*" gitignore entry is evidence corruption has bitten
-  // here before. (The cross-process read-modify-write race between this service
-  // and agent-review still exists; the full fix is per-project files or a shared
-  // lock -- but this removes the corruption/truncation failure mode.)
-  const tmp = `${STATE_PATH}.tmp-${process.pid}-${Date.now()}`;
-  fs.writeFileSync(tmp, JSON.stringify(state, null, 2));
-  fs.renameSync(tmp, STATE_PATH);
+// Every write goes through here: agent-review writes the same file, and a
+// load/save pair outside the lock can undo its write (see shared/json-state).
+function updateState(mutate) {
+  return updateJsonSync(STATE_PATH, mutate);
 }
 
 // A verdict belongs to a BRANCH. Each task has its own branch and, since
@@ -2024,10 +2015,10 @@ function runNextQueued(project, routerKey) {
 }
 
 function setStep(project, step) {
-  const state = loadState();
-  if (!state[project]?.inProgress) return; // review already finished/aborted
-  state[project].inProgress.step = step;
-  saveState(state);
+  updateState((state) => {
+    if (!state[project]?.inProgress) return false; // review already finished/aborted
+    state[project].inProgress.step = step;
+  });
 }
 
 async function reviewProject(project, cfg, routerKey, requested = null) {
@@ -2051,9 +2042,9 @@ async function reviewProject(project, cfg, routerKey, requested = null) {
     // at start left the record naming one branch while `lastReviewedSha`
     // still belonged to another, and agent-review's merge gate read that
     // pair as "newer commits since the last review" on the real task.
-    const state = loadState();
-    state[project] = { ...state[project], inProgress: { sha, branch, base, startedAt: new Date().toISOString(), step: 'setting up worktree' } };
-    saveState(state);
+    updateState((state) => {
+      state[project] = { ...state[project], inProgress: { sha, branch, base, startedAt: new Date().toISOString(), step: 'setting up worktree' } };
+    });
   }
 
   let worktreePath;
@@ -2192,7 +2183,6 @@ async function reviewProject(project, cfg, routerKey, requested = null) {
     const churn = verdict === 'READY' ? null : computeFileChurn(project, review.findings, branch);
     const escalated = verdict === 'READY' ? false : (wasEscalated || infraFailed || consecutiveNeedsFixes >= MAX_CONSECUTIVE_FIXES || Boolean(churn));
 
-    const state = loadState();
     const record = {
       // The review unit, recorded in full: a verdict is only meaningful for the
       // branch and base it was produced against. agent-review's merge endpoint
@@ -2225,8 +2215,9 @@ async function reviewProject(project, cfg, routerKey, requested = null) {
       consecutiveNeedsFixes,
       escalated,
     };
-    state[project] = { ...record, branches: withBranchRecord(state[project], branch, record) };
-    saveState(state);
+    updateState((state) => {
+      state[project] = { ...record, branches: withBranchRecord(state[project], branch, record) };
+    });
     appendHistory(project, record);
 
     if (verdict === 'NEEDS_FIXES' && !wasEscalated) {
@@ -2239,11 +2230,12 @@ async function reviewProject(project, cfg, routerKey, requested = null) {
     return { started: true };
   } catch (err) {
     log(`[${project}] review failed with an internal error: ${err.message}`);
-    const state = loadState();
-    // Own-property check first: `project` came in over HTTP, and a key like
-    // __proto__ must never reach the delete (CodeQL js/prototype-polluting-assignment).
-    if (Object.hasOwn(state, project) && state[project]?.inProgress?.sha === sha) delete state[project].inProgress;
-    saveState(state);
+    updateState((state) => {
+      // Own-property check first: `project` came in over HTTP, and a key like
+      // __proto__ must never reach the delete (CodeQL js/prototype-polluting-assignment).
+      if (!(Object.hasOwn(state, project) && state[project]?.inProgress?.sha === sha)) return false;
+      delete state[project].inProgress;
+    });
     return { started: true, error: err.message };
   } finally {
     if (worktreePath) await cleanupWorktree(cfg, worktreePath);

@@ -34,6 +34,7 @@ scripts/watchdog-services.json
 # --- state, logs and other machines' working copies ------------------------
 **/worktrees/
 **/state.json
+**/state.json.*
 **/history.jsonl
 **/usage.jsonl
 logs/
