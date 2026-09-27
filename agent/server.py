@@ -12,14 +12,13 @@ import logging
 import os
 import time
 import traceback
-import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 logger = logging.getLogger("tektonix")
 
 import httpx
-from fastapi import Depends, FastAPI, File, HTTPException, Request, Response, UploadFile
+from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -49,6 +48,7 @@ from agent.routers import model_config as model_config_routes
 from agent.routers import analytics as analytics_routes
 from agent.routers import push as push_routes
 from agent.routers import review_sandbox as review_sandbox_routes
+from agent.routers import uploads as uploads_routes
 from agent.tools.model_rates import warm_rates
 from agent.classify import classify_task
 from agent import runtime_settings
@@ -64,7 +64,7 @@ from agent.middleware.budget_guard import BudgetExceededError
 from agent.frontend_route import RouteDecision, classify_frontend
 from agent.planning_chat import build_planning_agent, classify_planning_difficulty, planning_thread_config, run_planning_turn
 from agent import auth
-from agent.auth import User, check_repo_access
+from agent.auth import User
 from agent.notify import notify_operators, notify_operators_bg, task_alert, watch_services
 from agent.mailer import send_plain_email
 
@@ -455,6 +455,7 @@ app.include_router(evals_routes.router)
 app.include_router(swebench_routes.router)
 app.include_router(artifact_routes.router)
 app.include_router(review_sandbox_routes.router)
+app.include_router(uploads_routes.router)
 
 
 # audit M-9: response security headers (defence-in-depth behind React's escaping,
@@ -476,6 +477,11 @@ _CSP = (
 
 
 from starlette.responses import JSONResponse as _JSONResponse
+
+# The body ceiling belongs to the upload limits it is derived from, which
+# moved with the route to agent/routers/uploads.py (2026-09-27); the same
+# value under the name the middleware and its test read.
+REQUEST_BODY_MAX_BYTES = uploads_routes.REQUEST_BODY_MAX_BYTES
 from datetime import UTC
 from datetime import datetime as _dt
 
@@ -753,104 +759,6 @@ async def _github_poll_loop(startup_delay: float = 20.0) -> None:
         except TimeoutError:
             pass
         _github_poll_wake.clear()
-
-
-
-
-UPLOADS_DIRNAME = ".uploads"
-UPLOAD_MAX_BYTES = 25 * 1024 * 1024
-# audit M-13: bound the number of files per upload and the absolute request
-# body. Without these, `files: list[UploadFile]` was unbounded and a Content-
-# Length ceiling existed nowhere (so JSON bodies were unbounded too).
-UPLOAD_MAX_FILES = 20
-REQUEST_BODY_MAX_BYTES = UPLOAD_MAX_FILES * UPLOAD_MAX_BYTES + 8 * 1024 * 1024
-UPLOAD_KINDS = {
-    ".png": "image", ".jpg": "image", ".jpeg": "image", ".webp": "image", ".gif": "image",
-    ".pdf": "pdf",
-    ".csv": "text", ".tsv": "text", ".txt": "text", ".json": "text", ".md": "text",
-    ".xlsx": "sheet", ".xls": "sheet",
-}
-
-_GIT_EXCLUDES_PATH = Path(__file__).resolve().parent.parent / ".agent-git-excludes"
-
-
-def _ensure_uploads_ignored(repo_root: str) -> None:
-    """Uploads live inside the sandbox repo (so the agent's /workspace tools
-    reach them) but must never enter a commit/review. A repo-external git
-    excludes file (core.excludesFile) keeps them invisible to git without
-    touching the project's own .gitignore -- zero diff, nothing for the
-    reviewer to see."""
-    import subprocess
-    if not _GIT_EXCLUDES_PATH.exists():
-        _GIT_EXCLUDES_PATH.write_text(f"{UPLOADS_DIRNAME}/\n")
-    subprocess.run(["git", "-C", repo_root, "config", "core.excludesFile", str(_GIT_EXCLUDES_PATH)], check=False)
-
-
-@app.post("/api/uploads")
-async def upload_files(repo: str, files: list[UploadFile] = File(...), user: User = Depends(require_full_auth)):
-    """Store operator attachments in the repo's sandbox under .uploads/<batch>/
-    and return a manifest for the task goal. PDFs get a sibling .txt with the
-    extracted text so the (text-only) coding models can read them directly;
-    images are consumed via the agent's describe_image tool."""
-    if repo not in PROJECTS:
-        raise HTTPException(404, f"unknown repo {repo!r}")
-    check_repo_access(user, repo)
-    repo_root = PROJECTS[repo]["sandbox"]
-    # audit M-34: _ensure_uploads_ignored is synchronous (Path.exists,
-    # write_text, subprocess.run) -- run it off the event loop.
-    await asyncio.to_thread(_ensure_uploads_ignored, repo_root)
-    batch = uuid.uuid4().hex[:8]
-    batch_dir = Path(repo_root) / UPLOADS_DIRNAME / batch
-    batch_dir.mkdir(parents=True, exist_ok=True)
-
-    # audit M-13: bound the file count before touching any of them.
-    if len(files) > UPLOAD_MAX_FILES:
-        raise HTTPException(413, f"too many files ({len(files)}); limit is {UPLOAD_MAX_FILES}")
-
-    manifest = []
-    for f in files:
-        name = Path(f.filename or "file").name  # strip any path components
-        ext = Path(name).suffix.lower()
-        kind = UPLOAD_KINDS.get(ext)
-        if kind is None:
-            raise HTTPException(415, f"unsupported file type {ext!r} ({name})")
-        # audit M-13: stream to disk in chunks with a running counter, aborting
-        # (and deleting the partial file) the moment it exceeds the cap -- the
-        # old `await f.read()` materialized the whole file in memory first.
-        dest = batch_dir / name
-        written = 0
-        with dest.open("wb") as out:
-            while True:
-                chunk = await f.read(1024 * 1024)
-                if not chunk:
-                    break
-                written += len(chunk)
-                if written > UPLOAD_MAX_BYTES:
-                    out.close()
-                    dest.unlink(missing_ok=True)
-                    raise HTTPException(413, f"{name} exceeds {UPLOAD_MAX_BYTES // (1024*1024)}MB")
-                out.write(chunk)
-        rel = f"{UPLOADS_DIRNAME}/{batch}/{name}"
-        entry = {"path": rel, "kind": kind, "bytes": written}
-        if kind == "pdf":
-            # audit M-34: pypdf full-text extraction is CPU-bound for seconds on
-            # a large PDF -- run it in a thread so it doesn't stall the loop.
-            def _extract_pdf(dest_path: str, out_path: str) -> int:
-                import pypdf
-                reader = pypdf.PdfReader(dest_path)
-                text = "\n\n".join((page.extract_text() or "") for page in reader.pages)
-                Path(out_path).write_text(text, encoding="utf-8")
-                return len(reader.pages)
-            try:
-                pages = await asyncio.to_thread(_extract_pdf, str(dest), str(batch_dir / f"{name}.txt"))
-                entry["extracted_text"] = f"{rel}.txt"
-                entry["pages"] = pages
-            except Exception as e:  # noqa: BLE001 -- a scanned/encrypted pdf shouldn't fail the upload
-                entry["extracted_text"] = None
-                logger.info("uploads: text extraction failed for %s: %s", entry.get("name"), e)
-                entry["note"] = "text extraction failed -- possibly scanned; no text layer"
-        manifest.append(entry)
-    return {"repo": repo, "files": manifest}
 
 
 _attachments_note = tasks.attachments_note   # agent/tasks.py
