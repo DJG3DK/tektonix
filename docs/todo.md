@@ -73,8 +73,8 @@ what proves the injection reached it.
 
 ## Split `agent/server.py` along the seams that already exist
 
-**Status:** started, 2026-09-21. Eleven seams out (`server.py` was 5,659 lines
-before them and is 2,128 on 2026-09-27):
+**Status:** started, 2026-09-21. Twelve seams out (`server.py` was 5,659 lines
+before them and is 2,069 on 2026-09-27):
 `push`, `analytics`, `env_config`, `settings` (with the audit log it is
 interleaved with), `model_config`, `github` (the inbox and approve links,
 2026-09-23, once task creation had moved) `tasks` (2026-09-23, once the
@@ -84,9 +84,10 @@ live run state had its own module, `agent/task_runtime.py`), `planning`
 request models and cookie/scope helpers only they use) and `projects`
 (2026-09-27, onboarding, creation, removal and the deploy keys; the shared
 helpers take the app explicitly, `_spawn_background` joined `live_state`,
-and `provisioning.py` stayed put) and `uploads` (2026-09-27; the body-size
-middleware imports its ceiling back from the router). Do not flatten the
-rest in one pass.
+and `provisioning.py` stayed put), `uploads` (2026-09-27; the body-size
+middleware imports its ceiling back from the router) and the review proxy
+(2026-09-27, `agent/routers/review_proxy.py`, on its own as required). Do
+not flatten the rest in one pass.
 
 **The remaining seams need one more move first, and it is a specific one.**
 The shared state is done: `agent/live_state.py` holds the five live
@@ -140,10 +141,11 @@ by `__name__` and every test overriding auth is keyed on identity.
 
 ### What breaks
 
-`agent/server.py` still holds the review proxy and the machinery the seams
-reach on `app.state` (the graph stream, the planning turn runner, the
-binding to the projects router's `_create_project`). `tasks`, `planning`,
-`auth`, `projects` and `uploads` are out. What is left is ordinary: one seam per
+`agent/server.py` still holds the machinery the seams reach on `app.state`
+(the graph stream, the planning turn runner, the binding to the projects
+router's `_create_project`), the lifespan, and four routes: `/api/health`,
+`/api/router-balance`, `/api/consolidation/status` and
+`POST /api/github/repos`. Every named seam is out. What is left is ordinary: one seam per
 commit, inventory and repo-scope green, and `provisioning.py`,
 `history_index.py` and the review proxy never in the same change. The repo
 check inside each handler is now pinned too — `tests/test_repo_scope.py`
