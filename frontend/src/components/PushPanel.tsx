@@ -133,7 +133,8 @@ export function PushPanel() {
         // Tell the server first: if unsubscribe() succeeds and the POST then
         // fails, the row survives with an endpoint nothing can deliver to and
         // every alert pays for a dead send until the service 410s it.
-        await unsubscribePush(sub.endpoint).catch(() => undefined);
+        const auth = sub.toJSON().keys?.auth ?? keyToB64(sub.getKey("auth"));
+        await unsubscribePush(sub.endpoint, auth).catch(() => undefined);
         await sub.unsubscribe();
       }
       setSubscribedHere(false);

@@ -486,11 +486,13 @@ export async function subscribePush(body: {
   return res.json();
 }
 
-export async function unsubscribePush(endpoint: string): Promise<{ subscriptions: number }> {
+// `auth` is the subscription's own secret: it lets this browser drop its
+// endpoint even when the row belongs to the account it was signed into before.
+export async function unsubscribePush(endpoint: string, auth?: string): Promise<{ subscriptions: number }> {
   const res = await apiFetch(`${API_BASE}/push/unsubscribe`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ endpoint }),
+    body: JSON.stringify({ endpoint, auth }),
   });
   if (!res.ok) throw new Error(`unsubscribing failed: ${res.status}`);
   return res.json();

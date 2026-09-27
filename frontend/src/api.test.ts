@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { AuthError, getBenchmarks, getMe, listTasks, login, logout, setAuthFailureHandler, verify2FA } from "./api";
+import { AuthError, getBenchmarks, getMe, listTasks, login, logout, setAuthFailureHandler, unsubscribePush, verify2FA } from "./api";
 import { response, user } from "./test/fixtures";
 
 // api.ts carries several invariants that its own comments record as having
@@ -169,5 +169,16 @@ describe("getBenchmarks — telling a missing route from a real answer", () => {
     const spy = stubFetch(async () => res({ window_days: 7 }, "application/json"));
     await getBenchmarks(7);
     expect(spy.mock.calls[0][0]).toContain("window_days=7");
+  });
+});
+
+describe("unsubscribePush", () => {
+  it("sends the subscription's auth secret, which the server requires for a row it does not own", async () => {
+    const spy = stubFetch(async () => response({ subscriptions: 0 }));
+    await unsubscribePush("https://push.example/abc", "secret-auth");
+    expect(JSON.parse(String(spy.mock.calls[0][1]?.body))).toEqual({
+      endpoint: "https://push.example/abc",
+      auth: "secret-auth",
+    });
   });
 });
