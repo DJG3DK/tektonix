@@ -57,7 +57,7 @@ from agent.tools.agent_tools import make_agent_tools
 # these are read/written via a bare StoreBackend, which must use the same
 # keys the composite's route stripping produces or this module reads a stale
 # seeded copy while the agent's own memory updates sit invisible on the
-# stripped key (see deep_agent.route_local_path's docstring).
+# stripped key (see project_memory.route_local_path's docstring).
 MEMORY_KEY = route_local_path("/memories/", MEMORY_PATH)
 CONSOLIDATION_MARKER_PATH = "/.last_consolidated"
 # Episodes are forensic records, not memory: consolidation transfers their

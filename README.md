@@ -664,6 +664,9 @@ agent/
   lifecycle.py           every task state × action, in one tested table
   supervisor.py          closes tasks already on main; heals infrastructure escalations
   deep_agent.py          per-task deepagents factory (tools, memory backend, subagents)
+  deep_agent_prompts.py  the seats' system prompts and the shared guidance blocks
+  model_client.py        llm_for_role: the ChatOpenAI client every role is built with
+  project_memory.py      memory/skills/episodes store layer; ProjectMemory for a seat's prompt
   planning_chat.py       the Planning Chat agent
   frontend_route.py      Auto / Frontend / General seat selection
   github_inbox.py        poller, policy, approve-link tokens

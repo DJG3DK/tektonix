@@ -1,5 +1,5 @@
 """CODER_REASONING=off turns the coder seat's chain of thought off for this
-process and nothing else (agent/deep_agent.py, 2026-09-25)."""
+process and nothing else (agent/model_client.py, 2026-09-25)."""
 import agent.deep_agent as da
 
 

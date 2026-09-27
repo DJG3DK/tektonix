@@ -157,7 +157,7 @@ def test_the_finding_guidance_reaches_every_prompt_that_can_chase_one():
     assert marker in d.COORDINATOR_SYSTEM_PROMPT_TEMPLATE, "the coordinator decides what to delegate"
     # Every prompt built from the shared guidance blocks gets it, which is
     # what puts it in front of the investigator too.
-    source = (paths.REPO_ROOT / "agent" / "deep_agent.py").read_text()
+    source = (paths.REPO_ROOT / "agent" / "deep_agent_prompts.py").read_text()
     assert source.count("_FILESYSTEM_GUIDANCE + _VISUAL_GUIDANCE + _FINDING_GUIDANCE") == 3
 
 
