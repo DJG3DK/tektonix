@@ -198,6 +198,7 @@ agent/
   nodes/               work.py, verify_and_ship.py, diff_patterns.py
   deep_agent.py        the build agent: seats, tools, the approval gate
   deep_agent_prompts.py the seats' system prompts and the guidance blocks they share
+  model_client.py      the chat-model client every role is built with (llm_for_role)
   planning_chat.py     the planning agent: three seats, brief-first, draft gate
   graph.py             the pools and the per-project slots, dispatched per backend
   workspaces.py        one git worktree per task, filled from the project's workspace

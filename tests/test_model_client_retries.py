@@ -2,7 +2,7 @@
 
 The openai SDK defaults to max_retries=2 and we never set it, so the default
 was inherited rather than chosen. A tool-calling call is non-streaming (see
-deep_agent's disable_streaming="tool_calling"), so it is governed by a real
+model_client's disable_streaming="tool_calling"), so it is governed by a real
 total timeout -- and on hitting it the SDK retries twice before this code sees
 an error. One logical model call could occupy three times the timeout, fifteen
 minutes at the current 300s, while the agent log stayed silent because the SDK
