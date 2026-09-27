@@ -93,10 +93,10 @@ async def test_the_ship_step_returns_the_hint_rather_than_the_git_error(monkeypa
                                            "ship": "pr"})
     monkeypatch.setattr(github_settings, "token_for", lambda *a, **k: FINE)
 
-    async def fake_git(cmd, cwd, timeout=None):
+    async def fake_git(cmd, cwd, timeout=None, extra_env=None):
         if "remote get-url" in cmd or "config --local" in cmd:
             return {"ok": True, "output": "https://github.com/OWNER/REPO.git"}
-        if cmd.startswith("push"):
+        if " push " in f" {cmd} ":
             return {"ok": False, "output": REAL_REFUSAL}
         return {"ok": True, "output": ""}
 
