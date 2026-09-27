@@ -78,6 +78,13 @@ services:
         condition: service_healthy
       router:
         condition: service_healthy
+      checks-postgres:
+        condition: service_healthy
+      checks-redis:
+        condition: service_started
+    networks:
+      - default
+      - checks
     environment:
       # The entrypoint builds LANGGRAPH_PG_DSN and MODEL_ROUTER_KEY from these
       # generated files; set LANGGRAPH_PG_DSN yourself to use another database.
@@ -116,6 +123,14 @@ services:
       # a request naming a worktree anywhere else is refused. Setting it is
       # also what enables that endpoint at all.
       REVIEW_WORKTREE_ROOT: /projects/.tektonix-review-worktrees
+      # A project's db:drift, db:seed and test:e2e run in the checks
+      # container on this private network, against these two throwaway
+      # services (agent/review_sandbox.py). The network is internal: a check
+      # can reach the two of them and nothing else. All three unset means the
+      # reviewer refuses the database checks, as it did before 2026-09-27.
+      REVIEW_CHECKS_NETWORK: three-d-agent_checks
+      REVIEW_CHECKS_POSTGRES_URL: postgresql://checks:checks@checks-postgres:5432/postgres
+      REVIEW_CHECKS_REDIS_URL: redis://checks-redis:6379
       # The review services are siblings here, not localhost.
       REVIEW_SERVICE_HOST: agent-review
       REVIEW_CONTROL_HOST: commit-reviewer
@@ -213,6 +228,43 @@ services:
       - reviewstate:/app/review-state
       - bundlesecrets:/run/tektonix-secrets:ro
     restart: unless-stopped
+
+  # The database checks' own Postgres and Redis: throwaway, on the internal
+  # `checks` network only, reached by nothing but the agent (which creates
+  # and drops each review's database) and the check containers it starts.
+  # Data lives in memory; nothing here outlives a restart, and nothing here is
+  # yours. The fixed password is fine for a server no other network can
+  # reach and whose every database is disposable.
+  checks-postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: checks
+      POSTGRES_PASSWORD: checks
+      POSTGRES_DB: postgres
+    tmpfs:
+      - /var/lib/postgresql/data
+    networks:
+      - checks
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U checks -d postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  checks-redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    networks:
+      - checks
+    restart: unless-stopped
+
+networks:
+  default:
+  # No gateway: a container on this network alone cannot reach the internet,
+  # the host, or any service that is not also on it.
+  checks:
+    internal: true
 
 volumes:
   pgdata:

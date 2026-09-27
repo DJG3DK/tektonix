@@ -460,6 +460,54 @@ async function runDelegated(cfg, worktreePath, relDir, cmd, args, timeoutMs, ext
                     data.image || imageFor(stack || cfg.stack).image);
 }
 
+/**
+ * The database checks, run by the agent in the checks container against
+ * its throwaway checks-postgres and checks-redis (agent/review_sandbox.py).
+ * The commands and their directory are the project's own configuration,
+ * which the agent reads from projects.json itself; this sends only what the
+ * agent cannot know: which project, which worktree, and the dependency
+ * mounts the checks need. Rows come back in the host path's shape.
+ */
+async function runDelegatedDatabaseCheck(cfg, worktreePath, stack, { secret, fetchImpl = fetch } = {}) {
+    const setup = (why) => [{
+        name: 'db-setup', ok: false, infrastructure: true,
+        output: `SETUP: the database checks run the project's code and could not be sandboxed -- ${why}. `
+              + 'They were not run, and nothing about the code under review is known either way.',
+    }];
+    if (!secret) return setup('REVIEW_CONTROL_SECRET is not configured, so the agent would refuse the request');
+    const base = path.basename(worktreePath);
+    const m = /^(.+)-[0-9a-f]{7,40}$/.exec(base);
+    const body = {
+        project: cfg.name || (m ? m[1] : base),
+        worktree: worktreePath,
+        stack: stack || null,
+        mounts: mountSpecs(cfg, worktreePath),
+    };
+    let res;
+    try {
+        res = await fetchImpl(`${DELEGATE_URL}/api/internal/review-sandbox/db-check`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json', 'x-review-secret': secret },
+            body: JSON.stringify(body),
+            signal: AbortSignal.timeout(600_000),
+        });
+    } catch (err) {
+        return setup(`the agent's sandbox endpoint did not answer (${String(err && err.message || err).slice(0, 200)})`);
+    }
+    let data = null;
+    try { data = await res.json(); } catch { /* reported below */ }
+    if (!res.ok || !data || !Array.isArray(data.results)) {
+        const detail = data && (data.detail || data.error);
+        return setup(`the agent refused it (HTTP ${res.status}${detail ? `: ${String(detail).slice(0, 300)}` : ''})`);
+    }
+    return data.results.map((r) => ({
+        name: String(r.name || 'db-check'),
+        ok: Boolean(r.ok),
+        output: String(r.output || ''),
+        ...(r.infrastructure ? { infrastructure: true } : {}),
+    }));
+}
+
 function classify(r, image) {
     const missing = missingTool(r.out);
     if (missing) {
@@ -493,6 +541,6 @@ function missingTool(output) {
     return m ? m[1] : null;
 }
 
-module.exports = { probe, delegatedProbe, resetProbe, runSandboxed, runDelegated, delegatedRequest, dockerArgs, mountArgs,
+module.exports = { probe, delegatedProbe, resetProbe, runSandboxed, runDelegated, runDelegatedDatabaseCheck, delegatedRequest, dockerArgs, mountArgs,
                    mountSpecs, nodeModulesLinks, isInside, missingTool, imageFor, STACKS, IMAGE, IN_CONTAINER,
                    DELEGATE_URL };

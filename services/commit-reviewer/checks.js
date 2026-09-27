@@ -12,7 +12,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const sandbox = require('./sandbox');
-const { log, run, runSealed, runAgentCode } = require('./exec');
+const { log, run, runSealed, runAgentCode, REVIEW_CONTROL_SECRET } = require('./exec');
 const { setupWorktree, cleanupWorktree } = require('./worktree');
 
 // A check whose COMMAND was never found did not fail -- it did not run, and
@@ -200,15 +200,21 @@ async function runDatabaseCheck(cfg, worktreePath) {
   const dc = cfg.databaseCheck;
   if (!dc) return [];
   if (sandbox.IN_CONTAINER) {
-    // These run the repository's own code outside any sandbox (see below),
-    // and in the bundle "outside" is this container, which holds the merge
-    // secret. There is also no loopback Postgres or Redis here to run them
-    // against, so nothing is lost by refusing.
-    return [{
-      name: 'db-setup', ok: false, infrastructure: true,
-      output: 'SETUP: the database checks run the project\'s code unsandboxed and are not run in '
-            + 'the container bundle. Nothing about the code under review is known either way.',
-    }];
+    // Never in this container: it holds the merge secret. The agent runs
+    // them in the checks container against the bundle's throwaway
+    // checks-postgres and checks-redis, on a network that reaches nothing
+    // else (2026-09-27). Without an agent to ask, or a bundle without those
+    // services, the agent's 503 comes back as the refusal it always was.
+    if (!sandbox.DELEGATE_URL) {
+      return [{
+        name: 'db-setup', ok: false, infrastructure: true,
+        output: 'SETUP: the database checks run the project\'s code and cannot be sandboxed here: '
+              + 'AGENT_SANDBOX_URL is unset, so there is no agent to start the checks container. '
+              + 'Nothing about the code under review is known either way.',
+      }];
+    }
+    log(`  delegating the database checks (drift, seed, e2e) in ${dc.apiDir} to the agent`);
+    return sandbox.runDelegatedDatabaseCheck(cfg, worktreePath, cfg.stack, { secret: REVIEW_CONTROL_SECRET });
   }
   const apiDir = path.join(worktreePath, dc.apiDir);
   const envPath = path.join(apiDir, '.env');

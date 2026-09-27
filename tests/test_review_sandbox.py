@@ -345,3 +345,123 @@ def test_a_build_starts_once_and_only_for_the_default_image_with_a_context(bundl
 
     asyncio.run(go())
     rs._builds.clear()
+
+
+# --- the database checks, in the sandbox (2026-09-27) ---------------------------
+
+def _db_env(monkeypatch, tmp_path):
+    monkeypatch.setenv(rs.CHECKS_NETWORK_ENV, "three-d-agent_checks")
+    monkeypatch.setenv(rs.CHECKS_POSTGRES_ENV, "postgresql://checks:pw@checks-postgres:5432/postgres")
+    monkeypatch.setenv(rs.CHECKS_REDIS_ENV, "redis://checks-redis:6379")
+
+
+def _db_project(bundle, monkeypatch):
+    PROJECTS["shop"]["databaseCheck"] = {
+        "apiDir": "apps/api",
+        "driftCmd": {"cmd": "pnpm", "args": ["db:drift"]},
+        "seedCmd": {"cmd": "pnpm", "args": ["db:seed"]},
+        "e2eCmd": {"cmd": "pnpm", "args": ["test:e2e"]},
+    }
+
+
+def _fake_db_layer(monkeypatch, outcomes):
+    """Record the SQL, the redis flush and every sandboxed step; `outcomes`
+    maps a step name to ok/not."""
+    sql, runs, flushed = [], [], []
+
+    async def admin(statement):
+        sql.append(statement)
+
+    async def flush(db=rs.CHECKS_REDIS_DB):
+        flushed.append(db)
+
+    async def run(req):
+        runs.append(req)
+        name = {"db:drift": "db-drift", "db:seed": "db-seed", "test:e2e": "e2e"}[req.args[0]]
+        ok = outcomes.get(name, True)
+        return {"ok": ok, "code": 0 if ok else 1, "output": f"{name} {'passed' if ok else 'FAILED'}",
+                "image": "tektonix-sandbox:latest"}
+
+    monkeypatch.setattr(rs, "_admin_sql", admin)
+    monkeypatch.setattr(rs, "_flush_redis", flush)
+    monkeypatch.setattr(rs, "run_check", run)
+    return sql, runs, flushed
+
+
+def test_the_three_steps_run_in_order_in_the_checks_container_against_a_throwaway_database(bundle, monkeypatch):
+    _db_env(monkeypatch, bundle["tmp"])
+    _db_project(bundle, monkeypatch)
+    sql, runs, flushed = _fake_db_layer(monkeypatch, {})
+    rows = asyncio.run(rs.run_database_check(rs.DbCheckRequest(project="shop", worktree=bundle["wt"],
+                                                                 mounts=[(f"{bundle['live']}/node_modules", "/workspace/node_modules")])))
+    assert [r["name"] for r in rows] == ["db-drift", "db-seed", "e2e"] and all(r["ok"] for r in rows)
+    assert [r.args for r in runs] == [["db:drift"], ["db:seed"], ["test:e2e"]]
+    assert [r.timeout_ms for r in runs] == [120_000, 60_000, 300_000]
+    assert all(r.network == rs.CHECKS_NETWORK and r.rel_dir == "apps/api" and r.mounts for r in runs)
+    dsn = runs[0].env["DATABASE_URL"]
+    assert dsn.startswith("postgresql://checks:pw@checks-postgres:5432/tektonix_ci_review_") and dsn.endswith("?schema=public")
+    throwaway = dsn.split("/")[-1].split("?")[0]
+    assert runs[0].env["REDIS_URL"] == "redis://checks-redis:6379/15" and flushed == [15]
+    assert len(runs[0].env["JWT_ACCESS_SECRET"]) == 64 and runs[0].env["JWT_ACCESS_SECRET"] != runs[0].env["SECRETS_ENCRYPTION_KEY"]
+    assert "PATH" not in runs[0].env and "REVIEW_CONTROL_SECRET" not in runs[0].env
+    assert sql[0] == f"CREATE DATABASE {throwaway};"
+    assert "pg_terminate_backend" in sql[1] and sql[2] == f"DROP DATABASE IF EXISTS {throwaway};"
+
+
+def test_a_failing_step_stops_the_rest_and_the_database_is_still_dropped(bundle, monkeypatch):
+    _db_env(monkeypatch, bundle["tmp"])
+    _db_project(bundle, monkeypatch)
+    sql, runs, _ = _fake_db_layer(monkeypatch, {"db-seed": False})
+    rows = asyncio.run(rs.run_database_check(rs.DbCheckRequest(project="shop", worktree=bundle["wt"])))
+    assert [(r["name"], r["ok"]) for r in rows] == [("db-drift", True), ("db-seed", False)]
+    assert [r.args for r in runs] == [["db:drift"], ["db:seed"]], "e2e needs a seeded schema; it was not run"
+    assert sql[-1].startswith("DROP DATABASE IF EXISTS tektonix_ci_review_")
+
+
+def test_the_checks_network_is_server_config_and_a_request_cannot_choose_it(bundle, monkeypatch):
+    _db_env(monkeypatch, bundle["tmp"])
+    argv = _argv(bundle, network=rs.CHECKS_NETWORK)
+    assert argv[argv.index("--network") + 1] == "three-d-agent_checks"
+    c = _client()
+    r = c.post("/api/internal/review-sandbox/run", json=_body(bundle, network="checks"),
+               headers={"X-Review-Secret": "the-secret"})
+    assert r.status_code == 400 and "network" in r.json()["detail"]
+
+
+def test_without_the_checks_services_the_route_is_503_and_the_runner_refuses(bundle, monkeypatch):
+    for k in (rs.CHECKS_NETWORK_ENV, rs.CHECKS_POSTGRES_ENV, rs.CHECKS_REDIS_ENV):
+        monkeypatch.delenv(k, raising=False)
+    _db_project(bundle, monkeypatch)
+    c = _client()
+    r = c.post("/api/internal/review-sandbox/db-check", json={"project": "shop", "worktree": bundle["wt"]},
+               headers={"X-Review-Secret": "the-secret"})
+    assert r.status_code == 503 and rs.CHECKS_NETWORK_ENV in r.json()["detail"]
+    rows = asyncio.run(rs.run_database_check(rs.DbCheckRequest(project="shop", worktree=bundle["wt"])))
+    assert rows[0]["name"] == "db-setup" and rows[0]["infrastructure"] is True and rows[0]["output"].startswith("SETUP:")
+
+
+def test_the_route_returns_the_rows_and_a_project_without_database_checks_returns_none(bundle, monkeypatch):
+    _db_env(monkeypatch, bundle["tmp"])
+    _db_project(bundle, monkeypatch)
+    _fake_db_layer(monkeypatch, {})
+    c = _client()
+    h = {"X-Review-Secret": "the-secret"}
+    r = c.post("/api/internal/review-sandbox/db-check", json={"project": "shop", "worktree": bundle["wt"]}, headers=h)
+    assert r.status_code == 200 and [x["name"] for x in r.json()["results"]] == ["db-drift", "db-seed", "e2e"]
+    r = c.post("/api/internal/review-sandbox/db-check", json={"project": "shop", "worktree": "/etc"}, headers=h)
+    assert r.status_code == 400
+    del PROJECTS["shop"]["databaseCheck"]
+    r = c.post("/api/internal/review-sandbox/db-check", json={"project": "shop", "worktree": bundle["wt"]}, headers=h)
+    assert r.status_code == 200 and r.json() == {"results": []}
+
+
+def test_a_database_that_cannot_be_created_is_a_setup_refusal(bundle, monkeypatch):
+    _db_env(monkeypatch, bundle["tmp"])
+    _db_project(bundle, monkeypatch)
+
+    async def broken(statement):
+        raise ConnectionError("connection refused")
+
+    monkeypatch.setattr(rs, "_admin_sql", broken)
+    rows = asyncio.run(rs.run_database_check(rs.DbCheckRequest(project="shop", worktree=bundle["wt"])))
+    assert rows[0]["name"] == "db-setup" and rows[0]["infrastructure"] is True and "connection refused" in rows[0]["output"]

@@ -105,13 +105,16 @@ connection". `depends_on: service_healthy` is what closes that.
 * **A project that lives only on GitHub.** The dashboard clones it here and
   ships as a pull request (M2). The clone is still on this machine; there is
   no remote execution.
-* **Checks run in the reviewer process, not a sandbox.** On a host install the
-  reviewer puts each project's checks in a container, because it is otherwise
-  root on the real machine running code the agent wrote. Here it does not: this
-  service is already inside a container, and it is deliberately NOT given
-  `/var/run/docker.sock` — handing it the socket so it could start a sandbox
-  would give it host-root equivalent, which is worse than the containment it
-  already has. See `SECURITY.md`.
+* **Checks run in a sandbox the agent starts, not in the reviewer.** The
+  reviewer is deliberately NOT given `/var/run/docker.sock` (the socket would
+  make it host-root equivalent), and it holds the merge secret, so it runs no
+  agent-written code itself. It asks the agent, which has the socket, to
+  start the same hardened container for each check, after a probe that the
+  image is there (the agent builds it on demand). A project's `db:drift`,
+  `db:seed` and `test:e2e` run the same way against the bundle's own
+  throwaway `checks-postgres` and `checks-redis`, on an internal network the
+  check container shares with those two services and nothing else. See
+  `SECURITY.md`.
 * **The logo tools.** `logo_render`, `logo_export_brand_kit` and the rest call
   LogoLoom's Node modules, and the agent image is Python-only — no Node, and
   60MB of image libraries for a feature most installs never touch. The agent

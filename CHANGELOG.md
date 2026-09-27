@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### The bundle runs the database checks, contained
+
+`db:drift`, `db:seed` and `test:e2e` were refused in the compose bundle: they
+need a Postgres and a Redis, and the only place to run them was the
+reviewer's own container, which holds the merge secret. The bundle now
+carries a throwaway `checks-postgres` and `checks-redis` on an internal
+network with no gateway. The agent creates a database there for each review,
+flushes a scratch Redis database, runs the three commands in order in the
+same hardened container as every other check, joined to that network alone,
+and drops the database whatever happened. The commands and their directory
+come from the project's own configuration, never from the request; the DSN
+and the secrets are built for the run. A bundle without the two services
+gets the refusal it always did, and a host install is unchanged.
+
 ### The bundle's reviewer probes the sandbox before it trusts it
 
 In the compose bundle the reviewer asks the agent to run each check in a

@@ -31,6 +31,7 @@ import asyncio
 import logging
 import os
 import re
+import secrets
 import uuid
 from dataclasses import dataclass, field
 
@@ -64,6 +65,33 @@ class CheckRequest:
     stack: str | None = None
     mounts: list[tuple[str, str]] = field(default_factory=list)
     timeout_ms: int = 300_000
+
+
+# --- the database checks' own network and services (2026-09-27) -----------------
+#
+# db:drift, db:seed and test:e2e need a Postgres and a Redis. A host install
+# runs them OUTSIDE the sandbox against the machine's loopback, the one place
+# agent-authored code still runs as root on the box (SECURITY.md). The bundle
+# used to refuse them instead. Now the bundle gives them a throwaway
+# checks-postgres and checks-redis on a private, internal compose network,
+# and the three commands run in the same hardened container as every other
+# check, joined to that network alone: no route to the agent, the router,
+# the reviewer or the internet. The names below are server config; a request
+# never chooses the network or the DSN.
+CHECKS_NETWORK = "checks"          # the request-side name; mapped to the real network here
+CHECKS_NETWORK_ENV = "REVIEW_CHECKS_NETWORK"
+CHECKS_POSTGRES_ENV = "REVIEW_CHECKS_POSTGRES_URL"   # postgresql://user:pass@host:port/postgres
+CHECKS_REDIS_ENV = "REVIEW_CHECKS_REDIS_URL"         # redis://host:port
+CHECKS_REDIS_DB = 15
+_DB_STEPS = (("db-drift", "driftCmd", 120_000), ("db-seed", "seedCmd", 60_000), ("e2e", "e2eCmd", 300_000))
+
+
+def checks_network() -> str | None:
+    return os.environ.get(CHECKS_NETWORK_ENV) or None
+
+
+def db_checks_enabled() -> bool:
+    return all(os.environ.get(k) for k in (CHECKS_NETWORK_ENV, CHECKS_POSTGRES_ENV, CHECKS_REDIS_ENV))
 
 
 def worktree_root() -> str | None:
@@ -191,7 +219,7 @@ def build_docker_argv(req: CheckRequest, container_name: str) -> tuple[list[str]
     if not isinstance(req.args, list) or len(req.args) > MAX_ARGS:
         raise RejectedRequest("args must be a list of at most 256 strings")
     args = [_no_nul(a, "arg") for a in req.args]
-    if req.network not in ("none", "bridge"):
+    if req.network not in ("none", "bridge", CHECKS_NETWORK):
         raise RejectedRequest("network must be 'none' or 'bridge'")
 
     image, toolchain_env = _image_and_env(req, cfg)
@@ -207,7 +235,7 @@ def build_docker_argv(req: CheckRequest, container_name: str) -> tuple[list[str]
         "docker", "run", "--rm", "--name", container_name,
         "-v", f"{sb.host_path(wt)}:/workspace",
         *[a for src, dst in mounts for a in ("-v", f"{sb.host_path(src)}:{dst}:ro")],
-        "--network", req.network,
+        "--network", checks_network() if req.network == CHECKS_NETWORK else req.network,
         "-w", "/workspace" if rel == "." else f"/workspace/{rel}",
         "--memory", sb.SANDBOX_MEMORY_LIMIT,
         "--memory-swap", sb.SANDBOX_MEMORY_SWAP,
@@ -348,3 +376,133 @@ async def run_check(req: CheckRequest) -> dict:
         raise
     text = (out or b"").decode("utf-8", errors="replace")[-MAX_OUTPUT_CHARS:]
     return {"ok": proc.returncode == 0, "code": proc.returncode, "output": text, "image": image}
+
+
+# --- running a project's database checks in the sandbox ----------------------------
+
+@dataclass
+class DbCheckRequest:
+    project: str
+    worktree: str
+    mounts: list[tuple[str, str]] = field(default_factory=list)
+    stack: str | None = None
+
+
+def _parse_dsn(url: str) -> dict:
+    """user, password, host, port of a postgresql:// URL. No library: the URL
+    is server config and the pieces go into a URL the checks are given."""
+    m = re.match(r"^postgres(?:ql)?://([^:/@]+)(?::([^@]*))?@([^:/]+)(?::(\d+))?(?:/([^?]*))?", url)
+    if not m:
+        raise RejectedRequest(f"{CHECKS_POSTGRES_ENV} is not a postgresql:// URL")
+    return {"user": m.group(1), "password": m.group(2) or "", "host": m.group(3),
+            "port": int(m.group(4) or 5432), "db": m.group(5) or "postgres"}
+
+
+def check_env(throwaway_db: str) -> dict[str, str]:
+    """What the three commands see: the throwaway DSN, a scratch Redis
+    database and freshly generated secrets -- built for the run, as the host
+    path builds its own (services/commit-reviewer/checks.js), never inherited."""
+    pg = _parse_dsn(os.environ[CHECKS_POSTGRES_ENV])
+    redis = os.environ[CHECKS_REDIS_ENV].rstrip("/")
+    return {
+        "DATABASE_URL": f"postgresql://{pg['user']}:{pg['password']}@{pg['host']}:{pg['port']}/{throwaway_db}?schema=public",
+        "REDIS_URL": f"{redis}/{CHECKS_REDIS_DB}",
+        "JWT_ACCESS_SECRET": secrets.token_hex(32),
+        "SECRETS_ENCRYPTION_KEY": secrets.token_hex(32),
+        "CORS_ORIGIN_STOREFRONT": "http://localhost:5173",
+        "CORS_ORIGIN_ADMIN": "http://localhost:5174",
+        "ORDER_NOTIFY_EMAIL": "orders@example.test",
+    }
+
+
+async def _admin_sql(sql: str) -> None:
+    """One statement on the checks server's maintenance database, autocommit
+    (CREATE/DROP DATABASE cannot run in a transaction)."""
+    import psycopg  # noqa: PLC0415 -- the agent's own driver; the sandbox image has none
+
+    pg = _parse_dsn(os.environ[CHECKS_POSTGRES_ENV])
+    conninfo = (f"host={pg['host']} port={pg['port']} user={pg['user']} password={pg['password']} "
+                f"dbname={pg['db']} connect_timeout=10")
+    async with await psycopg.AsyncConnection.connect(conninfo, autocommit=True) as conn:
+        await conn.execute(sql)
+
+
+async def _flush_redis(db: int = CHECKS_REDIS_DB) -> None:
+    """SELECT db; FLUSHDB, spoken directly: the agent carries no redis client."""
+    url = os.environ[CHECKS_REDIS_ENV]
+    m = re.match(r"^redis://([^:/]+)(?::(\d+))?", url)
+    if not m:
+        raise RejectedRequest(f"{CHECKS_REDIS_ENV} is not a redis:// URL")
+    reader, writer = await asyncio.wait_for(asyncio.open_connection(m.group(1), int(m.group(2) or 6379)), timeout=10)
+    try:
+        writer.write(f"*2\r\n$6\r\nSELECT\r\n${len(str(db))}\r\n{db}\r\n*1\r\n$7\r\nFLUSHDB\r\n".encode())
+        await writer.drain()
+        for _ in range(2):
+            line = await asyncio.wait_for(reader.readline(), timeout=10)
+            if not line.startswith(b"+OK"):
+                raise RuntimeError(f"redis answered {line!r}")
+    finally:
+        writer.close()
+
+
+def _setup_failure(what: str) -> list[dict]:
+    return [{"name": "db-setup", "ok": False, "infrastructure": True,
+             "output": f"SETUP: the database checks could not be set up by the agent -- {what}. They were not "
+                       f"run, and nothing about the code under review is known either way."}]
+
+
+async def run_database_check(req: DbCheckRequest) -> list[dict]:
+    """The host path's runDatabaseCheck, in the sandbox: a throwaway database
+    created on checks-postgres, the scratch Redis flushed, then db-drift,
+    db-seed and e2e in order in the checks container, stopping at the first
+    failure, and the database dropped whatever happened. Rows in the same
+    shape the host path returns."""
+    if not db_checks_enabled():
+        return _setup_failure(f"{CHECKS_NETWORK_ENV}, {CHECKS_POSTGRES_ENV} and {CHECKS_REDIS_ENV} are not all set")
+    live, cfg = _project_live(req.project)
+    dc = cfg.get("databaseCheck")
+    if not dc:
+        return []
+    worktree = _checked_worktree(CheckRequest(project=req.project, worktree=req.worktree, cmd="x"), live)
+    api_dir = _checked_rel_dir(str(dc.get("apiDir") or "."))
+    steps = []
+    for name, key, timeout_ms in _DB_STEPS:
+        spec = dc.get(key) or {}
+        cmd = _no_nul(str(spec.get("cmd") or ""), key)
+        if not cmd:
+            raise RejectedRequest(f"databaseCheck.{key} has no cmd")
+        steps.append((name, cmd, [str(a) for a in (spec.get("args") or [])], timeout_ms))
+    image = None
+    throwaway = f"tektonix_ci_review_{secrets.token_hex(4)}"
+    env = check_env(throwaway)
+    results: list[dict] = []
+    try:
+        try:
+            await _admin_sql(f"CREATE DATABASE {throwaway};")
+        except Exception as e:  # noqa: BLE001 -- the reviewer needs the reason, not a stack trace
+            return _setup_failure(f"could not create the throwaway database: {str(e)[:300]}")
+        try:
+            await _flush_redis()
+        except Exception as e:  # noqa: BLE001
+            return _setup_failure(f"could not reach the checks redis: {str(e)[:300]}")
+        for name, cmd, args, timeout_ms in steps:
+            r = await run_check(CheckRequest(
+                project=req.project, worktree=worktree, cmd=cmd, args=args, rel_dir=api_dir,
+                env=env, network=CHECKS_NETWORK, stack=req.stack, mounts=list(req.mounts),
+                timeout_ms=timeout_ms))
+            image = r.get("image", image)
+            row = {"name": name, "ok": bool(r.get("ok")), "code": r.get("code"),
+                   "output": str(r.get("output") or "")[-4000:]}
+            if r.get("infrastructure"):
+                row["infrastructure"] = True
+            results.append(row)
+            if not row["ok"]:
+                break
+        return results
+    finally:
+        try:
+            await _admin_sql(f"SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+                             f"WHERE datname = '{throwaway}' AND pid <> pg_backend_pid();")
+            await _admin_sql(f"DROP DATABASE IF EXISTS {throwaway};")
+        except Exception as e:  # noqa: BLE001 -- a leaked throwaway is logged, never raised over a result
+            logger.warning("review db check: throwaway database %s not dropped: %s", throwaway, e)

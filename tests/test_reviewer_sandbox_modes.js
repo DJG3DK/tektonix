@@ -285,3 +285,46 @@ test('a file pulled into the review prompt cannot be a way out of the worktree',
 Promise.all(pending).then(() => {
     console.log(`\n${passed} passed`);
 });
+
+test('in the bundle the database checks are delegated whole, and the rows come back in the host shape', async () => {
+    const s = freshSandbox('1', 'http://agent:8100');
+    const { live, wt } = fixtureWorktree();
+    const seen = [];
+    const answer = (status, data) => async (url, init) => {
+        seen.push({ url, init });
+        return { ok: status < 300, status, json: async () => data };
+    };
+    const rows = await s.runDelegatedDatabaseCheck({ live, name: 'shop', dependencyDirs: ['node_modules'] }, wt, null,
+        { secret: 's3cret', fetchImpl: answer(200, { results: [
+            { name: 'db-drift', ok: true, code: 0, output: 'no drift' },
+            { name: 'db-seed', ok: false, code: 1, output: 'seed failed' },
+        ] }) });
+    assert.deepEqual(rows, [{ name: 'db-drift', ok: true, output: 'no drift' }, { name: 'db-seed', ok: false, output: 'seed failed' }]);
+    assert.equal(seen[0].url, 'http://agent:8100/api/internal/review-sandbox/db-check');
+    assert.equal(seen[0].init.headers['x-review-secret'], 's3cret');
+    const body = JSON.parse(seen[0].init.body);
+    assert.equal(body.project, 'shop');
+    assert.equal(body.worktree, wt);
+    assert.ok(Array.isArray(body.mounts), 'the dependency mounts travel with the request');
+    assert.ok(!('cmd' in body) && !('env' in body), 'the commands and the DSN are the agent\'s to decide');
+
+    for (const [label, opts] of [
+        ['bundle without checks services', { secret: 's3cret', fetchImpl: answer(503, { detail: 'database checks are not enabled on this deployment' }) }],
+        ['agent down', { secret: 's3cret', fetchImpl: async () => { throw new Error('ECONNREFUSED'); } }],
+        ['no secret', { secret: '', fetchImpl: answer(200, { results: [] }) }],
+    ]) {
+        const r = await s.runDelegatedDatabaseCheck({ live, name: 'shop' }, wt, null, opts);
+        assert.equal(r.length, 1, label);
+        assert.equal(r[0].name, 'db-setup', label);
+        assert.equal(r[0].infrastructure, true, label);
+        assert.ok(/^SETUP: /.test(r[0].output), `${label}: ${r[0].output}`);
+    }
+});
+
+test('the checks module hands the database checks to the agent in the bundle and refuses without one', async () => {
+    const src = fs.readFileSync(path.join(REVIEWER_DIR, 'checks.js'), 'utf8');
+    assert.ok(/sandbox\.runDelegatedDatabaseCheck\(cfg, worktreePath/.test(src), 'the bundle branch delegates');
+    assert.ok(/AGENT_SANDBOX_URL is unset, so there is no agent to start the checks container/.test(src), 'and refuses without an agent');
+    assert.ok(!/runSealed\(dc\.driftCmd[\s\S]*IN_CONTAINER/.test(src.split('async function runDatabaseCheck')[1].split('IN_CONTAINER')[0]),
+        'nothing agent-authored runs in this process before the bundle check');
+});

@@ -182,13 +182,19 @@ check -- an environment error read as a code failure gets handed back to the
 agent, which then tries to debug an environment it cannot see, and a correct
 commit is rejected round after round.
 
-### The database checks, which stay on the host
+### The database checks: contained in the bundle, on the host still not
 
-Three commands still run outside the sandbox on a host install: a project's
+Three commands run outside the sandbox on a host install: a project's
 `db:drift`, `db:seed` and `test:e2e`. They are agent-authored code, and they
-are the exception to everything above. In the compose bundle they are not run
-at all: there, "outside the sandbox" would be the reviewer's container, which
-holds the merge secret.
+are the exception to everything above. **In the compose bundle they are
+contained** (since 2026-09-27): the bundle carries a throwaway
+`checks-postgres` and `checks-redis` on an internal network with no gateway,
+the agent creates a database on the first and flushes a scratch database on
+the second, and the three commands run in the same hardened container as
+every other check, joined to that network alone -- no route to the agent,
+the router, the reviewer or the internet -- with a DSN and secrets built for
+the run. The database is dropped whatever happened. A bundle without those
+services gets the refusal it always did.
 
 They talk to Postgres and Redis on this machine's loopback. Inside a
 container `localhost` is the container, so containing them means one of two
@@ -214,9 +220,10 @@ the package-manager installs, schema generation, and the build assertions all
 go through the sandbox now. This is the residue, and it is written down
 rather than left to be discovered.
 
-Closing it properly means the reviewer's database dependencies moving into
-the compose stack, where a container can reach them by service name. That is
-the fix, and it is not built.
+Closing it on a host install means the same thing the bundle now does: a
+throwaway Postgres and Redis the check container can reach by name on a
+private network. The bundle has them; a host install still points at the
+machine's own loopback services and so still runs these three on the host.
 
 ### What this does not fix
 

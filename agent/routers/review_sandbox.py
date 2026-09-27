@@ -55,8 +55,33 @@ async def probe_review_sandbox(_auth: None = Depends(require_review_secret)):
     return await rs.probe()
 
 
+class _DbCheckBody(BaseModel):
+    project: str
+    worktree: str
+    stack: str | None = None
+    mounts: list[_Mount] = Field(default_factory=list)
+
+
+@router.post("/api/internal/review-sandbox/db-check")
+async def run_review_database_check(body: _DbCheckBody, _auth: None = Depends(require_review_secret)):
+    """The project's db:drift, db:seed and test:e2e, in the checks container
+    on the checks network, against a throwaway database. 503 when the bundle
+    has no checks services configured, so the reviewer refuses as before."""
+    if not rs.db_checks_enabled():
+        raise HTTPException(503, "database checks are not enabled on this deployment: "
+                                 f"{rs.CHECKS_NETWORK_ENV}, {rs.CHECKS_POSTGRES_ENV} and {rs.CHECKS_REDIS_ENV} must be set")
+    req = rs.DbCheckRequest(project=body.project, worktree=body.worktree, stack=body.stack,
+                            mounts=[(m.src, m.dst) for m in body.mounts])
+    try:
+        return {"results": await rs.run_database_check(req)}
+    except rs.RejectedRequest as e:
+        raise HTTPException(400, f"refused: {e}") from e
+
+
 @router.post("/api/internal/review-sandbox/run")
 async def run_review_check(body: _RunBody, _auth: None = Depends(require_review_secret)):
+    if body.network not in ("none", "bridge"):
+        raise HTTPException(400, "refused: network must be 'none' or 'bridge'")
     req = rs.CheckRequest(
         project=body.project, worktree=body.worktree, cmd=body.cmd, args=body.args,
         rel_dir=body.relDir, env=body.env, network=body.network, stack=body.stack,
