@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### The bundle's containers can commit
+
+The first Windows install's first task did everything and then failed its
+final commit with "Please tell me who you are": a container has no git
+identity, where a host install has the operator's global config. The
+agent, both reviewers and every sandbox container now carry one, with the
+operator's address from `ADMIN_EMAIL`.
+
 ### A Windows app, and released images to feed it
 
 `app/` is a desktop app: the dashboard in a window, the compose stack under

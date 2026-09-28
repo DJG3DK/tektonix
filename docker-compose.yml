@@ -133,6 +133,15 @@ services:
       MODEL_ROUTER_CONFIG_PATH: /app/router-config/config.yaml
       MODEL_ROUTER_LEDGER: /app/router-logs/routing.jsonl
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:?set OPENROUTER_API_KEY in .env}
+      # Git needs an identity to commit and to merge, and a container has
+      # none: the first Windows install's first task ended at its final
+      # commit with "Please tell me who you are" (2026-09-28). The
+      # operator's address, as on a host install where their own git
+      # config applies.
+      GIT_AUTHOR_NAME: Tektonix
+      GIT_AUTHOR_EMAIL: ${ADMIN_EMAIL:-admin@example.com}
+      GIT_COMMITTER_NAME: Tektonix
+      GIT_COMMITTER_EMAIL: ${ADMIN_EMAIL:-admin@example.com}
       ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@example.com}
       DEFAULT_BUDGET_USD: ${DEFAULT_BUDGET_USD:-10.00}
       # Required by agent/config.py, and empty is a valid answer: without SMTP
@@ -234,6 +243,10 @@ services:
       MODEL_ROUTER_URL: http://router:4001
       REVIEW_CONTROL_HOST: commit-reviewer
       TEKTONIX_BUNDLE: "1"
+      GIT_AUTHOR_NAME: Tektonix
+      GIT_AUTHOR_EMAIL: ${ADMIN_EMAIL:-admin@example.com}
+      GIT_COMMITTER_NAME: Tektonix
+      GIT_COMMITTER_EMAIL: ${ADMIN_EMAIL:-admin@example.com}
     volumes:
       - ${PROJECTS_DIR:?set PROJECTS_DIR in .env}:/projects
       - agentdata:/app/data:ro
@@ -267,6 +280,10 @@ services:
       MODEL_ROUTER_URL: http://router:4001/v1
       MODEL_ROUTER_KEY_FILE: /run/tektonix-secrets/model_router_key
       TEKTONIX_BUNDLE: "1"
+      GIT_AUTHOR_NAME: Tektonix
+      GIT_AUTHOR_EMAIL: ${ADMIN_EMAIL:-admin@example.com}
+      GIT_COMMITTER_NAME: Tektonix
+      GIT_COMMITTER_EMAIL: ${ADMIN_EMAIL:-admin@example.com}
       # Checks run agent-authored code, and THIS container holds the secret
       # that authorises a merge -- so they never run here. The agent, which
       # has the docker socket, starts a sandbox container for each one

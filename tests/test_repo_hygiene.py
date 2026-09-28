@@ -528,3 +528,16 @@ def test_the_bundle_is_named_tektonix_and_builds_the_sandbox_image_before_the_ag
     assert services["sandbox-image"]["image"] == "tektonix-sandbox:latest"
     assert services["sandbox-image"]["build"] == {"context": "./docker/agent-sandbox"}
     assert services["agent"]["environment"]["REVIEW_CHECKS_NETWORK"] == "tektonix_checks"
+
+
+def test_the_bundle_gives_every_committing_container_a_git_identity():
+    """The first Windows install's first task ended at its final commit with
+    "Please tell me who you are": a container has no git identity, where a
+    host install has the operator's global config. The agent commits, the
+    commit-reviewer merges; both get the operator's address."""
+    compose = yaml.safe_load((REPO / "docker-compose.yml").read_text())
+    for svc in ("agent", "commit-reviewer", "agent-review"):
+        env = compose["services"][svc]["environment"]
+        for key in ("GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL"):
+            assert key in env, f"{svc} lacks {key}"
+        assert env["GIT_AUTHOR_EMAIL"] == "${ADMIN_EMAIL:-admin@example.com}"

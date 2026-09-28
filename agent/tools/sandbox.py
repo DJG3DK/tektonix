@@ -87,6 +87,23 @@ def host_path(path: str) -> str:
 
 
 SANDBOX_IMAGE = "tektonix-sandbox:latest"  # built from docker/agent-sandbox/Dockerfile
+
+
+# Git needs an identity to commit, and a sandbox container has none of its
+# own. The bundle sets these on the agent (docker-compose.yml, from
+# ADMIN_EMAIL); a host install has the operator's global git config, which
+# the sandbox cannot see either. Passed through when set, so `git commit`
+# the model runs in the sandbox works in both.
+_GIT_IDENTITY_VARS = ("GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL")
+
+
+def git_identity_args() -> list[str]:
+    args: list[str] = []
+    for k in _GIT_IDENTITY_VARS:
+        v = os.environ.get(k, "").strip()
+        if v:
+            args += ["-e", f"{k}={v}"]
+    return args
 SANDBOX_MEMORY_LIMIT = "2g"
 SANDBOX_CPU_LIMIT = "2"
 # No swap on top of the memory limit. Unset, docker gives a container as much
@@ -398,6 +415,7 @@ async def run_shell_sandboxed(
         "--memory-swap", SANDBOX_MEMORY_SWAP,
         "--cpus", SANDBOX_CPU_LIMIT,
         *[a for k, v in SANDBOX_TEST_ENV.items() for a in ("-e", f"{k}={v}")],
+        *git_identity_args(),
         # audit M-10 hardening. --user is deliberately NOT set: the bind-mounted
         # worktree is root-owned on the host (pm2 runs as root), so a non-root
         # container user could not write to it. Network stays on the default
@@ -485,6 +503,7 @@ async def start_preview_container(cmd: str, cwd: str, container_port: int,
         "--memory-swap", SANDBOX_MEMORY_SWAP,
         "--cpus", SANDBOX_CPU_LIMIT,
         *[a for k, v in SANDBOX_TEST_ENV.items() for a in ("-e", f"{k}={v}")],
+        *git_identity_args(),
         "--pids-limit", SANDBOX_PIDS_LIMIT,
         "--cap-drop", "ALL",
         "--security-opt", "no-new-privileges",
