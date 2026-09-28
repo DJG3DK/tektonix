@@ -117,6 +117,7 @@ EXPECTED = [
     ('POST', '/api/projects/{name}/deploy-key', 'require_admin'),
     ('POST', '/api/projects/{name}/deploy-key/generate', 'require_admin'),
     ('POST', '/api/projects/{name}/deploy-key/test', 'require_admin'),
+    ('POST', '/api/projects/{name}/move', 'require_admin'),
     ('POST', '/api/swebench/runs/{name}/stop', 'require_admin'),
     ('POST', '/api/tasks', 'check_repo_access'),
     ('POST', '/api/tasks/{task_id}/approve', 'check_repo_access'),

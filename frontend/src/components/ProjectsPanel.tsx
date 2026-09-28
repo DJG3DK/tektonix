@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { moveProject } from "../api";
 import {
   cloneProject,
   detectProject,
@@ -100,6 +101,11 @@ export function ProjectsPanel({ onChanged }: { onChanged?: () => void | Promise<
      the project leaves the list the moment it is removed, taking that panel
      with it, so a summary inside it is unmounted before anybody reads it. */
   const [removed, setRemoved] = useState<RemoveProjectResult | null>(null);
+  // Change path: which project's box is in use, what is typed, and the outcome.
+  const [moving, setMoving] = useState<string | null>(null);
+  const [moveTo, setMoveTo] = useState("");
+  const [moveError, setMoveError] = useState<string | null>(null);
+  const [moveNote, setMoveNote] = useState<string | null>(null);
 
   // Per-candidate operator choices, keyed by list then value. Seeded from the
   // report's recommendation on first render of the review step.
@@ -270,6 +276,39 @@ export function ProjectsPanel({ onChanged }: { onChanged?: () => void | Promise<
                 </div>
                 {expanded === name && (
                   <>
+                    <form
+                      className="wiz-move"
+                      onSubmit={async (e) => {
+                        e.preventDefault();
+                        const next = moveTo.trim();
+                        if (!next) return;
+                        setMoveError(null);
+                        try {
+                          const r = await moveProject(name, next);
+                          setMoveTo("");
+                          setMoveNote(r.unchanged ? "That is already its path." : `${name} now works in ${r.live}.`);
+                          await load();
+                          await onChanged?.();
+                        } catch (err) {
+                          setMoveError(err instanceof Error ? err.message : "could not change the path");
+                        }
+                      }}
+                    >
+                      <label className="wiz-move-label" htmlFor={`move-${name}`}>Change path</label>
+                      <input
+                        id={`move-${name}`}
+                        className="wiz-move-input"
+                        spellCheck={false}
+                        placeholder={cfg.live}
+                        value={moving === name ? moveTo : ""}
+                        onFocus={() => { setMoving(name); setMoveNote(null); }}
+                        onChange={(e) => { setMoving(name); setMoveTo(e.target.value); }}
+                      />
+                      <button type="submit" className="btn btn--sm" disabled={moving !== name || !moveTo.trim()}>Move</button>
+                      <span className="wiz-move-hint">Another checkout of the same repository. Nothing on disk moves.</span>
+                      {moving === name && moveError && <span className="wiz-move-error">{moveError}</span>}
+                      {moving === name && moveNote && <span className="wiz-move-note">{moveNote}</span>}
+                    </form>
                     <DeployKeyCard project={name} />
                     <RemoveProject
                       name={name}

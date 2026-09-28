@@ -263,3 +263,11 @@
   background: var(--surface, #16161d);
   color: var(--text, #e8e8ef);
 }
+
+/* Change path: one line under the project, same repository, nothing moves. */
+.wiz-move { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 6px 0 10px; }
+.wiz-move-label { font-weight: 600; font-size: 0.85rem; }
+.wiz-move-input { flex: 1 1 22rem; font: inherit; padding: 4px 8px; border-radius: 4px; border: 1px solid var(--line, #444); background: transparent; color: inherit; }
+.wiz-move-hint { flex-basis: 100%; font-size: 0.8rem; opacity: 0.75; }
+.wiz-move-error { flex-basis: 100%; font-size: 0.85rem; color: var(--danger, #c0392b); }
+.wiz-move-note { flex-basis: 100%; font-size: 0.85rem; }

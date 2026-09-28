@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### A project's path can change after onboarding
+
+The desktop app's projects folder moved and the only way to follow it was
+to remove the project and add it again. Each project row on the Projects
+page has a Change path box: the new path is held to onboarding's rules,
+must be a checkout of the same repository, and nothing on disk moves.
+
 ### A poller deploys a project whose main is merged elsewhere
 
 The agent deploys only its own merges. A pull request merged on GitHub, or

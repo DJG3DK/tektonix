@@ -1628,6 +1628,29 @@ def config_from_choices(live: str, sandbox: str, choices: dict) -> dict:
     return entry
 
 
+def move_project_entry(projects_path: Path, name: str, live: str) -> dict:
+    """Point an existing project at another checkout, atomically. The
+    sandbox follows when it was the live path (a project that works in its
+    own tree); a separate workspace path is kept. Returns the new entry.
+    2026-09-28: the projects folder changed under the desktop app and the
+    only way to follow it was to remove and re-add the project."""
+    data = json.loads(projects_path.read_text())
+    projects = data.get("projects") or {}
+    if name not in projects:
+        raise ProvisioningError(f"no project named {name!r} in {projects_path}")
+    entry = dict(projects[name])
+    old = entry.get("live")
+    entry["live"] = live
+    if not entry.get("sandbox") or entry.get("sandbox") == old:
+        entry["sandbox"] = live
+    projects[name] = entry
+    data["projects"] = projects
+    tmp = projects_path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(data, indent=2) + "\n")
+    os.replace(tmp, projects_path)
+    return entry
+
+
 def write_project_entry(projects_path: Path, name: str, entry: dict) -> None:
     """Atomic add of one project to projects.json. Atomic because this file
     is read at import by the API, the reviewer, and the deploy service -- a

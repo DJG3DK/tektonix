@@ -986,6 +986,16 @@ export async function checkoutRemovable(name: string): Promise<CheckoutRemovable
   return res.json();
 }
 
+export async function moveProject(name: string, live: string): Promise<{ ok: boolean; live: string; sandbox: string | null; unchanged: boolean }> {
+  const res = await apiFetch(`${API_BASE}/projects/${encodeURIComponent(name)}/move`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ live }),
+  });
+  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || `moveProject failed: ${res.status}`);
+  return res.json();
+}
+
 export async function removeProject(
   name: string, memory: "archive" | "delete", files: "keep" | "delete" = "keep",
 ): Promise<RemoveProjectResult> {

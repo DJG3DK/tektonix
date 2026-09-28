@@ -286,6 +286,7 @@ EXPECTED: list[tuple[str, str, str | None]] = [
     ('POST', '/api/projects/{name}/deploy-key', 'require_full_auth'),
     ('POST', '/api/projects/{name}/deploy-key/generate', 'require_full_auth'),
     ('POST', '/api/projects/{name}/deploy-key/test', 'require_full_auth'),
+    ('POST', '/api/projects/{name}/move', 'require_full_auth'),
     ('POST', '/api/push/subscribe', 'require_full_auth'),
     ('POST', '/api/push/test', 'require_full_auth'),
     ('POST', '/api/push/unsubscribe', 'require_full_auth'),

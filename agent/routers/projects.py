@@ -28,6 +28,7 @@ import asyncio
 import functools
 import logging
 import shutil
+import subprocess
 from types import SimpleNamespace
 from typing import Literal
 
@@ -897,6 +898,63 @@ async def get_deploy_key_status(name: str, user: User = Depends(require_full_aut
         return (await asyncio.to_thread(deploy_keys.status, name, live)).to_dict()
     except deploy_keys.DeployKeyError as e:
         raise HTTPException(400, str(e))
+
+
+class MoveProjectRequest(BaseModel):
+    live: str
+
+
+@router.post("/api/projects/{name}/move")
+async def move_project_endpoint(request: Request, name: str, req: MoveProjectRequest,
+                                user: User = Depends(require_full_auth)):
+    """Point a project at another checkout of the same repository.
+
+    The path is held to the rules onboarding holds it to: absolute, under an
+    allowed root, not the agent's own tree, a git checkout. When both the old
+    and the new checkout name an origin, they must name the same repository;
+    a project is its repository, not its folder. Nothing on disk moves.
+    """
+    auth.require_admin(user)
+    import os  # noqa: PLC0415
+    from agent import provisioning  # noqa: PLC0415
+    from agent.config import _PROJECTS_CONFIG_PATH, reload_projects  # noqa: PLC0415
+    from agent.tools import github_tools  # noqa: PLC0415
+
+    entry = agent_config.PROJECTS.get(name)
+    if entry is None:
+        raise HTTPException(404, f"no project named {name!r}")
+    busy = await _running_repos(request.app)
+    if name in busy:
+        raise HTTPException(409, f"{name} has work in flight -- stop it first")
+    try:
+        new = provisioning.assert_path_allowed(req.live.strip())
+    except provisioning.ProvisioningError as e:
+        raise HTTPException(400, str(e))
+    if not os.path.isdir(os.path.join(new, ".git")):
+        raise HTTPException(400, f"{new} is not a git checkout")
+    old = entry.get("live") or ""
+    if os.path.realpath(old) == new:
+        return {"ok": True, "live": new, "sandbox": entry.get("sandbox"), "unchanged": True}
+
+    def origin_of(path: str) -> str | None:
+        try:
+            r = subprocess.run(["git", "-C", path, "config", "--local", "--get", "remote.origin.url"],
+                               capture_output=True, text=True, timeout=10)
+        except (OSError, subprocess.SubprocessError):
+            return None
+        return github_tools.repo_slug_from_remote(r.stdout) if r.returncode == 0 else None
+
+    old_slug, new_slug = origin_of(old), origin_of(new)
+    if old_slug and new_slug and old_slug.lower() != new_slug.lower():
+        raise HTTPException(409, f"{new} is a checkout of {new_slug}, not of {old_slug}; a project is its repository")
+    try:
+        updated = provisioning.move_project_entry(_PROJECTS_CONFIG_PATH, name, new)
+    except (provisioning.ProvisioningError, OSError, ValueError) as e:
+        raise HTTPException(500, f"could not update the projects file: {e}")
+    reload_projects()
+    await audit.record(audit_store(request), actor=user.email, action="project.move", target=name,
+                       detail=f"{old} -> {new}")
+    return {"ok": True, "live": updated["live"], "sandbox": updated.get("sandbox"), "unchanged": False}
 
 
 @router.post("/api/projects/{name}/deploy-key")
