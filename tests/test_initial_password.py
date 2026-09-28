@@ -35,10 +35,9 @@ def data_dir(tmp_path, monkeypatch):
     return d
 
 
-def test_the_password_is_stored_in_the_data_directory_and_shown_once_from_the_volume_s_key(data_dir, capsys):
+def test_the_password_is_stored_in_the_data_directory_and_shown_once_from_the_volume_s_key(data_dir, monkeypatch, capsys):
     key = base64.urlsafe_b64encode(secrets.token_bytes(32)).decode()
-    config = SimpleNamespace(auth_secret_key=key)
-    server._store_initial_password.__globals__["config"] = config
+    monkeypatch.setattr(server, "config", SimpleNamespace(auth_secret_key=key))
     server._store_initial_password("hunter2-once")
     stored = data_dir / ".initial-admin-password"
     assert stored.exists() and "hunter2-once" not in stored.read_text()
@@ -56,7 +55,7 @@ def test_the_password_is_stored_in_the_data_directory_and_shown_once_from_the_vo
 
 def test_a_key_that_differs_from_the_one_the_agent_booted_with_is_said_so(data_dir, monkeypatch, capsys):
     key = base64.urlsafe_b64encode(secrets.token_bytes(32)).decode()
-    server._store_initial_password.__globals__["config"] = SimpleNamespace(auth_secret_key=key)
+    monkeypatch.setattr(server, "config", SimpleNamespace(auth_secret_key=key))
     server._store_initial_password("pw")
     monkeypatch.setenv("AUTH_SECRET_KEY", base64.urlsafe_b64encode(secrets.token_bytes(32)).decode())
     script = _load_script()
