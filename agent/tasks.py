@@ -95,6 +95,35 @@ def attachments_note(attachments: list[dict]) -> str:
     return "\n".join(lines)
 
 
+async def carry_planning_cost(store, repo: str, session_id: str, task_id: str) -> float:
+    """The planning session's spend, carried onto the build task it starts.
+
+    Planning cost used to vanish: a session banked its turns, Build Now handed
+    the plan over as a goal, and the task started from $0.00 (2026-09-28).
+    A session's spend is carried once: what it has spent beyond what earlier
+    builds from the same session already carried. The session records what
+    was carried and to which task, so the analytics page can show planning
+    spend that never became a task as its own category."""
+    try:
+        item = await store.aget(("planning", repo), session_id)
+    except Exception:  # noqa: BLE001 -- a store hiccup must not stop the task
+        logger.exception("planning cost carry: could not read session %s", session_id)
+        return 0.0
+    if not item or (item.value or {}).get("repo") not in (None, repo):
+        return 0.0
+    meta = dict(item.value)
+    spent = float(meta.get("cost_usd") or 0.0)
+    already = float(meta.get("carried_cost_usd") or 0.0)
+    carried = round(max(0.0, spent - already), 6)
+    meta["carried_cost_usd"] = round(already + carried, 6)
+    meta["built_task_ids"] = [*(meta.get("built_task_ids") or []), task_id]
+    try:
+        await store.aput(("planning", repo), session_id, meta)
+    except Exception:  # noqa: BLE001
+        logger.exception("planning cost carry: could not record the carry on session %s", session_id)
+    return carried
+
+
 async def run_task(
     app, task_id: str, goal: str, repo: str, budget_usd: float, category: str,
     auto_approve_commands: bool = False,
@@ -120,6 +149,7 @@ async def start_task(
     auto_approve_commands: bool, require_merge_review: bool,
     reference_repos: list[str] | None = None,
     attachments: list[dict] | None = None, origin: str | None = None,
+    planning_session_id: str | None = None,
 ) -> dict:
     """Classify, route and launch a task. `origin` is recorded on the task
     meta ("github" for inbox tasks)."""
@@ -158,6 +188,10 @@ async def start_task(
         # write_task_meta merges, so this survives the stream's own first
         # write whichever lands first.
         await write_task_meta(app.state.store, repo, task_id, origin=origin)
+    if planning_session_id:
+        carried = await carry_planning_cost(app.state.store, repo, planning_session_id, task_id)
+        await write_task_meta(app.state.store, repo, task_id,
+                              planning_session_id=planning_session_id, planning_cost_usd=carried)
     live_state.running_tasks[task_id] = asyncio.create_task(
         run_task(
             app, task_id, goal, repo, budget, classification.category,

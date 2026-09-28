@@ -76,7 +76,14 @@ function TaskRow({
       <div className="sidebar-item-goal">{t.goal}</div>
       <div className="sidebar-item-bottom">
         <StatusBadge status={t.status} />
-        {t.cost_so_far !== undefined && <span className="sidebar-item-cost">${t.cost_so_far.toFixed(2)}</span>}
+        {t.cost_so_far !== undefined && (
+          <span
+            className="sidebar-item-cost"
+            title={t.planning_cost_usd ? `build $${t.cost_so_far.toFixed(2)} + planning $${t.planning_cost_usd.toFixed(2)}` : undefined}
+          >
+            ${(t.cost_so_far + (t.planning_cost_usd ?? 0)).toFixed(2)}
+          </span>
+        )}
       </div>
     </div>
   );

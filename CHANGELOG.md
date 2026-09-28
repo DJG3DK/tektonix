@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### Adding a project says where the app runs, not how git moves
+
+"Add · pull requests" and "Add · merge" named the mechanism. They are now
+"runs elsewhere" and "runs here", with a line above them saying what each
+does: work goes up as pull requests for you to merge, or merges, pushes and
+restarts the app on this machine after review.
+
+### Planning spend is part of the task's cost
+
+A planning session banked its turns and Build Now handed the plan over as
+a goal; the task then started from $0.00 and the planning spend was
+nowhere. The session's spend is now carried onto the task it starts, once,
+and the task's cost on the list, its page and Analytics is the whole cost:
+the build plus the planning. The budget bar still measures the build. A
+plan that never became a task shows on Analytics as its own category.
+Reviewer cost stays separate, as before.
+
 ### A project's path can change after onboarding
 
 The desktop app's projects folder moved and the only way to follow it was

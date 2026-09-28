@@ -29,6 +29,7 @@ export const CATEGORY_COLORS: Record<string, string> = {
   performance: "#e3a72e",
   investigation: "#58a6ff",
   other: "#5c6472",
+  planning: "#c9a36a",
 };
 import { CATEGORY_ORDER, CATEGORY_LABELS } from "../categories";
 

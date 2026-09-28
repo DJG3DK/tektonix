@@ -67,7 +67,7 @@ interface Props {
   // Same shape as App.tsx's handleCreate for a normal new task -- "Build
   // Now" hands the saved plan document off to the real build system exactly
   // the way a manually-typed goal would, no dedicated backend endpoint.
-  onBuildNow: (goal: string, repo: string, budgetUsd: number, route: RouteChoice) => void;
+  onBuildNow: (goal: string, repo: string, budgetUsd: number, route: RouteChoice, sessionId?: string) => void;
   /** Why the last Build Now failed, if it did -- a dead button is not an answer. */
   buildError?: string | null;
   onClearBuildError?: () => void;
@@ -605,7 +605,7 @@ export function PlanningView({ repos, isAdmin, githubReady, onProjectCreated, se
             {planOpen ? "Hide plan" : "Show plan"}
           </button>
           {stream.planMarkdown && (
-            <BuildNowPanel sessionRoute={session?.route} onConfirm={(budgetUsd, route) => onBuildNow(stream.planMarkdown!, repo, budgetUsd, route)} />
+            <BuildNowPanel sessionRoute={session?.route} onConfirm={(budgetUsd, route) => onBuildNow(stream.planMarkdown!, repo, budgetUsd, route, session?.session_id)} />
           )}
           {buildError && (
             <div className="planning-build-error" role="alert">

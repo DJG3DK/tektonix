@@ -61,6 +61,11 @@ export interface TaskMeta {
   status: TaskStatus;
   created_at: number;
   cost_so_far?: number;
+  /** The planning session's spend carried onto this task at Build Now. The
+   * whole cost of a task is cost_so_far + planning_cost_usd; the budget bar
+   * measures the build alone. */
+  planning_cost_usd?: number;
+  planning_session_id?: string | null;
   escalation_reason?: string | null;
   /** Set when the project ships as a pull request instead of merging. The
    * task is finished and the work is waiting for a person. */

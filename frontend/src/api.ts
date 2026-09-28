@@ -290,11 +290,15 @@ export async function uploadFiles(repo: string, files: File[]): Promise<Attachme
 
 export async function createTask(
   goal: string, repo: string, budgetUsd?: number, attachments?: AttachmentEntry[], route: "auto" | "frontend" | "general" = "auto",
+  planningSessionId?: string,
 ): Promise<{ task_id: string; route?: string; route_reason?: string }> {
   const res = await apiFetch(`${API_BASE}/tasks`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ goal, repo, budget_usd: budgetUsd, attachments: attachments?.length ? attachments : null, route }),
+    body: JSON.stringify({
+      goal, repo, budget_usd: budgetUsd, attachments: attachments?.length ? attachments : null, route,
+      planning_session_id: planningSessionId ?? null,
+    }),
   });
   if (!res.ok) {
     // Say WHY: a 422 on Build Now (plan longer than the goal limit, 2026-09-09)

@@ -192,12 +192,12 @@ function AuthenticatedApp({ user, onLogout, onUserChanged }: { user: CurrentUser
       .catch(() => setGithubReady(false));
   }, [isAdmin]);
 
-  async function handleCreate(goal: string, repo: string, budgetUsd: number, files: File[], route: "auto" | "frontend" | "general" = "auto") {
+  async function handleCreate(goal: string, repo: string, budgetUsd: number, files: File[], route: "auto" | "frontend" | "general" = "auto", planningSessionId?: string) {
     setSubmitting(true);
     setCreateError(null);
     try {
       const attachments = files.length ? await uploadFiles(repo, files) : undefined;
-      const created = await createTask(goal, repo, budgetUsd, attachments, route);
+      const created = await createTask(goal, repo, budgetUsd, attachments, route, planningSessionId);
       const { task_id } = created;
       const meta: TaskMeta = {
         task_id, goal, repo, budget_usd: budgetUsd, status: "running", created_at: Date.now() / 1000,
@@ -370,7 +370,7 @@ function AuthenticatedApp({ user, onLogout, onUserChanged }: { user: CurrentUser
             githubReady={githubReady}
             onProjectCreated={refreshRepos}
             session={selectedPlanningSession}
-            onBuildNow={(goal, repo, budgetUsd, route) => handleCreate(goal, repo, budgetUsd, [], route)}
+            onBuildNow={(goal, repo, budgetUsd, route, sessionId) => handleCreate(goal, repo, budgetUsd, [], route, sessionId)}
             buildError={createError}
             onClearBuildError={() => setCreateError(null)}
             onSessionCreated={(s) => {

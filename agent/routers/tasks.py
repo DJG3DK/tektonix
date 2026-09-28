@@ -74,6 +74,9 @@ class CreateTaskRequest(BaseModel):
     # "auto" decides from category/paths/keywords (agent/frontend_route.py);
     # "frontend"/"general" is the operator overriding that.
     route: Literal["auto", "frontend", "general"] = "auto"
+    # Build Now from a planning session: the session's spend is carried onto
+    # this task, so the task's cost is the whole cost (agent/tasks.py).
+    planning_session_id: str | None = Field(default=None, max_length=64)
 
 class SendMessageRequest(BaseModel):
     text: str
@@ -121,6 +124,7 @@ async def create_task(request: Request, req: CreateTaskRequest, user: User = Dep
     # lone space through), matching send_planning_message's own check.
     return await tasks.start_task(request.app, 
         req.goal, req.repo, req.budget_usd, req.route,
+        planning_session_id=req.planning_session_id,
         # Per project, not per account: see User.auto_approves.
         auto_approve_commands=user.auto_approves(req.repo),
         require_merge_review=user.require_merge_review,

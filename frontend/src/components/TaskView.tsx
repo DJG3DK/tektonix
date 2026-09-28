@@ -121,8 +121,12 @@ export function TaskView({ task, stream, setGeneration }: Props) {
                   title={status === "running" ? "Watch the agent's edits live" : "View this task's diff"}>
             Changes
           </button>
-          <div className="task-view-budget" title={`$${stream.costSoFar.toFixed(3)} of $${task.budget_usd.toFixed(2)} budget`}>
-            <span className="task-view-cost">${stream.costSoFar.toFixed(2)}</span>
+          <div
+            className="task-view-budget"
+            title={`build $${stream.costSoFar.toFixed(3)} of $${task.budget_usd.toFixed(2)} budget`
+              + (task.planning_cost_usd ? ` + planning $${task.planning_cost_usd.toFixed(3)} = $${(stream.costSoFar + task.planning_cost_usd).toFixed(3)} in all` : "")}
+          >
+            <span className="task-view-cost">${(stream.costSoFar + (task.planning_cost_usd ?? 0)).toFixed(2)}</span>
             <div className="task-view-budget-track">
               <div
                 className={`task-view-budget-fill ${budgetPct > 85 ? "task-view-budget-fill--hot" : ""}`}

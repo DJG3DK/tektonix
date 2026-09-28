@@ -49,10 +49,16 @@ async def get_analytics(request: Request, user: User = Depends(require_full_auth
 
     tasks: list[dict] = []
     episodes: list[dict] = []
+    planning_sessions: list[dict] = []
     for repo in PROJECTS:
         results = await read_with_retry(lambda repo=repo: store.asearch(("tasks", repo), limit=200))
         for item in results:
             tasks.append({**item.value, "repo": repo})
+        try:
+            for item in await read_with_retry(lambda repo=repo: store.asearch(("planning", repo), limit=200)):
+                planning_sessions.append(item.value or {})
+        except Exception:  # noqa: BLE001 -- the page still answers without the planning bucket
+            logger.warning("analytics: could not read planning sessions for %s", repo)
         ep_results = await read_with_retry(lambda repo=repo: store.asearch(("episodes", repo), limit=200))
         for item in ep_results:
             value = item.value
@@ -117,6 +123,8 @@ async def get_analytics(request: Request, user: User = Depends(require_full_auth
         _bucket(day)["tasks"] += 1
         if t.get("task_id") not in episodes_by_task:
             _bucket(day)["cost"] += float(t.get("cost_so_far") or 0.0)
+        # The planning that produced the task, on the day the task started.
+        _bucket(day)["cost"] += float(t.get("planning_cost_usd") or 0.0)
 
     daily_series = [daily[k] for k in sorted(daily)]
 
@@ -126,7 +134,9 @@ async def get_analytics(request: Request, user: User = Depends(require_full_auth
             "repo": t.get("repo"),
             "goal": (t.get("goal") or "")[:80],
             "category": t.get("category") or "other",
-            "cost": float(t.get("cost_so_far") or 0.0),
+            # The whole cost: the build, plus the planning that produced it.
+            "cost": float(t.get("cost_so_far") or 0.0) + float(t.get("planning_cost_usd") or 0.0),
+            "planning_cost": float(t.get("planning_cost_usd") or 0.0),
             "budget": float(t.get("budget_usd") or 0.0),
             "status": t.get("status"),
             "created_at": t.get("created_at"),
@@ -146,7 +156,16 @@ async def get_analytics(request: Request, user: User = Depends(require_full_auth
         cat = t.get("category") or "other"
         bucket = by_category.setdefault(cat, {"category": cat, "tasks": 0, "cost": 0.0})
         bucket["tasks"] += 1
-        bucket["cost"] += float(t.get("cost_so_far") or 0.0)
+        bucket["cost"] += float(t.get("cost_so_far") or 0.0) + float(t.get("planning_cost_usd") or 0.0)
+    # Planning that never became a task is spend too. Each session carries
+    # its cost onto the first build started from it (agent/tasks.py); what is
+    # left uncarried -- abandoned plans, plans still open -- is its own
+    # category, counted in sessions rather than tasks.
+    uncarried = [max(0.0, float(m.get("cost_usd") or 0.0) - float(m.get("carried_cost_usd") or 0.0))
+                 for m in planning_sessions]
+    stranded = [c for c in uncarried if c > 0]
+    if stranded:
+        by_category["planning"] = {"category": "planning", "tasks": len(stranded), "cost": sum(stranded)}
     by_category_list = sorted(by_category.values(), key=lambda b: b["cost"], reverse=True)
 
     outcomes: dict[str, int] = {}
