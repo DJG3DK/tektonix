@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### A Windows app, and released images to feed it
+
+`app/` is a desktop app: the dashboard in a window, the compose stack under
+it, a tray icon to reach both. It installs WSL 2 and Docker Desktop when
+they are missing, asks for the two settings in a form, pulls the release's
+images from GHCR with Docker's progress in the window, shows the first
+password, and follows any service's log. One button updates the stack when
+a new release is out, and the app updates itself through a signed updater.
+The release workflow publishes the four images to
+`ghcr.io/djg3dk/tektonix-<name>` on every version tag and builds the
+Windows installer. The compose file names every built image, so a pulled
+release and a source build land in the same place.
+
 ### An empty reply is retried without reasoning first
 
 A reply that is all chain of thought and no answer was retried once on

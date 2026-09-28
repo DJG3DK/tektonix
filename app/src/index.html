@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Tektonix</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="top">
+    <div class="brand">
+      <img src="logo.png" alt="" width="28" height="28" />
+      <span>Tektonix</span>
+    </div>
+    <div class="top-right">
+      <span id="stack-version" class="muted"></span>
+      <span id="app-version" class="muted"></span>
+    </div>
+  </header>
+
+  <main>
+    <!-- Docker -->
+    <section id="page-docker" class="page hidden">
+      <h1 id="docker-title">Checking Docker…</h1>
+      <p id="docker-text" class="lead"></p>
+      <div class="row">
+        <button id="docker-install" class="btn primary hidden">Install Docker Desktop</button>
+        <button id="docker-start" class="btn primary hidden">Start Docker Desktop</button>
+        <button id="docker-recheck" class="btn">Check again</button>
+      </div>
+    </section>
+
+    <!-- Setup -->
+    <section id="page-setup" class="page hidden">
+      <h1>Two settings</h1>
+      <p class="lead">The agent calls models through OpenRouter, and it works in one folder on this machine.</p>
+      <form id="setup-form">
+        <label>
+          <span>OpenRouter API key</span>
+          <input id="setup-key" type="password" autocomplete="off" spellcheck="false" placeholder="sk-or-v1-…" />
+          <small id="setup-key-hint" class="muted"></small>
+          <small class="muted">Get one at <a href="#" data-open="https://openrouter.ai/keys">openrouter.ai/keys</a>. It is the only thing that costs money.</small>
+        </label>
+        <label>
+          <span>Projects folder</span>
+          <div class="row">
+            <input id="setup-dir" type="text" spellcheck="false" placeholder="C:\Users\you\code" />
+            <button type="button" id="setup-pick" class="btn">Choose…</button>
+          </div>
+          <small class="muted">Repositories there are visible to the agent, and one it clones from GitHub for you lands there too. An empty folder is fine.</small>
+        </label>
+        <label>
+          <span>Sign-in email</span>
+          <input id="setup-email" type="email" spellcheck="false" placeholder="admin@example.com" />
+          <small class="muted">The first account. Its one-time password is shown here after the first start.</small>
+        </label>
+        <div class="row">
+          <button type="submit" class="btn primary" id="setup-save">Save and start</button>
+          <button type="button" class="btn hidden" id="setup-cancel">Cancel</button>
+        </div>
+        <p id="setup-error" class="error hidden"></p>
+      </form>
+    </section>
+
+    <!-- Running / control -->
+    <section id="page-stack" class="page hidden">
+      <div class="status-head">
+        <h1 id="stack-title">Tektonix</h1>
+        <span id="stack-state" class="pill"></span>
+      </div>
+      <p id="stack-text" class="lead"></p>
+      <div class="row wrap">
+        <button id="btn-open" class="btn primary">Open dashboard</button>
+        <button id="btn-start" class="btn">Start</button>
+        <button id="btn-stop" class="btn">Stop</button>
+        <button id="btn-password" class="btn">Show first password</button>
+        <button id="btn-settings" class="btn">Settings</button>
+        <button id="btn-folder" class="btn">Open projects folder</button>
+      </div>
+      <div id="password-box" class="callout hidden">
+        <strong>One-time password:</strong> <code id="password-value"></code>
+        <span class="muted">Sign in with it; you set your own straight away. It is shown once.</span>
+      </div>
+
+      <h2>Updates</h2>
+      <div class="row wrap">
+        <button id="btn-check-stack" class="btn">Check for updates</button>
+        <button id="btn-update-stack" class="btn primary hidden">Update Tektonix</button>
+        <button id="btn-update-app" class="btn hidden">Update this app</button>
+        <span id="update-text" class="muted"></span>
+      </div>
+
+      <h2>Containers</h2>
+      <table id="containers" class="table"><tbody></tbody></table>
+
+      <h2>Logs</h2>
+      <div class="row">
+        <select id="log-service">
+          <option value="agent">agent</option>
+          <option value="commit-reviewer">commit-reviewer</option>
+          <option value="agent-review">agent-review</option>
+          <option value="router">router</option>
+          <option value="postgres">postgres</option>
+        </select>
+        <button id="btn-logs" class="btn">Follow</button>
+        <button id="btn-logs-stop" class="btn">Stop following</button>
+        <button id="btn-logs-clear" class="btn">Clear</button>
+      </div>
+    </section>
+
+    <pre id="log" class="log"></pre>
+  </main>
+
+  <script src="main.js"></script>
+</body>
+</html>

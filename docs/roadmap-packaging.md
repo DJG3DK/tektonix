@@ -266,7 +266,7 @@ on a task branch — with nothing running but the CLI itself.
 code. Everything above it reuses the existing loop; this one gives it a second
 front end and a second persistence backend, and both need their own tests.
 
-### M4 — The Windows app *(next, after the first Windows install runs a task through the reviewer)*
+### M4 — The Windows app *(in progress; first build 2026-09-28, `app/`)*
 
 The first real Windows install (2026-09-28) worked, and was clunky: a
 `.bat`, a console prompt, a one-time password read out of a container, and

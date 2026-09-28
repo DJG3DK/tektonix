@@ -1,0 +1,16 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "The control panel window: the app's own commands, the updater, dialogs and opening folders.",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-show",
+    "core:window:allow-hide",
+    "core:window:allow-set-focus",
+    "updater:default",
+    "process:default",
+    "dialog:default",
+    "opener:default"
+  ]
+}

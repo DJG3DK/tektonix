@@ -8,6 +8,13 @@
 # yet (a GitHub-only project is cloned onto this machine; there is no remote
 # execution).
 
+# Every built service names its image (tektonix-agent:latest and so on):
+# a source checkout builds into that name with `up -d --build`, and the
+# desktop app pulls the same release from ghcr.io/djg3dk/tektonix-<service>
+# and tags it with that name, then runs `up -d --no-build`. One file for
+# both, and a rebuilt or pulled image is what `up` recreates the container
+# from either way. .github/workflows/release.yml publishes the images.
+#
 # The compose project name: every container, network and volume is
 # tektonix-<service>-1, tektonix_checks, tektonix_pgdata. An install made
 # before 2026-09-28 was three-d-agent; keep its data by putting
@@ -41,6 +48,7 @@ services:
     restart: unless-stopped
 
   router:
+    image: tektonix-router:latest
     build:
       context: .
       dockerfile: docker/router/Dockerfile
@@ -93,6 +101,7 @@ services:
     restart: "no"
 
   agent:
+    image: tektonix-agent:latest
     build:
       context: .
       dockerfile: docker/agent/Dockerfile
@@ -199,6 +208,7 @@ services:
   # runs on the host and a container cannot reach it. That endpoint says so
   # rather than failing (TEKTONIX_BUNDLE, services/agent-review/server.js).
   agent-review:
+    image: tektonix-reviewer:latest
     build:
       context: .
       dockerfile: docker/reviewer/Dockerfile
@@ -231,6 +241,7 @@ services:
     restart: unless-stopped
 
   commit-reviewer:
+    image: tektonix-reviewer:latest
     build:
       context: .
       dockerfile: docker/reviewer/Dockerfile

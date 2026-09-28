@@ -99,3 +99,8 @@ services/logoloom/vendor/
 # Eval run reports. The suite is committed; a particular run's output is this
 # deployment's own record, and a dozen JSON blobs per week is not repo history.
 /logs/evals/
+
+# The desktop app (app/): build output and dependencies.
+app/node_modules/
+app/src-tauri/target/
+app/src-tauri/gen/

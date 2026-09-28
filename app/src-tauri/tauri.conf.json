@@ -1,0 +1,67 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Tektonix",
+  "version": "0.9.0",
+  "identifier": "io.tektonix.desktop",
+  "build": {
+    "frontendDist": "../src"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "label": "main",
+        "title": "Tektonix",
+        "width": 960,
+        "height": 700,
+        "minWidth": 720,
+        "minHeight": 520
+      }
+    ],
+    "security": {
+      "csp": null
+    },
+    "trayIcon": {
+      "iconPath": "icons/icon.png",
+      "iconAsTemplate": false,
+      "tooltip": "Tektonix"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": [
+      "nsis"
+    ],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "resources": {
+      "../../docker-compose.yml": "stack/docker-compose.yml",
+      "../../docker/.env.example": "stack/.env.example",
+      "../../docker/checks-postgres/init.sh": "stack/docker/checks-postgres/init.sh",
+      "../../docker/postgres/init-secrets.sh": "stack/docker/postgres/init-secrets.sh",
+      "../../services/model-router/config.example.yaml": "stack/services/model-router/config.example.yaml"
+    },
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "languages": [
+          "English"
+        ]
+      }
+    },
+    "createUpdaterArtifacts": true
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://github.com/DJG3DK/tektonix/releases/latest/download/latest.json"
+      ],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEVFMzkyNjJDRUVBODM1NjgKUldSb05hanVMQ1k1N292N1ViZlBsSEx4UTBUaVJ4SlhPQzJLUmFaeGJ6RXFLdDZYME82SGZGWksK"
+    }
+  }
+}
