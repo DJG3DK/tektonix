@@ -368,6 +368,8 @@ jobs:
         # Sources install.sh as a library, so nothing is installed and no
         # package manager is needed.
         run: bash tests/test_install_prereqs.sh
+      - name: Deploy poller
+        run: bash tests/test_deploy_poll.sh
       - name: Doctor runs on a tree with no configuration
         # It must report what is missing rather than crash -- that is exactly
         # the state a new contributor's checkout is in.

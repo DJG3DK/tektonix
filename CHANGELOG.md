@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### A poller deploys a project whose main is merged elsewhere
+
+The agent deploys only its own merges. A pull request merged on GitHub, or
+a task shipped from another machine, left the production checkout behind.
+`scripts/deploy-poll.sh` pulls main when it moves, installs dependencies
+when the package files changed, builds, and restarts the named pm2
+processes, one cron line per project. Files the running app rewrites are
+named and never reset; a commit that also changes one stops the deploy
+rather than guessing. `docs/runbooks/deploy-poll.md`.
+
 ### The GitHub token test says which project it cannot reach, and why
 
 "Reaches none of the configured projects" came with nothing to check. The

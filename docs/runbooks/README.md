@@ -41,3 +41,4 @@ failing dependency. None of them costs a model call.
 
 The map of what these processes are, and which file holds what, is
 [../architecture.md](../architecture.md).
+- [deploy-poll.md](deploy-poll.md) — deploying a project whose main is merged elsewhere: the poller, its cron line, and the files it will not touch.
