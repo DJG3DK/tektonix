@@ -83,3 +83,12 @@ def test_in_the_bundle_the_page_is_told_there_is_no_restart_to_offer(monkeypatch
     assert "already live" in r.json()["router_restart"]["note"]
     monkeypatch.delenv("TEKTONIX_BUNDLE")
     assert TestClient(srv.app).get("/api/model-config").json()["router_restart"] == {"available": True, "note": None}
+
+
+def test_the_agent_is_given_the_router_s_v1_base_like_a_host_install():
+    """The first task of the first Windows install failed with the router's
+    own 404: the agent's OpenAI client appends /chat/completions to its base
+    URL, and compose gave it the bare origin."""
+    compose = yaml.safe_load((REPO / "docker-compose.yml").read_text())
+    assert compose["services"]["agent"]["environment"]["MODEL_ROUTER_URL"] == "http://router:4001/v1"
+    assert (REPO / ".env.example").read_text().count("MODEL_ROUTER_URL=http://127.0.0.1:4001/v1") == 1

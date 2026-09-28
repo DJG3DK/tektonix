@@ -113,7 +113,10 @@ services:
       POSTGRES_PASSWORD_FILE: /run/tektonix-secrets/postgres_password
       POSTGRES_DB: ${POSTGRES_DB:-tektonix}
       MODEL_ROUTER_KEY_FILE: /run/tektonix-secrets/model_router_key
-      MODEL_ROUTER_URL: http://router:4001
+      # With /v1: the agent's OpenAI client appends /chat/completions to
+      # this. Without it the first model call of the first task was the
+      # router's 404 (2026-09-28).
+      MODEL_ROUTER_URL: http://router:4001/v1
       # The router's live config and its ledger, shared through volumes: the
       # Models page edits the first, Analytics reads the second. Both used
       # to be host paths only a host install has, and the bundle's Models

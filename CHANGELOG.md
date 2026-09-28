@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### The first task in the bundle could not reach the router
+
+The agent's first model call answered "404 Not Found". Compose gave the
+agent the router's bare address where a host install gives it the `/v1`
+base the OpenAI client appends `/chat/completions` to. Fixed in compose,
+and the example env now shows the full value.
+
 ### The Models page works in the bundle
 
 It was a 500: the agent read the router's config from a host path the
