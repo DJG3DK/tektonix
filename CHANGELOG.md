@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### A committed branch with a clean tree is sent to review, not called "no changes"
+
+The ship gate read the working tree only. When the work was already
+committed on the task branch with no record of it in the gate (a final
+commit that failed and then landed on a resume, or a coder that committed
+itself), it saw an empty diff and nudged toward "no changes needed" with
+1,446 lines sitting on the branch. Commits main does not have are the
+change: the gate adopts them as the pending commit and reviews them.
+
 ### `docker compose up -d` is the whole upgrade
 
 Every built service has `pull_policy: build`: a plain `up -d` builds what

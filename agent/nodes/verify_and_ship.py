@@ -44,6 +44,7 @@ existing commit instead of stranding a real, unreviewed change.
 import os
 import re
 from contextlib import asynccontextmanager
+import logging
 import time
 
 from langgraph.store.base import BaseStore
@@ -53,6 +54,7 @@ from agent.episodes import write_episode
 from agent.tools.checks import run_all_checks
 from agent.tools.git import (
     _git,
+    commits_ahead,
     current_sha,
     ensure_task_branch,
     git_commit,
@@ -560,6 +562,20 @@ async def _verify_and_ship_inner(state: AgentState, repo: str, repo_root: str,
             head_sha = await current_sha(repo_root)
             if head_sha and head_sha != pending_sha:
                 pending_sha = head_sha
+        if not pending_sha:
+            # The branch may already hold the work with no record of it
+            # here: the coder ran `git commit` itself, or a final commit
+            # landed on a resume after this gate's own record was lost with
+            # the escalation before it. 2026-09-28, the first Windows
+            # install: the final commit failed for want of a git identity,
+            # the resume committed 1,446 lines, and this gate said "no file
+            # changes yet". Commits main does not have ARE the change.
+            ahead = await commits_ahead(repo_root)
+            if ahead > 0:
+                pending_sha = await current_sha(repo_root)
+                logging.getLogger("tektonix").info(
+                    "verify_and_ship: adopting %d commit(s) already on the task branch (%s) as the pending commit",
+                    ahead, (pending_sha or "")[:12])
         if pending_sha:
             # Nothing new since a commit that's still pending review/deploy.
             # Two distinct cases:

@@ -30,6 +30,13 @@ def _stub_task_branch(monkeypatch):
     asserting on the wrong failure. Tests that care about branch handling
     override this with their own monkeypatch.
     """
+    async def _none_ahead(repo_root, base_ref="main"):
+        return 0
+
+    # The branch-ahead check (2026-09-28) runs real git otherwise; the tests
+    # that care set their own count.
+    monkeypatch.setattr(vs, "commits_ahead", _none_ahead)
+
     async def _ok(repo_root, task_id, base_ref="main"):
         return {"ok": True, "branch": f"agent/{task_id}", "output": ""}
 
@@ -1059,3 +1066,36 @@ def test_an_escalation_is_still_terminal_even_while_parked():
     escalated = _parked_on_merge()
     escalated["escalated"] = True
     assert vs._is_terminal(escalated) is True
+
+
+async def test_a_clean_tree_on_a_branch_ahead_of_main_is_the_pending_commit_not_no_changes(monkeypatch):
+    """2026-09-28, the first Windows install: the final commit failed for
+    want of a git identity, the resume committed the work, and this gate
+    saw an empty `git diff` with no recorded commit and said "no file
+    changes yet". Commits main does not have are the change: adopt HEAD
+    and send it to review."""
+    monkeypatch.setattr(vs, "run_all_checks", _fake_checks(all_ok=True))
+    monkeypatch.setattr(vs, "git_diff", _fake_return(""))
+    monkeypatch.setattr(vs, "commits_ahead", _fake_return(3))
+    monkeypatch.setattr(vs, "current_sha", _fake_return("deadbeef1234"))
+    seen = {}
+
+    async def review(state, repo, sha):
+        seen["sha"] = sha
+        return {"reviewed": sha}
+
+    monkeypatch.setattr(vs, "_review_and_deploy", review)
+    state = _state(no_diff_streak=0, committed_sha=None)
+
+    result = await vs._verify_and_ship(state, config=None)
+
+    assert seen["sha"] == "deadbeef1234" and result == {"reviewed": "deadbeef1234"}
+
+
+async def test_a_clean_tree_on_a_branch_level_with_main_still_counts_as_no_diff(monkeypatch):
+    monkeypatch.setattr(vs, "run_all_checks", _fake_checks(all_ok=True))
+    monkeypatch.setattr(vs, "git_diff", _fake_return(""))
+    monkeypatch.setattr(vs, "commits_ahead", _fake_return(0))
+    state = _state(no_diff_streak=0, committed_sha=None)
+    result = await vs._verify_and_ship(state, config=None)
+    assert result["no_diff_streak"] == 1 and result["pending_feedback"] is not None

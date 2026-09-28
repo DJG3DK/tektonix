@@ -362,6 +362,18 @@ async def git_commit(repo_root: str, message: str, files: list[str] | None = Non
     return {"ok": commit["ok"], "output": commit["output"]}
 
 
+async def commits_ahead(repo_root: str, base_ref: str = "main") -> int:
+    """How many commits HEAD has that `base_ref` does not. 0 when the branch
+    has nothing of its own, or when the question cannot be answered."""
+    r = await _git(f"rev-list --count {base_ref}..HEAD", repo_root, timeout=15)
+    if not r["ok"]:
+        return 0
+    try:
+        return int(str(r["output"]).strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        return 0
+
+
 async def current_sha(repo_root: str) -> str:
     r = await _git("rev-parse HEAD", repo_root, timeout=15)
     return r["output"].strip()
