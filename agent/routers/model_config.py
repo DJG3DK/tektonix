@@ -47,7 +47,20 @@ async def get_model_config(user: User = Depends(require_full_auth)):
     """
     auth.require_admin(user)
     # Live catalog prices, not the hand-written model_info blocks (which drift).
-    return {"roles": await model_config.get_current_pins_priced()}
+    return {"roles": await model_config.get_current_pins_priced(), "router_restart": _router_restart()}
+
+
+BUNDLE_RESTART_NOTE = ("The bundle's router re-reads its config on the next call, so a saved pin is already live. "
+                       "To restart it anyway: docker compose restart router")
+
+
+def _router_restart() -> dict:
+    """Whether this page can restart the router. In the bundle it cannot
+    (no pm2 in a container) and need not, and the page shows this note in
+    place of the button rather than a dialog that then fails."""
+    if os.environ.get("TEKTONIX_BUNDLE") == "1":
+        return {"available": False, "note": BUNDLE_RESTART_NOTE}
+    return {"available": True, "note": None}
 
 
 @router.get("/catalog")
@@ -174,8 +187,7 @@ def restart_model_router(request: Request, user: User = Depends(require_full_aut
         # No pm2 in a container, and no need: the bundle's router re-reads
         # the shared config on its next call. `docker compose restart router`
         # is the operator's, from the host, if they want one anyway.
-        raise HTTPException(409, "the bundle's router re-reads its config on the next call; a saved pin is "
-                                 "already live. To restart it anyway: docker compose restart router")
+        raise HTTPException(409, BUNDLE_RESTART_NOTE)
     result = model_config.restart_llm_router(request.app.state.config.router_base_url)
     if not result["ok"]:
         # The message is what the dialog shows, so it has to say which half

@@ -10,7 +10,7 @@ way. Both are shared volumes now. The router seeds its config from the
 committed example (or your `ROUTER_CONFIG`) on first boot and keeps the
 volume's copy after that, so pins set on the Models page survive restarts
 and upgrades and are live on the router's next call. The "restart router"
-button says so in the bundle instead of failing.
+button is replaced by a note saying so in the bundle.
 
 ### The balance card works in the bundle
 

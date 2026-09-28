@@ -207,3 +207,17 @@ describe("what the page says it controls", () => {
     forbidden.forEach((name) => expect(blurb.toLowerCase()).not.toContain(name));
   });
 });
+
+
+describe("in the compose bundle", () => {
+  it("shows the note in place of the restart button", async () => {
+    api.getModelConfig.mockResolvedValue({
+      roles: { "agent-coder": pin("a/one") },
+      router_restart: { available: false, note: "The bundle's router re-reads its config on the next call, so a saved pin is already live." },
+    });
+    render(<ModelConfigPanel />);
+    const note = await screen.findByTestId("router-restart-note");
+    expect(note.textContent).toContain("already live");
+    expect(screen.queryByRole("button", { name: /Restart Router/i })).not.toBeInTheDocument();
+  });
+});

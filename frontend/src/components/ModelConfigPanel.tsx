@@ -330,6 +330,9 @@ function ModelConfigPins() {
   const [error, setError] = useState<string | null>(null);
   const [justSaved, setJustSaved] = useState(false);
   const [confirmingRestart, setConfirmingRestart] = useState(false);
+  // In the compose bundle the router re-reads its config on the next call and
+  // there is no pm2 to restart; the page gets a note instead of a button.
+  const [restartNote, setRestartNote] = useState<string | null>(null);
   // audit M-24: focus management for the restart confirmation dialog -- it
   // restarts a shared service that interrupts in-flight calls across two apps,
   // so a keyboard user must be able to reach Cancel/Restart, dismiss with
@@ -355,6 +358,7 @@ function ModelConfigPins() {
     try {
       const [cfg, cat] = await Promise.all([getModelConfig(), getModelCatalog()]);
       setPins(cfg.roles);
+      setRestartNote(cfg.router_restart && !cfg.router_restart.available ? (cfg.router_restart.note ?? "") : null);
       setCatalog(cat.models);
       setProbeOk(cat.forced_tool_call?.compliant ?? []);
       setProbedAt(cat.forced_tool_call?.probed_at ?? null);
@@ -571,9 +575,13 @@ function ModelConfigPins() {
       {/* Saving lives in the sticky bar (see ModelConfigPanel above); this
           row holds the two actions that are not edits. */}
       <div className="model-config-actions">
-        <button className="model-config-restart-btn" disabled={restarting} onClick={() => setConfirmingRestart(true)}>
-          {restarting ? "Restarting…" : "Restart Router"}
-        </button>
+        {restartNote === null ? (
+          <button className="model-config-restart-btn" disabled={restarting} onClick={() => setConfirmingRestart(true)}>
+            {restarting ? "Restarting…" : "Restart Router"}
+          </button>
+        ) : (
+          <p className="settings-hint model-config-restart-note" data-testid="router-restart-note">{restartNote}</p>
+        )}
         {/* Re-runs the real forced-tool-call probe across the eligible catalog.
             Takes a few minutes — it makes one live request per model, which is
             the only thing that actually answers the question. */}

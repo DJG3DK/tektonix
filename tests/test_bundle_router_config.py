@@ -64,3 +64,22 @@ def test_in_the_bundle_the_restart_button_says_the_pin_is_already_live(monkeypat
     monkeypatch.setenv("TEKTONIX_BUNDLE", "1")
     r = TestClient(srv.app).post("/api/model-config/restart-router")
     assert r.status_code == 409 and "docker compose restart router" in r.json()["detail"]
+
+
+def test_in_the_bundle_the_page_is_told_there_is_no_restart_to_offer(monkeypatch):
+    import agent.server as srv
+    from agent import model_config
+    from agent.auth import User
+
+    async def pins():
+        return {}
+
+    me = User(id=1, email="a@b.co", role="admin", allowed_repos=None, totp_enabled=True, must_change_password=False)
+    monkeypatch.setitem(srv.app.dependency_overrides, srv.auth.require_full_auth, lambda: me)
+    monkeypatch.setattr(model_config, "get_current_pins_priced", pins)
+    monkeypatch.setenv("TEKTONIX_BUNDLE", "1")
+    r = TestClient(srv.app).get("/api/model-config")
+    assert r.status_code == 200 and r.json()["router_restart"]["available"] is False
+    assert "already live" in r.json()["router_restart"]["note"]
+    monkeypatch.delenv("TEKTONIX_BUNDLE")
+    assert TestClient(srv.app).get("/api/model-config").json()["router_restart"] == {"available": True, "note": None}

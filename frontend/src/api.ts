@@ -627,7 +627,13 @@ export async function getRouterBalance(): Promise<RouterBalance> {
 // This agent's own seven pinned roles (agent/model_config.py's
 // MANAGED_ROLES) -- distinct from the two above, which read the shared
 // review-service router dashboard.
-export async function getModelConfig(): Promise<{ roles: Record<string, ModelPin> }> {
+export interface RouterRestart {
+  /** false in the compose bundle: the router re-reads its config; there is no restart to offer. */
+  available: boolean;
+  note: string | null;
+}
+
+export async function getModelConfig(): Promise<{ roles: Record<string, ModelPin>; router_restart?: RouterRestart }> {
   const res = await apiFetch(`${API_BASE}/model-config`);
   if (!res.ok) throw new Error(`getModelConfig failed: ${res.status}`);
   return res.json();
