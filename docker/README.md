@@ -53,8 +53,12 @@ Python, Node, Postgres and ripgrep all live in the images.
 
 ## The two settings that matter
 
-**`PROJECTS_DIR`** is where your repositories live *on the host*. Everything
-under it appears to the agent as `/projects/<name>`.
+**`PROJECTS_DIR`** is the folder the agent works in, *on the host*. A
+repository already there appears to the agent as `/projects/<name>`, and one
+it clones from GitHub for you lands there too: on the Projects page, paste
+the repository URL instead of a path and press Clone. An empty folder is fine
+if everything you have is on GitHub; a private repository needs a token
+(`GITHUB_TOKEN` in `.env`, or one added under Settings, GitHub).
 
 ```
 Linux/macOS   PROJECTS_DIR=/home/you/code

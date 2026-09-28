@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### The installer says an empty projects folder is fine
+
+Its question read as if you needed repositories on the machine already. The
+folder is where the agent works: repositories there are visible to it, and
+one it clones from GitHub lands there too. The prompt, the env example and
+the docker README say so.
+
 ### Scripts check out with Unix line endings on Windows
 
 Git for Windows converts text files to CRLF by default, and a CRLF copy of

@@ -389,8 +389,10 @@ function Main {
     $suggested = Join-Path $env:USERPROFILE 'code'
     if ([string]::IsNullOrWhiteSpace($dir) -and -not $Yes) {
         Write-Host ""
-        Write-Host '  Which folder holds the repositories you want the agent to work on?'
-        Write-Host '  Everything under it becomes visible to the agent; nothing outside it does.'
+        Write-Host '  Which folder should the agent work in?'
+        Write-Host '  Repositories already there are visible to it, and one it clones from'
+        Write-Host '  GitHub for you (from the dashboard) lands there too. Nothing outside it'
+        Write-Host '  is. If everything you have is on GitHub, an empty folder is the answer.'
     }
     $dir = Format-ProjectsDir (Request-Value -Prompt 'Projects folder' -Current $dir -Default $suggested)
 
