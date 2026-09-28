@@ -14,13 +14,15 @@ COPY services/model-router/router ./router
 # config.yaml is the OPERATOR's file (it holds their model pins) and is
 # gitignored, so the image ships the example and compose mounts the real one
 # over it when there is one.
-COPY services/model-router/config.example.yaml ./config.yaml
+COPY services/model-router/config.example.yaml ./config.seed.yaml
+COPY docker/router/entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
 
 ENV PYTHONUNBUFFERED=1 \
-    MODEL_ROUTER_CONFIG=/app/config.yaml \
+    MODEL_ROUTER_CONFIG=/app/router-config/config.yaml \
     MODEL_ROUTER_LEDGER=/app/logs/routing.jsonl
 EXPOSE 4001
 HEALTHCHECK --interval=15s --timeout=5s --start-period=20s --retries=6 \
     CMD curl -fsS http://127.0.0.1:4001/health/liveliness || exit 1
 
-CMD ["uvicorn", "router.app:app", "--host", "0.0.0.0", "--port", "4001"]
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

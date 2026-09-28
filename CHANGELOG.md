@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### The Models page works in the bundle
+
+It was a 500: the agent read the router's config from a host path the
+container does not have, and Analytics read the router's ledger the same
+way. Both are shared volumes now. The router seeds its config from the
+committed example (or your `ROUTER_CONFIG`) on first boot and keeps the
+volume's copy after that, so pins set on the Models page survive restarts
+and upgrades and are live on the router's next call. The "restart router"
+button says so in the bundle instead of failing.
+
 ### The balance card works in the bundle
 
 Analytics showed no API balance although the key worked. The agent asked

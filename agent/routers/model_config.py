@@ -9,6 +9,8 @@ which includes this router, would be a cycle.
 """
 from __future__ import annotations
 
+import os
+
 from fastapi import APIRouter, Depends, Request
 
 from agent.auth import User, require_full_auth
@@ -168,6 +170,12 @@ def restart_model_router(request: Request, user: User = Depends(require_full_aut
     surface that plainly rather than bundling this into save.
     """
     auth.require_admin(user)
+    if os.environ.get("TEKTONIX_BUNDLE") == "1":
+        # No pm2 in a container, and no need: the bundle's router re-reads
+        # the shared config on its next call. `docker compose restart router`
+        # is the operator's, from the host, if they want one anyway.
+        raise HTTPException(409, "the bundle's router re-reads its config on the next call; a saved pin is "
+                                 "already live. To restart it anyway: docker compose restart router")
     result = model_config.restart_llm_router(request.app.state.config.router_base_url)
     if not result["ok"]:
         # The message is what the dialog shows, so it has to say which half

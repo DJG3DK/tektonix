@@ -68,7 +68,13 @@ services:
       # onto a file". `docker compose up` in a fresh tree could not start.
       # Pointing the default at a file that is always there fixes it; set
       # ROUTER_CONFIG in .env to use your own.
-      - ${ROUTER_CONFIG:-./services/model-router/config.example.yaml}:/app/config.yaml:ro
+      # ...as the SEED. The live file is config.yaml in the routerconfig
+      # volume, which the agent shares: the Models page writes pins there
+      # and the router re-reads it on its next call. The entrypoint copies
+      # the seed in on first boot only (docker/router/entrypoint.sh), so
+      # pins set from the dashboard outlive a restart and an upgrade.
+      - ${ROUTER_CONFIG:-./services/model-router/config.example.yaml}:/app/config.seed.yaml:ro
+      - routerconfig:/app/router-config
       - routerlogs:/app/logs
       - bundlesecrets:/run/tektonix-secrets:ro
     restart: unless-stopped
@@ -108,6 +114,12 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-tektonix}
       MODEL_ROUTER_KEY_FILE: /run/tektonix-secrets/model_router_key
       MODEL_ROUTER_URL: http://router:4001
+      # The router's live config and its ledger, shared through volumes: the
+      # Models page edits the first, Analytics reads the second. Both used
+      # to be host paths only a host install has, and the bundle's Models
+      # page was a 500 (2026-09-28).
+      MODEL_ROUTER_CONFIG_PATH: /app/router-config/config.yaml
+      MODEL_ROUTER_LEDGER: /app/router-logs/routing.jsonl
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:?set OPENROUTER_API_KEY in .env}
       ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@example.com}
       DEFAULT_BUDGET_USD: ${DEFAULT_BUDGET_USD:-2.00}
@@ -166,6 +178,8 @@ services:
       - ${PROJECTS_DIR:?set PROJECTS_DIR in .env}:/projects
       - agentdata:/app/data
       - agentlogs:/app/logs
+      - routerconfig:/app/router-config
+      - routerlogs:/app/router-logs:ro
       - bundlesecrets:/run/tektonix-secrets:ro
       # The sandbox image is built on first run from this context.
       - ./docker/agent-sandbox:/app/docker/agent-sandbox:ro
@@ -300,6 +314,7 @@ networks:
     internal: true
 
 volumes:
+  routerconfig:
   pgdata:
   # Verdicts and their history. Separate from agentdata because the agent owns
   # that one and these two write this one.
