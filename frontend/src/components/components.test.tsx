@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ConsolidationStatusPanel } from "./ConsolidationStatusPanel";
@@ -100,11 +100,14 @@ describe("MobileNav", () => {
     expect(screen.getByText("Tasks")).toBeInTheDocument();
   });
 
-  it("offers them to an admin", () => {
+  it("offers them to an admin, and Users only where the deployment is licensed for it", () => {
     render(<MobileNav view="task" pane="list" isAdmin {...handlers()} />);
     expect(screen.getByText("Stats")).toBeInTheDocument();
     expect(screen.getByText("Bench")).toBeInTheDocument();
     expect(screen.getByText("Models")).toBeInTheDocument();
+    expect(screen.queryByText("Users")).not.toBeInTheDocument();
+    cleanup();
+    render(<MobileNav view="task" pane="list" isAdmin canManageUsers {...handlers()} />);
     expect(screen.getByText("Users")).toBeInTheDocument();
   });
 

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Accounts beyond the first are a licensed feature
+
+The public build is the single-operator product. It no longer offers to
+create further accounts: the route refuses with a plain reason and the
+Users page is not shown. Nothing changes for an existing account, and a
+licensed deployment keeps the page.
+
 ### The shipped runtime limits are the proven ones
 
 The defaults were the first week's guesses: 180-second model calls,

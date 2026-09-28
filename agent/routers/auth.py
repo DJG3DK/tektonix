@@ -25,7 +25,7 @@ import logging
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Request, Response
 from pydantic import BaseModel
 
-from agent import audit, auth, rate_limit
+from agent import audit, auth, features, rate_limit
 from agent import config as agent_config
 from agent.auth import SESSION_COOKIE_NAME, User, require_full_auth
 from agent.notify import send_telegram, task_alert
@@ -129,6 +129,9 @@ def _user_public(user: User) -> dict:
         # None until the account picks one; the frontend maps that to the
         # default rather than the server writing the default into every row.
         "theme": user.theme or auth.DEFAULT_THEME,
+        # Which licensed features this deployment has; the dashboard shows
+        # or hides their pages by this.
+        "features": features.public(),
     }
 
 
@@ -406,6 +409,11 @@ async def list_users_endpoint(request: Request, user: User = Depends(require_ful
 @router.post("/api/auth/users", status_code=201)
 async def create_user_endpoint(request: Request, req: CreateUserRequest, user: User = Depends(require_full_auth)):
     auth.require_admin(user)
+    if not features.enabled(features.MULTI_USER):
+        # The public build is single-operator; accounts beyond the first are
+        # licensed (agent/features.py). Existing accounts are untouched.
+        raise HTTPException(403, "user accounts beyond the first are a licensed feature and are not enabled "
+                                 "on this deployment")
     if req.role not in ("admin", "user"):
         raise HTTPException(400, "role must be 'admin' or 'user'")
     # audit H7: can_access() treats allowed_repos=None as UNRESTRICTED for any

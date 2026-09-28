@@ -184,8 +184,8 @@ describe("Sidebar — repo filter", () => {
 });
 
 describe("Sidebar — admin-only navigation", () => {
-  it("offers Users, Analytics and Benchmarks to an admin", () => {
-    renderSidebar({ user: user({ role: "admin" }) });
+  it("offers Users, Analytics and Benchmarks to an admin of a licensed deployment", () => {
+    renderSidebar({ user: user({ role: "admin", features: { multi_user: true } }) });
     expect(screen.getByRole("button", { name: /users/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /analytics/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /benchmarks/i })).toBeInTheDocument();
@@ -273,5 +273,17 @@ describe("a queued task", () => {
     inboxCount.mockReturnValue(null);
     renderSidebar({ tasks: [task({ task_id: "q1", goal: "waiting one", status: "queued" })] });
     expect(screen.getAllByText(/waiting one/).length).toBe(1);
+  });
+});
+
+
+describe("Users is a licensed feature", () => {
+  it("is not offered in the public build, even to an admin", () => {
+    renderSidebar({ user: { ...user(), role: "admin", features: { multi_user: false } } });
+    expect(screen.queryByRole("button", { name: /^users$/i })).not.toBeInTheDocument();
+  });
+  it("is offered where the deployment has it", () => {
+    renderSidebar({ user: { ...user(), role: "admin", features: { multi_user: true } } });
+    expect(screen.getByRole("button", { name: /^users$/i })).toBeInTheDocument();
   });
 });

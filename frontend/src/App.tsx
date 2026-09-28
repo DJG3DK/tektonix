@@ -337,7 +337,7 @@ function AuthenticatedApp({ user, onLogout, onUserChanged }: { user: CurrentUser
             <ModelConfigPanel />
           </div>
         )}
-        {view === "users" && user.role === "admin" && <UsersPanel repos={repos} />}
+        {view === "users" && user.role === "admin" && user.features?.multi_user && <UsersPanel repos={repos} />}
         {(view === "analytics" || view === "benchmarks" || view === "models" || view === "users") && user.role !== "admin" && (
           /* An admin URL opened by a restricted account (a shared link, a
              bookmark). The server is the boundary -- every API behind these
@@ -395,6 +395,7 @@ function AuthenticatedApp({ user, onLogout, onUserChanged }: { user: CurrentUser
         view={view}
         pane={mobilePane}
         isAdmin={user.role === "admin"}
+        canManageUsers={Boolean(user.features?.multi_user)}
         onTasks={() => setMobilePane("list")}
         onNewPlan={() => { setSelectedPlanningSession(null); setView("planning"); setMobilePane("main"); }}
         onAnalytics={() => { setView("analytics"); setMobilePane("main"); }}

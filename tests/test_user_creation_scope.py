@@ -26,6 +26,7 @@ _ADMIN = User(id=1, email="admin@example.com", role="admin", allowed_repos=None,
 
 @pytest.fixture
 def client(monkeypatch):
+    monkeypatch.setenv("TEKTONIX_FEATURES", "multi-user")   # these are the licensed deployment's rules
     monkeypatch.setitem(srv.app.dependency_overrides, srv.require_full_auth, lambda: _ADMIN)
     monkeypatch.setattr(srv.app.state, "auth_pool", object(), raising=False)
     return TestClient(srv.app)

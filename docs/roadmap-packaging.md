@@ -122,7 +122,7 @@ dependency, not by appetite.
 **Done when:** the full suite passes with no behaviour change, and the mount
 paths are computed in one function.
 
-### M1 — The container bundle *(this is "the Windows package")* — **core done**
+### M1 — The container bundle *(this is "the Windows package")* — **done; first real Windows install 2026-09-28**
 
 A `docker compose` stack — agent, Postgres, router, both reviewers — that runs
 identically wherever Docker Desktop runs: Windows, macOS, Linux.
@@ -266,11 +266,45 @@ on a task branch — with nothing running but the CLI itself.
 code. Everything above it reuses the existing loop; this one gives it a second
 front end and a second persistence backend, and both need their own tests.
 
-### M4 — Desktop shell *(optional, last)*
+### M4 — The Windows app *(next, after the first Windows install runs a task through the reviewer)*
 
-A small Tauri wrapper that starts the stack, shows status and opens the UI. It
-is a finish, not a foundation: building it before M1 means shipping an
-installer around a stack that still needs manual setup.
+The first real Windows install (2026-09-28) worked, and was clunky: a
+`.bat`, a console prompt, a one-time password read out of a container, and
+six fixes for pages that reached for files only a host install has. The
+answer is an app, not a better script.
+
+* **Shape.** A Tauri shell: a native window hosting the dashboard, a tray
+  icon, and a lifecycle manager over the compose stack. The dashboard is
+  already a web app, so the shell is small and there is no second UI.
+* **Prerequisites on install.** The installer checks for WSL 2 and Docker
+  Desktop and installs what is missing (`wsl --install --no-distribution`
+  with a reboot prompt; Docker Desktop from Docker's own URL with its silent
+  flags). Home and Pro alike. Virtualization off in the firmware stays a
+  check with the remedy in words; no installer can flip it.
+* **Bring-up.** A setup screen instead of a console prompt: the OpenRouter
+  key and the projects folder, written to `.env`; `docker compose up -d
+  --build` with progress in the window; the one-time password shown in the
+  app; then the dashboard. Later launches start the stack if it is down.
+  Quitting stops the stack or leaves it, a setting.
+* **What the app owns.** Start, stop, upgrade (pull and rebuild, with
+  progress), logs, and "open the projects folder", from the tray.
+* **Order.** The shell around the existing dashboard with start and stop;
+  the setup screen and password display; the prerequisite installer; code
+  signing, because an unsigned installer that downloads Docker trips
+  SmartScreen and every antivirus.
+
+The bundle stays as it is for Linux and macOS; the app is a layer over it.
+
+### M5 — Licensing *(later)*
+
+The public build is the single-operator product. Accounts beyond the first
+are a licensed feature today, gated by a feature switch in the deployment's
+own configuration (`agent/features.py`) and not offered in the public
+build. The intended end state is a licence server: a paid licence key,
+entered once in the app or the dashboard, verified against the server, that
+switches on every licensed feature for that deployment. The switch stays
+the mechanism; the licence check becomes what sets it. Which features are
+licensed grows from there (multi-user first).
 
 ---
 

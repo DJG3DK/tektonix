@@ -3,6 +3,8 @@ export interface CurrentUser {
   id: number;
   email: string;
   role: "admin" | "user";
+  /** Licensed features this deployment has. Missing means none. */
+  features?: { multi_user: boolean };
   allowed_repos: string[] | null; // null == every repo (always true for admin)
   totp_enabled: boolean;
   must_change_password: boolean;

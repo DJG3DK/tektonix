@@ -31,11 +31,13 @@ interface Tab {
  * New Plan, not the raw task composer, which stays reachable from the
  * Building section header. */
 export function MobileNav({
-  view, pane, isAdmin, onTasks, onNewPlan, onAnalytics, onBenchmarks, onModels, onUsers, onSettings, onGitHub,
+  view, pane, isAdmin, canManageUsers = false, onTasks, onNewPlan, onAnalytics, onBenchmarks, onModels, onUsers, onSettings, onGitHub,
 }: {
   view: NavView;
   pane: "list" | "main";
   isAdmin: boolean;
+  /** Accounts beyond the first are a licensed feature; the tab shows only where it is on. */
+  canManageUsers?: boolean;
   onTasks: () => void;
   onNewPlan: () => void;
   onAnalytics: () => void;
@@ -56,8 +58,8 @@ export function MobileNav({
       match: (v, p) => p === "main" && v === "benchmarks", go: onBenchmarks },
     { key: "models", label: "Models", icon: "cpu", admin: true,
       match: (v, p) => p === "main" && v === "models", go: onModels },
-    { key: "users", label: "Users", icon: "users", admin: true,
-      match: (v, p) => p === "main" && v === "users", go: onUsers },
+    ...(canManageUsers ? [{ key: "users", label: "Users", icon: "users", admin: true,
+      match: (v: NavView, p: "list" | "main") => p === "main" && v === "users", go: onUsers } as Tab] : []),
     { key: "github", label: "GitHub", icon: "github",
       match: (v, p) => p === "main" && v === "github", go: onGitHub },
     { key: "settings", label: "Settings", icon: "settings",
