@@ -52,3 +52,6 @@ select { width: auto; }
 .log .app { color: var(--brass); }
 .log .setup { color: var(--brass); }
 .log .err { color: var(--bad); }
+
+label.check { display: flex; align-items: flex-start; gap: 8px; margin: 0 0 10px; }
+label.check input { width: auto; max-width: none; margin-top: 3px; }

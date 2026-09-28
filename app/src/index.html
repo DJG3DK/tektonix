@@ -63,6 +63,14 @@
           <input id="setup-email" type="email" spellcheck="false" placeholder="admin@example.com" />
           <small class="muted">The first account. Its one-time password is shown here after the first start.</small>
         </label>
+        <label class="check">
+          <input id="setup-auto-update" type="checkbox" checked />
+          <span>Update automatically: check on start and every six hours, and update when the agent is idle</span>
+        </label>
+        <label class="check">
+          <input id="setup-prereleases" type="checkbox" />
+          <span>Include pre-releases (release candidates)</span>
+        </label>
         <div class="row">
           <button type="submit" class="btn primary" id="setup-save">Save and start</button>
           <button type="button" class="btn hidden" id="setup-cancel">Cancel</button>
@@ -97,6 +105,7 @@
         <button id="btn-update-stack" class="btn primary hidden">Update Tektonix</button>
         <button id="btn-update-app" class="btn hidden">Update this app</button>
         <span id="update-text" class="muted"></span>
+        <span id="update-auto" class="muted"></span>
       </div>
 
       <h2>Containers</h2>

@@ -248,3 +248,30 @@ def test_the_payload_shape_is_stable_for_a_monitoring_box(all_good):
     for name, check in payload["checks"].items():
         assert isinstance(check["ok"], bool), name
     assert SimpleNamespace(**payload).project_count == 1
+
+
+def test_the_payload_counts_what_is_in_flight_without_naming_it(monkeypatch):
+    """The desktop app auto-updates only when the agent is idle; it reads
+    this count from the public route. A count leaks nothing a name would."""
+    from fastapi.testclient import TestClient
+
+    import agent.server as srv
+    from agent import live_state
+
+    async def collect(pool, base, projects):
+        return {"ok": True, "checks": {}, "project_count": 0}
+
+    monkeypatch.setattr(srv.health_checks, "collect", collect)
+    monkeypatch.setattr(srv.app.state, "auth_pool", None, raising=False)
+    live_state.running_tasks.clear()
+    live_state.running_planning_turns.clear()
+    c = TestClient(srv.app)
+    assert c.get("/api/health").json()["busy"] == 0
+    live_state.running_tasks["t1"] = object()
+    live_state.running_planning_turns["p1"] = object()
+    try:
+        body = c.get("/api/health").json()
+        assert body["busy"] == 2 and "t1" not in str(body)
+    finally:
+        live_state.running_tasks.clear()
+        live_state.running_planning_turns.clear()

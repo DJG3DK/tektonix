@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### The app updates itself, and the stack, on its own
+
+Two preferences on the app's settings form: update automatically, on by
+default, and include pre-releases, off by default. With the first on, the
+app checks two minutes after start and every six hours; when a newer
+release is out and the agent is idle it updates the stack, then installs
+the newer app and restarts into it. The buttons stay for doing it by hand.
+The agent's public health route now says how much is in flight, which is
+what "idle" reads.
+
 ### A failed retry never ends a task
 
 The empty-reply retry re-asks the same model with reasoning switched off.

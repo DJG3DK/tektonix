@@ -6,8 +6,6 @@ const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
 const dialog = window.__TAURI__.dialog;
 const opener = window.__TAURI__.opener;
-const updater = window.__TAURI__.updater;
-const proc = window.__TAURI__.process;
 
 const $ = (id) => document.getElementById(id);
 const show = (id) => { for (const p of document.querySelectorAll(".page")) p.classList.add("hidden"); $(id).classList.remove("hidden"); };
@@ -93,6 +91,11 @@ async function showSetup(cancellable) {
   }
   $("setup-git-name").value = gitName || "";
   $("setup-git-email").value = gitEmail || "";
+  try {
+    const prefs = await invoke("prefs_get");
+    $("setup-auto-update").checked = !!prefs.auto_update;
+    $("setup-prereleases").checked = !!prefs.include_prereleases;
+  } catch (e) { /* defaults stay */ }
   $("setup-cancel").classList.toggle("hidden", !cancellable);
   $("setup-error").classList.add("hidden");
 }
@@ -111,6 +114,8 @@ $("setup-form").onsubmit = async (ev) => {
       key: key || null, projectsDir: $("setup-dir").value, adminEmail: $("setup-email").value,
       gitName: $("setup-git-name").value, gitEmail: $("setup-git-email").value,
     });
+    await invoke("prefs_set", { autoUpdate: $("setup-auto-update").checked, includePrereleases: $("setup-prereleases").checked });
+    void showAutoStatus();
     await showStack();
     if (!(await invoke("installed_version"))) await runStack("stack_install");
   } catch (e) {
@@ -126,6 +131,7 @@ let busy = false;
 async function showStack() {
   show("page-stack");
   await refreshStatus();
+  void showAutoStatus();
 }
 
 function setState(text, tone, lead) {
@@ -190,6 +196,14 @@ $("btn-password").onclick = async () => {
 };
 
 // ── Updates ──────────────────────────────────────────────────────────────────
+async function showAutoStatus() {
+  try {
+    const prefs = await invoke("prefs_get");
+    $("update-auto").textContent = prefs.auto_update
+      ? `Automatic: on start and every six hours, when the agent is idle${prefs.include_prereleases ? ", pre-releases included" : ""}.`
+      : "Automatic updates are off (Settings).";
+  } catch (e) { /* fine */ }
+}
 $("btn-check-stack").onclick = async () => {
   $("update-text").textContent = "Checking…";
   $("btn-update-stack").classList.add("hidden");
@@ -207,12 +221,12 @@ $("btn-check-stack").onclick = async () => {
     }
   } catch (e) { $("update-text").textContent = String(e); }
   try {
-    appUpdate = await updater.check();
-    if (appUpdate) {
+    appUpdate = await invoke("app_update_check");
+    if (appUpdate.available) {
       $("update-text").textContent += ` This app has a new version too (${appUpdate.version}).`;
       $("btn-update-app").classList.remove("hidden");
     }
-  } catch (e) { /* no updater endpoint reachable; the stack check above is the one that matters */ }
+  } catch (e) { /* no updater manifest reachable; the stack check above is the one that matters */ }
 };
 $("btn-update-stack").onclick = async () => {
   if (!pendingStackUpdate) return;
@@ -223,12 +237,9 @@ $("btn-update-stack").onclick = async () => {
   pendingStackUpdate = null;
 };
 $("btn-update-app").onclick = async () => {
-  if (!appUpdate) return;
   $("btn-update-app").disabled = true;
   try {
-    say(`Downloading app ${appUpdate.version}…`);
-    await appUpdate.downloadAndInstall((ev) => { if (ev.event === "Finished") say("Installed; restarting."); });
-    await proc.relaunch();
+    await invoke("app_update_install");   // downloads, installs and restarts into the new app
   } catch (e) { fail(e); $("btn-update-app").disabled = false; }
 };
 

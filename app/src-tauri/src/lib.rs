@@ -10,7 +10,7 @@ mod stack;
 use std::sync::Arc;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
-use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 use tokio::sync::Mutex;
 
 struct LogFollow(Mutex<Option<proc::Streaming>>);
@@ -103,6 +103,46 @@ async fn stack_update(app: AppHandle, tag: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn prefs_get(app: AppHandle) -> stack::Prefs {
+    stack::read_prefs(&app)
+}
+
+#[tauri::command]
+fn prefs_set(app: AppHandle, auto_update: bool, include_prereleases: bool) -> Result<stack::Prefs, String> {
+    stack::write_prefs(&app, &stack::Prefs { auto_update, include_prereleases })
+}
+
+#[tauri::command]
+async fn app_update_check(app: AppHandle) -> Result<stack::AppUpdate, String> {
+    stack::check_app_update(&app).await
+}
+
+#[tauri::command]
+async fn app_update_install(app: AppHandle) -> Result<(), String> {
+    stack::install_app_update(&app).await
+}
+
+#[tauri::command]
+async fn auto_update_now(app: AppHandle) -> Result<String, String> {
+    stack::auto_update_pass(&app).await
+}
+
+/// Automatic updates: two minutes after start, then every six hours. Each
+/// pass is one line in the log pane; a failure is a line too, never a dialog.
+fn spawn_auto_updater(app: AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(120)).await;
+        loop {
+            match stack::auto_update_pass(&app).await {
+                Ok(what) => { let _ = app.emit(proc::LOG_EVENT, proc::LogLine { stream: "app".into(), line: format!("Update check: {what}.") }); }
+                Err(e) => { let _ = app.emit(proc::LOG_EVENT, proc::LogLine { stream: "app".into(), line: format!("Update check failed: {e}") }); }
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(6 * 3600)).await;
+        }
+    });
+}
+
+#[tauri::command]
 async fn logs_follow(app: AppHandle, service: String, state: tauri::State<'_, Arc<LogFollow>>) -> Result<(), String> {
     logs_stop(state.clone()).await?;
     let dir = stack::dir(&app)?;
@@ -180,6 +220,7 @@ pub fn run() {
         .manage(Arc::new(LogFollow(Mutex::new(None))))
         .setup(|app| {
             build_tray(app.handle())?;
+            spawn_auto_updater(app.handle().clone());
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -196,7 +237,8 @@ pub fn run() {
             docker_state, docker_start, docker_install,
             settings_get, settings_save, machine_git_identity, stack_dir, installed_version,
             stack_install, stack_up, stack_down, stack_status, stack_password,
-            stack_check_update, stack_update,
+            stack_check_update, stack_update, prefs_get, prefs_set,
+            app_update_check, app_update_install, auto_update_now,
             logs_follow, logs_stop, open_dashboard,
         ])
         .run(tauri::generate_context!())

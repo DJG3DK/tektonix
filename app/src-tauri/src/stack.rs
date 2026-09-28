@@ -62,6 +62,42 @@ pub struct Version {
     pub tag: String,
 }
 
+/// The app's own preferences, in the data directory beside the stack.
+#[derive(Serialize, Deserialize, Clone)]
+pub struct Prefs {
+    /// Check on startup and every few hours; update the stack when a newer
+    /// release is out and the agent is idle, then the app itself.
+    pub auto_update: bool,
+    /// Count pre-releases (a dash in the tag) as releases.
+    pub include_prereleases: bool,
+}
+
+impl Default for Prefs {
+    fn default() -> Self {
+        Prefs { auto_update: true, include_prereleases: false }
+    }
+}
+
+fn prefs_path(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(dir(app)?.join("prefs.json"))
+}
+
+pub fn read_prefs(app: &AppHandle) -> Prefs {
+    prefs_path(app).ok()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or_default()
+}
+
+pub fn write_prefs(app: &AppHandle, prefs: &Prefs) -> Result<Prefs, String> {
+    let path = prefs_path(app)?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    std::fs::write(&path, serde_json::to_string_pretty(prefs).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+    Ok(prefs.clone())
+}
+
 #[derive(Serialize, Clone)]
 pub struct UpdateInfo {
     pub installed: String,
@@ -348,20 +384,32 @@ pub struct Release {
     pub html_url: String,
     #[serde(default)]
     pub body: String,
+    #[serde(default)]
+    pub draft: bool,
 }
 
-pub async fn latest_release() -> Result<Release, String> {
+pub async fn latest_release(include_prereleases: bool) -> Result<Release, String> {
     let client = reqwest::Client::builder().user_agent("tektonix-desktop").build().map_err(|e| e.to_string())?;
-    let url = format!("https://api.github.com/repos/{REPO}/releases/latest");
+    if !include_prereleases {
+        let url = format!("https://api.github.com/repos/{REPO}/releases/latest");
+        let r = client.get(&url).send().await.map_err(|e| format!("could not reach GitHub: {e}"))?;
+        if !r.status().is_success() {
+            return Err(format!("GitHub answered {} for the latest release", r.status()));
+        }
+        return r.json::<Release>().await.map_err(|e| format!("unexpected answer from GitHub: {e}"));
+    }
+    // Newest first; drafts never count, pre-releases do.
+    let url = format!("https://api.github.com/repos/{REPO}/releases?per_page=10");
     let r = client.get(&url).send().await.map_err(|e| format!("could not reach GitHub: {e}"))?;
     if !r.status().is_success() {
-        return Err(format!("GitHub answered {} for the latest release", r.status()));
+        return Err(format!("GitHub answered {} for the releases", r.status()));
     }
-    r.json::<Release>().await.map_err(|e| format!("unexpected answer from GitHub: {e}"))
+    let all = r.json::<Vec<Release>>().await.map_err(|e| format!("unexpected answer from GitHub: {e}"))?;
+    all.into_iter().find(|rel| !rel.draft).ok_or_else(|| "no releases yet".to_string())
 }
 
 pub async fn check_update(app: &AppHandle) -> Result<UpdateInfo, String> {
-    let latest = latest_release().await?;
+    let latest = latest_release(read_prefs(app).include_prereleases).await?;
     let installed = installed_version(app).unwrap_or_default();
     Ok(UpdateInfo {
         available: !installed.is_empty() && installed != latest.tag_name,
@@ -409,8 +457,102 @@ mod tests {
     }
 
     #[test]
+    fn the_updater_manifest_lives_on_the_release_not_on_latest() {
+        assert_eq!(updater_endpoint("v0.9.0-rc6"), "https://github.com/DJG3DK/tektonix/releases/download/v0.9.0-rc6/latest.json");
+    }
+
+    #[test]
+    fn preferences_default_to_automatic_without_prereleases() {
+        let p = Prefs::default();
+        assert!(p.auto_update && !p.include_prereleases);
+        let back: Prefs = serde_json::from_str(&serde_json::to_string(&p).unwrap()).unwrap();
+        assert!(back.auto_update);
+    }
+
+    #[test]
     fn a_secret_is_hinted_never_shown() {
         assert_eq!(hint("sk-or-v1-abcdefgh1234"), "••••••••1234");
         assert_eq!(hint("short"), "•••••");
     }
+}
+
+
+/// Whether the agent has nothing in flight: the public health route's
+/// `busy` count. An agent too old to report it counts as busy, so an
+/// automatic update never pulls a running task's containers out from
+/// under it.
+pub async fn agent_idle() -> bool {
+    let client = match reqwest::Client::builder().timeout(std::time::Duration::from_secs(5)).build() {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
+    let Ok(r) = client.get(HEALTH).send().await else { return false };
+    let Ok(v) = r.json::<serde_json::Value>().await else { return false };
+    v.get("busy").and_then(|b| b.as_u64()) == Some(0)
+}
+
+/// Where the updater's manifest for a release lives: with the installer,
+/// on that release. `releases/latest/download` would skip pre-releases.
+pub fn updater_endpoint(tag: &str) -> String {
+    format!("https://github.com/{REPO}/releases/download/{tag}/latest.json")
+}
+
+#[derive(Serialize, Clone)]
+pub struct AppUpdate {
+    pub available: bool,
+    pub version: String,
+    pub tag: String,
+}
+
+/// Is a newer app than this one attached to the newest release?
+pub async fn check_app_update(app: &AppHandle) -> Result<AppUpdate, String> {
+    use tauri_plugin_updater::UpdaterExt;
+    let latest = latest_release(read_prefs(app).include_prereleases).await?;
+    let endpoint: tauri::Url = updater_endpoint(&latest.tag_name).parse().map_err(|e: url::ParseError| e.to_string())?;
+    let updater = app.updater_builder().endpoints(vec![endpoint]).map_err(|e| e.to_string())?
+        .build().map_err(|e| e.to_string())?;
+    match updater.check().await {
+        Ok(Some(u)) => Ok(AppUpdate { available: true, version: u.version.clone(), tag: latest.tag_name }),
+        Ok(None) => Ok(AppUpdate { available: false, version: String::new(), tag: latest.tag_name }),
+        Err(e) => Err(format!("could not check the app's own update: {e}")),
+    }
+}
+
+/// Download and install the newest app, then restart into it.
+pub async fn install_app_update(app: &AppHandle) -> Result<(), String> {
+    use tauri_plugin_updater::UpdaterExt;
+    let latest = latest_release(read_prefs(app).include_prereleases).await?;
+    let endpoint: tauri::Url = updater_endpoint(&latest.tag_name).parse().map_err(|e: url::ParseError| e.to_string())?;
+    let updater = app.updater_builder().endpoints(vec![endpoint]).map_err(|e| e.to_string())?
+        .build().map_err(|e| e.to_string())?;
+    let Some(update) = updater.check().await.map_err(|e| e.to_string())? else {
+        return Err("this app is already the newest".into());
+    };
+    note(app, format!("Downloading app {}...", update.version));
+    update.download_and_install(|_, _| {}, || {}).await.map_err(|e| format!("app update failed: {e}"))?;
+    note(app, "App updated; restarting.");
+    app.restart();
+}
+
+/// One automatic pass: the stack when a newer release is out and the agent
+/// is idle, then the app itself. Says what it did and why not.
+pub async fn auto_update_pass(app: &AppHandle) -> Result<String, String> {
+    let prefs = read_prefs(app);
+    if !prefs.auto_update {
+        return Ok("automatic updates are off".into());
+    }
+    let info = check_update(app).await?;
+    if info.available {
+        if !agent_idle().await {
+            return Ok(format!("{} is out, waiting for the agent to be idle", info.latest));
+        }
+        note(app, format!("Updating the stack to {} (the agent is idle)", info.latest));
+        update_to(app, &info.latest).await?;
+    }
+    let mine = check_app_update(app).await?;
+    if mine.available {
+        note(app, format!("A newer app ({}) is out; installing it", mine.version));
+        install_app_update(app).await?;
+    }
+    Ok(if info.available { format!("updated the stack to {}", info.latest) } else { "up to date".into() })
 }

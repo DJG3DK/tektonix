@@ -616,6 +616,9 @@ async def health():
     payload = await health_checks.collect(
         getattr(app.state, "auth_pool", None), config.router_base_url, PROJECTS,
     )
+    # How much is in flight: a count, never a name. The desktop app updates
+    # the stack only when this is 0 (app/src-tauri/src/stack.rs).
+    payload["busy"] = len(live_state.running_tasks) + len(live_state.running_planning_turns)
     return _JSONResponse(payload, status_code=200 if payload["ok"] else 503)
 
 
