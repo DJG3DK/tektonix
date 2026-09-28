@@ -174,5 +174,17 @@ It 'falls back to pointing at Docker output rather than inventing a cause' {
 }
 
 Write-Host ''
+
+
+
+Write-Host 'New-DesktopShortcut'
+It 'says why when the icon is missing rather than failing the install' {
+    $r = New-DesktopShortcut -Url 'http://localhost:8100' -IconPath (Join-Path ([IO.Path]::GetTempPath()) 'no-such.ico') -Desktop ([IO.Path]::GetTempPath()) 6>&1
+    Expect-True ($null -eq ($r | Where-Object { $_ -is [string] -and $_ -like '*.lnk' })) 'no shortcut path returned'
+}
+It 'the icon the installer points at ships with the checkout' {
+    Expect-True (Test-Path (Join-Path $PSScriptRoot '..' 'frontend' 'public' 'tektonix.ico')) 'frontend/public/tektonix.ico exists'
+}
+
 if ($script:failed -gt 0) { Write-Host "$script:failed of $script:ran failed" -ForegroundColor Red; exit 1 }
 Write-Host "$script:ran passed" -ForegroundColor Green

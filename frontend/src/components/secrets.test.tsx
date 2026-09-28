@@ -182,3 +182,22 @@ describe("DeployKeyCard", () => {
     expect(document.body).toBeTruthy();
   });
 });
+
+describe("ApiKeysPanel — in the compose bundle the values are compose's, not this page's", () => {
+  it("shows what compose provided, says where it changes, and takes no edits", async () => {
+    getEnvConfig.mockResolvedValue({
+      keys: [envKey({ is_set: true, display: "••••••••cdef" })],
+      managed_by: "compose",
+      note: "In the compose bundle these live in the .env file beside docker-compose.yml on the host. Edit it there and run `docker compose up -d` to apply.",
+    });
+    renderPanel();
+    const note = await screen.findByTestId("env-compose-note");
+    expect(note.textContent).toContain("docker compose up -d");
+    expect(screen.getByText("set")).toBeInTheDocument();
+    const input = screen.getByLabelText("OpenRouter API key") as HTMLInputElement;
+    expect(input).toBeDisabled();
+    expect(input.placeholder).toBe("••••••••cdef");
+    expect(screen.queryByRole("button", { name: /save/i })).not.toBeInTheDocument();
+    expect(saveEnvConfig).not.toHaveBeenCalled();
+  });
+});

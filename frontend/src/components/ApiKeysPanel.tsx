@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { getEnvConfig, saveEnvConfig, restartServices, type EnvKey } from "../api";
+import { getEnvConfig, saveEnvConfig, restartServices, type EnvConfig, type EnvKey } from "../api";
 import { Icon } from "./Icon";
 import { useSettingsSave } from "./SettingsSaveBar";
 import "./ApiKeysPanel.css";
@@ -18,6 +18,7 @@ import "./ApiKeysPanel.css";
  */
 export function ApiKeysPanel() {
   const [keys, setKeys] = useState<EnvKey[] | null>(null);
+  const [managed, setManaged] = useState<Pick<EnvConfig, "managed_by" | "note"> | null>(null);
   const [edits, setEdits] = useState<Record<string, string>>({});
   const [reveal, setReveal] = useState<Record<string, boolean>>({});
   const [restarting, setRestarting] = useState(false);
@@ -27,7 +28,9 @@ export function ApiKeysPanel() {
 
   async function load() {
     try {
-      setKeys((await getEnvConfig()).keys);
+      const cfg = await getEnvConfig();
+      setKeys(cfg.keys);
+      setManaged({ managed_by: cfg.managed_by, note: cfg.note });
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : "could not load");
@@ -35,7 +38,8 @@ export function ApiKeysPanel() {
   }
   useEffect(() => { void load(); }, []);
 
-  const dirty = Object.entries(edits).filter(([, v]) => v.trim() !== "");
+  const readOnly = managed?.managed_by === "compose";
+  const dirty = readOnly ? [] : Object.entries(edits).filter(([, v]) => v.trim() !== "");
 
   // No Save button of its own: the page's single sticky bar collects pending
   // edits from every panel and commits them. Errors propagate so the bar
@@ -87,10 +91,16 @@ export function ApiKeysPanel() {
           now (SettingsPage's own nav), and printing "API keys & integrations"
           directly under a header that already says Environment / "API keys and
           integration settings" was the same sentence twice. */}
-      <p className="settings-hint">
-        Stored in this deployment's <code>.env</code> files, never in the database and never sent to
-        the browser. Existing values are shown masked — leave a field blank to keep it unchanged.
-      </p>
+      {readOnly ? (
+        <p className="settings-hint akey-compose-note" data-testid="env-compose-note">
+          {managed?.note} Values are shown masked and cannot be changed from this page.
+        </p>
+      ) : (
+        <p className="settings-hint">
+          Stored in this deployment's <code>.env</code> files, never in the database and never sent to
+          the browser. Existing values are shown masked — leave a field blank to keep it unchanged.
+        </p>
+      )}
 
       <div className="settings-stack akey-groups">
       {groups.map((g) => (
@@ -113,8 +123,9 @@ export function ApiKeysPanel() {
                   type={k.secret && !reveal[k.key] ? "password" : "text"}
                   autoComplete="off"
                   spellCheck={false}
-                  placeholder={k.is_set ? `${k.display} — blank keeps it` : "not set"}
+                  placeholder={k.is_set ? (readOnly ? k.display : `${k.display} — blank keeps it`) : "not set"}
                   value={edits[k.key] ?? ""}
+                  disabled={readOnly}
                   onChange={(e) => setEdits((p) => ({ ...p, [k.key]: e.target.value }))}
                 />
                 {k.secret && (

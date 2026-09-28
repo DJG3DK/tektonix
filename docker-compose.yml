@@ -157,6 +157,9 @@ services:
       # The review services are siblings here, not localhost.
       REVIEW_SERVICE_HOST: agent-review
       REVIEW_CONTROL_HOST: commit-reviewer
+      # The Environment page shows what compose provided and says the host's
+      # .env is where a value changes (agent/env_config.py).
+      TEKTONIX_BUNDLE: "1"
     volumes:
       # Sibling containers, not nested. See docker/agent/Dockerfile.
       - /var/run/docker.sock:/var/run/docker.sock

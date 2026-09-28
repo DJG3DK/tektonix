@@ -196,6 +196,47 @@ function Invoke-Step {
 }
 
 <#
+A desktop shortcut to the dashboard, with the Tektonix logo as its icon.
+
+The bundle has no program to launch -- the dashboard is a web page -- so a
+shortcut is what a "Tektonix" icon on the desktop can honestly be. A .lnk
+whose target is the URL opens the default browser. Replaced every run, so
+a moved checkout or a changed port does not leave a dead icon behind.
+Returns the shortcut path, or $null with a note when it could not be made:
+the install has already succeeded at that point, and an icon is not worth
+failing it over.
+#>
+function New-DesktopShortcut {
+    param(
+        [Parameter(Mandatory)][string]$Url,
+        [Parameter(Mandatory)][string]$IconPath,
+        [string]$Desktop = [Environment]::GetFolderPath('Desktop'),
+        [string]$Name = 'Tektonix'
+    )
+    if (-not $IsWindows -and $PSVersionTable.PSEdition -eq 'Core' -and $env:OS -ne 'Windows_NT') {
+        Write-Note 'No desktop shortcut: not Windows.'
+        return $null
+    }
+    if (-not (Test-Path $IconPath)) {
+        Write-Note "No desktop shortcut: the icon $IconPath is missing."
+        return $null
+    }
+    try {
+        $shell = New-Object -ComObject WScript.Shell
+        $path = Join-Path $Desktop "$Name.lnk"
+        $sc = $shell.CreateShortcut($path)
+        $sc.TargetPath = $Url
+        $sc.IconLocation = "$IconPath,0"
+        $sc.Description = 'Tektonix dashboard'
+        $sc.Save()
+        return $path
+    } catch {
+        Write-Note "No desktop shortcut: $($_.Exception.Message)"
+        return $null
+    }
+}
+
+<#
 What Docker is doing right now, as one of: missing, stopped, no-compose, ready.
 
 Split from the acting on it because "not installed" and "installed but asleep"
@@ -451,6 +492,9 @@ function Main {
     Write-Note '  docker compose exec agent python scripts/show_initial_password.py'
     Write-Note 'It works once, and you change the password on first login.'
     Write-Note 'Running this again is safe, and is also how you upgrade.'
+    $icon = Join-Path $root 'frontend\public\tektonix.ico'
+    $shortcut = Invoke-Step "put a Tektonix shortcut on the desktop" { New-DesktopShortcut -Url $url -IconPath $icon }
+    if ($shortcut) { Write-Note "Desktop shortcut: $shortcut" }
     if (-not $Yes) {
         $open = Read-Host 'Open it in your browser now? [Y/n]'
         if ($open -notmatch '^[Nn]') { Start-Process $url }

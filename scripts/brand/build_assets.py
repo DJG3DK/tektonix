@@ -106,6 +106,9 @@ def ico(path, sizes=(16, 32, 48)):
         inset = px * 0.16
         plumb(d, inset * SS, inset * SS, (px - 2 * inset) * SS)
         frames.append(img.resize((px, px), Image.LANCZOS))
+    # Largest first: Pillow drops every size larger than the first frame, so a
+    # 16px first frame made a one-frame .ico whatever `sizes` said.
+    frames.sort(key=lambda f: f.width, reverse=True)
     frames[0].save(path, format="ICO", sizes=[(f.width, f.height) for f in frames],
                    append_images=frames[1:])
     print(f"  {path.name:<26} {list(sizes)}")
@@ -190,6 +193,9 @@ if __name__ == "__main__":
     icon(OUT / "favicon-16x16.png", 16)
     icon(OUT / "favicon-32x32.png", 32)
     ico(OUT / "favicon.ico")
+    # The Windows desktop shortcut's icon (install.ps1): Explorer shows up to
+    # 256px on a desktop, and a 48px frame scaled to that is a blur.
+    ico(OUT / "tektonix.ico", sizes=(16, 32, 48, 64, 128, 256))
     apple_touch(OUT / "apple-touch-icon.png")
     pwa_icon(OUT / "icon-192.png", 192)
     pwa_icon(OUT / "icon-512.png", 512)

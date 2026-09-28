@@ -37,7 +37,9 @@ async def get_env_config(user: User = Depends(require_full_auth)):
     *which* key is installed without being enough to use it.
     """
     auth.require_admin(user)
-    return {"keys": env_config.list_keys()}
+    compose = env_config.managed_by_compose()
+    return {"keys": env_config.list_keys(), "managed_by": "compose" if compose else "files",
+            "note": env_config.COMPOSE_NOTE if compose else None}
 
 
 @router.post("")
@@ -54,6 +56,8 @@ async def save_env_config(req: SaveEnvKeysRequest, user: User = Depends(require_
     except env_config.UnknownKeyError as e:
         # The key NAME is safe to echo; the value never is.
         raise HTTPException(status_code=400, detail=str(e))
+    except env_config.ReadOnlyError as e:
+        raise HTTPException(status_code=409, detail=str(e))
     except Exception as e:  # noqa: BLE001
         logger.warning("env-config write failed for %s: %s", sorted(req.updates), type(e).__name__)
         raise HTTPException(status_code=500, detail="could not write the env file")

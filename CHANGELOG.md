@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### The Environment page in the bundle shows what compose set
+
+The OpenRouter key showed "not set" although compose had passed it, and
+saving answered "could not write the env file": the page read and wrote
+`.env` files that exist only on a host install. In the bundle it now shows
+the values the process was given, masked, and says the host's `.env` beside
+docker-compose.yml is where they change, applied by `docker compose up -d`.
+
+### A Tektonix icon on the Windows desktop
+
+The installer puts a shortcut to the dashboard on the desktop, with the
+logo as its icon. The icon builder also kept only one size per `.ico`
+until now; the favicon carries its three sizes again.
+
 ### The first password can be read from the bundle
 
 `docker compose exec agent python scripts/show_initial_password.py` crashed:

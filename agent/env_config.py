@@ -101,6 +101,22 @@ MANAGED_KEYS: tuple[ManagedKey, ...] = (
 
 _BY_KEY = {k.key: k for k in MANAGED_KEYS}
 
+# In the compose bundle none of these files exist: every value comes from the
+# .env beside docker-compose.yml on the host, interpolated by compose, and a
+# change there is applied by `docker compose up -d`. The page shows what the
+# process was given and says so; a write is refused with the same sentence
+# (2026-09-28, the first Windows install: "could not write the env file").
+COMPOSE_NOTE = ("In the compose bundle these live in the .env file beside docker-compose.yml on the host. "
+                "Edit it there and run `docker compose up -d` to apply.")
+
+
+def managed_by_compose() -> bool:
+    return os.environ.get("TEKTONIX_BUNDLE") == "1"
+
+
+class ReadOnlyError(Exception):
+    pass
+
 
 def _read_env(path: Path) -> dict[str, str]:
     out: dict[str, str] = {}
@@ -130,9 +146,9 @@ def _mask(value: str) -> str:
 def list_keys() -> list[dict]:
     """Masked view for the Settings page. Never returns a value."""
     out = []
+    compose = managed_by_compose()
     for mk in MANAGED_KEYS:
-        env = _read_env(mk.path)
-        raw = env.get(mk.key, "")
+        raw = os.environ.get(mk.key, "") if compose else _read_env(mk.path).get(mk.key, "")
         out.append({
             "key": mk.key,
             "label": mk.label,
@@ -144,7 +160,7 @@ def list_keys() -> list[dict]:
             # masking a hostname helps nobody and makes the page unusable.
             "display": _mask(raw) if mk.secret else raw,
             "restarts": list(mk.restarts),
-            "file": str(mk.path),
+            "file": "the host's .env (docker compose)" if compose else str(mk.path),
         })
     return out
 
@@ -226,6 +242,8 @@ def set_keys(updates: dict[str, str]) -> dict:
     unknown = [k for k in updates if k not in _BY_KEY]
     if unknown:
         raise UnknownKeyError(f"not editable here: {', '.join(sorted(unknown))}")
+    if managed_by_compose():
+        raise ReadOnlyError(COMPOSE_NOTE)
 
     # audit M-3: validate every value BEFORE writing any file, so one bad value
     # can't leave a partial multi-file update behind.

@@ -669,7 +669,14 @@ export interface EnvKey {
   file: string;
 }
 
-export async function getEnvConfig(): Promise<{ keys: EnvKey[] }> {
+export interface EnvConfig {
+  keys: EnvKey[];
+  /** "compose": the bundle; values come from the host's .env and are read-only here. */
+  managed_by: "compose" | "files";
+  note: string | null;
+}
+
+export async function getEnvConfig(): Promise<EnvConfig> {
   const res = await apiFetch(`${API_BASE}/env-config`);
   if (!res.ok) throw new Error(`getEnvConfig failed: ${res.status}`);
   return res.json();
