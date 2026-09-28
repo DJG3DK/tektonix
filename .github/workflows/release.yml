@@ -103,9 +103,17 @@ jobs:
           tagName: ${{ github.event.inputs.tag || github.ref_name }}
           releaseName: "Tektonix ${{ github.event.inputs.tag || github.ref_name }}"
           releaseBody: "See CHANGELOG.md."
-          releaseDraft: false
+          # A draft: this repository has immutable releases, and a published
+          # release accepts no assets. The step after this publishes it.
+          releaseDraft: true
           # A tag with a dash (v0.9.0-rc1) is a pre-release: the app's update
           # check reads releases/latest, which skips those.
           prerelease: ${{ contains(github.event.inputs.tag || github.ref_name, '-') }}
           includeUpdaterJson: true
           updaterJsonPreferNsis: true
+      - name: Publish the release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: gh release edit "$TAG" --draft=false --repo "$GITHUB_REPOSITORY"
