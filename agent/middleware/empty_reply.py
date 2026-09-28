@@ -30,6 +30,7 @@ fallback model with its own pick.
 from __future__ import annotations
 
 import logging
+import re
 
 from langchain_core.messages import AIMessage, HumanMessage
 
@@ -47,6 +48,8 @@ RUNAWAY_COMPLETION_TOKENS = 16_000
 # node's nudge takes over, which re-asks the model that just emptied.
 MAX_RETRIES_PER_INVOCATION = 30
 
+# What a provider says when `reasoning.enabled: false` is not on offer.
+CANNOT_DISABLE_REASONING = re.compile(r"reasoning is mandatory|cannot be disabled|reasoning.*(required|must be enabled)", re.I)
 RETRY_NOTE = ("Your previous attempt ran out of output tokens while thinking and produced nothing. "
               "Answer directly: the next tool call, or your conclusion, without re-deriving everything.")
 
@@ -152,6 +155,18 @@ class EmptyReplyRetryMiddleware(AgentMiddleware):
             messages=list(request.messages) + [HumanMessage(content=harness(RETRY_NOTE))],
         )
 
+    def _retry_failed(self, where: str, model, e: Exception) -> None:
+        """A retry that errors is not worse than the empty reply it was for:
+        it is dropped, and the next option is tried. A provider that refuses
+        to run without reasoning ("Reasoning is mandatory for this endpoint",
+        2026-09-28, a coder pinned to such a model: six 502s in a row ended
+        the task) is remembered, so this seat is not asked again."""
+        text = str(e)
+        logger.warning("%s: retry on %s failed: %s", self.seat, where, text[:200])
+        if model is self.quiet_model and CANNOT_DISABLE_REASONING.search(text):
+            logger.warning("%s: this seat's model cannot run without reasoning; not asking again", self.seat)
+            self.quiet_model = None
+
     def wrap_model_call(self, request, handler):
         response = handler(request)
         for where, model in self._attempts():
@@ -161,7 +176,10 @@ class EmptyReplyRetryMiddleware(AgentMiddleware):
             retry = self._retry_request(request, msg, where, model)
             if retry is None:
                 return response
-            response = handler(retry)
+            try:
+                response = handler(retry)
+            except Exception as e:  # noqa: BLE001 -- see _retry_failed
+                self._retry_failed(where, model, e)
         return response
 
     async def awrap_model_call(self, request, handler):
@@ -173,5 +191,8 @@ class EmptyReplyRetryMiddleware(AgentMiddleware):
             retry = self._retry_request(request, msg, where, model)
             if retry is None:
                 return response
-            response = await handler(retry)
+            try:
+                response = await handler(retry)
+            except Exception as e:  # noqa: BLE001 -- see _retry_failed
+                self._retry_failed(where, model, e)
         return response

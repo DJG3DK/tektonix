@@ -182,3 +182,44 @@ def test_without_a_quiet_model_the_fallback_is_the_only_retry():
     import asyncio
     asyncio.run(mw.awrap_model_call(_req(), h))
     assert [r.model for r in h.requests] == [CODER, FALLBACK]
+
+
+# ── a retry that errors is dropped, never surfaced ───────────────────────────
+# 2026-09-28: a coder on a model whose endpoint refuses `reasoning: false`
+# answered every quiet retry with a 502, and six in a row ended the task.
+
+class _Boom(Exception):
+    pass
+
+
+async def test_a_failing_quiet_retry_falls_through_to_the_fallback_seat():
+    mw = EmptyReplyRetryMiddleware(FALLBACK, seat="coder", quiet_model=QUIET)
+    calls = []
+
+    async def handler(request):
+        calls.append(request.model)
+        if request.model is QUIET:
+            raise _Boom("Error code: 502 - Reasoning is mandatory for this endpoint and cannot be disabled.")
+        if request.model is FALLBACK:
+            return ModelResponse(result=[AIMessage(content="from the fallback", id="fb")])
+        return ModelResponse(result=[_capped(16384)])
+
+    out = await mw.awrap_model_call(_req(), handler)
+    assert _ai_message(out).content == "from the fallback" and calls == [CODER, QUIET, FALLBACK]
+    assert mw.quiet_model is None, "the seat is remembered as unable to go quiet"
+    calls.clear()
+    await mw.awrap_model_call(_req(), handler)
+    assert calls == [CODER, FALLBACK], "and is not asked again"
+
+
+async def test_when_every_retry_errors_the_original_empty_reply_goes_through():
+    mw = EmptyReplyRetryMiddleware(FALLBACK, seat="coder", quiet_model=QUIET)
+
+    async def handler(request):
+        if request.model is CODER:
+            return ModelResponse(result=[_capped(16384)])
+        raise _Boom("provider down")
+
+    out = await mw.awrap_model_call(_req(), handler)
+    assert is_empty_length_capped(_ai_message(out)), "the work node's nudge takes it from here; no error escapes"
+    assert mw.quiet_model is QUIET, "a plain failure does not mark the seat"

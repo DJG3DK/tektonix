@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### A failed retry never ends a task
+
+The empty-reply retry re-asks the same model with reasoning switched off.
+A model whose endpoint refuses that answered every retry with an error,
+and six in a row ended the task. A retry that errors is dropped now: the
+next option is tried, then the original reply goes through to the usual
+nudge, and a seat that cannot run without reasoning is not asked again.
+
 ### Adding a project says where the app runs, not how git moves
 
 "Add · pull requests" and "Add · merge" named the mechanism. They are now
