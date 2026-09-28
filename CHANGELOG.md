@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### The example router config pins the proven models
+
+Seven roles in the committed example still pointed at models the reference
+deployment moved away from months ago. The first Windows install's test
+writer spent its whole reply budget reasoning and returned nothing, thirty
+retries in a row. The example now pins what the reference deployment runs:
+the coder on DeepSeek V4.1 Flash, the planner, investigator, test writer,
+verifier and both planning-chat seats on GLM 5.3 Flash. An existing install
+keeps its own pins; the Models page changes them without a restart.
+
 ### The bundle's agent log is quiet again
 
 The service watcher polled pm2 every minute and printed a traceback each

@@ -127,32 +127,32 @@ model_list:
       output_cost_per_token: 0.00000047
   - model_name: agent-investigator
     params:
-      model: openrouter/deepseek/deepseek-v4.1-flash
+      model: openrouter/z-ai/glm-5.3-flash
       api_key: os.environ/OPENROUTER_API_KEY
       extra_body: {"provider": {"require_parameters": true}}
     model_info:
-      input_cost_per_token: 0.00000015
-      output_cost_per_token: 0.0000006
+      input_cost_per_token: 1.5e-07
+      output_cost_per_token: 5.0e-07
   - model_name: agent-coder
     params:
       # The main work loop -- file edits, shell, checks. Wants reliable tool
       # calling above all; the pin is one deployment's answer on one day.
-      model: openrouter/poolside/laguna-s-2.1
+      model: openrouter/deepseek/deepseek-v4.1-flash
       api_key: os.environ/OPENROUTER_API_KEY
       extra_body: {"provider": {"require_parameters": true}}
     model_info:
-      input_cost_per_token: 0.00000009
-      output_cost_per_token: 0.00000018
+      input_cost_per_token: 1.5e-07
+      output_cost_per_token: 6.0e-07
   - model_name: agent-planner
     params:
       # Plans the task and digests reviewer feedback: lighter-weight than
       # code editing, so a cheap tool-capable model.
-      model: openrouter/qwen/qwen3.8-flash
+      model: openrouter/z-ai/glm-5.3-flash
       api_key: os.environ/OPENROUTER_API_KEY
       extra_body: {"provider": {"require_parameters": true}}
     model_info:
-      input_cost_per_token: 0.00000015
-      output_cost_per_token: 0.00000047
+      input_cost_per_token: 1.5e-07
+      output_cost_per_token: 5.0e-07
   - model_name: agent-vision
     params:
       # Vision bridge for the coding agent's describe_image tool -- the
@@ -171,22 +171,22 @@ model_list:
       output_cost_per_token: 0.0000019
   - model_name: agent-test-writer
     params:
-      model: openrouter/deepseek/deepseek-v4.1-flash
+      model: openrouter/z-ai/glm-5.3-flash
       api_key: os.environ/OPENROUTER_API_KEY
       extra_body: {"provider": {"require_parameters": true}}
     model_info:
-      input_cost_per_token: 0.00000015
-      output_cost_per_token: 0.0000006
+      input_cost_per_token: 7.5e-08
+      output_cost_per_token: 2.5e-07
   - model_name: agent-verifier
     params:
       # The verifier tries to break a bug fix before it ships. Its own alias
       # (2026-09-25) so its calls are billed as its own, not the test-writer's.
-      model: openrouter/deepseek/deepseek-v4.1-flash
+      model: openrouter/z-ai/glm-5.3-flash
       api_key: os.environ/OPENROUTER_API_KEY
       extra_body: {"provider": {"require_parameters": true}}
     model_info:
-      input_cost_per_token: 0.00000015
-      output_cost_per_token: 0.0000006
+      input_cost_per_token: 7.5e-08
+      output_cost_per_token: 2.5e-07
   - model_name: agent-reviewer
     params:
       # The commit reviewer (services/commit-reviewer/reviewer.js), routed
@@ -303,24 +303,24 @@ model_list:
       # DeepSeek: cheap per token, and the provider does automatic prefix
       # caching, so the high-volume EASY tier's re-sent context bills at the
       # cache-read rate with no cache_control plumbing.
-      model: openrouter/deepseek/deepseek-v4-pro-0813
+      model: openrouter/z-ai/glm-5.3-flash
       api_key: os.environ/OPENROUTER_API_KEY
       extra_body: {"provider": {"require_parameters": true}}
     model_info:
-      input_cost_per_token: 0.0000010494
-      output_cost_per_token: 0.0000031482
+      input_cost_per_token: 1.5e-07
+      output_cost_per_token: 5.0e-07
   - model_name: agent-planning-chat-hard
     params:
       # HARD half of the planning-chat pair -- see agent-planning-chat above.
       # The Anthropic-only extras (additional_drop_params, cache_control
       # injection points) are added and removed by the dashboard editor as
       # the pin moves on and off Anthropic -- see agent-reviewer below.
-      model: openrouter/qwen/qwen3.8-max-0902
+      model: openrouter/z-ai/glm-5.3-flash
       api_key: os.environ/OPENROUTER_API_KEY
       extra_body: {"provider": {"require_parameters": true}}
     model_info:
-      input_cost_per_token: 0.000002
-      output_cost_per_token: 0.000006
+      input_cost_per_token: 1.5e-07
+      output_cost_per_token: 5.0e-07
   - model_name: agent-planning-chat-frontend
     params:
       # Planning chat for frontend sessions (agent/frontend_route.py), ahead
