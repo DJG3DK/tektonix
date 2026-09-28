@@ -9,6 +9,26 @@ from agent.backends import backend_for_dsn
 
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
+
+def apply_git_identity(env: dict | None = None) -> None:
+    """GIT_USER_NAME / GIT_USER_EMAIL (the operator's, from .env or the app's
+    settings) become the author and committer of every commit the agent
+    makes, unless git's own variables are already set. The bundle sets the
+    git variables in compose from the same two names; a host install goes
+    through here."""
+    env = os.environ if env is None else env
+    for src, targets in (("GIT_USER_NAME", ("GIT_AUTHOR_NAME", "GIT_COMMITTER_NAME")),
+                         ("GIT_USER_EMAIL", ("GIT_AUTHOR_EMAIL", "GIT_COMMITTER_EMAIL"))):
+        value = (env.get(src) or "").strip()
+        if not value:
+            continue
+        for t in targets:
+            if not (env.get(t) or "").strip():
+                env[t] = value
+
+
+apply_git_identity()
+
 # The variables the HTTP server needs and a local run does not. They used to
 # be os.environ[...] in load_config, which gave the server its fail-fast boot
 # for free -- and gave everything else a KeyError for a mail server it was

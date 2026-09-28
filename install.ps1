@@ -401,7 +401,7 @@ function Main {
         Write-Note 'Docker is running.'
     }
 
-    Write-Phase 3 'Two settings'
+    Write-Phase 3 'Your settings'
     $envPath = Join-Path $root '.env'
     $content = if (Test-Path $envPath) {
         Write-Note 'Keeping every value already in your .env'
@@ -457,8 +457,23 @@ function Main {
         }
     }
 
+    # Whose commits these are. Prefilled from this machine's git config when
+    # it has one; blank keeps "Tektonix" and the sign-in address.
+    $gitName = if ($existing.ContainsKey('GIT_USER_NAME')) { $existing['GIT_USER_NAME'] } else { '' }
+    $gitEmail = if ($existing.ContainsKey('GIT_USER_EMAIL')) { $existing['GIT_USER_EMAIL'] } else { '' }
+    if (-not $gitName -and (Get-Command git -ErrorAction SilentlyContinue)) { $gitName = (git config --global user.name 2>$null) }
+    if (-not $gitEmail -and (Get-Command git -ErrorAction SilentlyContinue)) { $gitEmail = (git config --global user.email 2>$null) }
+    if (-not $Yes) {
+        Write-Host ""
+        Write-Host '  The agent commits as you. Use the name and email your GitHub account knows.'
+    }
+    $gitName = Request-Value -Prompt 'Your name for commits' -Current $gitName -Default 'Tektonix'
+    $gitEmail = Request-Value -Prompt 'Your email for commits' -Current $gitEmail -Default ''
+
     $content = Set-EnvLine -Content $content -Key 'OPENROUTER_API_KEY' -Value $key
     $content = Set-EnvLine -Content $content -Key 'PROJECTS_DIR' -Value $dir
+    if ($gitName) { $content = Set-EnvLine -Content $content -Key 'GIT_USER_NAME' -Value $gitName }
+    if ($gitEmail) { $content = Set-EnvLine -Content $content -Key 'GIT_USER_EMAIL' -Value $gitEmail }
     Invoke-Step "write $envPath" { Set-Content -Path $envPath -Value $content -NoNewline -Encoding utf8 }
     if (-not $DryRun) { Write-Note 'Saved your settings to .env' }
 

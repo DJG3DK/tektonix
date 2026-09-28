@@ -43,6 +43,10 @@ pub struct Settings {
     pub openrouter_key_hint: String,
     pub projects_dir: String,
     pub admin_email: String,
+    /// Whose commits these are; blank falls back to "Tektonix" and the
+    /// sign-in address (docker-compose.yml).
+    pub git_name: String,
+    pub git_email: String,
 }
 
 #[derive(Serialize, Clone)]
@@ -155,7 +159,17 @@ pub fn read_settings(app: &AppHandle) -> Result<Settings, String> {
         openrouter_key_hint: hint(&key),
         projects_dir: get_env_value(&content, "PROJECTS_DIR").unwrap_or_default(),
         admin_email: get_env_value(&content, "ADMIN_EMAIL").unwrap_or_else(|| "admin@example.com".into()),
+        git_name: get_env_value(&content, "GIT_USER_NAME").unwrap_or_default(),
+        git_email: get_env_value(&content, "GIT_USER_EMAIL").unwrap_or_default(),
     })
+}
+
+/// This machine's own git identity, to prefill the form: most people who
+/// have git have set it once.
+pub async fn machine_git_identity() -> (String, String) {
+    let name = proc::capture("git", &["config", "--global", "user.name"], None).await.unwrap_or_default();
+    let email = proc::capture("git", &["config", "--global", "user.email"], None).await.unwrap_or_default();
+    (name.trim().to_string(), email.trim().to_string())
 }
 
 fn hint(secret: &str) -> String {
@@ -165,7 +179,8 @@ fn hint(secret: &str) -> String {
     format!("••••••••{}", &secret[secret.len() - 4..])
 }
 
-pub fn save_settings(app: &AppHandle, key: Option<String>, projects_dir: String, admin_email: String) -> Result<Settings, String> {
+pub fn save_settings(app: &AppHandle, key: Option<String>, projects_dir: String, admin_email: String,
+                     git_name: String, git_email: String) -> Result<Settings, String> {
     let projects_dir = projects_dir.trim().trim_matches('"').trim_end_matches(['\\', '/']).to_string();
     if projects_dir.is_empty() || !Path::new(&projects_dir).is_absolute() {
         return Err("the projects folder must be a full path, for example C:\\Users\\you\\code".into());
@@ -181,6 +196,8 @@ pub fn save_settings(app: &AppHandle, key: Option<String>, projects_dir: String,
     if !email.is_empty() {
         content = set_env_line(&content, "ADMIN_EMAIL", email);
     }
+    content = set_env_line(&content, "GIT_USER_NAME", git_name.trim());
+    content = set_env_line(&content, "GIT_USER_EMAIL", git_email.trim());
     std::fs::write(&path, content).map_err(|e| e.to_string())?;
     read_settings(app)
 }

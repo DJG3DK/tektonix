@@ -84,6 +84,17 @@ MANAGED_KEYS: tuple[ManagedKey, ...] = (
     ManagedKey("SMTP_USER", AGENT_ENV, "SMTP user", "Usually the sending address.", "Email", ("tektonix",), secret=False),
     ManagedKey("SMTP_PASS", AGENT_ENV, "SMTP password", "App password, not the account password.", "Email", ("tektonix",)),
     ManagedKey("SMTP_FROM", AGENT_ENV, "From address", "What recipients see.", "Email", ("tektonix",), secret=False),
+    ManagedKey(
+        "GIT_USER_NAME", AGENT_ENV, "Commit author name",
+        "Who the agent's commits are from. Blank: this machine's git config (host) or \"Tektonix\" (bundle).",
+        "Git", ("tektonix",), secret=False,
+    ),
+    ManagedKey(
+        "GIT_USER_EMAIL", AGENT_ENV, "Commit author email",
+        "The address your GitHub account knows, or its noreply one (ID+user@users.noreply.github.com), "
+        "so the commits count as yours.",
+        "Git", ("tektonix",), secret=False,
+    ),
     # The one switch that decides whether episode recall has a semantic leg
     # at all. Managed here rather than left to a hand-edited .env because
     # that leg costs money on every episode write and its value on this

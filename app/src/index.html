@@ -32,7 +32,7 @@
 
     <!-- Setup -->
     <section id="page-setup" class="page hidden">
-      <h1>Two settings</h1>
+      <h1>Your settings</h1>
       <p class="lead">The agent calls models through OpenRouter, and it works in one folder on this machine.</p>
       <form id="setup-form">
         <label>
@@ -48,6 +48,15 @@
             <button type="button" id="setup-pick" class="btn">Choose…</button>
           </div>
           <small class="muted">Repositories there are visible to the agent, and one it clones from GitHub for you lands there too. An empty folder is fine.</small>
+        </label>
+        <label>
+          <span>Your name for commits</span>
+          <input id="setup-git-name" type="text" spellcheck="false" placeholder="Your Name" />
+        </label>
+        <label>
+          <span>Your email for commits</span>
+          <input id="setup-git-email" type="email" spellcheck="false" placeholder="you@example.com" />
+          <small class="muted">The agent commits as you. Use the address your GitHub account knows, or its noreply one (ID+user@users.noreply.github.com). Blank: "Tektonix" and the sign-in email.</small>
         </label>
         <label>
           <span>Sign-in email</span>

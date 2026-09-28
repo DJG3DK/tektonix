@@ -540,7 +540,8 @@ def test_the_bundle_gives_every_committing_container_a_git_identity():
         env = compose["services"][svc]["environment"]
         for key in ("GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL"):
             assert key in env, f"{svc} lacks {key}"
-        assert env["GIT_AUTHOR_EMAIL"] == "${ADMIN_EMAIL:-admin@example.com}"
+        assert env["GIT_AUTHOR_EMAIL"] == "${GIT_USER_EMAIL:-${ADMIN_EMAIL:-admin@example.com}}", "the operator's own, else the sign-in address"
+        assert env["GIT_AUTHOR_NAME"] == "${GIT_USER_NAME:-Tektonix}"
 
 
 def test_every_built_service_builds_rather_than_pulling_its_local_name():

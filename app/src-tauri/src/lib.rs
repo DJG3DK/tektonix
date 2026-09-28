@@ -37,9 +37,15 @@ fn settings_get(app: AppHandle) -> Result<stack::Settings, String> {
 }
 
 #[tauri::command]
-fn settings_save(app: AppHandle, key: Option<String>, projects_dir: String, admin_email: String) -> Result<stack::Settings, String> {
+fn settings_save(app: AppHandle, key: Option<String>, projects_dir: String, admin_email: String,
+                 git_name: String, git_email: String) -> Result<stack::Settings, String> {
     stack::prepare(&app)?;
-    stack::save_settings(&app, key, projects_dir, admin_email)
+    stack::save_settings(&app, key, projects_dir, admin_email, git_name, git_email)
+}
+
+#[tauri::command]
+async fn machine_git_identity() -> (String, String) {
+    stack::machine_git_identity().await
 }
 
 #[tauri::command]
@@ -188,7 +194,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             docker_state, docker_start, docker_install,
-            settings_get, settings_save, stack_dir, installed_version,
+            settings_get, settings_save, machine_git_identity, stack_dir, installed_version,
             stack_install, stack_up, stack_down, stack_status, stack_password,
             stack_check_update, stack_update,
             logs_follow, logs_stop, open_dashboard,

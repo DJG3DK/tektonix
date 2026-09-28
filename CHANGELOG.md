@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### The agent's commits are yours
+
+`GIT_USER_NAME` and `GIT_USER_EMAIL` name the author and committer of
+every commit the agent makes. The app's settings form and the Windows
+installer ask for them, prefilled from the machine's git config; the
+Environment page shows them; the bundle and a host install both apply
+them. Blank keeps "Tektonix" and the sign-in address.
+
 ### A committed branch with a clean tree is sent to review, not called "no changes"
 
 The ship gate read the working tree only. When the work was already

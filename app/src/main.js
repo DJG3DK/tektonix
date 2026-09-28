@@ -80,12 +80,19 @@ async function afterDocker() {
   await showStack();
 }
 
-function showSetup(cancellable) {
+async function showSetup(cancellable) {
   show("page-setup");
   $("setup-key").value = "";
   $("setup-key-hint").textContent = settings && settings.openrouter_api_key_set ? `Set (${settings.openrouter_key_hint}). Leave blank to keep it.` : "";
   $("setup-dir").value = settings ? settings.projects_dir : "";
   $("setup-email").value = settings ? settings.admin_email : "";
+  let gitName = settings ? settings.git_name : "";
+  let gitEmail = settings ? settings.git_email : "";
+  if (!gitName && !gitEmail) {
+    try { [gitName, gitEmail] = await invoke("machine_git_identity"); } catch (e) { /* no git here; fine */ }
+  }
+  $("setup-git-name").value = gitName || "";
+  $("setup-git-email").value = gitEmail || "";
   $("setup-cancel").classList.toggle("hidden", !cancellable);
   $("setup-error").classList.add("hidden");
 }
@@ -100,7 +107,10 @@ $("setup-form").onsubmit = async (ev) => {
   $("setup-error").classList.add("hidden");
   try {
     const key = $("setup-key").value.trim();
-    settings = await invoke("settings_save", { key: key || null, projectsDir: $("setup-dir").value, adminEmail: $("setup-email").value });
+    settings = await invoke("settings_save", {
+      key: key || null, projectsDir: $("setup-dir").value, adminEmail: $("setup-email").value,
+      gitName: $("setup-git-name").value, gitEmail: $("setup-git-email").value,
+    });
     await showStack();
     if (!(await invoke("installed_version"))) await runStack("stack_install");
   } catch (e) {
@@ -167,7 +177,7 @@ async function runStack(command, args) {
 $("btn-start").onclick = () => runStack("stack_up");
 $("btn-stop").onclick = () => runStack("stack_down");
 $("btn-open").onclick = () => invoke("open_dashboard").catch(fail);
-$("btn-settings").onclick = () => showSetup(true);
+$("btn-settings").onclick = () => { void showSetup(true); };
 $("btn-folder").onclick = () => { if (settings && settings.projects_dir) opener.openPath(settings.projects_dir).catch(fail); };
 $("btn-password").onclick = async () => {
   try {
