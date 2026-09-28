@@ -232,7 +232,7 @@ describe("the repositories a token can reach", () => {
     await user.click(screen.getAllByRole("button", { name: "Repositories" })[0]);
     await screen.findByText("org/fresh");
 
-    await user.click(screen.getByRole("button", { name: /Add · pull requests/ }));
+    await user.click(screen.getByRole("button", { name: /Add · runs elsewhere/ }));
     expect(onboardFromGitHub).toHaveBeenCalledWith(
       expect.objectContaining({ slug: "org/fresh", ship: "pr" }),
     );
@@ -256,7 +256,7 @@ describe("the repositories a token can reach", () => {
 
     const reads = listGitHubRepos.mock.calls.length;
 
-    await user.click(screen.getByRole("button", { name: /Add · pull requests/ }));
+    await user.click(screen.getByRole("button", { name: /Add · runs elsewhere/ }));
     expect(await screen.findByText(/still running on the server/)).toBeInTheDocument();
     // and the list is re-read, in case it landed while we waited
     await waitFor(() => expect(listGitHubRepos.mock.calls.length).toBeGreaterThan(reads));
@@ -275,7 +275,7 @@ describe("the repositories a token can reach", () => {
     await user.click(screen.getAllByRole("button", { name: "Repositories" })[0]);
     await screen.findByText("org/fresh");
 
-    await user.click(screen.getByRole("button", { name: /Add · pull requests/ }));
+    await user.click(screen.getByRole("button", { name: /Add · runs elsewhere/ }));
     expect(await screen.findByText(/Added fresh/)).toBeInTheDocument();
   });
 });

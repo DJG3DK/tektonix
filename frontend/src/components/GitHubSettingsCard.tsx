@@ -161,7 +161,7 @@ export function GitHubSettingsCard() {
     setAddMsg(null);
     try {
       const res = await onboardFromGitHub({ slug, token_name: tokenName, ship });
-      setAddMsg(`Added ${res.name} — ${ship === "pr" ? "opens pull requests" : "merges and deploys"}.`);
+      setAddMsg(`Added ${res.name} — ${ship === "pr" ? "runs elsewhere: work goes up as pull requests" : "runs here: merges, pushes and deploys on this machine"}.`);
       await showRepos(tokenName, true);   // re-read, so it moves to "already added"
     } catch (e) {
       const msg = e instanceof Error ? e.message : "could not add it";
@@ -341,7 +341,9 @@ export function GitHubSettingsCard() {
               <p className="settings-hint">
                 What <b>{repoList.name}</b> can reach, straight from GitHub. Change what a
                 token may see in GitHub and this list follows. Adding one clones it here and
-                onboards it.
+                onboards it. Pick by where the app runs: <b>runs elsewhere</b> sends work up as
+                pull requests for you to merge; <b>runs here</b> merges, pushes and restarts the
+                app on this machine after review.
               </p>
               {addMsg && <p className="gh-repos-msg">{addMsg}</p>}
               <ul className="gh-repo-list">
@@ -365,20 +367,21 @@ export function GitHubSettingsCard() {
                           type="button"
                           className="gh-btn"
                           disabled={!r.push || adding !== null || r.archived}
-                          title={r.push ? "Opens a pull request; your base branch is never written"
-                                        : "This token cannot write to that repository"}
+                          title={r.push
+                            ? "The app runs on another machine. Work here goes up as a pull request; main is never written and nothing here deploys."
+                            : "This token cannot write to that repository"}
                           onClick={() => void addRepo(r.slug, repoList.name, "pr")}
                         >
-                          {adding === r.slug ? "Adding…" : "Add · pull requests"}
+                          {adding === r.slug ? "Adding…" : "Add · runs elsewhere"}
                         </button>
                         <button
                           type="button"
                           className="gh-btn"
                           disabled={!r.push || adding !== null || r.archived}
-                          title="Merges into the base branch and deploys"
+                          title="The app runs on this machine. After review and your approval the change merges into main, is pushed, and the app is restarted here."
                           onClick={() => void addRepo(r.slug, repoList.name, "push")}
                         >
-                          Add · merge
+                          Add · runs here
                         </button>
                       </span>
                     )}
