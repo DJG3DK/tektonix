@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### The app's windows are frameless
+
+No native title bars: the control panel and the dashboard window each draw
+a slim strip of their own, a drag handle with the three window controls.
+The dashboard's strip appears only inside the app; in a browser tab there
+is nothing to draw.
+
 ### The app updates itself, and the stack, on its own
 
 Two preferences on the app's settings form: update automatically, on by

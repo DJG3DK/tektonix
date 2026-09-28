@@ -28,6 +28,7 @@ const BenchmarksView = lazy(() =>
 );
 import { useTaskStream } from "./useTaskStream";
 import { parseRoute, routePath, sameRoute, type Route, type View } from "./route";
+import { TitleBar } from "./components/TitleBar";
 import "./App.css";
 
 function AuthenticatedApp({ user, onLogout, onUserChanged }: { user: CurrentUser; onLogout: () => void; onUserChanged: (u: CurrentUser) => void }) {
@@ -230,6 +231,8 @@ function AuthenticatedApp({ user, onLogout, onUserChanged }: { user: CurrentUser
     : "New task";
 
   return (
+    <>
+    <TitleBar />
     <div className={`app-shell ${mobilePane === "main" ? "show-main" : "show-list"}`}>
       <Sidebar
         tasks={tasks}
@@ -406,6 +409,7 @@ function AuthenticatedApp({ user, onLogout, onUserChanged }: { user: CurrentUser
         onGitHub={() => { setView("github"); setMobilePane("main"); }}
       />
     </div>
+    </>
   );
 }
 

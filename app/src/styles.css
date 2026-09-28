@@ -55,3 +55,10 @@ select { width: auto; }
 
 label.check { display: flex; align-items: flex-start; gap: 8px; margin: 0 0 10px; }
 label.check input { width: auto; max-width: none; margin-top: 3px; }
+
+/* The frameless window's own title strip. */
+.top { user-select: none; -webkit-user-select: none; }
+.win-controls { display: inline-flex; gap: 2px; margin-left: 10px; }
+.win-btn { font: inherit; font-size: 12px; width: 34px; height: 26px; border: 0; border-radius: 4px; background: transparent; color: var(--muted); cursor: pointer; }
+.win-btn:hover { background: #262c35; color: var(--text); }
+.win-btn--close:hover { background: var(--bad); color: #fff; }

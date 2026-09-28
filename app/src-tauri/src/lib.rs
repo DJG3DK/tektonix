@@ -178,6 +178,10 @@ fn show_dashboard(app: &AppHandle) -> Result<(), String> {
         .title("Tektonix")
         .inner_size(1360.0, 860.0)
         .min_inner_size(900.0, 600.0)
+        // Frameless; the dashboard draws its own title strip when it runs in
+        // this window (frontend/src/components/TitleBar.tsx) and gets the
+        // window controls through capabilities/dashboard.json.
+        .decorations(false)
         .build()
         .map_err(|e| e.to_string())?;
     Ok(())

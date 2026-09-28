@@ -1,0 +1,19 @@
+.titlebar {
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 0 0 12px;
+  background: var(--surface-2, #171b21);
+  border-bottom: 1px solid var(--line, #2a313b);
+  user-select: none;
+  -webkit-user-select: none;
+  font-size: 12px;
+}
+.titlebar-name { font-weight: 600; letter-spacing: .02em; opacity: .85; }
+.titlebar-controls { display: flex; height: 100%; }
+.titlebar-btn { width: 40px; height: 100%; border: 0; background: transparent; color: inherit; font: inherit; font-size: 12px; cursor: pointer; opacity: .8; }
+.titlebar-btn:hover { background: rgba(255, 255, 255, .08); opacity: 1; }
+.titlebar-btn--close:hover { background: #d9534f; color: #fff; }
+/* The shell fills the window under the strip. */
+.in-desktop-app .app-shell { height: calc(100vh - 30px); height: calc(100dvh - 30px); }

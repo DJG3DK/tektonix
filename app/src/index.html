@@ -7,14 +7,21 @@
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
-  <header class="top">
-    <div class="brand">
-      <img src="logo.png" alt="" width="28" height="28" />
-      <span>Tektonix</span>
+  <!-- Frameless window: this strip is the title bar. Everything in it is a
+       drag handle except the three controls. -->
+  <header class="top" data-tauri-drag-region>
+    <div class="brand" data-tauri-drag-region>
+      <img src="logo.png" alt="" width="28" height="28" data-tauri-drag-region />
+      <span data-tauri-drag-region>Tektonix</span>
     </div>
-    <div class="top-right">
-      <span id="stack-version" class="muted"></span>
-      <span id="app-version" class="muted"></span>
+    <div class="top-right" data-tauri-drag-region>
+      <span id="stack-version" class="muted" data-tauri-drag-region></span>
+      <span id="app-version" class="muted" data-tauri-drag-region></span>
+      <span class="win-controls">
+        <button id="win-min" class="win-btn" title="Minimise" aria-label="Minimise">&#x2500;</button>
+        <button id="win-max" class="win-btn" title="Maximise" aria-label="Maximise">&#x25A1;</button>
+        <button id="win-close" class="win-btn win-btn--close" title="Close (the tray keeps Tektonix running)" aria-label="Close">&#x2715;</button>
+      </span>
     </div>
   </header>
 

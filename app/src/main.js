@@ -250,6 +250,14 @@ $("btn-logs").onclick = async () => {
 $("btn-logs-stop").onclick = async () => { await invoke("logs_stop"); if (following) say("Stopped following."); following = false; };
 $("btn-logs-clear").onclick = () => { log.textContent = ""; };
 
+// ── Window controls (frameless) ──────────────────────────────────────────────
+try {
+  const win = window.__TAURI__.window.getCurrentWindow();
+  $("win-min").onclick = () => win.minimize();
+  $("win-max").onclick = () => win.toggleMaximize();
+  $("win-close").onclick = () => win.close();   // hides to the tray; Quit is in the tray menu
+} catch (e) { /* not inside the app */ }
+
 // ── Boot ─────────────────────────────────────────────────────────────────────
 (async () => {
   try {
