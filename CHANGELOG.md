@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+### Scripts check out with Unix line endings on Windows
+
+Git for Windows converts text files to CRLF by default, and a CRLF copy of
+`docker/checks-postgres/init.sh` mounted into the checks database killed
+that container, which the agent waits on. A `.gitattributes` keeps every
+shell script and Dockerfile at LF on any host. The installer and the docker
+README also said the first password is printed in the agent log; it has
+been stored encrypted since the code scanning fixes, and both now give the
+command that shows it.
+
 ## v0.8.0 — every check contained, the gate reads the diff, benchmarks from a page
 
 ### Twenty-two code scanning alerts closed

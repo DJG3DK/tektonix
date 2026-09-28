@@ -36,8 +36,15 @@ also the upgrade path.
 (The `cp` above is the reason it exists: Windows has no such command, so the
 documented first step could not be followed as written.)
 
-Then open <http://localhost:8100> and sign in with the admin account the logs
-print on first run (`docker compose logs agent`).
+Then open <http://localhost:8100> and sign in as `ADMIN_EMAIL` from your
+`.env` (`admin@example.com` unless you changed it). The one-time password is
+shown by
+
+```bash
+docker compose exec agent python scripts/show_initial_password.py
+```
+
+It is shown once, and you change it on first login.
 
 ## What you need
 

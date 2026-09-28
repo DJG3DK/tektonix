@@ -444,8 +444,10 @@ function Main {
     Write-Host ""
     Write-Host "  Tektonix is running at $url" -ForegroundColor Green
     Write-Host ""
-    Write-Note 'Your sign-in password is printed once, in the agent log:'
-    Write-Note '  docker compose logs agent'
+    $adminEmail = if ($existing.ContainsKey('ADMIN_EMAIL') -and $existing['ADMIN_EMAIL']) { $existing['ADMIN_EMAIL'] } else { 'admin@example.com' }
+    Write-Note "Sign in as $adminEmail. The one-time password is shown by:"
+    Write-Note '  docker compose exec agent python scripts/show_initial_password.py'
+    Write-Note 'It works once, and you change the password on first login.'
     Write-Note 'Running this again is safe, and is also how you upgrade.'
     if (-not $Yes) {
         $open = Read-Host 'Open it in your browser now? [Y/n]'
