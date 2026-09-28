@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### The GitHub token test says which project it cannot reach, and why
+
+"Reaches none of the configured projects" came with nothing to check. The
+probe now lists each unreached project with GitHub's answer, and names the
+usual cause: a repository owned by an organisation and a fine-grained token
+whose resource owner is the person, not the organisation.
+
 ### Main moves only on a green GitHub Actions run
 
 After the review gate and the operator's approval, a project that ships by

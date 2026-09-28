@@ -923,7 +923,7 @@ async def probe_token(token: str, projects: dict[str, dict]) -> dict:
     """Who the token is, which configured projects it can see, and what it
     may do there. Fine-grained tokens list only their selected repos."""
     client = GitHubClient(token)
-    out: dict[str, Any] = {"ok": True, "login": None, "repos": [], "matched": []}
+    out: dict[str, Any] = {"ok": True, "login": None, "repos": [], "matched": [], "unreached": []}
     try:
         me = await client.get("/user")
         out["login"] = me.get("login")
@@ -931,6 +931,12 @@ async def probe_token(token: str, projects: dict[str, dict]) -> dict:
         return {"ok": False, "error": f"token rejected: {e}"}
     slugs = {resolve_slug(name): name for name in projects}
     slugs.pop(None, None)
+    # A project whose origin is not a GitHub URL the agent can read cannot be
+    # matched by any token; say so rather than blaming the token.
+    for name in projects:
+        if name not in slugs.values():
+            out["unreached"].append({"slug": None, "project": name,
+                                     "error": "no GitHub origin on this project's checkout, so no token can reach it"})
     try:
         repos = await client.get("/user/repos", {"per_page": 100, "sort": "updated"})
     except Exception as e:  # noqa: BLE001
@@ -961,6 +967,16 @@ async def probe_token(token: str, projects: dict[str, dict]) -> dict:
                 "code_scanning": await _can(client, f"/repos/{slug}/code-scanning/alerts", {"per_page": 1}),
                 "checks": await _can_ci(client, slug),
             })
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as e:  # noqa: BLE001
+            # The reason is the whole answer: a 404 on an organisation's
+            # repository from a token whose resource owner is the person, not
+            # the organisation, is the usual one (2026-09-28, first Windows
+            # install: "checked on GitHub and it has access to all").
+            owner = slug.split("/", 1)[0]
+            hint = ""
+            if out["login"] and owner.lower() != str(out["login"]).lower():
+                hint = (f" {slug} belongs to {owner}, not to {out['login']}: a fine-grained token reaches an "
+                        f"organisation's repositories only when the organisation is its resource owner, "
+                        f"chosen when the token is created.")
+            out["unreached"].append({"slug": slug, "project": name, "error": f"{e}.{hint}"[:400]})
     return out

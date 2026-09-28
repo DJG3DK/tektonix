@@ -322,6 +322,11 @@ export function GitHubSettingsCard() {
                   {m.checks === true ? ", checks ok" : m.checks === false ? ", no checks permission" : ""}
                 </span>
               ))}
+              {probe.result?.unreached?.map((u) => (
+                <span key={u.project} className="gh-probe-warn" data-testid="gh-probe-unreached">
+                  {u.project}{u.slug ? ` (${u.slug})` : ""}: {u.error}
+                </span>
+              ))}
               {probe.result?.warning && <span className="gh-probe-warn">{probe.result.warning}</span>}
             </>
           )}

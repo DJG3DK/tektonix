@@ -1309,6 +1309,8 @@ export interface GitHubTokenProbe {
   login?: string | null;
   repos: { slug: string; project: string | null; push: boolean; pull: boolean }[];
   matched: { slug: string; project: string | null; push: boolean; pull: boolean; dependabot_alerts?: boolean | null; checks?: boolean | null }[];
+  /** Configured projects the token could not reach, each with the reason. */
+  unreached?: { slug: string | null; project: string; error: string }[];
 }
 
 /** Test a stored token by name, or a pasted one before it is saved. */
