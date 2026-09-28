@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### The shipped runtime limits are the proven ones
+
+The defaults were the first week's guesses: 180-second model calls,
+two-minute checks, 200 model calls a task, a $2 budget. Every real install
+raised them by hand after the first timeouts. A fresh install now starts
+from the values the reference deployment runs: five-minute model calls,
+ten-minute checks and builds, 400 model and 500 tool calls a task, a $10
+task budget and $15 planning turns. Twelve of the twenty-two limits
+changed; the Runtime limits page still overrides any of them.
+
 ### The daily jobs run inside the agent
 
 Memory consolidation and the codebase map were host crons: the compose

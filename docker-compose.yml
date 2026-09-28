@@ -125,7 +125,7 @@ services:
       MODEL_ROUTER_LEDGER: /app/router-logs/routing.jsonl
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:?set OPENROUTER_API_KEY in .env}
       ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@example.com}
-      DEFAULT_BUDGET_USD: ${DEFAULT_BUDGET_USD:-2.00}
+      DEFAULT_BUDGET_USD: ${DEFAULT_BUDGET_USD:-10.00}
       # Required by agent/config.py, and empty is a valid answer: without SMTP
       # a password reset is done against the database instead (INSTALL.md 6a).
       SMTP_HOST: ${SMTP_HOST:-}

@@ -248,7 +248,7 @@ the end of the turn. Paged reads return at least 500 lines whatever `limit` asks
   `recent-changes` skill lists the newest commits with their files.
 - **Large files page.** `read_project_file` supports `offset`/`limit`; a truncated read says
   outright that re-requesting returns identical text and names the exact next call to make.
-- **A per-turn dollar ceiling** (Settings → Runtime limits, `planning_turn_budget_usd`, default $4;
+- **A per-turn dollar ceiling** (Settings → Runtime limits, `planning_turn_budget_usd`, default $15;
   also seedable from `PLANNING_TURN_BUDGET_USD`) on top of whatever the session already spent.
   Planning previously ran uncapped — the one agent with no budget was the one that once spent $7
   on a single 157-call turn. On breach the draft plan and real cost are banked and the operator
