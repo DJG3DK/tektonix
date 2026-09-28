@@ -30,6 +30,7 @@ FRONTEND_DIST = Path(__file__).resolve().parent.parent / "frontend" / "dist"
 
 from agent.config import PROJECTS, load_config, require_server_config
 from agent.observability import install_langsmith
+from agent import paths
 from agent import tasks
 from agent import task_runtime
 from agent.outer_graph import build_outer_graph, open_checkpointer, open_store
@@ -274,7 +275,11 @@ async def _drain_planning_turns(timeout: float = 15.0) -> None:
         logger.error("shutdown: planning turn %r did not tear down within %.0fs", t.get_name(), timeout)
 
 
-_INITIAL_PASSWORD_PATH = Path(__file__).resolve().parent.parent / ".initial-admin-password"
+# In the data directory: on a host install that is data/ beside the repo, in
+# the bundle it is the agentdata volume, so the file outlives a rebuild of
+# the container. It sat at the repo root before 2026-09-28, and one `up
+# --build` between first boot and reading it lost the only admin password.
+_INITIAL_PASSWORD_PATH = paths.DATA_DIR / ".initial-admin-password"
 
 
 def _store_initial_password(password: str) -> None:
@@ -284,6 +289,7 @@ def _store_initial_password(password: str) -> None:
     operator. Neither the log nor the disk ever holds it in clear."""
     try:
         enc = auth._encrypt_totp_secret(config, password)
+        _INITIAL_PASSWORD_PATH.parent.mkdir(parents=True, exist_ok=True)
         _INITIAL_PASSWORD_PATH.touch(mode=0o600, exist_ok=True)
         _INITIAL_PASSWORD_PATH.chmod(0o600)
         _INITIAL_PASSWORD_PATH.write_text(enc + "\n")
@@ -310,7 +316,7 @@ async def lifespan(app: FastAPI):
             _store_initial_password(generated_password)
             logger.warning(
                 "Seeded initial admin account %s. Its one-time password is stored encrypted; "
-                "run `.venv/bin/python scripts/show_initial_password.py` to read it "
+                "run `python scripts/show_initial_password.py` to read it "
                 "(must be changed on first login).", config.admin_email,
             )
         # Both checkpointer and store passed to .compile() -- store isn't

@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### The first password can be read from the bundle
+
+`docker compose exec agent python scripts/show_initial_password.py` crashed:
+`exec` skips the entrypoint, so the DSN and signing key the entrypoint
+derives were not there. The script now reads the key from the data volume
+and needs no database. The encrypted password also moves from the repo
+root into the data directory, so a rebuild of the container before you
+have read it no longer loses the only admin password.
+
 ### Everything the bundle creates is called tektonix
 
 Containers were `three-d-agent-agent-1`, the network `three-d-agent_checks`,
