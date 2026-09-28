@@ -86,14 +86,32 @@ jobs:
       - uses: swatinem/rust-cache@v2
         with:
           workspaces: app/src-tauri
+      # A tag whose release is already published (a release made by hand,
+      # or a draft published under a new tag name) needs no second build, and
+      # this repository's published releases are immutable, so an upload to
+      # one fails anyway.
+      - name: Skip when the release is already published
+        id: existing
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft' 2>/dev/null | grep -q false; then
+            echo "published=true" >> "$GITHUB_OUTPUT"; echo "release $TAG is already published; nothing to build"
+          else
+            echo "published=false" >> "$GITHUB_OUTPUT"
+          fi
       - run: npm ci
         working-directory: app
+        if: steps.existing.outputs.published != 'true'
       # Builds the NSIS installer, signs the updater artifact with the key in
       # the secrets, and attaches the installer, its .sig and latest.json to
       # the GitHub release for this tag (creating the release if the tag has
       # none yet). The app's own updater reads latest.json from
       # releases/latest/download.
       - uses: tauri-apps/tauri-action@v0
+        if: steps.existing.outputs.published != 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -112,6 +130,7 @@ jobs:
           includeUpdaterJson: true
           updaterJsonPreferNsis: true
       - name: Publish the release
+        if: steps.existing.outputs.published != 'true'
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
