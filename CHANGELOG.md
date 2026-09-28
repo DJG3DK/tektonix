@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### The balance card works in the bundle
+
+Analytics showed no API balance although the key worked. The agent asked
+the review service, which reads the key from a file only a host install
+has. The agent now asks OpenRouter itself with its own key, caches the
+answer for a minute, and says "no OpenRouter key" rather than failing
+when there is none.
+
 ### The Environment page in the bundle shows what compose set
 
 The OpenRouter key showed "not set" although compose had passed it, and

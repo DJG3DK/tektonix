@@ -1795,19 +1795,36 @@ async def _start_task(goal: str, repo: str, budget_usd: float | None, route: str
 
 @app.get("/api/router-balance")
 async def get_router_balance(user: User = Depends(require_full_auth)):
-    # Admin-only, as /api/consolidation/status and Analytics are: it is the
-    # operator's spend and remaining credit (any session could read it until
-    # 2026-09-23, while BalanceStrip already hid it from non-admins).
+    """Remaining OpenRouter credit, for the Analytics page's balance card.
+
+    Admin-only: it is the operator's spend and remaining credit. Asked of
+    OpenRouter directly with this deployment's own key -- the one the router
+    bills -- and cached for a minute. It used to be proxied through the
+    review service, which reads the key from a file only a host install
+    has, so the bundle's card showed nothing while the key worked fine
+    (2026-09-28, the first Windows install)."""
     auth.require_admin(user)
+    now = time.monotonic()
+    cached = _balance_cache.get("data")
+    if cached is not None and now - _balance_cache["at"] < _BALANCE_CACHE_S:
+        return cached
+    from agent.model_config import _openrouter_key  # noqa: PLC0415
+    key = _openrouter_key()
+    if not key:
+        raise HTTPException(503, "no OpenRouter key: set OPENROUTER_API_KEY and restart the agent")
     async with httpx.AsyncClient(timeout=10.0) as client:
-        from agent.tools.review_gate import (  # noqa: PLC0415
-            _CONTROL_HEADERS, REVIEW_SERVICE_HOST, REVIEW_SERVICE_PORT)
-        # The review service's reads need the control secret too (SECURITY.md,
-        # "The review services").
-        resp = await client.get(f"http://{REVIEW_SERVICE_HOST}:{REVIEW_SERVICE_PORT}/api/router/balance",
-                                headers=_CONTROL_HEADERS)
-        resp.raise_for_status()
-        return resp.json()
+        resp = await client.get("https://openrouter.ai/api/v1/credits", headers={"Authorization": f"Bearer {key}"})
+    if resp.status_code != 200:
+        raise HTTPException(502, f"OpenRouter answered {resp.status_code} to the credits request")
+    body = resp.json().get("data") or {}
+    total, used = float(body.get("total_credits") or 0), float(body.get("total_usage") or 0)
+    data = {"totalCredits": total, "totalUsage": used, "remaining": total - used}
+    _balance_cache.update(data=data, at=now)
+    return data
+
+
+_BALANCE_CACHE_S = 60
+_balance_cache: dict = {"data": None, "at": 0.0}
 
 
 class GitHubReposRequest(BaseModel):

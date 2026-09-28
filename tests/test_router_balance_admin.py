@@ -28,11 +28,10 @@ def client(monkeypatch):
     monkeypatch.setattr(srv.app.state, "config", fake)
 
     class _Resp:
-        def raise_for_status(self):
-            pass
+        status_code = 200
 
         def json(self):
-            return {"totalCredits": 100, "totalUsage": 40, "remaining": 60}
+            return {"data": {"total_credits": 100, "total_usage": 40}}
 
     class _Client:
         def __init__(self, *a, **k):
@@ -48,6 +47,9 @@ def client(monkeypatch):
             return _Resp()
 
     monkeypatch.setattr(srv.httpx, "AsyncClient", _Client)
+    monkeypatch.setattr(srv, "_balance_cache", {"data": None, "at": 0.0})
+    import agent.model_config as mc
+    monkeypatch.setattr(mc, "_openrouter_key", lambda: "sk-or-v1-x")
     return TestClient(srv.app)
 
 

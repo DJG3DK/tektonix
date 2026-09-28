@@ -1,10 +1,8 @@
-"""Regression test for the API balance vanishing from the sidebar
-(2026-08-24): the frontend used to call /_review/api/router/balance
-directly, and nginx still gates that path behind the OLD shared
-reverse-proxy login -- one this app's own users no longer
-necessarily have now that /v2/ dropped that redundant gate in favor of
-agent/auth.py's own login. GET /api/router-balance proxies through this
-app's own backend (and its own auth) instead."""
+"""The API balance card. It vanished twice: 2026-08-24, when the frontend
+called the review service's path behind a login this app's users did not
+have; and 2026-09-28, in the bundle, when the proxy to the review service
+found no key file there. GET /api/router-balance asks OpenRouter itself,
+with this deployment's own key, behind this app's own auth."""
 
 from fastapi.testclient import TestClient
 
@@ -15,11 +13,10 @@ _FAKE_USER = User(id=1, email="test@example.com", role="admin", allowed_repos=No
 
 
 class _FakeResponse:
+    status_code = 200
+
     def __init__(self, payload):
         self._payload = payload
-
-    def raise_for_status(self):
-        pass
 
     def json(self):
         return self._payload
@@ -40,28 +37,37 @@ class _FakeAsyncClient:
     async def get(self, url, headers=None):
         _FakeAsyncClient.last_url = url
         _FakeAsyncClient.last_headers = headers or {}
-        return _FakeResponse({"totalCredits": 165, "totalUsage": 143.4, "remaining": 21.6})
+        _FakeAsyncClient.calls = getattr(_FakeAsyncClient, "calls", 0) + 1
+        return _FakeResponse({"data": {"total_credits": 165, "total_usage": 143.4}})
 
 
-def test_router_balance_proxies_the_review_service_through_this_apps_own_auth(monkeypatch):
-    from agent.tools import review_gate
-    # The headers are review_gate's, computed from REVIEW_CONTROL_SECRET at
-    # import. Set explicitly: CI runs with no .env, where they are empty, and
-    # this asserts the route passes them on -- not what this box's secret is.
-    monkeypatch.setattr(review_gate, "_CONTROL_HEADERS", {"X-Review-Secret": "the-secret"})
+def test_router_balance_asks_openrouter_with_this_deployments_key_behind_this_apps_own_auth(monkeypatch):
+    import agent.model_config as mc
+
+    monkeypatch.setattr(mc, "_openrouter_key", lambda: "sk-or-v1-thekey")
     monkeypatch.setitem(srv.app.dependency_overrides, srv.require_full_auth, lambda: _FAKE_USER)
     monkeypatch.setattr(srv.httpx, "AsyncClient", _FakeAsyncClient)
+    monkeypatch.setattr(srv, "_balance_cache", {"data": None, "at": 0.0})
+    _FakeAsyncClient.calls = 0
     client = TestClient(srv.app)
 
     res = client.get("/api/router-balance")
 
     assert res.status_code == 200
-    assert res.json() == {"totalCredits": 165, "totalUsage": 143.4, "remaining": 21.6}
-    from agent.tools.review_gate import REVIEW_SERVICE_HOST, REVIEW_SERVICE_PORT
-    # review_gate's address, not a copy of it (2026-09-23 review, 8.1), and the
-    # control secret, which the review service's reads now require (3.1).
-    assert _FakeAsyncClient.last_url == f"http://{REVIEW_SERVICE_HOST}:{REVIEW_SERVICE_PORT}/api/router/balance"
-    assert _FakeAsyncClient.last_headers == {"X-Review-Secret": "the-secret"}
+    assert res.json() == {"totalCredits": 165.0, "totalUsage": 143.4, "remaining": 165 - 143.4}
+    assert _FakeAsyncClient.last_url == "https://openrouter.ai/api/v1/credits"
+    assert _FakeAsyncClient.last_headers == {"Authorization": "Bearer sk-or-v1-thekey"}
+    assert client.get("/api/router-balance").status_code == 200 and _FakeAsyncClient.calls == 1, "cached for a minute"
+
+
+def test_without_a_key_the_card_gets_a_reason_not_a_500(monkeypatch):
+    import agent.model_config as mc
+
+    monkeypatch.setattr(mc, "_openrouter_key", lambda: None)
+    monkeypatch.setitem(srv.app.dependency_overrides, srv.require_full_auth, lambda: _FAKE_USER)
+    monkeypatch.setattr(srv, "_balance_cache", {"data": None, "at": 0.0})
+    res = TestClient(srv.app).get("/api/router-balance")
+    assert res.status_code == 503 and "OPENROUTER_API_KEY" in res.json()["detail"]
 
 
 def test_router_balance_requires_login(monkeypatch):
