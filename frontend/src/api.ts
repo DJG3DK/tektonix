@@ -659,6 +659,40 @@ export interface ConsolidationStatus {
   stale: boolean;
   age_hours?: number;
   tail: string;
+  /** From the agent's own scheduler (agent/jobs.py). */
+  due_at?: string | null;
+  due?: boolean;
+  running?: boolean;
+  waiting?: string | null;
+  trigger?: string | null;
+  error?: string | null;
+}
+
+export interface JobStatus {
+  name: string;
+  title: string;
+  ran_at: string | null;
+  ok: boolean | null;
+  exit_code: number | null;
+  trigger: string | null;
+  error: string | null;
+  duration_s: number | null;
+  due_at: string | null;
+  due: boolean;
+  running: boolean;
+  waiting: string | null;
+}
+
+export async function getJobs(): Promise<{ jobs: JobStatus[] }> {
+  const res = await apiFetch(`${API_BASE}/jobs`);
+  if (!res.ok) throw new Error(`getJobs failed: ${res.status}`);
+  return res.json();
+}
+
+export async function runJob(name: string): Promise<{ ok: boolean; started: string }> {
+  const res = await apiFetch(`${API_BASE}/jobs/${encodeURIComponent(name)}/run`, { method: "POST" });
+  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || `runJob failed: ${res.status}`);
+  return res.json();
 }
 
 export interface EnvKey {

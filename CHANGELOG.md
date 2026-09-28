@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### The daily jobs run inside the agent
+
+Memory consolidation and the codebase map were host crons: the compose
+bundle has no cron and a desktop app closed at night never reaches one,
+so in both they never ran. The agent schedules them itself now: once a
+day, at the first quiet moment after they are due, checked on startup and
+every ten minutes. Both are cheap when there is nothing new. The memory
+panel shows when each is next due, whether a due run is waiting for the
+agent to go idle, and has a Run now button per job. The host crons still
+work and count as a run; they are no longer needed.
+
 ### The first task in the bundle could not reach the router
 
 The agent's first model call answered "404 Not Found". Compose gave the

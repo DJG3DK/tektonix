@@ -108,6 +108,7 @@ EXPECTED = [
     ('GET', '/api/tasks/{task_id}/diff', 'check_repo_access'),
     ('GET', '/api/tasks/{task_id}/file', 'check_repo_access'),
     ('POST', '/api/github/inbox/{repo}/{key}/{action}', 'check_repo_access'),
+    ('POST', '/api/jobs/{name}/run', 'require_admin'),
     ('POST', '/api/planning/sessions', 'check_repo_access'),
     ('POST', '/api/planning/sessions/{session_id}/archive', 'check_repo_access'),
     ('POST', '/api/planning/sessions/{session_id}/message', 'check_repo_access'),

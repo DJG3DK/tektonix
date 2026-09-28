@@ -127,6 +127,10 @@ connection". `depends_on: service_healthy` is what closes that.
   check container shares with those two services and nothing else -- not
   the agent, which sets a run up with `docker exec` into them and hands
   the checks a plain role of their own. See `SECURITY.md`.
+* **The daily jobs.** Memory consolidation and the codebase map are scheduled
+  by the agent itself, once a day at the first quiet moment, with a Run now
+  button on the memory panel. There is no cron in the bundle and none is
+  needed.
 * **The logo tools.** `logo_render`, `logo_export_brand_kit` and the rest call
   LogoLoom's Node modules, and the agent image is Python-only — no Node, and
   60MB of image libraries for a feature most installs never touch. The agent

@@ -63,6 +63,7 @@ ACTIONS: dict[str, str] = {
     "evals.run": "started a golden eval run",
     "evals.stop": "stopped a golden eval run",
     "swebench.run": "started a SWE-bench run",
+    "jobs.run": "ran a daily job now",
     "swebench.stop": "stopped a SWE-bench run",
     "settings.auto_approve": "changed auto-approve of commands",
     "settings.merge_review": "changed the final merge review",

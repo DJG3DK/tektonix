@@ -1,5 +1,11 @@
 # The consolidation card is not green
 
+> **Since 2026-09-28 the agent schedules this itself** (`agent/jobs.py`):
+> once a day, at the first quiet moment after it is due, and on demand from
+> the memory panel's Run now button. The cron below is optional on a host
+> install and does not exist in the compose bundle. Both write the same
+> marker, `data/last_consolidation.json`, which is what the panel reads.
+
 ## What you see
 
 On the Models page, the consolidation card says one of:

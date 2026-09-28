@@ -50,6 +50,7 @@ from agent.routers import analytics as analytics_routes
 from agent.routers import push as push_routes
 from agent.routers import review_proxy as review_proxy_routes
 from agent.routers import review_sandbox as review_sandbox_routes
+from agent.routers import jobs as jobs_routes
 from agent.routers import uploads as uploads_routes
 from agent.tools.model_rates import warm_rates
 from agent.classify import classify_task
@@ -393,9 +394,16 @@ async def lifespan(app: FastAPI):
         # GitHub inbox poller (Settings -> GitHub). Sleeps until a project
         # switches a source on; see _github_poll_loop.
         github_poll_task = asyncio.create_task(_github_poll_loop())
+        # The daily jobs (memory consolidation, the codebase map), run here
+        # at the first quiet moment after they are due -- agent/jobs.py. The
+        # host crons that used to do this are optional now, and the bundle
+        # never had them.
+        from agent import jobs
+        jobs_task = asyncio.create_task(jobs.run_forever(app.state))
         notify_operators_bg(auth_pool, "🔄 agent backend restarted (deploys land this way; "
                             "orphaned tasks auto-resume, planning turns re-send)")
         yield
+        jobs_task.cancel()
         github_poll_task.cancel()
         service_watch_task.cancel()
         auto_resume_task.cancel()
@@ -449,6 +457,7 @@ if config.cors_allow_origins:
 # Included here, after the middleware and before the routes that are still in
 # this file, so the order a request passes through is unchanged.
 app.include_router(auth_routes.router)
+app.include_router(jobs_routes.router)
 app.include_router(push_routes.router)
 app.include_router(analytics_routes.router)
 app.include_router(model_config_routes.router)
@@ -1917,12 +1926,13 @@ async def consolidation_status(user: User = Depends(require_full_auth)):
     Exists because a failed run used to be indistinguishable from a healthy one
     — the script printed a line and exited 0, so cron stayed quiet and a provider
     incompatibility skipped consolidation unnoticed for months. The marker file
-    is written by scripts/consolidation-cron.sh on every run.
+    is written on every run, by the agent's own scheduler (agent/jobs.py) or
+    by scripts/consolidation-cron.sh on a host that still runs it.
     """
     auth.require_admin(user)
-    root = Path(__file__).resolve().parent.parent
-    marker = root / "data" / "last_consolidation.json"
-    log = Path("/var/log/agent-consolidation.log")
+    from agent import jobs
+    marker = jobs.marker_path(jobs.JOBS["consolidation"])
+    log = paths.DATA_DIR / "consolidation.log"
 
     # stale defaults False, not True: a default of True combined with a silent
     # except-pass meant any error here rendered a healthy run as STALE. That is
@@ -1957,6 +1967,10 @@ async def consolidation_status(user: User = Depends(require_full_auth)):
         payload["tail"] = await asyncio.to_thread(_tail_lines, log, 40)
     except Exception:
         pass
+    # What the scheduler knows: when it is next due, whether it is running
+    # now, and whether a due run is waiting for the agent to go quiet.
+    sched = jobs.status("consolidation")
+    payload.update({k: sched[k] for k in ("due_at", "due", "running", "waiting", "trigger", "error")})
     return payload
 
 

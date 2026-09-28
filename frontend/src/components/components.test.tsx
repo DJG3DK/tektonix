@@ -1,17 +1,22 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ConsolidationStatusPanel } from "./ConsolidationStatusPanel";
 import { MobileNav } from "./MobileNav";
 
 const getConsolidationStatus = vi.fn();
+const getJobs = vi.fn();
+const runJob = vi.fn();
 vi.mock("../api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../api")>();
-  return { ...actual, getConsolidationStatus: () => getConsolidationStatus() };
+  return { ...actual, getConsolidationStatus: () => getConsolidationStatus(), getJobs: () => getJobs(), runJob: (n: string) => runJob(n) };
 });
 
 beforeEach(() => {
   getConsolidationStatus.mockReset();
+  getJobs.mockReset();
+  runJob.mockReset();
+  getJobs.mockResolvedValue({ jobs: [] });
 });
 
 describe("ConsolidationStatusPanel", () => {
@@ -45,6 +50,32 @@ describe("ConsolidationStatusPanel", () => {
     getConsolidationStatus.mockRejectedValue(new Error("backend down"));
     render(<ConsolidationStatusPanel />);
     expect(await screen.findByText(/backend down/i)).toBeInTheDocument();
+  });
+
+  // 2026-09-28: the agent schedules the jobs itself; the panel shows when
+  // each is next due and an admin can run one now.
+  it("lists each daily job with its next due time and a run-now button", async () => {
+    getConsolidationStatus.mockResolvedValue({ ran_at: "2026-09-28T04:00:00Z", ok: true, stale: false, due_at: "2026-09-29T04:00:00Z", due: false });
+    getJobs.mockResolvedValue({ jobs: [
+      { name: "consolidation", title: "Memory consolidation", ran_at: "2026-09-28T04:00:00Z", ok: true, due_at: "2026-09-29T04:00:00Z", due: false, running: false, waiting: null },
+      { name: "cartography", title: "Codebase map", ran_at: null, ok: null, due_at: null, due: true, running: false, waiting: "due, waiting for the agent to be idle" },
+    ] });
+    runJob.mockResolvedValue({ ok: true, started: "cartography" });
+    render(<ConsolidationStatusPanel />);
+    expect(await screen.findByText(/next due 2026-09-29 04:00:00 UTC/)).toBeInTheDocument();
+    const run = await screen.findByRole("button", { name: /run codebase map now/i });
+    run.click();
+    await waitFor(() => expect(runJob).toHaveBeenCalledWith("cartography"));
+  });
+
+  it("says when a run is in progress and refuses a second start", async () => {
+    getConsolidationStatus.mockResolvedValue({ ran_at: "2026-09-28T04:00:00Z", ok: true, stale: false, running: true });
+    getJobs.mockResolvedValue({ jobs: [
+      { name: "consolidation", title: "Memory consolidation", ran_at: "2026-09-28T04:00:00Z", ok: true, due_at: null, due: true, running: true, waiting: null },
+    ] });
+    render(<ConsolidationStatusPanel />);
+    expect(await screen.findByText(/running now/i)).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: /run memory consolidation now/i })).toBeDisabled();
   });
 });
 
