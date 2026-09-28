@@ -209,18 +209,28 @@ pub fn local_name(name: &str) -> String {
     format!("tektonix-{name}:latest")
 }
 
-/// Pull one release's images and tag them with the local names.
+/// Pull one release's images and tag them with the local names. When the
+/// versioned tag does not exist (an app built ahead of its release, or a
+/// pre-release build), the registry's `latest` is pulled instead and the
+/// installed version is recorded as that.
 pub async fn pull(app: &AppHandle, tag: &str) -> Result<(), String> {
+    let mut used = tag.to_string();
     for name in IMAGES {
-        let remote = image_ref(name, tag);
+        let mut remote = image_ref(name, &used);
         note(app, format!("Pulling {remote}"));
-        let code = proc::stream(app, "docker", "docker", &["pull", &remote], None).await.map_err(|e| e.to_string())?;
+        let mut code = proc::stream(app, "docker", "docker", &["pull", &remote], None).await.map_err(|e| e.to_string())?;
+        if code != 0 && used != "latest" {
+            note(app, format!("No {used} image for {name}; using the latest published one."));
+            used = "latest".into();
+            remote = image_ref(name, &used);
+            code = proc::stream(app, "docker", "docker", &["pull", &remote], None).await.map_err(|e| e.to_string())?;
+        }
         if code != 0 {
             return Err(format!("could not pull {remote} (exit {code}). Is this machine online, and does the release exist?"));
         }
         proc::capture("docker", &["tag", &remote, &local_name(name)], None).await.map_err(|e| e.to_string())?;
     }
-    write_version(app, tag)?;
+    write_version(app, &used)?;
     Ok(())
 }
 

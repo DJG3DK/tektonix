@@ -63,9 +63,11 @@ jobs:
           # runs amd64 images under Rosetta in Docker Desktop meanwhile.
           platforms: linux/amd64
           push: true
+          # :latest follows releases only; a pre-release (a dash in the tag)
+          # publishes under its own tag alone.
           tags: |
             ghcr.io/djg3dk/tektonix-${{ matrix.image }}:${{ steps.version.outputs.tag }}
-            ghcr.io/djg3dk/tektonix-${{ matrix.image }}:latest
+            ${{ !contains(steps.version.outputs.tag, '-') && format('ghcr.io/djg3dk/tektonix-{0}:latest', matrix.image) || '' }}
           cache-from: type=gha,scope=${{ matrix.image }}
           cache-to: type=gha,scope=${{ matrix.image }},mode=max
 
