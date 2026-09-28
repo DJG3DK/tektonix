@@ -110,9 +110,17 @@ def is_empty_length_capped(msg: AIMessage | None) -> bool:
 
 
 class EmptyReplyRetryMiddleware(AgentMiddleware):
-    def __init__(self, fallback_model, seat: str):
+    """`quiet_model` is the same seat with its chain of thought switched off.
+    2026-09-28, the first Windows install: the test writer emptied on its
+    own pin and then on the fallback seat too, thirty times, for a prompt
+    that made both think until the cap. The blowout is pure reasoning, so
+    the first retry is the same model told not to reason; the fallback seat
+    is the second try. Either answering ends it."""
+
+    def __init__(self, fallback_model, seat: str, quiet_model=None):
         super().__init__()
         self.fallback_model = fallback_model
+        self.quiet_model = quiet_model
         self.seat = seat
         self.retries = 0
 
@@ -120,37 +128,50 @@ class EmptyReplyRetryMiddleware(AgentMiddleware):
         self.retries = 0
         return None
 
-    def _retry_request(self, request, msg: AIMessage):
+    def _attempts(self):
+        """The retries for one call, in order: the seat without reasoning
+        when there is such a model, then the fallback seat."""
+        out = []
+        if self.quiet_model is not None:
+            out.append(("the same seat without reasoning", self.quiet_model))
+        out.append(("the fallback seat", self.fallback_model))
+        return out
+
+    def _retry_request(self, request, msg: AIMessage, where: str, model):
         if self.retries >= MAX_RETRIES_PER_INVOCATION:
             logger.warning("%s: empty length-capped reply again, past %d retries this invocation; "
                            "handing it through", self.seat, MAX_RETRIES_PER_INVOCATION)
             return None
         self.retries += 1
         logger.warning("%s: empty length-capped reply (%d completion tokens, %d reasoning); "
-                       "retrying once on the fallback seat (%d/%d this invocation)",
-                       self.seat, _completion_tokens(msg), _reasoning_tokens(msg),
+                       "retrying on %s (%d/%d this invocation)",
+                       self.seat, _completion_tokens(msg), _reasoning_tokens(msg), where,
                        self.retries, MAX_RETRIES_PER_INVOCATION)
         return request.override(
-            model=self.fallback_model,
+            model=model,
             messages=list(request.messages) + [HumanMessage(content=harness(RETRY_NOTE))],
         )
 
     def wrap_model_call(self, request, handler):
         response = handler(request)
-        msg = _ai_message(response)
-        if not is_empty_length_capped(msg):
-            return response
-        retry = self._retry_request(request, msg)
-        if retry is None:
-            return response
-        return handler(retry)
+        for where, model in self._attempts():
+            msg = _ai_message(response)
+            if not is_empty_length_capped(msg):
+                return response
+            retry = self._retry_request(request, msg, where, model)
+            if retry is None:
+                return response
+            response = handler(retry)
+        return response
 
     async def awrap_model_call(self, request, handler):
         response = await handler(request)
-        msg = _ai_message(response)
-        if not is_empty_length_capped(msg):
-            return response
-        retry = self._retry_request(request, msg)
-        if retry is None:
-            return response
-        return await handler(retry)
+        for where, model in self._attempts():
+            msg = _ai_message(response)
+            if not is_empty_length_capped(msg):
+                return response
+            retry = self._retry_request(request, msg, where, model)
+            if retry is None:
+                return response
+            response = await handler(retry)
+        return response

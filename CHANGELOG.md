@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### An empty reply is retried without reasoning first
+
+A reply that is all chain of thought and no answer was retried once on
+the fallback seat. On the first Windows install one prompt emptied the
+test writer on its own model and on the fallback too, thirty times, and
+the task sat there. The blowout is pure reasoning, so the first retry now
+re-asks the same model with reasoning switched off, and the fallback seat
+is the second try. Every seat gets this.
+
 ### The example router config pins the proven models
 
 Seven roles in the committed example still pointed at models the reference

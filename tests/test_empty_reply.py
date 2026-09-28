@@ -8,7 +8,7 @@ from types import SimpleNamespace
 from langchain_core.messages import AIMessage, HumanMessage
 
 from agent.middleware.empty_reply import (
-    MAX_RETRIES_PER_INVOCATION, EmptyReplyRetryMiddleware, is_empty_length_capped,
+    MAX_RETRIES_PER_INVOCATION, EmptyReplyRetryMiddleware, _ai_message, is_empty_length_capped,
 )
 from langchain.agents.middleware.types import ModelResponse
 
@@ -146,3 +146,39 @@ def test_the_coordinator_s_retry_sits_inside_the_plan_code_model_pick():
             assert names.index("EmptyReplyRetryMiddleware") > names.index("PlanCodeModelMiddleware")
             return
     raise AssertionError("no coordinator middleware list with PlanCodeModelMiddleware found")
+
+
+# ── the same seat without reasoning is tried before the fallback seat ─────────
+# 2026-09-28, the first Windows install: the test writer emptied on its own
+# pin and on the fallback seat too, thirty times, for one prompt.
+
+QUIET = SimpleNamespace(name="coder-no-reasoning")
+
+
+async def test_the_first_retry_is_the_same_seat_without_reasoning():
+    mw = EmptyReplyRetryMiddleware(FALLBACK, seat="test-writer", quiet_model=QUIET)
+    h = _Handler([_capped(16384), AIMessage(content="write the parser test", id="ok")])
+    out = await mw.awrap_model_call(_req(), h)
+    assert _ai_message(out).content == "write the parser test"
+    assert [r.model for r in h.requests] == [CODER, QUIET]
+    assert mw.retries == 1
+
+
+async def test_when_quiet_empties_too_the_fallback_seat_is_next_and_then_it_goes_through():
+    mw = EmptyReplyRetryMiddleware(FALLBACK, seat="test-writer", quiet_model=QUIET)
+    h = _Handler([_capped(16384), _capped(16384), AIMessage(content="from the fallback", id="fb")])
+    out = await mw.awrap_model_call(_req(), h)
+    assert _ai_message(out).content == "from the fallback"
+    assert [r.model for r in h.requests] == [CODER, QUIET, FALLBACK]
+    assert mw.retries == 2
+    h = _Handler([_capped(16384), _capped(16384), _capped(16384)])
+    out = await mw.awrap_model_call(_req(), h)
+    assert is_empty_length_capped(_ai_message(out)) and len(h.requests) == 3, "three tries, then through unchanged"
+
+
+def test_without_a_quiet_model_the_fallback_is_the_only_retry():
+    mw = EmptyReplyRetryMiddleware(FALLBACK, seat="coder")
+    h = _Handler([_capped(), _capped()])
+    import asyncio
+    asyncio.run(mw.awrap_model_call(_req(), h))
+    assert [r.model for r in h.requests] == [CODER, FALLBACK]

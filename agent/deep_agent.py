@@ -1016,18 +1016,32 @@ async def build_deep_agent(
     coordinator_model = llm_for_role(config, coder_role, task_id=task_id, max_tokens=COORDINATOR_MAX_TOKENS,
                                      reasoning=coder_reasoning())
     planner_model = llm_for_role(config, "agent-planner", task_id=task_id, max_tokens=SEAT_MAX_TOKENS)
-    investigator_model = llm_for_role(config, coder_role if route in ("frontend", "fallback") else "agent-investigator",
-                                     task_id=task_id, max_tokens=SEAT_MAX_TOKENS)
+    investigator_alias = coder_role if route in ("frontend", "fallback") else "agent-investigator"
+    investigator_model = llm_for_role(config, investigator_alias, task_id=task_id, max_tokens=SEAT_MAX_TOKENS)
     # On the loop fallback every seat that acts moves: the loop that ended the
     # pass was as often in a subagent as in the coordinator.
-    test_writer_model = llm_for_role(config, coder_role if route == "fallback" else "agent-test-writer",
-                                     task_id=task_id, max_tokens=SEAT_MAX_TOKENS)
+    test_writer_alias = coder_role if route == "fallback" else "agent-test-writer"
+    test_writer_model = llm_for_role(config, test_writer_alias, task_id=task_id, max_tokens=SEAT_MAX_TOKENS)
     # Its own alias, so the router's ledger bills the verifier as the verifier
     # and not as the test-writer whose model it shared (2026-09-25).
-    verifier_model = llm_for_role(config, coder_role if route == "fallback" else "agent-verifier",
-                                  task_id=task_id, max_tokens=SEAT_MAX_TOKENS)
-    # One low-effort fallback for the seats' empty-reply retry (empty_reply.py).
+    verifier_alias = coder_role if route == "fallback" else "agent-verifier"
+    verifier_model = llm_for_role(config, verifier_alias, task_id=task_id, max_tokens=SEAT_MAX_TOKENS)
+    # One low-effort fallback for the seats' empty-reply retry (empty_reply.py),
+    # and each seat's own model with its chain of thought switched off, which
+    # that retry tries first: a blowout is pure reasoning, and the same model
+    # told not to reason answers the prompt that emptied it (2026-09-28).
     empty_reply_model = llm_for_role(config, "agent-coder-fallback", reasoning_effort="low", task_id=task_id)
+
+    def quiet(alias: str, cap: int):
+        return llm_for_role(config, alias, task_id=task_id, max_tokens=cap, reasoning=False)
+
+    quiet_models = {
+        "coordinator": quiet(coder_role, COORDINATOR_MAX_TOKENS),
+        "investigator": quiet(investigator_alias, SEAT_MAX_TOKENS),
+        "test-writer": quiet(test_writer_alias, SEAT_MAX_TOKENS),
+        "verifier": quiet(verifier_alias, SEAT_MAX_TOKENS),
+    }
+    quiet_models["general-purpose"] = quiet_models["coordinator"]
     # The report, verbatim, for the seats that check the fix: a one-line
     # task() description was all a verifier had of a multi-paragraph report
     # (2026-09-25).
@@ -1088,7 +1102,7 @@ async def build_deep_agent(
             # cleaning up dead modules gets "not found" four times before it
             # thinks of `rm` (observed 2026-09-08). bash rm is the real one.
             SanitizeToolCallsMiddleware(),  # a malformed tool call in history never reaches a provider (2026-09-09)
-            EmptyReplyRetryMiddleware(empty_reply_model, "investigator"),
+            EmptyReplyRetryMiddleware(empty_reply_model, "investigator", quiet_model=quiet_models["investigator"]),
             HiddenToolsMiddleware("glob", "grep", "execute", "delete"),
             RepeatCallGuardMiddleware(contain=True),  # the same call with the same result is not run a third time (2026-09-09)
             BudgetGuardMiddleware(tracker),
@@ -1132,7 +1146,7 @@ async def build_deep_agent(
             # shell here, and built-in execute has no sandbox behind this
             # backend, so it can only error or mislead.
             SanitizeToolCallsMiddleware(),  # a malformed tool call in history never reaches a provider (2026-09-09)
-            EmptyReplyRetryMiddleware(empty_reply_model, "test-writer"),
+            EmptyReplyRetryMiddleware(empty_reply_model, "test-writer", quiet_model=quiet_models["test-writer"]),
             HiddenToolsMiddleware("glob", "grep", "execute", "delete"),
             RepeatCallGuardMiddleware(contain=True),  # the same call with the same result is not run a third time (2026-09-09)
             BudgetGuardMiddleware(tracker),
@@ -1168,7 +1182,7 @@ async def build_deep_agent(
         "model": verifier_model,
         "middleware": [
             SanitizeToolCallsMiddleware(),
-            EmptyReplyRetryMiddleware(empty_reply_model, "verifier"),
+            EmptyReplyRetryMiddleware(empty_reply_model, "verifier", quiet_model=quiet_models["verifier"]),
             # write_file/edit_file reach the agent's memory space, never the
             # repo; a verifier reaching for them to write a probe died on it.
             HiddenToolsMiddleware("glob", "grep", "execute", "delete", "write_file", "edit_file"),
@@ -1229,7 +1243,7 @@ async def build_deep_agent(
             # shell here, and built-in execute has no sandbox behind this
             # backend, so it can only error or mislead.
             SanitizeToolCallsMiddleware(),  # a malformed tool call in history never reaches a provider (2026-09-09)
-            EmptyReplyRetryMiddleware(empty_reply_model, "general-purpose"),
+            EmptyReplyRetryMiddleware(empty_reply_model, "general-purpose", quiet_model=quiet_models["general-purpose"]),
             HiddenToolsMiddleware("glob", "grep", "execute", "delete"),
             RepeatCallGuardMiddleware(contain=True),  # the same call with the same result is not run a third time (2026-09-09)
             BudgetGuardMiddleware(tracker),
@@ -1270,7 +1284,7 @@ async def build_deep_agent(
             # replaced by its choice -- and the retry's note, a HumanMessage,
             # made it a "planning turn", so 17 of 19 retries went to the
             # planner at full effort (2026-09-25, first hour of a run).
-            EmptyReplyRetryMiddleware(empty_reply_model, "coordinator"),
+            EmptyReplyRetryMiddleware(empty_reply_model, "coordinator", quiet_model=quiet_models["coordinator"]),
             # Inside the retry, as on every subagent: outside it the guard saw
             # only the reply the retry kept, so the discarded empty call --
             # 32k reasoning tokens -- was never charged against the ceiling.
