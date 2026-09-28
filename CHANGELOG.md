@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### The bundle's agent log is quiet again
+
+The service watcher polled pm2 every minute and printed a traceback each
+time in the bundle, which has no pm2. It now says so once and stands down;
+compose restarts a dead service itself.
+
 ### Accounts beyond the first are a licensed feature
 
 The public build is the single-operator product. It no longer offers to

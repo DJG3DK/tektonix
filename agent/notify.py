@@ -22,6 +22,7 @@ per-user routing rules can come later if it ever matters.
 """
 
 import asyncio
+import shutil
 import logging
 
 import httpx
@@ -224,6 +225,13 @@ async def watch_services(auth_pool, interval: float = 60.0, exclude: tuple = ("t
     that process), so it announces itself via the startup alert instead.
     Runs forever; every failure is swallowed after logging -- constraint 1.
     """
+    if shutil.which("pm2") is None:
+        # The compose bundle: no pm2, and compose restarts a dead service
+        # itself. Polling would only print a traceback a minute (the first
+        # Windows install's log, 2026-09-28).
+        logger.info("service watch: no pm2 on this deployment; not polling")
+        return
+
     import json as _json
     prev: dict = {}
     while True:
