@@ -103,9 +103,14 @@ async def git_diff(repo_root: str, staged: bool = False) -> str:
     `git add -N` (intent-to-add: stages the path, not the content) makes new
     files show up in `git diff` normally without actually staging their
     content -- this is not intended as a real `git add`.
+
+    Measured against HEAD, so staged work counts too. A final commit that
+    fails after `git add -A` leaves the whole change in the index, where
+    plain `git diff` (tree vs index) reads empty: task 41a1a0b1, 2026-09-28,
+    ended "no changes needed" with 1,295 staged lines.
     """
     await _git("add -A -N", repo_root, timeout=30)
-    cmd = "diff --staged" if staged else "diff"
+    cmd = "diff --staged" if staged else "diff HEAD"
     r = await _git(cmd, repo_root, timeout=30)
     return r["output"]
 
