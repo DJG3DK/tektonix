@@ -46,6 +46,16 @@ docker compose exec agent python scripts/show_initial_password.py
 
 It is shown once, and you change it on first login.
 
+## Upgrading
+
+```bash
+git pull
+docker compose up -d
+```
+
+`up -d` builds whatever changed, from cache, so it is seconds when nothing
+did and a few minutes after a release. No `--build` needed.
+
 ## What you need
 
 Docker Desktop (Windows/macOS) or Docker Engine (Linux). Nothing else —

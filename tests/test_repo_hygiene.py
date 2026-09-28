@@ -541,3 +541,14 @@ def test_the_bundle_gives_every_committing_container_a_git_identity():
         for key in ("GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL"):
             assert key in env, f"{svc} lacks {key}"
         assert env["GIT_AUTHOR_EMAIL"] == "${ADMIN_EMAIL:-admin@example.com}"
+
+
+def test_every_built_service_builds_rather_than_pulling_its_local_name():
+    """`up -d` on a source install tried to pull tektonix-reviewer:latest
+    from Docker Hub before building it, and printed "pull access denied"
+    (2026-09-28). pull_policy: build means a plain `up -d` builds what
+    changed and never asks a registry for a local name."""
+    compose = yaml.safe_load((REPO / "docker-compose.yml").read_text())
+    for name, svc in compose["services"].items():
+        if "build" in svc:
+            assert svc.get("pull_policy") == "build", f"{name} needs pull_policy: build"

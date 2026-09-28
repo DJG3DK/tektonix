@@ -8,12 +8,13 @@
 # yet (a GitHub-only project is cloned onto this machine; there is no remote
 # execution).
 
-# Every built service names its image (tektonix-agent:latest and so on):
-# a source checkout builds into that name with `up -d --build`, and the
-# desktop app pulls the same release from ghcr.io/djg3dk/tektonix-<service>
-# and tags it with that name, then runs `up -d --no-build`. One file for
-# both, and a rebuilt or pulled image is what `up` recreates the container
-# from either way. .github/workflows/release.yml publishes the images.
+# Every built service names its image (tektonix-agent:latest and so on)
+# and has pull_policy: build, so a source checkout's `docker compose up -d`
+# builds what changed (from cache: seconds when nothing did) and never
+# tries to pull that name from Docker Hub. The desktop app pulls the same
+# release from ghcr.io/djg3dk/tektonix-<service>, tags it with that name,
+# and runs `up -d --no-build`, which uses what is there. One file for both.
+# .github/workflows/release.yml publishes the images.
 #
 # The compose project name: every container, network and volume is
 # tektonix-<service>-1, tektonix_checks, tektonix_pgdata. An install made
@@ -49,6 +50,7 @@ services:
 
   router:
     image: tektonix-router:latest
+    pull_policy: build
     build:
       context: .
       dockerfile: docker/router/Dockerfile
@@ -95,6 +97,7 @@ services:
   # container itself does nothing and exits at once; the image is the point.
   sandbox-image:
     image: tektonix-sandbox:latest
+    pull_policy: build
     build:
       context: ./docker/agent-sandbox
     entrypoint: ["true"]
@@ -102,6 +105,7 @@ services:
 
   agent:
     image: tektonix-agent:latest
+    pull_policy: build
     build:
       context: .
       dockerfile: docker/agent/Dockerfile
@@ -218,6 +222,7 @@ services:
   # rather than failing (TEKTONIX_BUNDLE, services/agent-review/server.js).
   agent-review:
     image: tektonix-reviewer:latest
+    pull_policy: build
     build:
       context: .
       dockerfile: docker/reviewer/Dockerfile
@@ -255,6 +260,7 @@ services:
 
   commit-reviewer:
     image: tektonix-reviewer:latest
+    pull_policy: build
     build:
       context: .
       dockerfile: docker/reviewer/Dockerfile

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### `docker compose up -d` is the whole upgrade
+
+Every built service has `pull_policy: build`: a plain `up -d` builds what
+changed and never tries to pull a local image name from Docker Hub, which
+printed "pull access denied" on the first Windows install. The desktop
+app's `--no-build` start is unaffected.
+
 ### The bundle's containers can commit
 
 The first Windows install's first task did everything and then failed its
