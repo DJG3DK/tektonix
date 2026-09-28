@@ -17,12 +17,12 @@ pasted, which means they carry concrete paths; on another install, substitute:
 
 | In these pages | Means |
 |---|---|
-| `/home/3d-agent` | your `AGENT_HOME` — where install.sh put the agent |
+| `/home/tektonix` | your `AGENT_HOME` — where install.sh put the agent |
 | `/root/.pm2/logs/...` | wherever pm2 writes for the user it runs as (`pm2 logs <app>` avoids the path entirely) |
 | `/home/storefront`, `/home/webapp` | your own projects' live checkouts, from `projects.json` |
 | `.venv/bin/python` | the agent's virtualenv |
 
-Most snippets start with `cd /home/3d-agent`; `cd "$AGENT_HOME"` works just as
+Most snippets start with `cd /home/tektonix`; `cd "$AGENT_HOME"` works just as
 well if you export it.
 
 Before any of them, the cheapest question: **is everything up?**

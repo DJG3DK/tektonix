@@ -238,7 +238,7 @@ agent. That is the point, not a limitation.
 
 ### M3 — The CLI *(the agent lives in the repo)*
 
-`3d-agent` run from inside a checkout, the way `claude` and `cursor` are. No
+`tektonix` run from inside a checkout, the way `claude` and `cursor` are. No
 dashboard, no nginx, no Postgres, no accounts. Same graph, same tools, same
 plan/verify loop.
 
@@ -246,8 +246,8 @@ The seams for this already exist, which is why it is M3 and not a rewrite:
 
 | What the CLI needs | Seam today | Work |
 |---|---|---|
-| Local persistence | `graph.open_checkpointer` / `open_store` are the only two constructors | Swap Postgres for SQLite under `.3d-agent/`. The store is opened with **no `index=`**, so there is no vector search to port — it is plain key-value plus filtered `asearch` |
-| A workspace | `provisioning.create_worktree` | A worktree under `.3d-agent/work`, so `live` and `sandbox` still differ and the whole task/branch/review model is untouched |
+| Local persistence | `graph.open_checkpointer` / `open_store` are the only two constructors | Swap Postgres for SQLite under `.tektonix/`. The store is opened with **no `index=`**, so there is no vector search to port — it is plain key-value plus filtered `asearch` |
+| A workspace | `provisioning.create_worktree` | A worktree under `.tektonix/work`, so `live` and `sandbox` still differ and the whole task/branch/review model is untouched |
 | Somewhere to render | `_stream_graph` needs only `store`, `graph` and a `_publish` sink | Pass a terminal renderer instead of the SSE bus |
 | Config | `load_config()` hard-requires `SMTP_*` and `AUTH_SECRET_KEY` via `os.environ[...]` | Make the server-only fields optional; a CLI has no email and no sessions |
 | Running commands | `sandbox.run_shell_sandboxed` (Docker per call) | Keep Docker where it exists. Add a host executor gated by the HumanInTheLoop middleware that `auto_approve_commands` already drives — that is precisely the CLI permission prompt, and it is already built |
@@ -259,7 +259,7 @@ touched three files. The host-vs-sandbox executor is real work and it lives
 here, in the row above.
 
 **Done when:** `pip install` (or a single binary), `cd` into any git repo,
-`3d-agent "fix the failing test"`, and watch it plan, edit, check and commit
+`tektonix "fix the failing test"`, and watch it plan, edit, check and commit
 on a task branch — with nothing running but the CLI itself.
 
 **Cost to be honest about:** this is the milestone with the most genuinely new

@@ -23,7 +23,7 @@ of its own. A failed run used to be indistinguishable from a healthy one.
 **The marker the card reads:**
 
 ```bash
-cat /home/3d-agent/data/last_consolidation.json
+cat /home/tektonix/data/last_consolidation.json
 ```
 
 ```json
@@ -33,14 +33,14 @@ cat /home/3d-agent/data/last_consolidation.json
 **The log the marker points at** — the last run's output, with its header:
 
 ```bash
-tail -40 /home/3d-agent/data/consolidation.log
+tail -40 /home/tektonix/data/consolidation.log
 ```
 
 **Is it scheduled at all?**
 
 ```bash
 crontab -l | grep consolidation
-# 15 4 * * * /home/3d-agent/scripts/consolidation-cron.sh
+# 15 4 * * * /home/tektonix/scripts/consolidation-cron.sh
 ```
 
 ---
@@ -53,15 +53,15 @@ Either the cron line is missing, or the wrapper has never completed.
 
 ```bash
 crontab -l | grep consolidation || echo "NOT SCHEDULED"
-# add it:  15 4 * * * /home/3d-agent/scripts/consolidation-cron.sh
+# add it:  15 4 * * * /home/tektonix/scripts/consolidation-cron.sh
 ```
 
 Then run it once by hand and watch it. It is safe to run at any time — it
 reads episodes and writes memory, it does not touch a repo:
 
 ```bash
-/home/3d-agent/scripts/consolidation-cron.sh; echo "exit $?"
-cat /home/3d-agent/data/last_consolidation.json
+/home/tektonix/scripts/consolidation-cron.sh; echo "exit $?"
+cat /home/tektonix/data/last_consolidation.json
 ```
 
 ### failed (exit N)
@@ -93,9 +93,9 @@ The file exists but does not parse. Look at it, then simply delete it and run
 the wrapper once; the card goes back to "never run" until that finishes.
 
 ```bash
-cat /home/3d-agent/data/last_consolidation.json
-rm /home/3d-agent/data/last_consolidation.json
-/home/3d-agent/scripts/consolidation-cron.sh; echo "exit $?"
+cat /home/tektonix/data/last_consolidation.json
+rm /home/tektonix/data/last_consolidation.json
+/home/tektonix/scripts/consolidation-cron.sh; echo "exit $?"
 ```
 
 ---

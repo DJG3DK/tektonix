@@ -24,7 +24,7 @@ from agent.tools.url_guard import UnsafeUrlError, _is_blocked_address, assert_pu
 
 @pytest.mark.parametrize("url", [
     "file:///etc/passwd",
-    "file:///home/3d-agent/.env",
+    "file:///home/tektonix/.env",
     "data:text/html,<script>x</script>",
     "gopher://internal/",
     "ftp://host/f",

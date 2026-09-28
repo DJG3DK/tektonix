@@ -19,7 +19,7 @@ from agent.tools.files import PathEscapeError, _resolve
 # read/write/edit all routed through _resolve(), which enforces containment.
 # describe_image used os.path.join(repo_root, path) instead -- and os.path.join
 # DISCARDS the root when the second argument is absolute. So
-# describe_image("/home/3d-agent/.env") read that file off the host and sent
+# describe_image("/home/tektonix/.env") read that file off the host and sent
 # its contents to the vision model. The mime check did not help: an
 # extensionless file guesses to None, which the code defaulted to "image/png",
 # so precisely the files worth stealing passed it. This tool runs host-side,

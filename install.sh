@@ -348,7 +348,7 @@ else
     say ""
 
     PG_DSN="${PG_DSN:-}"
-    [ -n "$PG_DSN" ] || PG_DSN=$(ask "Postgres DSN" "postgresql://postgres@localhost:5432/three_d_agent")
+    [ -n "$PG_DSN" ] || PG_DSN=$(ask "Postgres DSN" "postgresql://postgres@localhost:5432/tektonix")
     [ -n "$PG_DSN" ] || die "a Postgres DSN is required"
 
     OPENROUTER_API_KEY="${OPENROUTER_API_KEY:-}"
@@ -740,7 +740,7 @@ if [ -n "$DOMAIN" ] && [ "$DRY_RUN" != "1" ]; then
     done
 
     if [ "$NGINX_LAYOUT" = "debian" ]; then
-        VHOST=/etc/nginx/sites-available/3d-agent
+        VHOST=/etc/nginx/sites-available/tektonix
     else
         VHOST=/etc/nginx/conf.d/tektonix.conf
         sudo mkdir -p /etc/nginx/conf.d
@@ -821,14 +821,14 @@ NGINX
         sudo mkdir -p /var/www/html
         # conf.d is included directly; only Debian needs the enable symlink.
         if [ "$NGINX_LAYOUT" = "debian" ]; then
-            sudo ln -sfn "$VHOST" /etc/nginx/sites-enabled/3d-agent
+            sudo ln -sfn "$VHOST" /etc/nginx/sites-enabled/tektonix
         fi
         if sudo nginx -t >/dev/null 2>&1; then
             sudo systemctl reload nginx && ok "nginx vhost installed for $DOMAIN"
         else
             warn "nginx config test failed — run 'sudo nginx -t' to see why"
             if [ "$NGINX_LAYOUT" = "debian" ]; then
-                sudo rm -f /etc/nginx/sites-enabled/3d-agent
+                sudo rm -f /etc/nginx/sites-enabled/tektonix
             else
                 sudo rm -f "$VHOST"
             fi

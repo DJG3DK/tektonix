@@ -23,7 +23,7 @@ downstream, which is why it reads as a broken feature rather than a bad pin.
 reason the row failed; it is the single most useful field on this page:
 
 ```bash
-cd /home/3d-agent
+cd /home/tektonix
 python3 - <<'PY'
 import json, time, datetime
 rows = [json.loads(l) for l in open('services/model-router/logs/routing.jsonl') if l.strip()]
@@ -41,7 +41,7 @@ PY
 dashboard is a view of it:
 
 ```bash
-grep -A3 'model_name: agent-' /home/3d-agent/services/model-router/config.yaml | grep -E 'model_name|model:'
+grep -A3 'model_name: agent-' /home/tektonix/services/model-router/config.yaml | grep -E 'model_name|model:'
 ```
 
 **Is the router even up?**
@@ -77,7 +77,7 @@ After repinning, confirm with the next real call rather than assuming:
 ```bash
 python3 - <<'PY'
 import json
-rows = [json.loads(l) for l in open('/home/3d-agent/services/model-router/logs/routing.jsonl') if l.strip()]
+rows = [json.loads(l) for l in open('/home/tektonix/services/model-router/logs/routing.jsonl') if l.strip()]
 print(rows[-1]['requested_model'], '->', rows[-1].get('routed_model'), '| err:', rows[-1].get('error_detail'))
 PY
 ```
@@ -93,7 +93,7 @@ order shows up — so this reads both and matches whichever one names an alias.
 A naive string comparison of the two fields reports false alarms.)
 
 ```bash
-cd /home/3d-agent
+cd /home/tektonix
 .venv/bin/python - <<'PY'
 import json, time, yaml
 from collections import defaultdict

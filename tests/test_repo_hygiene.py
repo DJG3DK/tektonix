@@ -512,3 +512,19 @@ def test_the_checks_network_holds_the_two_throwaway_services_and_nothing_that_ma
     init = "./docker/checks-postgres/init.sh:/docker-entrypoint-initdb.d/init.sh:ro"
     assert init in (services["checks-postgres"].get("volumes") or []), "the bootstrap superuser password must be rotated at start"
     assert "ALTER USER" in (REPO / "docker/checks-postgres/init.sh").read_text()
+
+
+def test_the_bundle_is_named_tektonix_and_builds_the_sandbox_image_before_the_agent():
+    """2026-09-28, the first Windows install: containers came up as
+    three-d-agent-*, and the agent was unhealthy because its entrypoint was
+    still building the sandbox image when the health window closed."""
+    raw = (REPO / "docker-compose.yml").read_text()
+    compose = yaml.safe_load(raw)
+    assert compose["name"] == "tektonix"
+    code = "\n".join(ln for ln in raw.splitlines() if not ln.lstrip().startswith("#"))
+    assert "three-d-agent" not in code and "three_d_agent" not in code, "the old name survives outside a comment"
+    services = compose["services"]
+    assert services["agent"]["depends_on"]["sandbox-image"] == {"condition": "service_completed_successfully"}
+    assert services["sandbox-image"]["image"] == "tektonix-sandbox:latest"
+    assert services["sandbox-image"]["build"] == {"context": "./docker/agent-sandbox"}
+    assert services["agent"]["environment"]["REVIEW_CHECKS_NETWORK"] == "tektonix_checks"

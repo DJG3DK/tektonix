@@ -8,7 +8,11 @@
 # yet (a GitHub-only project is cloned onto this machine; there is no remote
 # execution).
 
-name: three-d-agent
+# The compose project name: every container, network and volume is
+# tektonix-<service>-1, tektonix_checks, tektonix_pgdata. An install made
+# before 2026-09-28 was three-d-agent; keep its data by putting
+# COMPOSE_PROJECT_NAME=three-d-agent and POSTGRES_DB=three_d_agent in .env.
+name: tektonix
 
 services:
   postgres:
@@ -24,13 +28,13 @@ services:
       # `sk-local-dev`) were the same in every installation.
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-}
       MODEL_ROUTER_KEY: ${MODEL_ROUTER_KEY:-}
-      POSTGRES_DB: three_d_agent
+      POSTGRES_DB: ${POSTGRES_DB:-tektonix}
     volumes:
       - pgdata:/var/lib/postgresql/data
       - bundlesecrets:/run/tektonix-secrets
       - ./docker/postgres/init-secrets.sh:/tektonix/init-secrets.sh:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U agent -d three_d_agent"]
+      test: ["CMD-SHELL", "pg_isready -U agent -d ${POSTGRES_DB:-tektonix}"]
       interval: 5s
       timeout: 3s
       retries: 20
@@ -69,11 +73,26 @@ services:
       - bundlesecrets:/run/tektonix-secrets:ro
     restart: unless-stopped
 
+  # The sandbox image every task and check runs in. Built here, with
+  # compose's own progress on screen, before the agent starts. It used to be
+  # built by the agent's entrypoint on first run, inside the agent's health
+  # window: on a slow first download the agent was declared unhealthy before
+  # it had started serving, and the whole stack failed (2026-09-28). The
+  # container itself does nothing and exits at once; the image is the point.
+  sandbox-image:
+    image: tektonix-sandbox:latest
+    build:
+      context: ./docker/agent-sandbox
+    entrypoint: ["true"]
+    restart: "no"
+
   agent:
     build:
       context: .
       dockerfile: docker/agent/Dockerfile
     depends_on:
+      sandbox-image:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       router:
@@ -86,6 +105,7 @@ services:
       # The entrypoint builds LANGGRAPH_PG_DSN and MODEL_ROUTER_KEY from these
       # generated files; set LANGGRAPH_PG_DSN yourself to use another database.
       POSTGRES_PASSWORD_FILE: /run/tektonix-secrets/postgres_password
+      POSTGRES_DB: ${POSTGRES_DB:-tektonix}
       MODEL_ROUTER_KEY_FILE: /run/tektonix-secrets/model_router_key
       MODEL_ROUTER_URL: http://router:4001
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:?set OPENROUTER_API_KEY in .env}
@@ -129,7 +149,7 @@ services:
       # no password -- each run gets its own plain role). All five unset
       # means the reviewer refuses the database checks, as it did before
       # 2026-09-27.
-      REVIEW_CHECKS_NETWORK: three-d-agent_checks
+      REVIEW_CHECKS_NETWORK: tektonix_checks
       REVIEW_CHECKS_POSTGRES_URL: postgresql://checks@checks-postgres:5432/postgres
       REVIEW_CHECKS_REDIS_URL: redis://checks-redis:6379
       REVIEW_CHECKS_POSTGRES_CONTAINER: tektonix-checks-postgres

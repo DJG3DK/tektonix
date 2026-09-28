@@ -136,7 +136,7 @@ async def run_frontend_build(repo_root: str) -> dict:
     check-mode tsc tolerates -- three TS6133 unused-variable errors shipped
     through the whole gate, review, and the operator's approval, then broke
     the build AFTER the merge, leaving live mid-deploy (2026-08-26, the 2FA
-    task). Same lesson as 3d-agent's own frontend a week earlier: the build
+    task). Same lesson as this dashboard's own frontend a week earlier: the build
     config is the stricter contract, so the gate must run the build.
 
     Skips cleanly (ran=False, ok=True) when the repo has no frontend/ with a

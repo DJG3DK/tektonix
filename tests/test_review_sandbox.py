@@ -350,7 +350,7 @@ def test_a_build_starts_once_and_only_for_the_default_image_with_a_context(bundl
 # --- the database checks, in the sandbox (2026-09-27) ---------------------------
 
 def _db_env(monkeypatch, tmp_path):
-    monkeypatch.setenv(rs.CHECKS_NETWORK_ENV, "three-d-agent_checks")
+    monkeypatch.setenv(rs.CHECKS_NETWORK_ENV, "tektonix_checks")
     monkeypatch.setenv(rs.CHECKS_POSTGRES_ENV, "postgresql://checks@checks-postgres:5432/postgres")
     monkeypatch.setenv(rs.CHECKS_REDIS_ENV, "redis://checks-redis:6379")
     monkeypatch.setenv(rs.CHECKS_POSTGRES_CONTAINER_ENV, "tektonix-checks-postgres")
@@ -429,7 +429,7 @@ def test_a_failing_step_stops_the_rest_and_the_database_is_still_dropped(bundle,
 def test_the_checks_network_is_server_config_and_a_request_cannot_choose_it(bundle, monkeypatch):
     _db_env(monkeypatch, bundle["tmp"])
     argv = _argv(bundle, network=rs.CHECKS_NETWORK)
-    assert argv[argv.index("--network") + 1] == "three-d-agent_checks"
+    assert argv[argv.index("--network") + 1] == "tektonix_checks"
     c = _client()
     r = c.post("/api/internal/review-sandbox/run", json=_body(bundle, network="checks"),
                headers={"X-Review-Secret": "the-secret"})

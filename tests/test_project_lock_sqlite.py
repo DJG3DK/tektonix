@@ -176,7 +176,7 @@ async def test_two_state_directories_do_not_contend(tmp_path):
     A Postgres advisory lock is global to a DATABASE: every process pointed
     at it contends for one claim on a project name. This is global to a
     STATE DIRECTORY. Two checkouts of one repository with their own
-    .3d-agent directories will both run, which is correct for the CLI's
+    .tektonix directories will both run, which is correct for the CLI's
     one-checkout-per-directory shape and is NOT what the server's lock
     promises.
     """

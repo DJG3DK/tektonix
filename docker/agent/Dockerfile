@@ -63,7 +63,7 @@ ENV PYTHONUNBUFFERED=1 \
     AGENT_PROJECT_ROOTS=/projects
 
 EXPOSE 8100
-HEALTHCHECK --interval=15s --timeout=5s --start-period=40s --retries=6 \
+HEALTHCHECK --interval=15s --timeout=5s --start-period=180s --retries=6 \
     CMD curl -fsS http://127.0.0.1:8100/api/health || exit 1
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

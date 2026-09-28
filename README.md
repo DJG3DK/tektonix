@@ -750,7 +750,7 @@ Order matters, because each layer depends on the one before it:
 
 ```bash
 # 0. Postgres — the checkpointer and store both need it
-createdb three_d_agent          # then put the DSN in .env
+createdb tektonix               # then put the DSN in .env
 
 # 1. The sandbox image — the agent's bash/edit tools run inside this container.
 #    Without it, the FIRST tool call of the first task fails.

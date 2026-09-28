@@ -59,7 +59,7 @@ export function ApiKeysPanel() {
       setPendingRestart([]);
       setSavedNote("Services restarted.");
     } catch {
-      // Restarting 3d-agent kills this very request — a dropped connection here
+      // Restarting the agent kills this very request — a dropped connection here
       // is the expected outcome, not a failure worth alarming about.
       setPendingRestart([]);
       setSavedNote("Restart issued. If the agent itself restarted, reload the page.");

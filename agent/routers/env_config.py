@@ -72,7 +72,7 @@ async def restart_services(req: SaveEnvKeysRequest, user: User = Depends(require
         raise HTTPException(status_code=400, detail="no known services named")
     out = {}
     for n in names:
-        # 3d-agent restarting kills this request mid-flight, which is expected —
+        # The agent restarting kills this request mid-flight, which is expected —
         # the client treats a dropped connection on its own restart as success.
         proc = await _a.create_subprocess_exec(
             "pm2", "restart", n, stdout=_a.subprocess.PIPE, stderr=_a.subprocess.STDOUT)

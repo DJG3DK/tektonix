@@ -93,7 +93,7 @@ def test_the_kick_spawns_a_detached_cartographer(monkeypatch, tmp_path):
     # open() on the real log path works on this host and Popen is faked, so
     # nothing actually runs.
     rg._refresh_codebase_map("my-service")
-    # Paths follow the installation (agent/paths.py), not a fixed /home/3d-agent.
+    # Paths follow the installation (agent/paths.py), not a fixed /home/tektonix.
     assert spawned["cmd"][-1] == "my-service"
     assert spawned["cmd"][-2].endswith("scripts/run_cartographer.py")
     assert spawned["kw"]["start_new_session"] is True

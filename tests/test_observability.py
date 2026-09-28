@@ -29,12 +29,12 @@ def test_redacts_key_value_pairs_with_suspicious_key_names():
 
 
 def test_redacts_postgres_dsn_password_but_keeps_rest_of_dsn():
-    dsn = "postgresql://three_d_agent:ffffffffffffffffffffffffffffffffffffffffffffffff@localhost:5432/three_d_agent"
+    dsn = "postgresql://tektonix:ffffffffffffffffffffffffffffffffffffffffffffffff@localhost:5432/tektonix"
     result = _redact(dsn)
     assert "ffffffffffffffffffffffffffffffffffffffffffffffff" not in result
     assert "[REDACTED]" in result
     # Host/port/dbname aren't secrets -- keep them, only the password is redacted.
-    assert "localhost:5432/three_d_agent" in result
+    assert "localhost:5432/tektonix" in result
 
 
 def test_redacts_sk_style_key_even_without_a_suggestive_key_name():

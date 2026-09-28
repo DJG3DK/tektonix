@@ -254,7 +254,7 @@ def make_agent_tools(
             return _NO_PATH
         # _resolve (same guard read/write/edit use), NOT os.path.join: join
         # DISCARDS repo_root entirely when handed an absolute path, so
-        # describe_image("/home/3d-agent/.env") read that file straight off
+        # describe_image("/home/tektonix/.env") read that file straight off
         # the host and shipped its contents to the vision model. `..` walked
         # out just as easily. This tool runs host-side (unlike bash, which is
         # containerised), so there was no second boundary behind it.

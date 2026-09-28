@@ -44,7 +44,7 @@ The router logs one line per completed model call. If the task is really
 working, that file is moving.
 
 ```bash
-cd /home/3d-agent
+cd /home/tektonix
 python3 - <<'PY'
 import json, time, datetime
 rows = [json.loads(l) for l in open('services/model-router/logs/routing.jsonl') if l.strip()]
@@ -70,7 +70,7 @@ in flight, that record can outlive the process that was driving it. The
 dashboard marks this as **orphaned** when it can tell; here is the direct way:
 
 ```bash
-cd /home/3d-agent
+cd /home/tektonix
 set -a; . ./.env; set +a
 timeout 60 .venv/bin/python - <<'PY'
 import asyncio
@@ -119,7 +119,7 @@ shows the prompt inline; a task that has been sitting there since before you
 looked is easy to scroll past.
 
 ```bash
-cd /home/3d-agent
+cd /home/tektonix
 set -a; . ./.env; set +a
 timeout 60 .venv/bin/python - <<'PY'
 import asyncio, json
@@ -210,7 +210,7 @@ grep 'locked by another process' /root/.pm2/logs/tektonix-error.log | tail -3
 ```
 
 ```bash
-cd /home/3d-agent; set -a; . ./.env; set +a
+cd /home/tektonix; set -a; . ./.env; set +a
 psql "$LANGGRAPH_PG_DSN" -c "select pid, classid, objid from pg_locks where locktype='advisory'"
 ```
 
@@ -238,7 +238,7 @@ Both now have guards (prompt guidance, and the workspace salvage in
 **Check** what it is actually touching, rather than whether it is moving:
 
 ```bash
-cd /home/3d-agent
+cd /home/tektonix
 .venv/bin/python - <<'EOF'
 import asyncio, json, sys
 sys.path.insert(0, ".")

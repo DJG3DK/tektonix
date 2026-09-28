@@ -44,7 +44,7 @@ accounts.
 ## Taking a backup
 
 ```bash
-cd /home/3d-agent
+cd /home/tektonix
 ./scripts/backup.sh                 # writes backups/agent-<UTC timestamp>.dump
 ./scripts/backup.sh /mnt/elsewhere  # or somewhere off this box
 ```
@@ -57,7 +57,7 @@ the day you need it. It keeps the last 14 by default (`BACKUP_KEEP`).
 Nightly, next to the existing jobs:
 
 ```
-30 3 * * * /home/3d-agent/scripts/backup.sh >> /home/3d-agent/data/backup.log 2>&1
+30 3 * * * /home/tektonix/scripts/backup.sh >> /home/tektonix/data/backup.log 2>&1
 ```
 
 **Put a copy somewhere else.** A dump sitting on the same disk as the database

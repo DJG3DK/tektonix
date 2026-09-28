@@ -46,9 +46,9 @@ if [ -z "$MODEL_ROUTER_KEY" ] && [ -n "$MODEL_ROUTER_KEY_FILE" ]; then
 fi
 if [ -z "$LANGGRAPH_PG_DSN" ] && [ -n "$POSTGRES_PASSWORD_FILE" ]; then
     LANGGRAPH_PG_DSN=$(python -c "
-import sys, urllib.parse
+import os, sys, urllib.parse
 pw = open(sys.argv[1]).read().strip()
-print('postgresql://agent:' + urllib.parse.quote(pw, safe='') + '@postgres:5432/three_d_agent')
+print('postgresql://agent:' + urllib.parse.quote(pw, safe='') + '@postgres:5432/' + os.environ.get('POSTGRES_DB', 'tektonix'))
 " "$POSTGRES_PASSWORD_FILE")
     export LANGGRAPH_PG_DSN
 fi

@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+### Everything the bundle creates is called tektonix
+
+Containers were `three-d-agent-agent-1`, the network `three-d-agent_checks`,
+the database `three_d_agent`: the working name from before the product had
+one. The compose project is `tektonix` now, and so is everything it names.
+An install made before this keeps its data with two lines in `.env`:
+`COMPOSE_PROJECT_NAME=three-d-agent` and `POSTGRES_DB=three_d_agent`. The
+host installer's nginx site and the example DSN follow suit, and the docs
+say `/home/tektonix` where they meant "where install.sh put it".
+
+### The sandbox image is built before the agent starts
+
+On the first Windows install the agent was declared unhealthy and the stack
+failed. The agent's entrypoint built the sandbox image on first run, inside
+the health window; on a slow first download the window closed before the
+agent had started serving. Compose builds the image itself now, with its
+own progress on screen, and the agent waits for that; the health window is
+wider too, for a slow first database start.
+
 ### The installer says an empty projects folder is fine
 
 Its question read as if you needed repositories on the machine already. The

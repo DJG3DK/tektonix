@@ -150,7 +150,7 @@ or answer the **Remote access** prompt when running interactively. It will:
   certificate for a domain pointing elsewhere burns a Let's Encrypt rate-limit
   slot and fails with a confusing message about challenge validation;
 - install nginx and certbot if missing;
-- write `/etc/nginx/sites-available/3d-agent` with the settings this app needs
+- write `/etc/nginx/sites-available/tektonix` with the settings this app needs
   (below);
 - run `certbot --nginx`, which adds the TLS block, the HTTP→HTTPS redirect and
   an automatic renewal timer.
@@ -323,7 +323,7 @@ Six files, one database, two directories. Nothing is duplicated except the two
 pairs that must agree, and those are marked.
 
 ```
-3d-agent/
+tektonix/
 ├── .env                                   the AGENT's own secrets            600
 │     LANGGRAPH_PG_DSN   AUTH_SECRET_KEY   SMTP_*   ADMIN_EMAIL
 │     MODEL_ROUTER_KEY ─────────────────────────┐  must match ──┐
@@ -722,7 +722,7 @@ token. Set this up on day one, not after the first loss:
 Nightly:
 
 ```
-30 3 * * * /home/3d-agent/scripts/backup.sh >> /home/3d-agent/data/backup.log 2>&1
+30 3 * * * /home/tektonix/scripts/backup.sh >> /home/tektonix/data/backup.log 2>&1
 ```
 
 Keep `.env` with the dump — `AUTH_SECRET_KEY` is what decrypts the 2FA secrets
