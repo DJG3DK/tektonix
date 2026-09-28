@@ -336,6 +336,20 @@ KNOBS: dict[str, dict] = {
         "env": None,
         "group": "Model & sandbox timeouts",
     },
+    "ci_wait_timeout_s": {
+        "label": "GitHub Actions wait timeout",
+        "help": (
+            "How long an approved commit waits for the project's GitHub Actions runs before "
+            "the task escalates instead of merging. Main moves only on a green run; resuming "
+            "the escalated task waits again."
+        ),
+        "unit": "s",
+        "default": 3600.0,
+        "min": 300.0,
+        "max": 14400.0,
+        "env": None,
+        "group": "Model & sandbox timeouts",
+    },
     "auto_heal_attempts": {
         # "0 = off" in the label, not only the help: the panel shows help as a
         # hover tooltip, which a phone never shows, and this is the one global

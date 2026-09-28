@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+### Main moves only on a green GitHub Actions run
+
+After the review gate and the operator's approval, a project that ships by
+pushing no longer fast-forwards its base branch at once. It pushes the task
+branch, opens a pull request against the base (which starts `on:
+pull_request` workflows), and waits for every Actions run on that exact
+commit. Green merges and pushes, and GitHub closes the pull request as
+merged. Red sends the failing jobs and steps back to the agent, and the fix
+needs its own approval. A wait that times out (`ci_wait_timeout_s`, one hour
+by default) or a token that cannot read Actions escalates unmerged, and a
+resume waits again. Skipped, with a log line, when the commit has no
+workflows, the origin is not GitHub, the project has no token, or the
+project sets `"ci_gate": false` in projects.json. A merge whose push to
+GitHub failed now says so on its summary line instead of "merged and
+deployed".
+
+### Staged work is a diff
+
+A final commit that failed after staging left the change in the index,
+where the gate's plain `git diff` read empty and ended the task as "no
+changes needed". The gate measures against HEAD.
+
 ### The agent's commits are yours
 
 `GIT_USER_NAME` and `GIT_USER_EMAIL` name the author and committer of

@@ -194,9 +194,14 @@ def test_the_push_the_file_asks_for_has_nothing_to_push_with(poisoned_repo, monk
 
     argv = seen["argv"]
     env_values = [argv[i + 1] for i, a in enumerate(argv) if a == "-e"]
+    # The git identity rides along when the operator set one (dc7a6ca, so a
+    # commit in the sandbox works): a name and an address, which authenticate
+    # nothing. Whether it is set depends on the machine running this.
+    identity = [v for v in env_values if v.split("=", 1)[0] in sandbox._GIT_IDENTITY_VARS]
     # DJANGO_TEST_PROCESSES: the container's own CPU count, so a test runner
     # does not size itself from the host's (sandbox.SANDBOX_TEST_ENV). No secret.
-    assert sorted(env_values) == ["CI=true", "DEBIAN_FRONTEND=noninteractive", "DJANGO_TEST_PROCESSES=2"], \
+    assert sorted(set(env_values) - set(identity)) == \
+        ["CI=true", "DEBIAN_FRONTEND=noninteractive", "DJANGO_TEST_PROCESSES=2"], \
         f"the container was handed more than it needs: {env_values}"
 
     mounts = [argv[i + 1] for i, a in enumerate(argv) if a == "-v"]

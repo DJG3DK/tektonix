@@ -429,8 +429,7 @@ async def ship_as_pull_request(project: str, branch: str, sha: str, title: str) 
     outcomes identically apart from what it tells the operator.
     """
     from agent.config import PROJECTS, load_config  # noqa: PLC0415
-    from agent.tools.git import _git, token_credential_args, token_env  # noqa: PLC0415
-    from agent.tools.shell import ShellTimeout  # noqa: PLC0415
+    from agent.tools.git import _git  # noqa: PLC0415
     from agent import github_repos  # noqa: PLC0415
     from agent.tools import github_tools  # noqa: PLC0415
 
@@ -495,41 +494,12 @@ async def ship_as_pull_request(project: str, branch: str, sha: str, title: str) 
         return {"ok": False, "stage": "ship",
                 "error": f"{project} has no GitHub origin to open a pull request against"}
 
-    # The push has to authenticate, and how depends on what the remote is.
-    #
-    # A project cloned from a URL has a plain https origin with no credentials
-    # on it -- the token is deliberately not written into .git/config, which
-    # anyone who can read the checkout can read. So the token reaches this
-    # one push through a credential helper reading the child's environment
-    # (agent/tools/git.py, token_credential_args) -- never the command line,
-    # where every local user can read it.
-    #
-    # A project with an SSH origin already has a deploy key configured through
-    # core.sshCommand, so the plain remote name is right and adding a token
-    # would do nothing.
+    # The push authenticates by what the remote is: see push_to_github.
     configured = await _git("config --local --get remote.origin.url", live, timeout=15)
     origin = configured["output"].strip() if configured["ok"] else ""
-    if origin.startswith("https://"):
-        push_args = [*token_credential_args(), "push", "--quiet", f"https://github.com/{slug}.git", branch]
-        push_env = token_env(token)
-    else:
-        push_args = ["push", "--quiet", "origin", branch]
-        push_env = None
-
-    try:
-        push = await _git(shlex.join(push_args), live, timeout=300, extra_env=push_env)
-    except ShellTimeout:
-        return {"ok": False, "stage": "ship", "error": f"could not push {branch}: timed out after 300s"}
+    push = await push_to_github(live, origin, slug, branch, token, name=branch)
     if not push["ok"]:
-        # git echoes the URL it was given, token and all.
-        detail = push["output"].replace(token, "***")[:300]
-        if _WORKFLOW_SCOPE_REFUSAL in push["output"]:
-            return {"ok": False, "stage": "ship",
-                    "reason": "workflow_scope",
-                    "error": _workflow_scope_hint(token, slug, branch),
-                    "git": detail}
-        return {"ok": False, "stage": "ship",
-                "error": f"could not push {branch}: {detail}"}
+        return {"stage": "ship", **push}
 
     try:
         pr = await github_repos.open_pull_request(
@@ -542,3 +512,42 @@ async def ship_as_pull_request(project: str, branch: str, sha: str, title: str) 
 
     return {"ok": True, "shipped": "pull_request", "pull_request": pr["url"],
             "number": pr["number"], "branch": branch}
+
+
+async def push_to_github(live: str, origin: str, slug: str, refspec: str, token: str,
+                         name: str | None = None) -> dict:
+    """Push one refspec to the project's GitHub origin: {"ok": True} or
+    {"ok": False, "error": ..., ["reason", "git"]}.
+
+    How it authenticates depends on the remote. A project cloned from a URL has
+    a plain https origin with no credentials on it -- the token is deliberately
+    not written into .git/config, which anyone who can read the checkout can
+    read. So the token reaches this one push through a credential helper
+    reading the child's environment (agent/tools/git.py,
+    token_credential_args) -- never the command line, where every local user
+    can read it. An SSH origin already has a deploy key configured through
+    core.sshCommand, so the plain remote name is right and a token would do
+    nothing.
+    """
+    from agent.tools.git import _git, token_credential_args, token_env  # noqa: PLC0415
+    from agent.tools.shell import ShellTimeout  # noqa: PLC0415
+
+    name = name or refspec
+    if origin.startswith("https://"):
+        push_args = [*token_credential_args(), "push", "--quiet", f"https://github.com/{slug}.git", refspec]
+        push_env = token_env(token)
+    else:
+        push_args = ["push", "--quiet", "origin", refspec]
+        push_env = None
+    try:
+        push = await _git(shlex.join(push_args), live, timeout=300, extra_env=push_env)
+    except ShellTimeout:
+        return {"ok": False, "error": f"could not push {name}: timed out after 300s"}
+    if not push["ok"]:
+        # git echoes the URL it was given, token and all.
+        detail = push["output"].replace(token, "***")[:300]
+        if _WORKFLOW_SCOPE_REFUSAL in push["output"]:
+            return {"ok": False, "reason": "workflow_scope",
+                    "error": _workflow_scope_hint(token, slug, name), "git": detail}
+        return {"ok": False, "error": f"could not push {name}: {detail}"}
+    return {"ok": True}

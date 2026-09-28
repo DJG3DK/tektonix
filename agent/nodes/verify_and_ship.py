@@ -22,8 +22,10 @@ What a pass does, in order (the iteration ceiling is checked first):
      hand off to the review service. NEEDS_FIXES loops back with the findings;
      the reviewer's own circuit breaker escalates, except on a benchmark,
      which ships the fix as disputed. READY parks the task for the operator's
-     final look when require_merge_review is on, then merges and deploys or
-     opens a pull request -> terminal.
+     final look when require_merge_review is on. A push project then waits
+     for its GitHub Actions on the commit (agent/tools/github_ci.py: red
+     loops back, green merges, deploys and pushes); a pr project opens a
+     pull request -> terminal.
 
 An episode (agent/episodes.py) is written at every terminal outcome --
 shipped, done-no-changes, escalated -- and not while parked on an operator
@@ -70,6 +72,7 @@ from agent.tools.review_gate import (
     trigger_check,
     wait_for_review,
 )
+from agent.tools.github_ci import describe_failures, gate_on_actions
 from agent.project_checks import autodetect_checks_if_none
 from agent.outer_state import AgentState
 from agent.nodes import diff_patterns
@@ -259,6 +262,51 @@ def _loop_back(reason: str, feedback: str, state: AgentState, no_diff_streak: in
             "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ"),
         }],
     }
+
+
+def _stream_phase(summary: str, phase: str) -> None:
+    """Say what the gate is waiting on before a long quiet stretch."""
+    try:
+        from langgraph.config import get_stream_writer
+        get_stream_writer()({"type": "log_entry", "entry": {
+            "node": "verify_and_ship", "step_id": None, "summary": summary, "detail": "",
+            "cost_usd": 0.0, "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "phase": phase, "expected_seconds": None,
+        }})
+    except Exception:  # noqa: BLE001 -- outside a graph run there is no stream
+        pass
+
+
+def _ci_log_entry(ci: dict, sha: str) -> dict:
+    if ci.get("skipped"):
+        summary = f"GitHub Actions gate skipped: {ci['skipped']}"
+    elif ci["ok"]:
+        summary = f"GitHub Actions passed on {sha[:12]}: {', '.join(ci.get('passed') or [])}"
+    elif ci.get("reason") == "failed":
+        summary = f"GitHub Actions FAILED on {sha[:12]} -- not merged, back to the agent"
+    else:
+        summary = f"GitHub Actions gate stopped ({ci.get('reason')}) -- not merged"
+    detail = describe_failures(ci["failed"]) if ci.get("failed") else str(ci.get("error") or "")
+    if ci.get("pull_request"):
+        detail = f"{ci['pull_request']}\n{detail}".strip()
+    return {"node": "verify_and_ship", "step_id": None, "summary": summary, "detail": detail[:2000],
+            "cost_usd": 0.0, "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ")}
+
+
+def _merged_summary(deployed: dict) -> str:
+    """What a successful merge did with GitHub, said on the line the operator
+    reads. The push is best-effort after the merge, and a failure used to live
+    only in the entry's detail: the task read "merged and deployed" with origin
+    still behind."""
+    push = deployed.get("origin_push") or (deployed.get("merge") or {}).get("push")
+    if not push or push.get("skipped"):
+        return "merged and deployed"
+    if not push.get("ok"):
+        why = str(push.get("reason") or push.get("error") or "unknown").strip()[:200]
+        return f"merged locally, but GitHub was NOT updated: {why}"
+    restart = deployed.get("restart") or {}
+    deployed_something = restart.get("built") or restart.get("restarted")
+    return "merged, deployed and pushed to GitHub" if deployed_something else "merged and pushed to GitHub"
 
 
 def _done_no_changes(state: AgentState) -> dict:
@@ -1047,10 +1095,43 @@ async def _review_and_deploy(state: AgentState, repo: str, sha: str) -> dict:
     #
     # The gate is identical either way: this is only what happens after a pass.
     ship_mode = (PROJECTS.get(repo) or {}).get("ship", "push")
+    title = state["goal"].splitlines()[0][:72]
+    if ship_mode != "pr":
+        # The base branch moves only on a green GitHub Actions run for this
+        # exact commit (agent/tools/github_ci.py). Red goes back to the agent;
+        # anything else that stops the wait escalates with the approval kept,
+        # so a resume comes straight back here.
+        _stream_phase(f"waiting for GitHub Actions on {sha[:12]} before merging", "ci")
+        ci = await gate_on_actions(repo, branch, sha, title, timeout=_rs.as_int("ci_wait_timeout_s"))
+        ci_entry = _ci_log_entry(ci, sha)
+        if not ci["ok"] and ci.get("reason") == "failed":
+            return {
+                "iteration_count": state["iteration_count"] + 1,
+                "pending_feedback": (
+                    f"GitHub Actions failed on {sha[:12]}, so it was NOT merged. The review gate and "
+                    f"the operator had passed it; CI did not:\n\n{describe_failures(ci['failed'])}\n\n"
+                    f"Reproduce each failing step locally (the workflow files are in .github/workflows/), "
+                    f"fix the cause, and let this gate review the new commit."
+                ),
+                "no_diff_streak": 0,
+                "committed_sha": sha,
+                # A fix is a new commit, and a new commit needs its own approval.
+                "merge_approved_sha": None,
+                "pending_merge_approval": None,
+                "review_gate_result": review,
+                "execution_log": [log_entry, ci_entry],
+                "stale_pending_review_streak": 0,
+            }
+        if not ci["ok"]:
+            esc = _escalate(f"not merged -- GitHub Actions gate: {ci.get('error') or ci.get('reason')}")
+            return {**esc, "committed_sha": sha, "review_gate_result": review,
+                    "execution_log": [log_entry, ci_entry, *esc["execution_log"]]}
+        logged = [log_entry, ci_entry]
+    else:
+        logged = [log_entry]
+
     if ship_mode == "pr":
-        from agent.tools.git import task_branch_name
-        branch = task_branch_name(state["task_id"])
-        deployed = await ship_as_pull_request(repo, branch, sha, state["goal"].splitlines()[0][:72])
+        deployed = await ship_as_pull_request(repo, branch, sha, title)
     else:
         deployed = await merge_and_deploy(repo, branch)
     # Say what actually happened. "merged and deployed" after a pull request
@@ -1067,7 +1148,7 @@ async def _review_and_deploy(state: AgentState, repo: str, sha: str) -> dict:
     elif deployed.get("shipped") == "pull_request":
         ship_summary = f"pull request opened: {deployed.get('pull_request', '')}"
     else:
-        ship_summary = "merged and deployed"
+        ship_summary = _merged_summary(deployed)
     deploy_entry = {
         "node": "verify_and_ship",
         "step_id": None,
@@ -1110,7 +1191,7 @@ async def _review_and_deploy(state: AgentState, repo: str, sha: str) -> dict:
                 "committed_sha": sha,
                 "merge_approved_sha": None,
                 "review_gate_result": review,
-                "execution_log": [log_entry, deploy_entry],
+                "execution_log": [*logged, deploy_entry],
                 "stale_pending_review_streak": 0,
             }
         if not rb.get("rebased"):
@@ -1118,7 +1199,7 @@ async def _review_and_deploy(state: AgentState, repo: str, sha: str) -> dict:
                 "committed_sha": sha,
                 "merge_approved_sha": None,
                 "review_gate_result": review,
-                "execution_log": [log_entry, deploy_entry],
+                "execution_log": [*logged, deploy_entry],
                 **_escalate(
                     "live moved on and the branch could not be rebased onto it: "
                     f"{rb.get('output') or rb.get('reason') or 'unknown'}"
@@ -1133,7 +1214,7 @@ async def _review_and_deploy(state: AgentState, repo: str, sha: str) -> dict:
         print(f"[verify] {repo}: live moved, rebased {sha[:12]} -> {new_sha[:12]}.{same}")
         return {
             **await _review_and_deploy(state, repo, new_sha),
-            "execution_log": [log_entry, deploy_entry],
+            "execution_log": [*logged, deploy_entry],
         }
 
     if not deployed["ok"]:
@@ -1164,7 +1245,7 @@ async def _review_and_deploy(state: AgentState, repo: str, sha: str) -> dict:
                 # will be a NEW commit needing its own fresh approval anyway.
                 "merge_approved_sha": None,
                 "review_gate_result": review,
-                "execution_log": [log_entry, deploy_entry],
+                "execution_log": [*logged, deploy_entry],
                 "stale_pending_review_streak": 0,
             }
         # The MESSAGE, not the repr of the dict carrying it. Escalation text is
@@ -1185,7 +1266,7 @@ async def _review_and_deploy(state: AgentState, repo: str, sha: str) -> dict:
             "committed_sha": sha,
             "merge_approved_sha": None,  # same reasoning as the build branch above
             "review_gate_result": review,
-            "execution_log": [log_entry, deploy_entry],
+            "execution_log": [*logged, deploy_entry],
             **_escalate(f"{stage} failed: {why}"),
         }
 
@@ -1194,7 +1275,7 @@ async def _review_and_deploy(state: AgentState, repo: str, sha: str) -> dict:
     # no checks (its built-ins can carry checks projects.json cannot see);
     # never on a failed merge/deploy above. Never raises -- an exception here
     # would turn a shipped task into an escalation via the outer try/except.
-    shipped_log = [log_entry, deploy_entry]
+    shipped_log = [*logged, deploy_entry]
     checks_entry = await autodetect_checks_if_none(repo)
     if checks_entry is not None:
         shipped_log.append(checks_entry)
