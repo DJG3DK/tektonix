@@ -76,11 +76,42 @@ pub struct Prefs {
     pub auto_update: bool,
     /// Count pre-releases (a dash in the tag) as releases.
     pub include_prereleases: bool,
+    /// "console" or "panel": what the window showed last, so a restart
+    /// (an update's, most of all) comes back to it.
+    #[serde(default)]
+    pub last_page: String,
 }
 
 impl Default for Prefs {
     fn default() -> Self {
-        Prefs { auto_update: true, include_prereleases: false }
+        Prefs { auto_update: true, include_prereleases: false, last_page: String::new() }
+    }
+}
+
+/// Record what the window shows; nothing else in the preferences moves.
+pub fn remember_page(app: &AppHandle, page: &str) {
+    let mut prefs = read_prefs(app);
+    if prefs.last_page != page {
+        prefs.last_page = page.to_string();
+        let _ = write_prefs(app, &prefs);
+    }
+}
+
+/// A release-candidate app counts release candidates as releases whatever
+/// the preference says: its next update IS one. 2026-09-29: with the box
+/// unticked, an rc app compared itself to the last stable release and said
+/// it was up to date, forever.
+pub fn wants_prereleases(app: &AppHandle) -> bool {
+    read_prefs(app).include_prereleases || release_tag(app).contains('-')
+}
+
+/// Whether someone is using the window right now: it is shown and has the
+/// focus. An update never restarts the app under a person's hands.
+pub fn window_in_use(app: &AppHandle) -> bool {
+    use tauri::Manager;
+    match app.get_webview_window("main") {
+        Some(w) => w.is_visible().unwrap_or(false) && w.is_focused().unwrap_or(false),
+        None => false,
     }
 }
 
@@ -106,7 +137,14 @@ pub fn write_prefs(app: &AppHandle, prefs: &Prefs) -> Result<Prefs, String> {
 
 #[derive(Serialize, Clone)]
 pub struct UpdateInfo {
+    /// The stack's recorded release; empty when nothing was recorded.
     pub installed: String,
+    /// Whether that record is proven by the local image (stack.rs Version).
+    pub stack_verified: bool,
+    /// This app's own release.
+    pub app_version: String,
+    /// The release the stack should be on: the newer of GitHub's latest
+    /// and this app's own.
     pub latest: String,
     pub available: bool,
     pub url: String,
@@ -490,12 +528,20 @@ pub async fn latest_release(include_prereleases: bool) -> Result<Release, String
 }
 
 pub async fn check_update(app: &AppHandle) -> Result<UpdateInfo, String> {
-    let latest = latest_release(read_prefs(app).include_prereleases).await?;
-    let installed = installed_version(app).unwrap_or_default();
+    let latest = latest_release(wants_prereleases(app)).await?;
+    let mine = release_tag(app);
+    let record = read_version(app);
+    let local = local_agent_image_id().await;
+    let proven = record.as_ref().is_some_and(|r| record_is_proven(r, local.as_deref()));
+    let installed = record.map(|r| r.tag).unwrap_or_default();
+    // An app built ahead of GitHub's newest listing still wants its own.
+    let target = if newer_than(&mine, &latest.tag_name) { mine.clone() } else { latest.tag_name.clone() };
     Ok(UpdateInfo {
-        available: !installed.is_empty() && newer_than(&latest.tag_name, &installed),
+        available: !proven || newer_than(&target, &installed),
         installed,
-        latest: latest.tag_name,
+        stack_verified: proven,
+        app_version: mine,
+        latest: target,
         url: latest.html_url,
         notes: latest.body,
     })
@@ -614,7 +660,7 @@ pub struct AppUpdate {
 /// Is a newer app than this one attached to the newest release?
 pub async fn check_app_update(app: &AppHandle) -> Result<AppUpdate, String> {
     use tauri_plugin_updater::UpdaterExt;
-    let latest = latest_release(read_prefs(app).include_prereleases).await?;
+    let latest = latest_release(wants_prereleases(app)).await?;
     let endpoint: tauri::Url = updater_endpoint(&latest.tag_name).parse().map_err(|e: url::ParseError| e.to_string())?;
     let updater = app.updater_builder().endpoints(vec![endpoint]).map_err(|e| e.to_string())?
         .build().map_err(|e| e.to_string())?;
@@ -628,7 +674,7 @@ pub async fn check_app_update(app: &AppHandle) -> Result<AppUpdate, String> {
 /// Download and install the newest app, then restart into it.
 pub async fn install_app_update(app: &AppHandle) -> Result<(), String> {
     use tauri_plugin_updater::UpdaterExt;
-    let latest = latest_release(read_prefs(app).include_prereleases).await?;
+    let latest = latest_release(wants_prereleases(app)).await?;
     let endpoint: tauri::Url = updater_endpoint(&latest.tag_name).parse().map_err(|e: url::ParseError| e.to_string())?;
     let updater = app.updater_builder().endpoints(vec![endpoint]).map_err(|e| e.to_string())?
         .build().map_err(|e| e.to_string())?;
@@ -663,8 +709,17 @@ pub async fn auto_update_pass(app: &AppHandle) -> Result<String, String> {
         note(app, format!("Updating the stack to {} (the agent is idle)", info.latest));
         update_to(app, &info.latest).await?;
     }
+    // The app replaces itself only when nothing is going on: no task in
+    // flight, and nobody at the window. 2026-09-29: it reinstalled itself
+    // while the operator was typing to a running task, and took the window.
     let mine = check_app_update(app).await?;
     if mine.available {
+        if !agent_idle().await {
+            return Ok(format!("app {} is out; it installs when the agent is idle, or from the panel", mine.version));
+        }
+        if window_in_use(app) {
+            return Ok(format!("app {} is out; it installs when this window is not in use, or from the panel", mine.version));
+        }
         note(app, format!("A newer app ({}) is out; installing it", mine.version));
         install_app_update(app).await?;
     }

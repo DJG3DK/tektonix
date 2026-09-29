@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### An update never takes the window from you
+
+The app installed its own update while a task was running and the
+operator was typing to it, and came back on the panel page. It now
+replaces itself only when the agent is idle and nobody is at the window,
+or from the panel's button; a restart returns to the page it showed; and
+a second launch brings the running window forward as it is.
+
+The Updates section always shows both versions and both buttons, the
+pre-release switch sits next to Check for updates, a release-candidate app
+counts release candidates as releases whether or not that switch is on,
+and a stack whose release cannot be verified is offered the app's own.
+
 ### A long check no longer looks like a silent agent
 
 In the bundle the reviewer's checks run through the agent, and the

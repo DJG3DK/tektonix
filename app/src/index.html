@@ -115,13 +115,15 @@
       </div>
 
       <h2>Updates</h2>
+      <p id="versions" class="muted"></p>
       <div class="row wrap">
         <button id="btn-check-stack" class="btn">Check for updates</button>
-        <button id="btn-update-stack" class="btn primary hidden">Update Tektonix</button>
-        <button id="btn-update-app" class="btn hidden">Update this app</button>
-        <span id="update-text" class="muted"></span>
-        <span id="update-auto" class="muted"></span>
+        <button id="btn-update-stack" class="btn primary" disabled>Update Tektonix</button>
+        <button id="btn-update-app" class="btn" disabled>Update this app</button>
+        <label class="check inline"><input id="pre-inline" type="checkbox" /> <span>Include pre-releases</span></label>
       </div>
+      <p id="update-text" class="muted"></p>
+      <p id="update-auto" class="muted"></p>
 
       <h2>Containers</h2>
       <table id="containers" class="table"><tbody></tbody></table>

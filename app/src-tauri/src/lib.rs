@@ -111,7 +111,15 @@ fn prefs_get(app: AppHandle) -> stack::Prefs {
 
 #[tauri::command]
 fn prefs_set(app: AppHandle, auto_update: bool, include_prereleases: bool) -> Result<stack::Prefs, String> {
-    stack::write_prefs(&app, &stack::Prefs { auto_update, include_prereleases })
+    let mut prefs = stack::read_prefs(&app);
+    prefs.auto_update = auto_update;
+    prefs.include_prereleases = include_prereleases;
+    stack::write_prefs(&app, &prefs)
+}
+
+#[tauri::command]
+fn app_version(app: AppHandle) -> String {
+    stack::release_tag(&app)
 }
 
 #[tauri::command]
@@ -185,6 +193,7 @@ fn show_console(app: &AppHandle) -> Result<(), String> {
     w.navigate(url).map_err(|e| e.to_string())?;
     let _ = w.show();
     let _ = w.set_focus();
+    stack::remember_page(app, "console");
     Ok(())
 }
 
@@ -196,16 +205,39 @@ fn show_panel_page(app: &AppHandle) -> Result<(), String> {
     w.navigate(url).map_err(|e| e.to_string())?;
     let _ = w.show();
     let _ = w.set_focus();
+    stack::remember_page(app, "panel");
     Ok(())
 }
 
 fn show_panel(app: &AppHandle) {
     if show_panel_page(app).is_err() {
-        if let Some(w) = app.get_webview_window("main") {
-            let _ = w.show();
-            let _ = w.set_focus();
-        }
+        focus_window(app);
     }
+}
+
+/// Bring the window forward as it is: whatever page it shows stays.
+fn focus_window(app: &AppHandle) {
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.show();
+        let _ = w.set_focus();
+    }
+}
+
+/// After a restart the window comes back to the page it showed: the
+/// console, once the agent answers (up to a minute), else the panel.
+fn restore_last_page(app: AppHandle) {
+    if stack::read_prefs(&app).last_page != "console" {
+        return;
+    }
+    tauri::async_runtime::spawn(async move {
+        for _ in 0..60 {
+            if stack::agent_busy().await.is_some() {
+                let _ = show_console(&app);
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        }
+    });
 }
 
 fn build_tray(app: &AppHandle) -> tauri::Result<()> {
@@ -283,9 +315,10 @@ pub fn run() {
     tauri::Builder::default()
         // One running copy. A second launch (the installer's "run when
         // finished" plus the Start menu, or a launch while the first sits in
-        // the tray) brings the running panel forward instead of starting
-        // another app with a dead taskbar button of its own (2026-09-29).
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| show_panel(app)))
+        // the tray) brings the running window forward, on whatever page it
+        // shows, instead of starting another app with a dead taskbar button
+        // of its own (2026-09-29).
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| focus_window(app)))
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_dialog::init())
@@ -294,6 +327,7 @@ pub fn run() {
         .setup(|app| {
             build_main_window(app.handle())?;
             build_tray(app.handle())?;
+            restore_last_page(app.handle().clone());
             spawn_auto_updater(app.handle().clone());
             Ok(())
         })
@@ -311,7 +345,7 @@ pub fn run() {
             docker_state, docker_start, docker_install,
             settings_get, settings_save, machine_git_identity, stack_dir, installed_version,
             stack_install, stack_up, stack_down, stack_status, stack_password,
-            stack_check_update, stack_update, prefs_get, prefs_set,
+            stack_check_update, stack_update, prefs_get, prefs_set, app_version,
             app_update_check, app_update_install, auto_update_now,
             logs_follow, logs_stop, open_console, open_panel,
         ])

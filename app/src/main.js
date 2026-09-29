@@ -207,43 +207,63 @@ $("btn-password").onclick = async () => {
 
 // ── Updates ──────────────────────────────────────────────────────────────────
 async function showAutoStatus() {
+  try { await showVersions(null); } catch (e) { /* fine */ }
   try {
     const prefs = await invoke("prefs_get");
+    $("pre-inline").checked = !!prefs.include_prereleases;
     $("update-auto").textContent = prefs.auto_update
       ? `Automatic: on start and every six hours, when the agent is idle${prefs.include_prereleases ? ", pre-releases included" : ""}.`
       : "Automatic updates are off (Settings).";
   } catch (e) { /* fine */ }
 }
+async function showVersions(info) {
+  const appV = info ? info.app_version : await invoke("app_version");
+  const stack = info ? info.installed : await invoke("installed_version");
+  const verified = info ? info.stack_verified : true;
+  const stackText = stack ? `stack ${stack}${verified ? "" : " (unverified)"}` : "stack not installed";
+  $("versions").textContent = `This app: ${appV} · ${stackText}`;
+  $("stack-version").textContent = stack ? "stack " + stack : "";
+}
 $("btn-check-stack").onclick = async () => {
   $("update-text").textContent = "Checking…";
-  $("btn-update-stack").classList.add("hidden");
-  $("btn-update-app").classList.add("hidden");
+  $("btn-update-stack").disabled = true;
+  $("btn-update-app").disabled = true;
   try {
     const info = await invoke("stack_check_update");
-    const installed = await invoke("installed_version");
-    $("stack-version").textContent = installed ? "stack " + installed : "";
+    await showVersions(info);
     if (info.available) {
       pendingStackUpdate = info.latest;
-      $("update-text").textContent = `Tektonix ${info.latest} is out; you have ${info.installed}.`;
-      $("btn-update-stack").classList.remove("hidden");
+      $("update-text").textContent = info.stack_verified
+        ? `Tektonix ${info.latest} is out; the stack is on ${info.installed}.`
+        : `The stack's release cannot be verified; Update Tektonix puts it on ${info.latest}.`;
+      $("btn-update-stack").disabled = false;
     } else {
-      $("update-text").textContent = `Tektonix is up to date (${info.installed || info.latest}).`;
+      $("update-text").textContent = `The stack is up to date (${info.installed}).`;
     }
   } catch (e) { $("update-text").textContent = String(e); }
   try {
     appUpdate = await invoke("app_update_check");
     if (appUpdate.available) {
       $("update-text").textContent += ` This app has a new version too (${appUpdate.version}).`;
-      $("btn-update-app").classList.remove("hidden");
+      $("btn-update-app").disabled = false;
+    } else {
+      $("update-text").textContent += " This app is the newest.";
     }
-  } catch (e) { /* no updater manifest reachable; the stack check above is the one that matters */ }
+  } catch (e) { $("update-text").textContent += ` (App update check failed: ${String(e)})`; }
+};
+$("pre-inline").onchange = async () => {
+  try {
+    const prefs = await invoke("prefs_get");
+    await invoke("prefs_set", { autoUpdate: prefs.auto_update, includePrereleases: $("pre-inline").checked });
+    void showAutoStatus();
+    $("btn-check-stack").onclick();
+  } catch (e) { fail(e); }
 };
 $("btn-update-stack").onclick = async () => {
   if (!pendingStackUpdate) return;
-  $("btn-update-stack").classList.add("hidden");
+  $("btn-update-stack").disabled = true;
   await runStack("stack_update", { tag: pendingStackUpdate });
-  const installed = await invoke("installed_version");
-  $("stack-version").textContent = installed ? "stack " + installed : "";
+  await showVersions(null);
   pendingStackUpdate = null;
 };
 $("btn-update-app").onclick = async () => {
