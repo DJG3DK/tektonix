@@ -457,8 +457,10 @@ pub fn release_tag(app: &AppHandle) -> String {
 }
 
 /// `vMAJOR.MINOR.PATCH`, with an optional `-rcN`: a pre-release sorts below
-/// the release it leads to. Anything unparseable sorts lowest.
-fn version_key(tag: &str) -> (u64, u64, u64, bool, u64) {
+/// the release it leads to, and among pre-releases the label comes first
+/// (alpha, then beta, then rc, as the words sort) and its number second,
+/// as a number. Anything unparseable sorts lowest.
+fn version_key(tag: &str) -> (u64, u64, u64, bool, String, u64) {
     let raw = tag.trim().trim_start_matches('v');
     let (core, pre) = match raw.split_once('-') {
         Some((c, p)) => (c, Some(p)),
@@ -471,16 +473,19 @@ fn version_key(tag: &str) -> (u64, u64, u64, bool, u64) {
         nums.next().unwrap_or(0),
     );
     match pre {
-        None => (maj, min, pat, true, 0),
-        Some(p) => (
-            maj,
-            min,
-            pat,
-            false,
-            p.trim_start_matches(|c: char| !c.is_ascii_digit())
-                .parse()
-                .unwrap_or(0),
-        ),
+        None => (maj, min, pat, true, String::new(), 0),
+        Some(p) => {
+            let number = p.trim_start_matches(|c: char| !c.is_ascii_digit());
+            let label = p[..p.len() - number.len()].trim_end_matches('.');
+            (
+                maj,
+                min,
+                pat,
+                false,
+                label.to_ascii_lowercase(),
+                number.parse().unwrap_or(0),
+            )
+        }
     }
 }
 
@@ -938,6 +943,26 @@ mod tests {
         assert!(
             newer_than("v0.9.0-rc11", "latest"),
             "and is replaced by any real release"
+        );
+    }
+
+    #[test]
+    fn a_pre_release_label_is_compared_before_its_number() {
+        assert!(
+            newer_than("v0.10.0-rc1", "v0.10.0-beta3"),
+            "the number alone said beta3 > rc1"
+        );
+        assert!(newer_than("v0.10.0-beta1", "v0.10.0-alpha9"));
+        assert!(newer_than("v0.10.0-rc2", "v0.10.0-rc1"));
+        assert!(newer_than("v0.10.0-rc10", "v0.10.0-rc9"), "still a number");
+        assert!(newer_than("v0.10.0", "v0.10.0-rc99"));
+        assert!(
+            newer_than("v0.10.0-rc.2", "v0.10.0-rc1"),
+            "a semver-style dot in the label is the same label"
+        );
+        assert!(
+            !newer_than("v0.10.0-RC1", "v0.10.0-rc1"),
+            "case is not a difference"
         );
     }
 
