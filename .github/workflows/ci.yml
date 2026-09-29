@@ -25,9 +25,12 @@ on:
 permissions:
   contents: read
 
+# A newer push to the same pull request supersedes the run in flight. Not
+# on main: cancelling there left commits with no finished run, and the
+# release gate needs a green run for the exact commit it tags.
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   python:
@@ -78,10 +81,11 @@ jobs:
       - name: Lint (ruff)
         # ruff config landed with the source's ~65 existing noqa codes, which
         # had never been enforced by anything. The ruleset is what the code
-        # already satisfies; deferred rules are listed in ruff.toml.
-        run: |
-          pip install ruff
-          ruff check .
+        # already satisfies; deferred rules are listed in ruff.toml. The
+        # version is the one requirements.txt pins, installed above; an
+        # unpinned `pip install ruff` here could lint with a newer one than
+        # a contributor's.
+        run: ruff --version && ruff check .
 
       # No .env is created on purpose. conftest.py supplies placeholder values
       # via setdefault, so this run also proves a fresh clone can run the suite
@@ -98,11 +102,15 @@ jobs:
           REQUIRE_SERVICE_TESTS: "1"
 
       # The model router is its own service with its own venv in production,
-      # but its tests import only fastapi/httpx/pyyaml, which this environment
-      # already has. Running them here keeps them from becoming the kind of
-      # suite nobody notices has broken.
-      - name: pytest (model router)
-        run: python -m pytest -q services/model-router/tests
+      # so its tests run against its own pinned requirements, in a venv of
+      # their own. They used to run against the root requirements, which
+      # proved the router works with whatever the agent happens to install
+      # rather than with what its image installs.
+      - name: pytest (model router, its own requirements)
+        run: |
+          python -m venv services/model-router/.venv
+          services/model-router/.venv/bin/pip install -q -r services/model-router/requirements.txt pytest==9.1.1 pytest-asyncio==1.4.0
+          services/model-router/.venv/bin/python -m pytest -q services/model-router/tests
 
       # services/ is excluded from the repo-wide ruff run because it is mostly
       # Node. The model router is Python we own, so it gets linted explicitly

@@ -193,6 +193,60 @@ def test_nothing_builds_or_signs_before_the_gate():
     assert jobs["app-windows"]["needs"] == "images"
 
 
+# ---------------------------------------------------------------------------
+# Dependabot sees every manifest, and the router's requirements are pinned
+# ---------------------------------------------------------------------------
+
+def test_dependabot_watches_every_manifest_in_the_tree():
+    """Three manifests had no entry (the review dashboard's npm, the router's
+    pip, the images' base tags), so the router's requirements floated and
+    nothing watched them. Fixtures under evals/ are test data, not ours to
+    update; services/logoloom is vendored."""
+    doc = yaml.safe_load((REPO / ".github/dependabot.yml").read_text())
+    watched: set[tuple[str, str]] = set()
+    for entry in doc["updates"]:
+        for d in entry.get("directories") or [entry["directory"]]:
+            watched.add((entry["package-ecosystem"], d))
+    skip = {"node_modules", ".git", "evals", "logoloom", ".venv", "target"}
+    expected: set[tuple[str, str]] = set()
+    for p in REPO.rglob("*"):
+        if any(part in skip for part in p.relative_to(REPO).parts):
+            continue
+        rel = "/" if p.parent == REPO else "/" + p.parent.relative_to(REPO).as_posix()
+        if p.name == "package.json":
+            expected.add(("npm", rel))
+        elif p.name == "requirements.txt":
+            expected.add(("pip", rel))
+        elif p.name == "Cargo.toml":
+            expected.add(("cargo", rel))
+        elif p.name == "Dockerfile":
+            expected.add(("docker", rel))
+    missing = set()
+    for eco, d in expected:
+        if (eco, d) in watched:
+            continue
+        # a glob entry like /docker/* covers /docker/agent
+        if any(w_eco == eco and w_dir.endswith("/*") and d.startswith(w_dir[:-1]) for w_eco, w_dir in watched):
+            continue
+        missing.add((eco, d))
+    assert not missing, f"manifests Dependabot does not watch: {sorted(missing)}"
+    assert ("docker-compose", "/") in watched, "the compose file's postgres and redis tags float otherwise"
+
+
+def test_the_router_s_requirements_are_pinned_and_ci_installs_them_in_their_own_venv():
+    reqs = [ln.strip() for ln in (REPO / "services/model-router/requirements.txt").read_text().splitlines()
+            if ln.strip() and not ln.startswith("#")]
+    assert reqs and all("==" in r for r in reqs), reqs
+    step = _step(_jobs(CI)["python"], "model router, its own requirements")["run"]
+    assert "services/model-router/.venv/bin/pip install" in step and "services/model-router/requirements.txt" in step
+    assert "services/model-router/.venv/bin/python -m pytest -q services/model-router/tests" in step
+    assert "pip install ruff\n" not in "\n".join(_lint_lines()), "ruff comes pinned from requirements.txt"
+
+
+def _lint_lines() -> list[str]:
+    return [s.get("run") or "" for s in _jobs(CI)["python"]["steps"]]
+
+
 def test_the_real_doctor_survives_the_step_on_this_tree(tmp_path):
     """The step against the real script: whatever this checkout is missing,
     the answer is findings, never a traceback."""

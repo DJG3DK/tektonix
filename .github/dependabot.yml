@@ -2,6 +2,10 @@
 # moves the LangChain family together (they version in step). Majors of
 # development-only packages and the Actions are grouped too: on the first
 # run each of those opened its own PR, fourteen at once (2026-09-29).
+#
+# Every manifest in the tree is here. Three were missing until 2026-09-29
+# -- the review dashboard's npm, the router's pip and the images' base
+# tags -- so the router's requirements floated unpinned and unwatched.
 version: 2
 updates:
   - package-ecosystem: pip
@@ -14,6 +18,14 @@ updates:
         patterns: ["langchain*", "langgraph*", "deepagents"]
       python-minor:
         update-types: ["minor", "patch"]
+  - package-ecosystem: pip
+    directory: /services/model-router
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+    groups:
+      router:
+        patterns: ["*"]
   - package-ecosystem: npm
     directory: /frontend
     schedule:
@@ -26,7 +38,30 @@ updates:
         dependency-type: development
         update-types: ["major"]
   - package-ecosystem: npm
+    directory: /services/agent-review
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+    groups:
+      agent-review:
+        patterns: ["*"]
+  - package-ecosystem: npm
     directory: /app
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+  # The landing page and its newsletter signup, built and tested by CI's
+  # `site` job and shipped with nothing.
+  - package-ecosystem: npm
+    directory: /site
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+    groups:
+      site:
+        patterns: ["*"]
+  - package-ecosystem: pip
+    directory: /site/server
     schedule:
       interval: weekly
     open-pull-requests-limit: 3
@@ -43,3 +78,18 @@ updates:
     groups:
       actions:
         patterns: ["*"]
+  # The images' FROM lines and the compose file's third-party images
+  # (postgres, redis). One PR for all of them.
+  - package-ecosystem: docker
+    directories: ["/docker/*"]
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+    groups:
+      base-images:
+        patterns: ["*"]
+  - package-ecosystem: docker-compose
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3

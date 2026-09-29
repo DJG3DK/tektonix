@@ -1,8 +1,11 @@
-# Newest everything, deliberately. The service this replaces pinned
-# fastapi pinned deliberately; see the router README for the version story
-# (get_flat_dependant) that 0.140.7 removed -- a framework held back by a
-# dependency's use of an internal API. Nothing here touches FastAPI internals.
-fastapi>=0.140.7
-uvicorn[standard]>=0.35
-httpx>=0.28
-pyyaml>=6.0
+# Pinned, and moved by Dependabot (.github/dependabot.yml, the router
+# entry). These floated as `>=` floors until 2026-09-29, so the image and
+# the host venv could resolve to different versions and nothing watched
+# either. The router README has the version story behind fastapi's floor
+# (get_flat_dependant, removed in 0.140.7); nothing here touches FastAPI
+# internals, so a bump is expected to be routine. CI installs exactly this
+# file into its own venv and runs the router's tests with it.
+fastapi==0.141.1
+uvicorn[standard]==0.53.0
+httpx==0.28.1
+pyyaml==6.0.3
