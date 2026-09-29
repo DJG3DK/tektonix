@@ -137,3 +137,40 @@ def test_analytics_counts_planning_on_the_task_and_stranded_plans_as_their_own_c
     cats = {c["category"]: c for c in body["by_category"]}
     assert cats["feature"]["cost"] == 2.5, "the task's category carries the whole cost"
     assert cats["planning"] == {"category": "planning", "tasks": 1, "cost": 0.8}, "only the plan that never became a task"
+
+
+def test_the_three_totals_on_the_analytics_page_agree(monkeypatch):
+    """per_repo left the carried planning cost out, and the stranded plans
+    were only in by_category, so the page showed three different totals for
+    one set of spend (2026-09-29)."""
+    import agent.server as srv
+    from agent.auth import User
+    from agent.routers import analytics as an
+
+    store = _Store({
+        (("tasks", "proj"), "t1"): {"task_id": "t1", "repo": "proj", "goal": "g", "category": "feature",
+                                    "cost_so_far": 2.0, "planning_cost_usd": 0.5, "budget_usd": 5, "status": "done",
+                                    "created_at": 1_790_000_000},
+        (("tasks", "other"), "t2"): {"task_id": "t2", "repo": "other", "goal": "g", "category": "bugfix",
+                                     "cost_so_far": 1.0, "budget_usd": 5, "status": "done", "created_at": 1_790_000_000},
+        (("planning", "proj"), "s1"): {"session_id": "s1", "repo": "proj", "cost_usd": 0.5, "carried_cost_usd": 0.5},
+        (("planning", "proj"), "s2"): {"session_id": "s2", "repo": "proj", "cost_usd": 0.8, "updated_at": 1_790_050_000},
+        (("planning", "other"), "s3"): {"session_id": "s3", "repo": "other", "cost_usd": 0.3, "created_at": 1_790_000_000},
+    })
+    monkeypatch.setattr(an, "PROJECTS", {"proj": {}, "other": {}})
+    monkeypatch.setattr(srv.app.state, "store", store, raising=False)
+    me = User(id=1, email="a@b.co", role="admin", allowed_repos=None, totp_enabled=True, must_change_password=False)
+    monkeypatch.setitem(srv.app.dependency_overrides, srv.auth.require_full_auth, lambda: me)
+    body = TestClient(srv.app).get("/api/analytics").json()
+    expected = 2.0 + 0.5 + 1.0 + 0.8 + 0.3
+    assert round(body["total_cost"], 6) == expected
+    assert round(sum(c["cost"] for c in body["by_category"]), 6) == expected
+    assert round(sum(r["cost"] for r in body["per_repo"].values()), 6) == expected
+    assert round(body["per_repo"]["proj"]["cost"], 6) == 2.0 + 0.5 + 0.8
+    assert round(body["per_repo"]["other"]["cost"], 6) == 1.0 + 0.3
+    from datetime import UTC, datetime
+    days = {d["date"]: d for d in body["daily"]}
+    touched = datetime.fromtimestamp(1_790_050_000, tz=UTC).strftime("%Y-%m-%d")
+    made = datetime.fromtimestamp(1_790_000_000, tz=UTC).strftime("%Y-%m-%d")
+    if touched != made:
+        assert round(days[touched]["cost"], 6) == 0.8, "a stranded plan lands on the day it was last touched"

@@ -161,11 +161,22 @@ async def get_analytics(request: Request, user: User = Depends(require_full_auth
     # its cost onto the first build started from it (agent/tasks.py); what is
     # left uncarried -- abandoned plans, plans still open -- is its own
     # category, counted in sessions rather than tasks.
-    uncarried = [max(0.0, float(m.get("cost_usd") or 0.0) - float(m.get("carried_cost_usd") or 0.0))
-                 for m in planning_sessions]
-    stranded = [c for c in uncarried if c > 0]
+    # The same spend has to land in the daily series (so total_cost sees
+    # it) and on the session's project: it sat in by_category alone and the
+    # three totals on the page disagreed (2026-09-29).
+    stranded: list[tuple[dict, float]] = []
+    for m in planning_sessions:
+        left = max(0.0, float(m.get("cost_usd") or 0.0) - float(m.get("carried_cost_usd") or 0.0))
+        if left > 0:
+            stranded.append((m, left))
     if stranded:
-        by_category["planning"] = {"category": "planning", "tasks": len(stranded), "cost": sum(stranded)}
+        by_category["planning"] = {"category": "planning", "tasks": len(stranded),
+                                   "cost": sum(c for _, c in stranded)}
+    for m, left in stranded:
+        when = m.get("updated_at") or m.get("created_at")
+        if when:
+            _bucket(datetime.fromtimestamp(float(when), tz=UTC).strftime("%Y-%m-%d"))["cost"] += left
+    daily_series = [daily[k] for k in sorted(daily)]
     by_category_list = sorted(by_category.values(), key=lambda b: b["cost"], reverse=True)
 
     outcomes: dict[str, int] = {}
@@ -178,7 +189,12 @@ async def get_analytics(request: Request, user: User = Depends(require_full_auth
         repo_tasks = [t for t in tasks if t.get("repo") == repo]
         per_repo[repo] = {
             "tasks": len(repo_tasks),
-            "cost": sum(float(t.get("cost_so_far") or 0.0) for t in repo_tasks),
+            # A task's cost is its build plus the planning it carried, as
+            # by_category and per_task count it; plus this project's plans
+            # that never became a task.
+            "cost": sum(float(t.get("cost_so_far") or 0.0) + float(t.get("planning_cost_usd") or 0.0)
+                        for t in repo_tasks)
+            + sum(c for m, c in stranded if m.get("repo") == repo),
         }
 
     iteration_stats = [
