@@ -435,7 +435,7 @@ function TaskRow({ runName, task: t }: { runName: string; task: SwebenchTaskRow 
     return () => {
       live = false;
     };
-  }, [open, detail, runName, t.id, t.started]);
+  }, [open, detail, runName, t.id, t.run, t.started]);
 
   const failed = [...(t.tests?.fail_to_pass_failed ?? []), ...(t.tests?.pass_to_pass_failed ?? [])];
   return (
