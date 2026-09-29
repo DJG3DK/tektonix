@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### The LangChain family moves up
+
+langgraph 1.2.12, langchain 1.4.3, langchain-core 1.6.6, langchain-openai
+1.6.6, langchain-anthropic 1.7.4, langchain-google-genai 4.4.0 (with
+google-genai 2.25.0), langsmith 0.14.1 and deepagents 0.7.19. Twelve
+deepagents releases of fixes: the task tool rejects unknown arguments
+instead of dropping them, subagent state reaches provided middleware,
+compaction recovery is bounded, and clipped tool output says so. The
+suite passes unchanged.
+
 ### A workspace-internal package resolves inside the check container
 
 The reviewer linked a monorepo's internal package to the worktree by its
