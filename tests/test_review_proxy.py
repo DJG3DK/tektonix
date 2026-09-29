@@ -173,3 +173,25 @@ async def test_no_secret_configured_forwards_without_one(upstream, monkeypatch):
     monkeypatch.delenv("REVIEW_CONTROL_SECRET", raising=False)
     await _call()
     assert "x-review-secret" not in upstream.seen["headers"]
+
+
+@pytest.mark.asyncio
+async def test_the_callers_own_credentials_stop_at_the_proxy(upstream, monkeypatch):
+    """The session cookie and a bearer token authenticate the caller to the
+    agent; the review service is authenticated by the injected secret and
+    has no use for them. Forwarded, they sat in the review services' logs
+    (2026-09-29)."""
+    monkeypatch.setattr(srv.auth, "require_admin", lambda u: None)
+    await _call(headers={
+        "Cookie": "session=abc.def; other=1",
+        "Authorization": "Bearer caller-token",
+        "Accept": "application/json",
+    })
+
+    sent = upstream.seen["headers"]
+    assert "cookie" not in sent
+    assert "authorization" not in sent
+    joined = "".join(sent.values())
+    assert "caller-token" not in joined and "abc.def" not in joined
+    assert sent["accept"] == "application/json", "ordinary headers still go through"
+    assert sent["x-review-secret"] == "the-real-secret"

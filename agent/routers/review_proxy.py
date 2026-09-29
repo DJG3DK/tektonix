@@ -42,6 +42,13 @@ _REVIEW_PROXY_HOP_BY_HOP = frozenset({
     "te", "trailers", "transfer-encoding", "upgrade", "host", "content-length",
 })
 
+# The caller's credentials stop here. The session cookie and any bearer token
+# authenticate the caller TO THIS PROCESS; the review service authenticates
+# the proxy by the secret set below, and has no use for them. Forwarded, they
+# sat in the review services' request logs and in any error they echoed
+# (2026-09-29). Dropped on the way in, like the caller's own X-Review-Secret.
+_REVIEW_PROXY_CALLER_CREDENTIALS = frozenset({"cookie", "authorization", "x-review-secret"})
+
 # Merge and restart genuinely take minutes on a large project, and nginx allows
 # half an hour for exactly that reason. A shorter limit here would turn a slow
 # deploy into a failed one.
@@ -61,7 +68,7 @@ async def review_proxy(path: str, request: Request, user: User = Depends(require
     # sees -- this endpoint's authority comes from the session, not the header.
     headers = {
         k: v for k, v in request.headers.items()
-        if k.lower() not in _REVIEW_PROXY_HOP_BY_HOP and k.lower() != "x-review-secret"
+        if k.lower() not in _REVIEW_PROXY_HOP_BY_HOP and k.lower() not in _REVIEW_PROXY_CALLER_CREDENTIALS
     }
     secret = os.environ.get("REVIEW_CONTROL_SECRET")
     if secret:
