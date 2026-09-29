@@ -575,6 +575,13 @@ vhost has that block, delete it, reload nginx, and rotate
 `REVIEW_CONTROL_SECRET` in both `.env` and `services/shared/.env`;
 `scripts/doctor.py` fails while the block is present.
 
+When you rotate, restart the services with the new value exported in the
+same shell: `set -a; . ./.env; set +a; pm2 restart tektonix commit-reviewer
+agent-review --update-env`. pm2 keeps each process's environment from the
+shell that first started it, and a plain restart hands the old secret back
+to the agent while the merge service reads the new one from the file; every
+approved task then waits out its review timeout on a 401 (2026-09-29).
+
 **Both sides need `REVIEW_CONTROL_SECRET`,** and they read it from different
 files: the agent from its own `.env`, the two Node services from
 `services/shared/.env`. `install.sh` generates one value into both. If you set
