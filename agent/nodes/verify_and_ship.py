@@ -705,9 +705,11 @@ async def _verify_and_ship_inner(state: AgentState, repo: str, repo_root: str,
                 # coder about a verdict the reviewer no longer held.
                 from agent.tools.git import task_branch_name as _tbn
                 held = await current_verdict(repo, _tbn(state["task_id"]))
-                if held != "unknown" and (held is None or held.get("lastReviewedSha") != pending_sha):
+                differs = isinstance(held, dict) and (
+                    held.get("lastReviewedSha") != pending_sha or held.get("verdict") != prior_review.get("verdict"))
+                if held is None or differs:
                     logging.getLogger("tektonix").info(
-                        "verify_and_ship: the reviewer no longer holds a verdict for %s -- asking for review again",
+                        "verify_and_ship: the reviewer's record for %s is not the one this task holds -- asking for review again",
                         pending_sha[:12])
                     return {**(await _review_and_deploy(state, repo, pending_sha)), "stale_pending_review_streak": 0}
                 streak = state.get("stale_pending_review_streak", 0) + 1

@@ -29,7 +29,8 @@ check container like node_modules; a baseline on which every compared
 check fails is treated as a review environment that cannot run the
 project, not as a red project; a harness escalation does not carry into
 the next real review; and the gate trusts the reviewer's current record
-over the task's copy, so clearing a branch's record does force a review.
+over the task's copy, so clearing a branch's record does force a review,
+and a verdict that differs from the task's copy is taken from the reviewer.
 
 ### The review runs in the bundle the way it runs on a host
 

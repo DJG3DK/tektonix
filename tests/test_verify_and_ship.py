@@ -1180,3 +1180,28 @@ async def test_a_verdict_the_reviewer_no_longer_holds_is_asked_for_again(monkeyp
     result = await vs._verify_and_ship(state, config=None)
 
     assert asked == ["abc123"] and "pending_feedback" not in result
+
+
+async def test_a_verdict_that_differs_from_the_task_s_copy_is_taken_from_the_reviewer(monkeypatch):
+    """The reviewer re-judged the commit READY after its harness was fixed;
+    the task still held the old rejection and nudged the coder about it."""
+    monkeypatch.setattr(vs, "run_all_checks", _fake_checks(all_ok=True))
+    monkeypatch.setattr(vs, "git_diff", _fake_return(""))
+    monkeypatch.setattr(vs, "current_sha", _fake_return("abc123"))
+    asked = []
+
+    async def review(state, repo, sha):
+        asked.append(sha)
+        return {"committed_sha": None, "review_gate_result": {"lastReviewedSha": sha, "verdict": "READY"}}
+
+    async def ready_now(repo, branch=None):
+        return {"lastReviewedSha": "abc123", "verdict": "READY"}
+
+    monkeypatch.setattr(vs, "_review_and_deploy", review)
+    monkeypatch.setattr(vs, "current_verdict", ready_now)
+    state = _state(committed_sha="abc123",
+                   review_gate_result={"lastReviewedSha": "abc123", "verdict": "NEEDS_FIXES", "summary": "old"})
+
+    result = await vs._verify_and_ship(state, config=None)
+
+    assert asked == ["abc123"] and "pending_feedback" not in result
