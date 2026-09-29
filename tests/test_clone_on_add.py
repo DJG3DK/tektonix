@@ -131,7 +131,12 @@ def test_a_token_never_reaches_the_stored_remote(tmp_path, upstream, monkeypatch
 
     config = (tmp_path / "projects" / "thing" / ".git" / "config").read_text()
     assert "ghp_secret_value" not in config
-    remote = subprocess.run(["git", "remote", "get-url", "origin"], cwd=path,
+    # `git config --get`, not `git remote get-url`: the latter applies the
+    # user's global url.*.insteadOf rewrites, so on a machine whose global
+    # config rewrites github.com (Cursor Cloud VMs, many CI runners) it
+    # reported a rewritten URL and the test failed with a clean .git/config
+    # (2026-09-29 audit, T2). What is STORED is the question here.
+    remote = subprocess.run(["git", "config", "--get", "remote.origin.url"], cwd=path,
                             capture_output=True, text=True).stdout.strip()
     assert remote == "https://github.com/someone/thing.git"
 
