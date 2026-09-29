@@ -79,10 +79,14 @@ class CheckRequest:
 # sets the run up over `docker exec` into the two service containers (psql
 # and redis-cli on their own sockets), so nothing a check can reach has a
 # route to the agent, the router, the reviewer or the internet. Each run
-# gets its own plain role owning its own database, and its own Redis
-# database from a pool, so runs neither see each other nor the server's
-# superuser. The names below are server config; a request never chooses the
-# network, the containers or the DSN.
+# gets its own plain role owning its own database (CONNECT revoked from
+# everyone else), and its own Redis database from a pool, so runs neither
+# see each other nor the server's superuser; what a crashed agent leaves
+# behind is dropped at the next start (sweep_orphans). The Redis side is a
+# convention with the sharpest tools taken away -- docker-compose.yml denies
+# FLUSHALL, CONFIG and friends to the one user -- because Redis cannot bind
+# a user to a database index. The names below are server config; a request
+# never chooses the network, the containers or the DSN.
 CHECKS_NETWORK = "checks"          # the request-side name; mapped to the real network here
 CHECKS_NETWORK_ENV = "REVIEW_CHECKS_NETWORK"
 CHECKS_POSTGRES_ENV = "REVIEW_CHECKS_POSTGRES_URL"   # postgresql://<superuser>@host:port/postgres, as a check sees it; no password
@@ -478,6 +482,58 @@ async def _admin_sql(sql: str) -> None:
         raise RuntimeError(out[-300:] or "psql failed")
 
 
+async def _admin_rows(sql: str) -> list[str]:
+    """One query the same way, its rows back one per line (psql -At)."""
+    pg = _parse_dsn(os.environ[CHECKS_POSTGRES_ENV])
+    ok, out = await _docker("exec", "-i", os.environ[CHECKS_POSTGRES_CONTAINER_ENV],
+                            "psql", "-v", "ON_ERROR_STOP=1", "-At", "-U", pg["user"], "-d", pg["db"],
+                            stdin=sql.encode(), timeout_s=60)
+    if not ok:
+        raise RuntimeError(out[-300:] or "psql failed")
+    return [line.strip() for line in out.splitlines() if line.strip()]
+
+
+# The throwaway role and database of every run in flight, so a sweep never
+# drops what a check is using.
+_THROWAWAY_PREFIX = "tektonix_ci_review_"
+_THROWAWAY_RE = re.compile(r"^tektonix_ci_review_[0-9a-f]{8}$")
+_in_flight: set[str] = set()
+
+
+async def sweep_orphans() -> list[str]:
+    """Drop the throwaway roles and databases a crashed agent left behind.
+
+    Each run drops its own in a `finally`, but an agent that dies mid-run
+    (a restart, an OOM) never reaches it, and until checks-postgres itself
+    restarted the leftovers stayed: connectable by later runs' roles, and
+    named for nothing. Run at startup, when nothing this process started can
+    be in flight; a name in `_in_flight` is spared all the same. Never
+    raises: an unreachable checks server is the probe's problem."""
+    if not db_checks_enabled():
+        return []
+    swept: list[str] = []
+    try:
+        dbs = await _admin_rows(f"SELECT datname FROM pg_database WHERE datname LIKE '{_THROWAWAY_PREFIX}%';")
+        roles = await _admin_rows(f"SELECT rolname FROM pg_roles WHERE rolname LIKE '{_THROWAWAY_PREFIX}%';")
+    except Exception as e:  # noqa: BLE001 -- reported, never raised at startup
+        logger.warning("review db check: could not list leftover throwaway databases: %s", e)
+        return []
+    for name in [*dbs, *roles]:
+        # Hex names only, made here: anything else is not ours to drop and
+        # would not be safe to splice into SQL.
+        if not _THROWAWAY_RE.match(name) or name in _in_flight or name in swept:
+            continue
+        try:
+            await _admin_sql(f"DROP DATABASE IF EXISTS {name} WITH (FORCE);")
+            await _admin_sql(f"DROP ROLE IF EXISTS {name};")
+            swept.append(name)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("review db check: leftover throwaway %s not dropped: %s", name, e)
+    if swept:
+        logger.info("review db check: dropped %d throwaway database(s) left by an earlier run", len(swept))
+    return swept
+
+
 async def _flush_redis(db: int) -> None:
     """FLUSHDB on the run's database, by redis-cli inside the redis container."""
     ok, out = await _docker("exec", os.environ[CHECKS_REDIS_CONTAINER_ENV], "redis-cli", "-n", str(db), "FLUSHDB",
@@ -549,11 +605,17 @@ async def run_database_check(req: DbCheckRequest) -> list[dict]:
     redis_db = await _take_redis_db()
     env = check_env(throwaway, throwaway, password, redis_db)
     results: list[dict] = []
+    _in_flight.add(throwaway)
     try:
         try:
             await _admin_sql(f"CREATE ROLE {throwaway} LOGIN PASSWORD '{password}' "
                              f"NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT;")
             await _admin_sql(f"CREATE DATABASE {throwaway} OWNER {throwaway} TEMPLATE template0;")
+            # Postgres grants CONNECT on every new database to PUBLIC, so one
+            # run's role could open another run's database (and read nothing
+            # it does not own, but a connection is a foothold). Only the
+            # owner keeps it.
+            await _admin_sql(f"REVOKE CONNECT ON DATABASE {throwaway} FROM PUBLIC;")
         except Exception as e:  # noqa: BLE001 -- the reviewer needs the reason, not a stack trace
             return _setup_failure(f"could not create the throwaway database: {str(e)[:300]}")
         try:
@@ -580,4 +642,5 @@ async def run_database_check(req: DbCheckRequest) -> list[dict]:
             await _admin_sql(f"DROP ROLE IF EXISTS {throwaway};")
         except Exception as e:  # noqa: BLE001 -- a leaked throwaway is logged, never raised over a result
             logger.warning("review db check: throwaway database %s not dropped: %s", throwaway, e)
+        _in_flight.discard(throwaway)
         await _give_back_redis_db(redis_db)

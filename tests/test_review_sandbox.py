@@ -413,7 +413,8 @@ def test_the_three_steps_run_in_order_in_the_checks_container_against_a_throwawa
     assert sql[0] == (f"CREATE ROLE {throwaway} LOGIN PASSWORD '{password}' "
                       f"NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT;")
     assert sql[1] == f"CREATE DATABASE {throwaway} OWNER {throwaway} TEMPLATE template0;"
-    assert sql[2] == f"DROP DATABASE IF EXISTS {throwaway} WITH (FORCE);" and sql[3] == f"DROP ROLE IF EXISTS {throwaway};"
+    assert sql[2] == f"REVOKE CONNECT ON DATABASE {throwaway} FROM PUBLIC;"
+    assert sql[3] == f"DROP DATABASE IF EXISTS {throwaway} WITH (FORCE);" and sql[4] == f"DROP ROLE IF EXISTS {throwaway};"
 
 
 def test_a_failing_step_stops_the_rest_and_the_database_is_still_dropped(bundle, monkeypatch):
@@ -615,3 +616,83 @@ def test_a_long_database_check_keeps_the_connection_alive_too(bundle, monkeypatc
     # A bad worktree is still refused before the first byte.
     r = c.post("/api/internal/review-sandbox/db-check", json={"project": "shop", "worktree": "/etc"}, headers=h)
     assert r.status_code == 400 and "refused" in r.json()["detail"]
+
+
+# --- cross-run isolation on the checks services (2026-09-29) --------------------
+
+def test_a_throwaway_database_is_connectable_by_its_owner_alone(bundle, monkeypatch):
+    """Postgres grants CONNECT on a new database to PUBLIC, so one run's role
+    could open another run's database: nothing to read there, but a
+    foothold. Revoked right after the create, before any check runs."""
+    _db_env(monkeypatch, bundle["tmp"])
+    _db_project(bundle, monkeypatch)
+    sql, runs, _ = _fake_db_layer(monkeypatch, {})
+    asyncio.run(rs.run_database_check(rs.DbCheckRequest(project="shop", worktree=bundle["wt"])))
+    create = next(i for i, st in enumerate(sql) if st.startswith("CREATE DATABASE "))
+    name = sql[create].split()[2]
+    assert sql[create + 1] == f"REVOKE CONNECT ON DATABASE {name} FROM PUBLIC;"
+    assert all(not st.startswith("REVOKE") for st in sql[create + 2:]), "revoked once, before the checks"
+    assert runs, "the checks still ran after the revoke"
+    assert not rs._in_flight, "the run's name is forgotten once it is dropped"
+
+
+def test_the_startup_sweep_drops_what_a_crashed_agent_left_and_spares_a_run_in_flight(bundle, monkeypatch):
+    """Each run drops its own throwaway in a finally; an agent that died
+    mid-run never reached it, and the leftovers stayed until checks-postgres
+    restarted."""
+    _db_env(monkeypatch, bundle["tmp"])
+    listed = {
+        "pg_database": "tektonix_ci_review_deadbeef\ntektonix_ci_review_0badf00d\ntektonix_ci_review_ab12cd34\n",
+        "pg_roles": "tektonix_ci_review_deadbeef\ntektonix_ci_review_0badf00d\ntektonix_ci_review_notours; DROP\n",
+    }
+    statements = []
+
+    async def docker(*args, timeout_s=30, stdin=None):
+        text = (stdin or b"").decode()
+        statements.append(text)
+        for key, rows in listed.items():
+            if key in text:
+                return True, rows
+        return True, ""
+
+    monkeypatch.setattr(rs, "_docker", docker)
+    monkeypatch.setattr(rs, "_in_flight", {"tektonix_ci_review_ab12cd34"})
+    swept = asyncio.run(rs.sweep_orphans())
+    assert swept == ["tektonix_ci_review_deadbeef", "tektonix_ci_review_0badf00d"]
+    dropped = [st for st in statements if st.startswith("DROP")]
+    assert "DROP DATABASE IF EXISTS tektonix_ci_review_deadbeef WITH (FORCE);" in dropped
+    assert "DROP ROLE IF EXISTS tektonix_ci_review_0badf00d;" in dropped
+    assert not any("ab12cd34" in st for st in dropped), "a run in flight keeps its database"
+    assert not any("notours" in st for st in dropped), "only names this module made are dropped"
+
+
+def test_the_sweep_is_a_no_op_without_the_checks_services_and_never_raises(bundle, monkeypatch):
+    for k in rs._CHECKS_ENVS:
+        monkeypatch.delenv(k, raising=False)
+    assert asyncio.run(rs.sweep_orphans()) == []
+
+    _db_env(monkeypatch, bundle["tmp"])
+
+    async def down(*args, timeout_s=30, stdin=None):
+        return False, "Error response from daemon: No such container"
+
+    monkeypatch.setattr(rs, "_docker", down)
+    assert asyncio.run(rs.sweep_orphans()) == []
+
+
+def test_the_checks_redis_denies_the_commands_that_reach_past_a_runs_own_index():
+    """Redis cannot bind a user to a database index, so a run's index is a
+    convention; FLUSHALL, CONFIG, DEBUG, SHUTDOWN and ACL are what a check
+    could use to reach every other run's, and the one user is denied them.
+    FLUSHDB stays: the agent clears one index per run with it."""
+    import yaml
+    from agent import paths
+    compose = yaml.safe_load((paths.REPO_ROOT / "docker-compose.yml").read_text())
+    cmd = compose["services"]["checks-redis"]["command"]
+    assert cmd[0] == "redis-server"
+    user = cmd.index("--user")
+    rule = cmd[user + 1:]
+    assert rule[:3] == ["default", "on", "nopass"]
+    for denied in ("-flushall", "-config", "-debug", "-shutdown", "-acl"):
+        assert denied in rule, denied
+    assert "-flushdb" not in rule and "+@all" in rule

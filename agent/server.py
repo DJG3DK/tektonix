@@ -400,9 +400,15 @@ async def lifespan(app: FastAPI):
         # never had them.
         from agent import jobs
         jobs_task = asyncio.create_task(jobs.run_forever(app.state))
+        # Throwaway databases a crashed agent left on checks-postgres --
+        # agent/review_sandbox.py, sweep_orphans. A no-op without the bundle's
+        # checks services, and never a startup failure.
+        from agent import review_sandbox
+        review_sweep_task = asyncio.create_task(review_sandbox.sweep_orphans())
         notify_operators_bg(auth_pool, "🔄 agent backend restarted (deploys land this way; "
                             "orphaned tasks auto-resume, planning turns re-send)")
         yield
+        review_sweep_task.cancel()
         jobs_task.cancel()
         github_poll_task.cancel()
         service_watch_task.cancel()

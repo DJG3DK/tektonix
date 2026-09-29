@@ -351,7 +351,14 @@ services:
   checks-redis:
     image: redis:7-alpine
     container_name: tektonix-checks-redis
-    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    # One user, every check: Redis cannot bind a user to a database index,
+    # so a run's own index is a convention (agent/review_sandbox.py). The
+    # commands that reach past it -- FLUSHALL over every run's index, CONFIG,
+    # DEBUG, SHUTDOWN, ACL -- are denied; FLUSHDB stays, the agent uses it
+    # to clear one index per run. The health check's PING is unaffected.
+    command: ["redis-server", "--save", "", "--appendonly", "no",
+              "--user", "default", "on", "nopass", "~*", "&*", "+@all",
+              "-flushall", "-config", "-debug", "-shutdown", "-acl"]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
