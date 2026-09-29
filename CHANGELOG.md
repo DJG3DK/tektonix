@@ -2,6 +2,33 @@
 
 ## Unreleased
 
+### The app runs the release it came from
+
+A release-candidate app asked for images of its plain version, no such
+release existed, and the pull quietly fell back to the previous stable
+release: every candidate so far ran the v0.8.0 stack. The app now carries
+its release tag, pulls those images whenever the stack is behind it, and a
+missing image is an error rather than a swap.
+
+An update is a newer release. With pre-releases off, the stable release
+older than the installed candidate was offered as an update.
+
+The installer is named after the tag (`Tektonix_0.9.0-rc13_x64-setup.exe`);
+every candidate used to download as 0.9.0.
+
+### The final commit has a one-line subject
+
+A pasted plan became the commit message verbatim, heading and all. The
+subject is now the goal's first line, cleaned and cut at a word; a long
+goal contributes only its first paragraph.
+
+### The record says what git saw
+
+When the ship gate finds no diff, the task log now carries the branch,
+HEAD, the base, what `git status` sees and what is stashed, so a "no diff"
+on a workspace that plainly has edits is chased from that line. The
+adoption of commits already on the branch uses the project's base branch.
+
 ### The window always has a title strip
 
 A frameless window is usable only through a strip drawn by the page it

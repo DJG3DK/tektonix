@@ -379,6 +379,33 @@ async def commits_ahead(repo_root: str, base_ref: str = "main") -> int:
         return 0
 
 
+async def no_diff_evidence(repo_root: str, base_ref: str = "main") -> str:
+    """One line on why a workspace reads as unchanged, for the record
+    verify_and_ship keeps when it finds no diff: the branch, HEAD, the base,
+    what `git status` sees and what is stashed. 2026-09-29, a Windows install:
+    the operator saw the edits, the gate said "no diff", and the log held
+    nothing to tell the two apart. Never raises."""
+    parts: list[str] = []
+    for label, cmd in (("branch", "rev-parse --abbrev-ref HEAD"), ("head", "rev-parse --short HEAD"),
+                       (base_ref, f"rev-parse --short {base_ref}"),
+                       ("ahead", f"rev-list --count {base_ref}..HEAD"),
+                       ("status", "status --porcelain"), ("stash", "stash list")):
+        try:
+            r = await _git(cmd, repo_root, timeout=15)
+        except Exception as e:  # noqa: BLE001 -- evidence, never a failure of its own
+            parts.append(f"{label}=error({type(e).__name__})")
+            continue
+        out = (r.get("output") or "").strip()
+        if label in ("status", "stash"):
+            lines = [ln.strip() for ln in out.splitlines() if ln.strip()]
+            parts.append(f"{label}={len(lines)}" + (" [" + "; ".join(lines[:5]) + "]" if lines else ""))
+        elif r.get("ok"):
+            parts.append(f"{label}={out.splitlines()[-1][:80] if out else '?'}")
+        else:
+            parts.append(f"{label}=error: {out[:120]!r}")
+    return f"workspace {repo_root}: " + ", ".join(parts)
+
+
 async def current_sha(repo_root: str) -> str:
     r = await _git("rev-parse HEAD", repo_root, timeout=15)
     return r["output"].strip()

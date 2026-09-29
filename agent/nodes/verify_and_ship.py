@@ -57,6 +57,7 @@ from agent.tools.checks import run_all_checks
 from agent.tools.git import (
     _git,
     commits_ahead,
+    no_diff_evidence,
     current_sha,
     ensure_task_branch,
     git_commit,
@@ -64,7 +65,7 @@ from agent.tools.git import (
     rebase_onto_base,
     sha_in_repo,
 )
-from agent import check_timing
+from agent import check_timing, commit_subject
 from agent import runtime_settings as _rs
 from agent.tools.review_gate import (
     merge_and_deploy,
@@ -248,7 +249,10 @@ def _unfinished_todos(state: AgentState) -> list[str]:
     ]
 
 
-def _loop_back(reason: str, feedback: str, state: AgentState, no_diff_streak: int = 0) -> dict:
+def _loop_back(reason: str, feedback: str, state: AgentState, no_diff_streak: int = 0,
+               evidence: str = "") -> dict:
+    """`evidence` is for the operator's log only, never for the model: it
+    names workspace paths, which the model is told nothing about."""
     return {
         "iteration_count": state["iteration_count"] + 1,
         "pending_feedback": feedback,
@@ -257,7 +261,7 @@ def _loop_back(reason: str, feedback: str, state: AgentState, no_diff_streak: in
             "node": "verify_and_ship",
             "step_id": None,
             "summary": reason,
-            "detail": feedback[:2000],
+            "detail": feedback[:2000] + ("\n\n" + evidence if evidence else ""),
             "cost_usd": 0.0,
             "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ"),
         }],
@@ -309,7 +313,7 @@ def _merged_summary(deployed: dict) -> str:
     return "merged, deployed and pushed to GitHub" if deployed_something else "merged and pushed to GitHub"
 
 
-def _done_no_changes(state: AgentState) -> dict:
+def _done_no_changes(state: AgentState, evidence: str = "") -> dict:
     """Terminal, non-escalated completion for a task that genuinely needed
     no code changes -- distinct from `_escalate` (nothing went wrong) and
     from a real ship (nothing was committed/reviewed/deployed). Routes to
@@ -322,7 +326,7 @@ def _done_no_changes(state: AgentState) -> dict:
             "node": "verify_and_ship",
             "step_id": None,
             "summary": "done -- no changes needed, confirmed on two consecutive passes",
-            "detail": "",
+            "detail": evidence,
             "cost_usd": 0.0,
             "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ"),
         }],
@@ -618,7 +622,8 @@ async def _verify_and_ship_inner(state: AgentState, repo: str, repo_root: str,
             # install: the final commit failed for want of a git identity,
             # the resume committed 1,446 lines, and this gate said "no file
             # changes yet". Commits main does not have ARE the change.
-            ahead = await commits_ahead(repo_root)
+            base_branch = (PROJECTS.get(repo) or {}).get("base_branch") or "main"
+            ahead = await commits_ahead(repo_root, base_branch)
             if ahead > 0:
                 pending_sha = await current_sha(repo_root)
                 logging.getLogger("tektonix").info(
@@ -789,8 +794,13 @@ async def _verify_and_ship_inner(state: AgentState, repo: str, repo_root: str,
                 "the same code path: find it -- the neighbours of the example (a chained/unraised "
                 "exception, an empty or nested input, the sibling branch) -- and fix that. A cosmetic "
                 "rewrite of working code resolves nothing.", state, no_diff_streak=1)
+        # What git saw, kept with the decision: the operator reads it on the
+        # task page, and a "no diff" on a workspace that plainly has edits is
+        # a bug to chase from this line, not from memory.
+        evidence = await no_diff_evidence(repo_root, (PROJECTS.get(repo) or {}).get("base_branch") or "main")
+        logging.getLogger("tektonix").info("verify_and_ship: no diff -- %s", evidence)
         if state.get("no_diff_streak", 0) >= 1:
-            return _done_no_changes(state)
+            return _done_no_changes(state, evidence)
         feedback = (
             "Checks pass, but there are no file changes yet (git diff is empty). If you're still "
             "investigating, continue. If you believe the goal is already satisfied with no changes "
@@ -798,7 +808,8 @@ async def _verify_and_ship_inner(state: AgentState, repo: str, repo_root: str,
             "checked once more, and if it's still true next pass, the task will end here as a "
             "legitimate no-changes-needed completion."
         )
-        return _loop_back("checks passed but no diff -- nudging for progress", feedback, state, no_diff_streak=1)
+        return _loop_back("checks passed but no diff -- nudging for progress", feedback, state,
+                          no_diff_streak=1, evidence=evidence)
 
     # Three shapes of a wrong fix the diff itself shows -- a new error
     # message, a sibling function left alone, a grammar change with no
@@ -873,7 +884,8 @@ async def _verify_and_ship_inner(state: AgentState, repo: str, repo_root: str,
     # earlier one on the task branch. The branch is what the reviewer reads,
     # and committed_sha moves to its new tip below, in _review_and_deploy.
     goal = state["goal"]
-    commit_message = f"{goal}\n\n(shipped via deepagents-based agent)" + _review_response_note(state)
+    commit_message = (commit_subject.message(goal) + "\n\n(shipped via deepagents-based agent)"
+                      + _review_response_note(state))
     operator_edit = state.get("_operator_edit")
     if operator_edit:
         note = (operator_edit.get("note") or "").strip()
@@ -1095,7 +1107,7 @@ async def _review_and_deploy(state: AgentState, repo: str, sha: str) -> dict:
     #
     # The gate is identical either way: this is only what happens after a pass.
     ship_mode = (PROJECTS.get(repo) or {}).get("ship", "push")
-    title = state["goal"].splitlines()[0][:72]
+    title = commit_subject.subject(state["goal"])
     if ship_mode != "pr":
         # The base branch moves only on a green GitHub Actions run for this
         # exact commit (agent/tools/github_ci.py). Red goes back to the agent;

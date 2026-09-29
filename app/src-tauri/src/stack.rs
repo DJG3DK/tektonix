@@ -260,6 +260,34 @@ fn write_version(app: &AppHandle, tag: &str) -> Result<(), String> {
     std::fs::write(version_path(app)?, text).map_err(|e| e.to_string())
 }
 
+/// The release this app was built from: the tag the release workflow bakes
+/// in, else the package version. 2026-09-29: an rc app asked for `v0.9.0`
+/// images, no such release existed, and the pull fell back to `latest`, so
+/// every release candidate ran the previous stable release's stack.
+pub fn release_tag(app: &AppHandle) -> String {
+    match option_env!("TEKTONIX_RELEASE_TAG").map(str::trim).filter(|t| !t.is_empty()) {
+        Some(t) => t.to_string(),
+        None => format!("v{}", app.package_info().version),
+    }
+}
+
+/// `vMAJOR.MINOR.PATCH`, with an optional `-rcN`: a pre-release sorts below
+/// the release it leads to. Anything unparseable sorts lowest.
+fn version_key(tag: &str) -> (u64, u64, u64, bool, u64) {
+    let raw = tag.trim().trim_start_matches('v');
+    let (core, pre) = match raw.split_once('-') { Some((c, p)) => (c, Some(p)), None => (raw, None) };
+    let mut nums = core.split('.').map(|n| n.parse::<u64>().unwrap_or(0));
+    let (maj, min, pat) = (nums.next().unwrap_or(0), nums.next().unwrap_or(0), nums.next().unwrap_or(0));
+    match pre {
+        None => (maj, min, pat, true, 0),
+        Some(p) => (maj, min, pat, false, p.trim_start_matches(|c: char| !c.is_ascii_digit()).parse().unwrap_or(0)),
+    }
+}
+
+pub fn newer_than(candidate: &str, installed: &str) -> bool {
+    version_key(candidate) > version_key(installed)
+}
+
 pub fn image_ref(name: &str, tag: &str) -> String {
     format!("{REGISTRY}/tektonix-{name}:{tag}")
 }
@@ -268,29 +296,40 @@ pub fn local_name(name: &str) -> String {
     format!("tektonix-{name}:latest")
 }
 
-/// Pull one release's images and tag them with the local names. When the
-/// versioned tag does not exist (an app built ahead of its release, or a
-/// pre-release build), the registry's `latest` is pulled instead and the
-/// installed version is recorded as that.
+/// Pull one release's images and tag them with the local names. The images
+/// are published before the installer (release.yml), so a release the app
+/// knows always has them; a missing image is an error, never a quiet swap
+/// for some other release's code.
 pub async fn pull(app: &AppHandle, tag: &str) -> Result<(), String> {
-    let mut used = tag.to_string();
     for name in IMAGES {
-        let mut remote = image_ref(name, &used);
+        let remote = image_ref(name, tag);
         note(app, format!("Pulling {remote}"));
-        let mut code = proc::stream(app, "docker", "docker", &["pull", &remote], None).await.map_err(|e| e.to_string())?;
-        if code != 0 && used != "latest" {
-            note(app, format!("No {used} image for {name}; using the latest published one."));
-            used = "latest".into();
-            remote = image_ref(name, &used);
-            code = proc::stream(app, "docker", "docker", &["pull", &remote], None).await.map_err(|e| e.to_string())?;
-        }
+        let code = proc::stream(app, "docker", "docker", &["pull", &remote], None).await.map_err(|e| e.to_string())?;
         if code != 0 {
-            return Err(format!("could not pull {remote} (exit {code}). Is this machine online, and does the release exist?"));
+            return Err(format!("could not pull {remote} (exit {code}). Is this machine online, and is {tag} a published release?"));
         }
         proc::capture("docker", &["tag", &remote, &local_name(name)], None).await.map_err(|e| e.to_string())?;
     }
-    write_version(app, &used)?;
+    write_version(app, tag)?;
     Ok(())
+}
+
+/// The stack this app runs is at least the release it was built from. A new
+/// app over an older stack (or a stack recorded as `latest` by the old
+/// fallback) pulls its own images before it starts; a stack the automatic
+/// update already moved ahead of the app is left where it is.
+pub async fn ensure_own_release(app: &AppHandle) -> Result<(), String> {
+    let wanted = release_tag(app);
+    match installed_version(app) {
+        Some(have) if !newer_than(&wanted, &have) => Ok(()),
+        have => {
+            note(app, match have {
+                Some(h) => format!("This app is {wanted}; the stack is {h}. Pulling {wanted}."),
+                None => format!("Pulling the {wanted} stack."),
+            });
+            pull(app, &wanted).await
+        }
+    }
 }
 
 fn compose_args<'a>(dir: &'a Path, rest: &[&'a str]) -> Vec<String> {
@@ -418,7 +457,7 @@ pub async fn check_update(app: &AppHandle) -> Result<UpdateInfo, String> {
     let latest = latest_release(read_prefs(app).include_prereleases).await?;
     let installed = installed_version(app).unwrap_or_default();
     Ok(UpdateInfo {
-        available: !installed.is_empty() && installed != latest.tag_name,
+        available: !installed.is_empty() && newer_than(&latest.tag_name, &installed),
         installed,
         latest: latest.tag_name,
         url: latest.html_url,
@@ -460,6 +499,17 @@ mod tests {
         assert_eq!(image_ref("agent", "v0.9.0"), "ghcr.io/djg3dk/tektonix-agent:v0.9.0");
         assert_eq!(local_name("reviewer"), "tektonix-reviewer:latest");
         assert_eq!(IMAGES, ["agent", "router", "reviewer", "sandbox"]);
+    }
+
+    #[test]
+    fn a_pre_release_sorts_below_its_release_and_above_the_one_before() {
+        assert!(newer_than("v0.9.0-rc11", "v0.8.0"));
+        assert!(newer_than("v0.9.0-rc12", "v0.9.0-rc11"));
+        assert!(newer_than("v0.9.0", "v0.9.0-rc12"));
+        assert!(!newer_than("v0.8.0", "v0.9.0-rc11"), "a stable release older than the installed rc is not an update");
+        assert!(!newer_than("v0.9.0-rc11", "v0.9.0-rc11"));
+        assert!(!newer_than("latest", "v0.9.0-rc11"), "the old fallback's record never wins");
+        assert!(newer_than("v0.9.0-rc11", "latest"), "and is replaced by any real release");
     }
 
     #[test]

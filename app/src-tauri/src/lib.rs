@@ -63,8 +63,7 @@ fn installed_version(app: AppHandle) -> Option<String> {
 #[tauri::command]
 async fn stack_install(app: AppHandle, password: Option<String>) -> Result<bool, String> {
     stack::prepare(&app)?;
-    let tag = format!("v{}", app.package_info().version);
-    stack::pull(&app, &tag).await?;
+    stack::pull(&app, &stack::release_tag(&app)).await?;
     stack::up(&app).await?;
     let email = stack::read_settings(&app)?.admin_email;
     match password {
@@ -76,10 +75,7 @@ async fn stack_install(app: AppHandle, password: Option<String>) -> Result<bool,
 #[tauri::command]
 async fn stack_up(app: AppHandle) -> Result<(), String> {
     stack::prepare(&app)?;
-    if stack::installed_version(&app).is_none() {
-        let tag = format!("v{}", app.package_info().version);
-        stack::pull(&app, &tag).await?;
-    }
+    stack::ensure_own_release(&app).await?;
     stack::up(&app).await
 }
 

@@ -107,6 +107,20 @@ jobs:
       - run: npm ci
         working-directory: app
         if: steps.existing.outputs.published != 'true'
+      # The installer, the updater manifest and the app's own version carry
+      # the tag: Tektonix_0.9.0-rc13_x64-setup.exe, not a file named 0.9.0
+      # for every candidate. Build-time only; nothing is committed.
+      - name: Version the app after the tag
+        if: steps.existing.outputs.published != 'true'
+        shell: bash
+        working-directory: app
+        env:
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          v="${TAG#v}"
+          node -e 'const fs=require("fs");for (const f of ["src-tauri/tauri.conf.json","package.json"]){const j=JSON.parse(fs.readFileSync(f,"utf8"));j.version=process.argv[1];fs.writeFileSync(f,JSON.stringify(j,null,2)+"\n")}' "$v"
+          sed -i "0,/^version = \".*\"/s//version = \"$v\"/" src-tauri/Cargo.toml
+          echo "app version $v"
       # Builds the NSIS installer, signs the updater artifact with the key in
       # the secrets, and attaches the installer, its .sig and latest.json to
       # the GitHub release for this tag (creating the release if the tag has
@@ -118,6 +132,9 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # Baked into the binary (stack.rs release_tag): the app pulls the
+          # images of the release it came from, rc or not.
+          TEKTONIX_RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
         with:
           projectPath: app
           tagName: ${{ github.event.inputs.tag || github.ref_name }}
