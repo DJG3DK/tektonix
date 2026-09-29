@@ -151,11 +151,61 @@ original is still there if the restore turns out to be the wrong dump.
 
 ---
 
+## The compose bundle
+
+Postgres is not published to the host there, and its password lives in a
+volume, so the script runs the dump inside the container:
+
+```bash
+./scripts/backup.sh --bundle                 # backups/agent-<stamp>.dump
+                                             # backups/agent-<stamp>-volumes.tgz
+```
+
+The tarball is the part of the bundle the dump is useless without, taken
+from the agent container: `/app/data` (`AUTH_SECRET_KEY`, the encrypted
+first password), `/app/router-config` (the model pins), `/app/shared`
+(`projects.json`, the review-control secret) and the two generated secrets
+(`/run/tektonix-pg`, `/run/tektonix-router`). Nothing in `.env` is read.
+The projects themselves are in `PROJECTS_DIR` on the host and are not in
+either file. The same nightly line works, with `--bundle`.
+
+**Restoring the bundle**, with the agent stopped and the database restored
+beside the old one:
+
+```bash
+# 1. stop everything that writes; postgres stays up
+docker compose stop agent agent-review commit-reviewer
+
+# 2. a fresh database next to the old one, then the dump into it. If the
+#    dump lists an EXTENSION (pg_restore --list), create it first as in
+#    step 2 above; the bundle's image has no pgvector and never made one.
+docker compose exec -T postgres createdb -U agent tektonix_restored
+docker compose exec -T postgres pg_restore -U agent -d tektonix_restored \
+    --no-owner --exit-on-error < backups/agent-<stamp>.dump
+
+# 3. the volumes, from the tarball: the agent's own, then the database
+#    password into the postgres container (the agent mounts it read-only)
+docker compose run --rm -T --no-deps --entrypoint tar agent xzf - -C / \
+    app/data app/router-config app/shared run/tektonix-router < backups/agent-<stamp>-volumes.tgz
+docker compose exec -T postgres tar xzf - -C / run/tektonix-pg < backups/agent-<stamp>-volumes.tgz
+
+# 4. point the agent at the restored database and start it
+#    (.env: POSTGRES_DB=tektonix_restored), then check it sees the data
+docker compose up -d
+curl -s 127.0.0.1:8100/api/health | python3 -m json.tool
+```
+
+Restoring the password file matters even when the database was never lost:
+`pgdata` outlives a lost `pgsecret`, and then the agent has no way to open
+it. The checks in "After a restore" apply here too.
+
+---
+
 ## What is not backed up here
 
 | Not in the dump | Where it lives | What to do |
 |---|---|---|
-| The projects' code | `/home/<project>` git checkouts | they have a remote; that is the backup |
-| `projects.json`, deploy keys, review secrets | on disk in the install | copy them with `.env` |
-| Router config and pins | `services/model-router/config.yaml` | **not in git** — gitignored since the Models page rewrites it on every repin. Keep a copy; `config.example.yaml` is only a starting point |
+| The projects' code | `/home/<project>` git checkouts; `PROJECTS_DIR` in the bundle | they have a remote; that is the backup |
+| `projects.json`, deploy keys, review secrets | on disk in the install; the `reviewshared` volume in the bundle | copy them with `.env` (`--bundle` tars them) |
+| Router config and pins | `services/model-router/config.yaml`; the `routerconfig` volume in the bundle | **not in git** — gitignored since the Models page rewrites it on every repin. Keep a copy (`--bundle` tars it); `config.example.yaml` is only a starting point |
 | Logs (`routing.jsonl`, pm2 logs) | on disk | rotate them; they are evidence, not state |

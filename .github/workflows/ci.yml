@@ -510,6 +510,8 @@ jobs:
         # The three containers' first-run, upgrade and PUID decisions, with
         # the privileged tools stubbed.
         run: bash tests/test_bundle_entrypoints.sh
+      - name: Backup script
+        run: bash tests/test_backup_bundle.sh
       - name: Doctor runs on a tree with no configuration
         # It must report what is missing rather than crash -- that is exactly
         # the state a new contributor's checkout is in. Exit 1 (something
