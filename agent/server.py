@@ -573,15 +573,15 @@ async def _security_headers(request, call_next):
 
 
 # ---------------------------------------------------------------------------
-# Auth -- username/password + TOTP 2FA (agent/auth.py). Every route below
-# this point that touches a repo-scoped resource calls check_repo_access
-# explicitly once `repo` is known (never uniform enough in shape -- query
-# param, request body field, or an existing task/session's own stored repo
-# -- for one FastAPI dependency to cover safely). Analytics and Model
-# Configuration are admin-only outright (require_admin), not repo-scoped --
-# they're operator/global concerns (aggregate spend across every project,
-# which LLM model each pinned role uses), not something a restricted
-# per-project account should see or change.
+# Auth -- username/password + TOTP 2FA (agent/auth.py). Every route that
+# touches a repo-scoped resource, here or in agent/routers/*, calls
+# check_repo_access explicitly once `repo` is known (never uniform enough
+# in shape -- query param, request body field, or an existing task/session's
+# own stored repo -- for one FastAPI dependency to cover safely);
+# tests/test_repo_scope.py pins each one. Analytics, Model Configuration and
+# the other operator-only pages are admin-only outright (require_admin),
+# not repo-scoped -- aggregate spend across every project, which LLM model
+# each pinned role uses -- and tests/test_admin_only_routes.py pins those.
 #
 # The /api/auth/* routes themselves live in agent/routers/auth.py (2026-09-27).
 # ---------------------------------------------------------------------------
@@ -794,17 +794,6 @@ _attachments_note = tasks.attachments_note   # agent/tasks.py
 # The review proxy lives in agent/routers/review_proxy.py (2026-09-27); the
 # same handler under its old name, for the test that drives it directly.
 review_proxy = review_proxy_routes.review_proxy
-
-
-
-
-
-
-
-
-# Ceiling on a single resume top-up. Not a policy about total spend --
-# just a bound on one request, so a typo or a hostile value cannot remove
-# the budget ceiling in one call.
 
 
 # The live run state moved to agent/task_runtime.py (2026-09-23) so the task
@@ -1238,12 +1227,12 @@ async def _resolve_task_repo(task_id: str) -> str | None:
     return await tasks_routes._resolve_task_repo(app, task_id)
 
 
-
-
-
-
 # ---------------------------------------------------------------------------
-# Planning chat -- a conversational research/design-consulting session
+# Planning chat -- the turn runner and session-meta helpers. The routes
+# themselves live in agent/routers/planning.py (2026-09-23) and reach these
+# through app.state (see _late above).
+#
+# A planning session is a conversational research/design-consulting session
 # (agent/planning_chat.py), distinct from a build task: no plan/execute/
 # verify graph, no budget ceiling, no write/edit/bash access to the repo.
 # Its own Store namespace ("planning", repo) holds lightweight session meta
@@ -1396,10 +1385,6 @@ def _publish_planning(session_id: str, event: dict) -> None:
             logger.warning("dropping event for a stalled planning %s subscriber", session_id)  # audit M-34
 
 
-
-
-
-
 async def _find_planning_meta(session_id: str):
     """Session meta is stored per-repo (("planning", repo)), but the id
     routes here carry no repo -- cheap enough to check the handful of
@@ -1409,12 +1394,6 @@ async def _find_planning_meta(session_id: str):
         if item:
             return repo, item.value
     return None, None
-
-
-
-
-
-
 
 
 async def _bank_planning_turn(
@@ -1766,12 +1745,6 @@ async def _run_planning_turn_bg(session_id: str, repo: str, text: str, attachmen
         _running_planning_turns.pop(session_id, None)
 
 
-
-
-
-
-
-
 async def _move_planning_session(session_id: str, old_repo: str, new_repo: str, meta: dict) -> dict:
     """Re-home a session's two Store rows -- meta at ("planning", repo) and
     the durable transcript at ("planning_log", repo) -- under the new repo.
@@ -1790,12 +1763,6 @@ async def _move_planning_session(session_id: str, old_repo: str, new_repo: str, 
     await store.adelete(("planning", old_repo), session_id)
     await planning_log.forget(store, old_repo, session_id)
     return new_meta
-
-
-
-
-
-
 
 
 async def _start_task(goal: str, repo: str, budget_usd: float | None, route: str, **kwargs) -> dict:
@@ -1865,8 +1832,6 @@ class GitHubReposRequest(BaseModel):
     token: str | None = None     # or a pasted one, before saving
 
 
-
-
 @app.post("/api/github/repos")
 async def github_repos_endpoint(req: GitHubReposRequest, user: User = Depends(require_full_auth)):
     """Every repository a token can reach, and which are already onboarded.
@@ -1918,8 +1883,6 @@ async def github_repos_endpoint(req: GitHubReposRequest, user: User = Depends(re
     for r in repos:
         r["onboarded_as"] = known.get(r["slug"].lower())
     return {"repos": repos, "onboarded": sorted(set(known.values()))}
-
-
 
 
 def _tail_lines(path: Path, count: int, block: int = 64 * 1024) -> str:
@@ -1996,8 +1959,6 @@ async def consolidation_status(user: User = Depends(require_full_auth)):
     sched = jobs.status("consolidation")
     payload.update({k: sched[k] for k in ("due_at", "due", "running", "waiting", "trigger", "error")})
     return payload
-
-
 
 
 # Static frontend, mounted last so it never shadows an /api/* route above.

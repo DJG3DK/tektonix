@@ -22,7 +22,8 @@ Per-user project access: `allowed_repos` is NULL for a role="admin" account
 (every configured repo, including ones added later, with no ACL table to
 keep in sync) and an explicit list for role="user" (e.g. a restricted
 account scoped to exactly one project). Checked via `check_repo_access`,
-called explicitly by every repo-scoped endpoint in server.py -- not wired
+called explicitly by every repo-scoped endpoint (agent/routers/*, pinned by
+tests/test_repo_scope.py) -- not wired
 through FastAPI's dependency-injection, since the existing endpoints take
 `repo` in enough different shapes (query param, request body field, or
 implied by an existing task/session's own stored repo) that one uniform DI
@@ -857,8 +858,8 @@ async def verify_totp_or_recovery(pool: AsyncConnectionPool, config: Config, use
 
 
 async def request_password_reset(pool: AsyncConnectionPool, config: Config, email: str) -> None:
-    """Always succeeds from the caller's point of view (see server.py's own
-    endpoint, which returns {"ok": true} unconditionally) -- silently no-ops
+    """Always succeeds from the caller's point of view (the route in
+    agent/routers/auth.py returns {"ok": true} unconditionally) -- silently no-ops
     if the email doesn't match a real account, the same anti-enumeration
     behavior any password-reset flow needs. Only ever sends real email
     if a matching user actually exists.
