@@ -507,7 +507,7 @@ def _remove_run_containers(run: str) -> None:
         ids = listed.stdout.split()
         if ids:
             subprocess.run(["docker", "rm", "-f", *ids], capture_output=True, timeout=300)
-    except (OSError, subprocess.SubprocessError):
+    except Exception:  # noqa: BLE001 -- best effort on a thread nobody joins; anything else is noise
         pass
 
 
@@ -540,7 +540,8 @@ async def stop_swebench_run(name: str, request: Request, user: User = Depends(re
         raise HTTPException(409, "this run is not running")
     for run in stopped:
         # Best effort: the harness names its containers `sweb.eval.<task>.<run>`.
-        threading.Thread(target=_remove_run_containers, args=(run,), daemon=True).start()
+        threading.Thread(target=_remove_run_containers, args=(run,), daemon=True,
+                         name=f"swebench-cleanup-{run}").start()
     await audit.record(audit_store(request), actor=user.email, action="swebench.stop", target=name,
                        detail=", ".join(stopped))
     return {"ok": True, "stopped": stopped}

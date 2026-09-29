@@ -226,13 +226,19 @@ def test_a_second_run_is_refused_while_one_is_in_progress(client, monkeypatch):
 
 
 def test_stop_signals_the_running_run_s_session_and_refuses_a_dead_or_finished_one(client, monkeypatch):
-    signalled = []
+    signalled, removed = [], []
     monkeypatch.setattr(sw.os, "killpg", lambda pid, sig: signalled.append((pid, sig)))
-    monkeypatch.setattr(sw.subprocess, "Popen", lambda *a, **k: None)
+    # The route's own seam, never the global subprocess module: patching
+    # `subprocess.Popen` process-wide reached the cleanup thread, which then
+    # died on a TypeError -- or, scheduled after the patch was undone, ran a
+    # real `docker rm -f` on the developer's machine (2026-09-29 audit, A10).
+    monkeypatch.setattr(sw, "_remove_run_containers", removed.append)
     monkeypatch.setattr(sw.audit, "record", _no_audit)
     r = client.post("/api/swebench/runs/live-run/stop")
     assert r.status_code == 200 and r.json()["stopped"] == ["live-run"]
     assert signalled == [(os.getpid(), sw.signal.SIGTERM)]
+    _join_cleanup_threads()
+    assert removed == ["live-run"]
     assert client.post("/api/swebench/runs/dead-run/stop").status_code == 409, "its process is already gone"
     assert client.post("/api/swebench/runs/done-run/stop").status_code == 409
     assert client.post("/api/swebench/runs/no-such-run/stop").status_code == 404
@@ -243,12 +249,30 @@ def test_stopping_a_combined_run_stops_every_shard(client, monkeypatch, tmp_path
         _write(tmp_path, f"tektonix-x-s{k}", {"run_id": f"tektonix-x-s{k}", "state": "running", "pid": os.getpid(),
                                               "selection": {"sample": 4, "shard": f"{k}/2"}, "total": 2,
                                               "started_at": "2026-09-26T10:00:00Z", "instances": {}})
-    signalled = []
+    signalled, removed = [], []
     monkeypatch.setattr(sw.os, "killpg", lambda pid, sig: signalled.append(pid))
-    monkeypatch.setattr(sw.subprocess, "Popen", lambda *a, **k: None)
+    monkeypatch.setattr(sw, "_remove_run_containers", removed.append)
     monkeypatch.setattr(sw.audit, "record", _no_audit)
     r = client.post("/api/swebench/runs/tektonix-x/stop")
     assert r.status_code == 200 and r.json()["stopped"] == ["tektonix-x-s1", "tektonix-x-s2"] and len(signalled) == 2
+    _join_cleanup_threads()
+    assert sorted(removed) == ["tektonix-x-s1", "tektonix-x-s2"]
+
+
+def _join_cleanup_threads():
+    import threading
+    for t in threading.enumerate():
+        if t is not threading.current_thread() and t.daemon and t.name.startswith("swebench-cleanup"):
+            t.join(timeout=5)
+
+
+def test_the_container_cleanup_swallows_whatever_docker_throws(monkeypatch):
+    """It runs on a daemon thread nobody joins; an exception there is a
+    warning in the test run and nothing at all in production."""
+    def broken(*a, **k):
+        raise TypeError("'NoneType' object does not support the context manager protocol")
+    monkeypatch.setattr(sw.subprocess, "run", broken)
+    sw._remove_run_containers("live-run")  # must not raise
 
 
 def test_the_runner_s_log_tail_is_shown_per_shard(client, tmp_path):
