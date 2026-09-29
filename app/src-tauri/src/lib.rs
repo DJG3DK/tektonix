@@ -250,6 +250,18 @@ async fn open_panel(app: AppHandle) -> Result<(), String> {
     show_panel_page(&app)
 }
 
+/// The projects folder from the settings, in the file manager. A command
+/// rather than the opener plugin's open-path from the page, so no page is
+/// allowed to open an arbitrary path.
+#[tauri::command]
+fn open_projects_dir(app: AppHandle) -> Result<(), String> {
+    let dir = stack::read_settings(&app)?.projects_dir;
+    if dir.is_empty() {
+        return Err("no projects folder is set yet".into());
+    }
+    tauri_plugin_opener::open_path(dir, None::<&str>).map_err(|e| e.to_string())
+}
+
 fn show_console(app: &AppHandle) -> Result<(), String> {
     let w = app.get_webview_window("main").ok_or("no window")?;
     let url: tauri::Url = stack::DASHBOARD
@@ -454,6 +466,7 @@ pub fn run() {
             logs_stop,
             open_console,
             open_panel,
+            open_projects_dir,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tektonix");

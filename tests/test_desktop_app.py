@@ -111,6 +111,18 @@ def test_the_console_origin_gets_window_controls_and_the_panel_switch_only():
     assert {f"allow-{c.replace('_', '-')}" for c in commands} <= set(panel["permissions"]), "the panel keeps every command"
 
 
+def test_the_projects_folder_opens_through_a_command_not_the_opener_plugin():
+    """opener.openPath from the page needed opener:allow-open-path, which the
+    capability never granted, so "Open projects folder" was denied
+    (2026-09-29). A command opens the saved setting instead; no page gets to
+    open an arbitrary path."""
+    panel_js = (REPO / "app/src/main.js").read_text()
+    assert "openPath" not in panel_js and 'invoke("open_projects_dir")' in panel_js
+    assert "open_projects_dir" in _registered_commands()
+    for cap in (REPO / "app/src-tauri/capabilities").glob("*.json"):
+        assert "opener:allow-open-path" not in json.loads(cap.read_text())["permissions"]
+
+
 def test_the_app_has_one_tray_icon():
     """app.trayIcon in the config made Tauri build a tray of its own, with
     no menu and no handler, beside the one lib.rs builds (2026-09-29)."""

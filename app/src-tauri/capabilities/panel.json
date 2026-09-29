@@ -43,6 +43,7 @@
     "allow-logs-follow",
     "allow-logs-stop",
     "allow-open-console",
-    "allow-open-panel"
+    "allow-open-panel",
+    "allow-open-projects-dir"
   ]
 }

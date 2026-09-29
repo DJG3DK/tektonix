@@ -29,6 +29,7 @@ const COMMANDS: &[&str] = &[
     "logs_stop",
     "open_console",
     "open_panel",
+    "open_projects_dir",
 ];
 
 fn main() {

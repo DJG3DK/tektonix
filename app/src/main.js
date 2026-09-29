@@ -206,7 +206,7 @@ $("btn-start").onclick = () => runStack("stack_up");
 $("btn-stop").onclick = () => runStack("stack_down");
 $("btn-open").onclick = () => invoke("open_console").catch(fail);
 $("btn-settings").onclick = () => { void showSetup(true); };
-$("btn-folder").onclick = () => { if (settings && settings.projects_dir) opener.openPath(settings.projects_dir).catch(fail); };
+$("btn-folder").onclick = () => invoke("open_projects_dir").catch(fail);
 $("btn-password").onclick = async () => {
   try {
     const pw = await invoke("stack_password");
