@@ -125,8 +125,10 @@ SANDBOX_CPU_LIMIT = _cap("SANDBOX_CPUS", "2", r"[1-9]\d?(\.\d+)?")
 SANDBOX_MEMORY_SWAP = SANDBOX_MEMORY_LIMIT
 # Test runners that size their worker pool from the HOST's core count see 32
 # cores inside a 2-CPU, 2 GB container: Django's runtests started 32 workers
-# and ran out of memory. Told the container's own size instead.
-SANDBOX_TEST_ENV = {"DJANGO_TEST_PROCESSES": SANDBOX_CPU_LIMIT}
+# and ran out of memory. Told the container's own size instead -- as a whole
+# number: docker takes `--cpus 1.5`, Django parses this with int() and a
+# fractional cap crashed every Django run in the sandbox (2026-09-29 audit).
+SANDBOX_TEST_ENV = {"DJANGO_TEST_PROCESSES": str(max(1, int(float(SANDBOX_CPU_LIMIT))))}
 # audit M-10: cap process count to blunt a fork bomb, drop all Linux
 # capabilities (git/npm/node need none), and forbid privilege escalation.
 SANDBOX_PIDS_LIMIT = "512"
