@@ -49,11 +49,17 @@ def repo_slug_from_remote(url: str) -> str | None:
     return f"{m.group(1)}/{m.group(2)}" if m else None
 
 
-_slug_cache: dict[str, str | None] = {}
+# Hits only. A miss used to be cached too, so a project whose origin was
+# added after the first lookup (onboarding without a remote, then a push
+# set up later) read as "no GitHub origin" until the process restarted
+# (2026-09-29). A miss is one `git config` read; it can afford to repeat.
+_slug_cache: dict[str, str] = {}
 
 
 def resolve_slug(repo: str) -> str | None:
-    """The GitHub owner/name for a configured project, from its checkout's origin."""
+    """The GitHub owner/name for a configured project, from its checkout's
+    origin. Runs git synchronously: from a coroutine, go through
+    asyncio.to_thread (see github_inbox.probe_token)."""
     if repo in _slug_cache:
         return _slug_cache[repo]
     proj = PROJECTS.get(repo) or {}
@@ -77,7 +83,8 @@ def resolve_slug(repo: str) -> str | None:
             slug = repo_slug_from_remote(r.stdout)
             if slug:
                 break
-    _slug_cache[repo] = slug
+    if slug:
+        _slug_cache[repo] = slug
     return slug
 
 

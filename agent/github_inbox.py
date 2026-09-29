@@ -779,7 +779,7 @@ async def create_task_for_item(item: dict, settings: dict, config: Config, creat
     pr_text = None
     if item.get("number") and item["kind"] in ("dependabot_prs", "review_requests"):
         token = github_settings.token_for(settings, config, item["repo"])
-        slug = resolve_slug(item["repo"])
+        slug = await asyncio.to_thread(resolve_slug, item["repo"])
         if token and slug:
             pr_text = await pr_text_for(token, slug, int(item["number"]))
     # The live checkout, not the agent's workspace: it is the canonical state
@@ -799,7 +799,7 @@ async def poll_project(
     """One project, one pass. Returns a small summary for the dashboard/log."""
     proj = github_settings.project_settings(settings, repo)
     token = github_settings.token_for(settings, config, repo)
-    slug = resolve_slug(repo)
+    slug = await asyncio.to_thread(resolve_slug, repo)   # runs git; off the loop
     if not token or not slug:
         return {"repo": repo, "skipped": "no token" if not token else "no GitHub origin"}
     client = client or GitHubClient(token)
@@ -929,12 +929,21 @@ async def probe_token(token: str, projects: dict[str, dict]) -> dict:
         out["login"] = me.get("login")
     except Exception as e:  # noqa: BLE001
         return {"ok": False, "error": f"token rejected: {e}"}
-    slugs = {resolve_slug(name): name for name in projects}
-    slugs.pop(None, None)
+    # slug -> every project that is a checkout of it. Two projects can share
+    # one repository (a fork onboarded twice, or a live and a staging
+    # checkout); keyed the other way the later one overwrote the earlier and
+    # the probe reported the wrong project reached (2026-09-29). resolve_slug
+    # runs git, so it is asked off the loop.
+    slugs: dict[str, list[str]] = {}
+    for name in projects:
+        slug = await asyncio.to_thread(resolve_slug, name)
+        if slug:
+            slugs.setdefault(slug, []).append(name)
+    reached = {n for names in slugs.values() for n in names}
     # A project whose origin is not a GitHub URL the agent can read cannot be
     # matched by any token; say so rather than blaming the token.
     for name in projects:
-        if name not in slugs.values():
+        if name not in reached:
             out["unreached"].append({"slug": None, "project": name,
                                      "error": "no GitHub origin on this project's checkout, so no token can reach it"})
     try:
@@ -945,9 +954,11 @@ async def probe_token(token: str, projects: dict[str, dict]) -> dict:
     for r in repos:
         slug = r.get("full_name")
         perms = r.get("permissions") or {}
-        entry = {"slug": slug, "project": slugs.get(slug), "push": bool(perms.get("push")), "pull": bool(perms.get("pull"))}
+        names = slugs.get(slug) or []
+        entry = {"slug": slug, "project": ", ".join(names) or None, "projects": names,
+                 "push": bool(perms.get("push")), "pull": bool(perms.get("pull"))}
         out["repos"].append(entry)
-        if entry["project"]:
+        if names:
             entry["dependabot_alerts"] = await _can(client, f"/repos/{slug}/dependabot/alerts", {"per_page": 1})
             entry["code_scanning"] = await _can(client, f"/repos/{slug}/code-scanning/alerts", {"per_page": 1})
             entry["checks"] = await _can_ci(client, slug)
@@ -955,14 +966,15 @@ async def probe_token(token: str, projects: dict[str, dict]) -> dict:
     # A project whose slug the token did not list may still be reachable
     # (classic tokens list everything; fine-grained ones only selected).
     listed = {e["slug"] for e in out["repos"]}
-    for slug, name in slugs.items():
+    for slug, names in slugs.items():
         if slug in listed:
             continue
+        name = ", ".join(names)
         try:
             info = await client.repo(slug)
             perms = info.get("permissions") or {}
             out["matched"].append({
-                "slug": slug, "project": name, "push": bool(perms.get("push")), "pull": True,
+                "slug": slug, "project": name, "projects": names, "push": bool(perms.get("push")), "pull": True,
                 "dependabot_alerts": await _can(client, f"/repos/{slug}/dependabot/alerts", {"per_page": 1}),
                 "code_scanning": await _can(client, f"/repos/{slug}/code-scanning/alerts", {"per_page": 1}),
                 "checks": await _can_ci(client, slug),
