@@ -24,12 +24,15 @@ import pytest
 from agent import paths
 from agent import review_sandbox as rs
 from agent.config import PROJECTS
+from tests import sandbox_image
 
+# A present image is not enough: one older than the Dockerfile fails these
+# with errors that read as product bugs (2026-09-29 audit, T4). The reason
+# names the rebuild when that is what is needed.
+_IMAGE_SKIP = sandbox_image.skip_reason()
 pytestmark = pytest.mark.skipif(
-    shutil.which("docker") is None
-    or subprocess.run(["docker", "image", "inspect", "tektonix-sandbox:latest"], capture_output=True).returncode != 0
-    or shutil.which("npm") is None,
-    reason="needs docker, the sandbox image and npm",
+    _IMAGE_SKIP is not None or shutil.which("npm") is None,
+    reason=_IMAGE_SKIP or "needs docker, the sandbox image and npm",
 )
 
 SCRIPTS = {
