@@ -533,3 +533,32 @@ def test_concurrent_runs_get_their_own_redis_database_and_give_it_back(bundle, m
     assert len(dbs) == 2 and sorted(flushed) == sorted(dbs), "each run flushed and used its own database"
     assert set(rs._redis_pool["free"]) == before, "both databases are back in the pool"
     assert len({r.env["DATABASE_URL"] for r in runs}) == 2, "and each has its own role and database"
+
+
+def test_a_long_check_keeps_the_connection_alive_with_whitespace_then_the_json(bundle, monkeypatch):
+    """2026-09-29: the reviewer's fetch gives up on headers after five
+    minutes; a project's test suite ran longer, and every review of it
+    said the agent's sandbox endpoint did not answer."""
+    from agent.routers import review_sandbox as route
+
+    class _Proc:
+        returncode = 0
+
+        async def communicate(self):
+            await asyncio.sleep(0.25)
+            return b"slow but green\n", None
+
+        async def wait(self):
+            return 0
+
+    async def fake_exec(*_argv, **_kw):
+        return _Proc()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+    monkeypatch.setattr(route, "KEEPALIVE_S", 0.05)
+    c = _client()
+    r = c.post("/api/internal/review-sandbox/run", json=_body(bundle), headers={"X-Review-Secret": "the-secret"})
+    assert r.status_code == 200
+    assert r.text.startswith("  "), "keepalive spaces came before the answer"
+    assert r.json() == {"ok": True, "code": 0, "output": "slow but green\n", "image": "tektonix-sandbox:latest"}
+    assert r.headers["content-type"].startswith("application/json")

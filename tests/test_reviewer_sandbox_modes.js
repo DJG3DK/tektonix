@@ -328,3 +328,14 @@ test('the checks module hands the database checks to the agent in the bundle and
     assert.ok(!/runSealed\(dc\.driftCmd[\s\S]*IN_CONTAINER/.test(src.split('async function runDatabaseCheck')[1].split('IN_CONTAINER')[0]),
         'nothing agent-authored runs in this process before the bundle check');
 });
+
+test('a failed fetch is described by its cause, which is what a person can act on', async () => {
+    const s = freshSandbox('1', 'http://agent:8100');
+    const timeout = new Error('fetch failed', { cause: { code: 'UND_ERR_HEADERS_TIMEOUT' } });
+    assert.equal(s.describeFetchError(timeout), 'fetch failed: UND_ERR_HEADERS_TIMEOUT');
+    const refused = new Error('fetch failed', { cause: new Error('connect ECONNREFUSED 10.0.0.2:8100') });
+    assert.equal(s.describeFetchError(refused), 'fetch failed: connect ECONNREFUSED 10.0.0.2:8100');
+    assert.equal(s.describeFetchError(new Error('plain')), 'plain');
+    const down = await s.probe({ secret: 's3cret', fetchImpl: async () => { throw timeout; } });
+    assert.ok(/UND_ERR_HEADERS_TIMEOUT/.test(down.reason), down.reason);
+});

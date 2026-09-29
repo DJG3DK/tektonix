@@ -443,6 +443,13 @@ function runNextQueued(project, routerKey) {
     .catch((err) => log(`[${project}] queued check failed: ${err.message}`)));
 }
 
+/** The first sentence of a check's SETUP line: the reason it could not run. */
+function setupReason(output) {
+  const text = String(output || '').replace(/^SETUP:\s*/, '').trim();
+  const first = text.split(/\.\s|\n/)[0].trim();
+  return first || 'no reason recorded';
+}
+
 function setStep(project, step) {
   updateState((state) => {
     if (!state[project]?.inProgress) return false; // review already finished/aborted
@@ -576,11 +583,11 @@ async function reviewProject(project, cfg, routerKey, requested = null) {
       // rejected" and the next person to look starts debugging the diff.
       const names = infraFailures.map((c) => c.name).join(', ');
       const plural = infraFailures.length > 1 ? 'those checks' : 'that check';
-      review.summary = `The gate could not RUN ${names}: the command was missing from the review `
-        + `environment, so ${plural} never executed and nothing was learned about this commit either `
-        + `way. This is a fault in the review harness, not in the code under review -- it cannot be `
-        + `fixed from inside the repository, and the commit is blocked only because an unrun check `
-        + `cannot be counted as a pass.\n\n${review.summary || ''}`;
+      const why = infraFailures.map((c) => `${c.name}: ${setupReason(c.output)}`).join('; ');
+      review.summary = `The gate could not RUN ${names} (${why}), so ${plural} never executed and `
+        + `nothing was learned about this commit either way. This is a fault in the review harness, `
+        + `not in the code under review -- it cannot be fixed from inside the repository, and the `
+        + `commit is blocked only because an unrun check cannot be counted as a pass.\n\n${review.summary || ''}`;
     }
     const hasBlockingFindings = (review.findings || []).some((f) => f.severity === 'blocking');
     // audit H-9: ANY omitted file forces NEEDS_FIXES in NODE -- not left to

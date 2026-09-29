@@ -523,10 +523,10 @@ function buildAgentMessage(review, checkResults) {
     lines.push(`Failed checks: ${failedChecks.join(', ')}`);
   }
   if (unrunnable.length) {
-    lines.push(`Checks that could NOT RUN: ${unrunnable.map((c) => c.name).join(', ')}. The command itself `
-      + `was missing from the review environment, so these never executed and say nothing about your code. `
-      + `This is a fault in the review harness — do NOT try to fix it from inside this repository, and do `
-      + `NOT change your code to work around it.`);
+    lines.push(`Checks that could NOT RUN: ${unrunnable.map((c) => c.name).join(', ')}. The review `
+      + `harness could not run them (the reason is in the failure output below), so these never executed `
+      + `and say nothing about your code. This is a fault in the review harness — do NOT try to fix it `
+      + `from inside this repository, and do NOT change your code to work around it.`);
   }
   if (preexisting.length) {
     lines.push(`Pre-existing failing checks (they fail the same way on the base commit, so they are NOT counted against this change and you should NOT try to fix them here): ${preexisting.join(', ')}`);

@@ -87,6 +87,18 @@ const PIDS = '512';
 const IN_CONTAINER = process.env.TEKTONIX_BUNDLE === '1';
 const DELEGATE_URL = (process.env.AGENT_SANDBOX_URL || '').replace(/\/+$/, '');
 
+/**
+ * What went wrong with a fetch, for a reason a person can act on. Node's
+ * fetch says only "fetch failed"; the cause underneath says ECONNREFUSED,
+ * ENOTFOUND, or UND_ERR_HEADERS_TIMEOUT, which are three different repairs.
+ */
+function describeFetchError(err) {
+    const cause = err && err.cause;
+    const inner = cause && (cause.code || cause.message);
+    const outer = String((err && err.message) || err);
+    return (inner ? `${outer}: ${inner}` : outer).slice(0, 200);
+}
+
 function execp(cmd, args, opts = {}) {
     return new Promise((resolve) => {
         execFile(cmd, args, { maxBuffer: 20 * 1024 * 1024, ...opts }, (err, stdout, stderr) => {
@@ -150,7 +162,7 @@ async function delegatedProbe({ secret, fetchImpl = fetch } = {}) {
         });
     } catch (err) {
         return { mode: 'unavailable',
-                 reason: `the agent's sandbox endpoint did not answer (${String(err && err.message || err).slice(0, 200)})` };
+                 reason: `the agent's sandbox endpoint did not answer (${describeFetchError(err)})` };
     }
     let data = null;
     try { data = await res.json(); } catch { /* reported below */ }
@@ -447,7 +459,7 @@ async function runDelegated(cfg, worktreePath, relDir, cmd, args, timeoutMs, ext
             signal: AbortSignal.timeout(body.timeoutMs + 60_000),
         });
     } catch (err) {
-        return setup(`the agent's sandbox endpoint did not answer (${String(err && err.message || err).slice(0, 200)})`);
+        return setup(`the agent's sandbox endpoint did not answer (${describeFetchError(err)})`);
     }
     let data = null;
     try { data = await res.json(); } catch { /* reported below */ }
@@ -492,7 +504,7 @@ async function runDelegatedDatabaseCheck(cfg, worktreePath, stack, { secret, fet
             signal: AbortSignal.timeout(600_000),
         });
     } catch (err) {
-        return setup(`the agent's sandbox endpoint did not answer (${String(err && err.message || err).slice(0, 200)})`);
+        return setup(`the agent's sandbox endpoint did not answer (${describeFetchError(err)})`);
     }
     let data = null;
     try { data = await res.json(); } catch { /* reported below */ }
@@ -541,6 +553,6 @@ function missingTool(output) {
     return m ? m[1] : null;
 }
 
-module.exports = { probe, delegatedProbe, resetProbe, runSandboxed, runDelegated, runDelegatedDatabaseCheck, delegatedRequest, dockerArgs, mountArgs,
+module.exports = { describeFetchError, probe, delegatedProbe, resetProbe, runSandboxed, runDelegated, runDelegatedDatabaseCheck, delegatedRequest, dockerArgs, mountArgs,
                    mountSpecs, nodeModulesLinks, isInside, missingTool, imageFor, STACKS, IMAGE, IN_CONTAINER,
                    DELEGATE_URL };

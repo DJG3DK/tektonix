@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### A long check no longer looks like a silent agent
+
+In the bundle the reviewer's checks run through the agent, and the
+reviewer's fetch gave up on any answer whose headers took over five
+minutes: a project's test suite did, and every review of it said "the
+agent's sandbox endpoint did not answer". The agent now answers at once
+and keeps the connection alive until the check ends. A failed fetch is
+reported with its cause, and the gate's summary says why a check could
+not run instead of guessing that the command was missing.
+
 ### The app runs the release it came from
 
 A release-candidate app asked for images of its plain version, no such

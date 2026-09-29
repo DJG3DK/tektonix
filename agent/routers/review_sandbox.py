@@ -10,10 +10,13 @@ calls this.
 """
 from __future__ import annotations
 
+import asyncio
 import hmac
+import json
 import os
 
 from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from agent import review_sandbox as rs
@@ -78,6 +81,15 @@ async def run_review_database_check(body: _DbCheckBody, _auth: None = Depends(re
         raise HTTPException(400, f"refused: {e}") from e
 
 
+# A check can run for many minutes, and the reviewer's fetch gives up on a
+# response whose headers have not arrived in five (undici's default). So the
+# answer starts at once and a space follows every few seconds until the
+# check ends; leading whitespace is valid JSON. 2026-09-29, the first
+# Windows install: a project's test suite ran longer than that, and every
+# review of it said "the agent's sandbox endpoint did not answer".
+KEEPALIVE_S = 15.0
+
+
 @router.post("/api/internal/review-sandbox/run")
 async def run_review_check(body: _RunBody, _auth: None = Depends(require_review_secret)):
     if body.network not in ("none", "bridge"):
@@ -87,7 +99,29 @@ async def run_review_check(body: _RunBody, _auth: None = Depends(require_review_
         rel_dir=body.relDir, env=body.env, network=body.network, stack=body.stack,
         mounts=[(m.src, m.dst) for m in body.mounts], timeout_ms=body.timeoutMs,
     )
+    # A refusal is still a 400, decided before the first byte goes out.
     try:
-        return await rs.run_check(req)
+        rs.build_docker_argv(req, "validate")
     except rs.RejectedRequest as e:
         raise HTTPException(400, f"refused: {e}") from e
+
+    async def stream():
+        task = asyncio.ensure_future(rs.run_check(req))
+        try:
+            while True:
+                done, _ = await asyncio.wait({task}, timeout=KEEPALIVE_S)
+                if done:
+                    break
+                yield b" "
+            try:
+                result = task.result()
+            except rs.RejectedRequest as e:
+                result = {"ok": False, "code": 1, "infrastructure": True,
+                          "output": f"SETUP: the agent refused this check -- {e}"}
+            yield json.dumps(result).encode("utf-8")
+        except (asyncio.CancelledError, GeneratorExit):
+            # The reviewer went away: the container must not outlive it.
+            task.cancel()
+            raise
+
+    return StreamingResponse(stream(), media_type="application/json")
