@@ -291,11 +291,40 @@ _KEEP_FRACTION = 0.5
 TOP_N = 5
 
 
+# What the last search, and the last memory index, put in front of each
+# task, so a use can be recorded WITH ITS RANK. The rank is the number the
+# re-ranker decision hangs on (docs/todo.md, hybrid retrieval): a used
+# episode at rank six or worse says ordering is the problem; one that was
+# never offered says the candidate pool is. Without it the log held the
+# answer's two halves in separate events and nobody joined them
+# (2026-09-29). Bounded: one entry per (task, repo), the newest wins.
+_LAST_REFS: dict[tuple[str | None, str], list[str]] = {}
+_LAST_OFFERED: dict[tuple[str | None, str], list[str]] = {}
+_LAST_LIMIT = 500
+
+
+def _remember(table: dict, key: tuple, items: list[str]) -> None:
+    table[key] = list(items)
+    if len(table) > _LAST_LIMIT:
+        for stale in list(table)[: len(table) - _LAST_LIMIT]:
+            table.pop(stale, None)
+
+
+def _rank_of(table: dict, key: tuple, item: str) -> int | None:
+    """1-based position of `item` in what was last put in front of this
+    task, or None when it was never offered (or the offer is unknown)."""
+    items = table.get(key)
+    if not items or item not in items:
+        return None
+    return items.index(item) + 1
+
+
 def record_query(query: str, repo: str, refs: list[str], *, task_id: str | None = None,
                  legs: tuple[str, ...] | None = None, found_by: dict[str, list[str]] | None = None,
                  path: Path | None = None) -> None:
     """One search happened, and these are the refs it put in front of the
     model. Never raises."""
+    _remember(_LAST_REFS, (task_id, repo), list(refs)[:TOP_N])
     _append({
         "ts": time.time(),
         "event": "query",
@@ -325,6 +354,7 @@ def record_use(ref: str, repo: str, *, task_id: str | None = None, path: Path | 
         "repo": repo,
         "task_id": task_id,
         "ref": ref,
+        "rank": _rank_of(_LAST_REFS, (task_id, repo), ref),
     }, path)
 
 
@@ -341,6 +371,7 @@ def record_use(ref: str, repo: str, *, task_id: str | None = None, path: Path | 
 def record_sections_offered(repo: str, offered: list[str], *, always: list[str] | None = None,
                             task_id: str | None = None, path: Path | None = None) -> None:
     """A prompt was built carrying this project's memory index. Never raises."""
+    _remember(_LAST_OFFERED, (task_id, repo), list(offered))
     _append({
         "ts": time.time(),
         "event": "memory_offered",
@@ -363,6 +394,7 @@ def record_section_read(slug: str, repo: str, *, task_id: str | None = None,
         "repo": repo,
         "task_id": task_id,
         "section": slug,
+        "position": _rank_of(_LAST_OFFERED, (task_id, repo), slug),
     }, path)
 
 

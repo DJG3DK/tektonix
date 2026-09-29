@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Recall records where the memory it used was ranked
+
+A used episode carries the rank the search offered it at, and a section
+read carries its position in the memory index. The log held offers and
+uses as separate events nobody joined, so the question a re-ranker would
+answer could not be asked. The vector leg of episode recall is switched on
+on the reference deployment.
+
 ### Auto mode reads a delete through a variable
 
 The coder kept its scratch path in a shell variable and deleted through

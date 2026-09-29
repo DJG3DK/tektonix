@@ -136,3 +136,23 @@ def test_telemetry_never_raises_when_it_cannot_write(tmp_path):
     (tmp_path / "a-file").write_text("not a directory")
     recall.record_query("q", "test-repo", [], path=unwritable)
     recall.record_use("/episodes/a.json", "test-repo", path=unwritable)
+
+
+
+def test_a_use_and_a_section_read_carry_the_rank_they_were_offered_at(tmp_path):
+    """The re-ranker decision hangs on where a used memory sat; the log used
+    to hold offers and uses as separate events nobody joined."""
+    import json
+    from agent import episode_recall as er
+    log = tmp_path / "events.jsonl"
+    er.record_query("how do we rebase", "demo", ["ep:a", "ep:b", "ep:c"], task_id="t1", path=log)
+    er.record_use("ep:c", "demo", task_id="t1", path=log)
+    er.record_use("ep:zzz", "demo", task_id="t1", path=log)            # never offered
+    er.record_use("ep:a", "demo", task_id="other", path=log)           # another task: no offer known
+    er.record_sections_offered("demo", ["conventions", "hot-spots", "deploy"], task_id="t1", path=log)
+    er.record_section_read("deploy", "demo", task_id="t1", path=log)
+    events = [json.loads(line) for line in log.read_text().splitlines()]
+    uses = [e for e in events if e["event"] == "use"]
+    assert [u["rank"] for u in uses] == [3, None, None]
+    read = next(e for e in events if e["event"] == "memory_read")
+    assert read["position"] == 3

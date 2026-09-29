@@ -504,13 +504,20 @@ is in the prompt for the retry. Note it composes with the new episode/history
 search: a critique is exactly the kind of durable "what went wrong" the history
 index is now able to retrieve across tasks.
 
-### 5. Hybrid retrieval with re-ranking — SPARSE BUILT, DENSE IN FLIGHT, RE-RANKER NOT
+### 5. Hybrid retrieval with re-ranking — SPARSE BUILT, DENSE ON (2026-09-29), RE-RANKER NOT
 
 **Built (2026-09-21):** `agent/history_index.py`, Postgres full-text with a
 weighted tsvector, over episodes, tasks and build transcripts.
 **Built but NOT SWITCHED ON:** the dense/vector leg (`agent/episode_vectors.py`),
 registered through `agent/episode_recall.py`'s leg registry.
 **Not built:** the cross-encoder re-ranker over the fused candidates.
+
+**2026-09-29:** the dense leg was switched on (router restarted, `EMBEDDINGS_ENABLED=1`,
+agent restarted, 42 episodes backfilled for $0.0003). The gate below was never
+measurable because the log held offers and uses as separate events; a use now
+carries `rank` and a section read carries `position`. The re-ranker decision is
+taken from those: a used episode at rank six or worse in more than a fifth of
+uses means ordering is the problem and the re-ranker is the fix.
 
 **The gate this was supposed to pass was never evaluated, and that is on the
 record here rather than left to be inferred.** The build order made the dense
@@ -588,3 +595,4 @@ are fixed. These did not, and are cheap to lose track of.
 - A review queued behind another is not `inProgress`, so the agent's wait is not extended for it; record the queue in state.
 - Not in the bundle image: gitleaks (secret scan reports "binary not found" as a plain failure), and usage.jsonl lives in the image rather than a volume.
 - An escalated task keeps the project's merge slot: an approved task on the same project waited sixteen minutes for "another task to finish its review and merge" while that task sat escalated. A task that escalates should release the slot.
+- A lockfile the deploy's own install rewrote in live ("hasInstallScript", regenerated integrity fields) blocks the fast-forward merge of a dependency update with "your local changes would be overwritten". Seen 2026-09-29; fixed by hand with `git checkout -- package-lock.json` in the live checkout. The merge could discard such a lockfile itself when the incoming merge replaces it; an operator should decide whether they want an automated discard on the live checkout.
