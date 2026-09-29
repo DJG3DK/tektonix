@@ -217,6 +217,11 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
 
 pub fn run() {
     tauri::Builder::default()
+        // One running copy. A second launch (the installer's "run when
+        // finished" plus the Start menu, or a launch while the first sits in
+        // the tray) brings the running panel forward instead of starting
+        // another app with a dead taskbar button of its own (2026-09-29).
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| show_panel(app)))
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_dialog::init())

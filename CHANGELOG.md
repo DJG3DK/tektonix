@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### One running copy of the app
+
+A second launch, from the installer's "run when finished" plus the Start
+menu or while the first copy sat in the tray, started another app with a
+dead taskbar button of its own. It now brings the running panel forward.
+
 ### The app's windows are frameless
 
 No native title bars: the control panel and the dashboard window each draw
