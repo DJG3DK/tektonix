@@ -40,7 +40,7 @@ x-logging: &logging
 
 services:
   postgres:
-    image: postgres:16-alpine
+    image: postgres:18-alpine
     # First, so the generated secrets exist before any service that reads
     # them starts: everything else waits for this one to be healthy. See
     # docker/postgres/init-secrets.sh.
@@ -393,7 +393,7 @@ services:
   # (docker/checks-postgres/init.sh): a check gets its own plain role, not
   # the superuser.
   checks-postgres:
-    image: postgres:16-alpine
+    image: postgres:18-alpine
     container_name: tektonix-checks-postgres
     environment:
       POSTGRES_USER: checks
