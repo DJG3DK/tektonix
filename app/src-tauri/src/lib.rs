@@ -1,7 +1,8 @@
 //! Tektonix desktop: the dashboard in a window, the compose stack under it,
-//! and a tray icon to reach both. The window's own page (src/) is a small
-//! control panel; the dashboard itself is the agent's web app, opened in a
-//! second window once the stack answers. See stack.rs for the layout.
+//! and a tray icon to reach both. One window, two pages: the window's own
+//! page (src/) is a small control panel; the dashboard itself is the agent's
+//! web app, shown in the same window once the stack answers (open_console,
+//! open_panel). See stack.rs for the layout.
 
 mod docker;
 mod proc;

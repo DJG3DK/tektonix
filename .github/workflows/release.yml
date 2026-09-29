@@ -2,7 +2,8 @@ name: Release
 
 # On a version tag: publish the bundle's images to GHCR, so an install that
 # cannot build from source (the desktop app, a machine without the tree)
-# pulls the release instead. Each image is pushed as :vX.Y.Z and :latest.
+# pulls the release instead. Each image is pushed as :vX.Y.Z; a release
+# (no dash in the tag) is also pushed as :latest, a pre-release is not.
 # The desktop app tags the pulled image with the local name compose uses
 # (tektonix-<service>:latest) and starts the stack with --no-build.
 #
@@ -184,8 +185,9 @@ jobs:
       # Builds the NSIS installer, signs the updater artifact with the key in
       # the secrets, and attaches the installer, its .sig and latest.json to
       # the GitHub release for this tag (creating the release if the tag has
-      # none yet). The app's own updater reads latest.json from
-      # releases/latest/download.
+      # none yet). The app's own updater reads latest.json from this tag's
+      # own release (releases/download/<tag>/latest.json; stack.rs
+      # updater_endpoint), so a candidate can update to the next candidate.
       - uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
         if: steps.existing.outputs.published != 'true'
         env:
@@ -203,8 +205,9 @@ jobs:
           # A draft: this repository has immutable releases, and a published
           # release accepts no assets. The step after this publishes it.
           releaseDraft: true
-          # A tag with a dash (v0.9.0-rc1) is a pre-release: the app's update
-          # check reads releases/latest, which skips those.
+          # A tag with a dash (v0.9.0-rc1) is a pre-release: an app that is
+          # not one itself, and has not asked for them, reads releases/latest
+          # and never sees it (stack.rs wants_prereleases).
           prerelease: ${{ contains(github.event.inputs.tag || github.ref_name, '-') }}
           includeUpdaterJson: true
           updaterJsonPreferNsis: true

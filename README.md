@@ -740,10 +740,14 @@ OpenRouter API key, which is the only paid dependency. The installer offers to i
 it finds missing, using your system package manager. It always asks first, the answer defaults to
 no, and `--yes` on its own is not taken as permission.
 
-On Windows, double-click `Install Tektonix.bat`, or see
-[docker/README.md](docker/README.md) and `install.ps1`. The bundle includes the
-review gate; what it cannot do is restart your app after a merge, because pm2
-runs on the host.
+On Windows, install the desktop app: the `Tektonix_<version>_x64-setup.exe`
+attached to each [release](https://github.com/DJG3DK/tektonix/releases). It
+installs Docker Desktop if it is missing, asks for your settings in a window,
+pulls the release's images and keeps them updated ([app/README.md](app/README.md)).
+`Install Tektonix.bat` and `install.ps1` still work for a source checkout
+([docker/README.md](docker/README.md)). The bundle includes the review gate;
+what it cannot do is restart your app after a merge, because pm2 runs on the
+host.
 
 <details>
 <summary>Manual bring-up, if you'd rather not use the installer</summary>

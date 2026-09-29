@@ -1,37 +1,50 @@
 # Tektonix desktop
 
 The dashboard in a window, the compose stack under it, and a tray icon to
-reach both. A [Tauri 2](https://tauri.app) shell: the window's own page
-(`src/`) is a small control panel, the dashboard is the agent's web app
-opened in a second window once the stack answers, and everything that does
-work is Rust (`src-tauri/src/`).
+reach both. A [Tauri 2](https://tauri.app) shell with one window and two
+pages: the window's own page (`src/`) is a small control panel, and the
+dashboard, the agent's web app at `localhost:8100`, takes the same window
+over once the stack answers (its title bar has a button back to the panel,
+and so does the tray). Everything that does work is Rust (`src-tauri/src/`).
 
 What it does that the console installer did not:
 
 * installs WSL 2 and Docker Desktop when they are missing (Windows), through
   Windows' own permission prompt;
-* asks for the two settings in a form, keeps them in its own `.env`;
+* asks for the settings in a form, keeps them in its own `.env`;
 * pulls the release's images from GHCR instead of building from source, with
   Docker's progress in the window, and starts the stack with `--no-build`;
-* shows the first password in the window;
-* updates the stack in one click when a new release is out, and updates
-  itself through Tauri's signed updater.
+* sets the first account's password from the form at the first start (and
+  can show the one-time password if it was never used);
+* keeps the stack on the app's own release, updates the stack in one click
+  when the operator asks for a newer one, and updates itself through Tauri's
+  signed updater.
 
 ## Layout on the machine
 
-Under the app's local data directory (`%LOCALAPPDATA%\Tektonix` on Windows):
+Under the app's local data directory (`%LOCALAPPDATA%\io.tektonix.desktop`
+on Windows; the identifier in `tauri.conf.json`):
 
 ```
 stack/docker-compose.yml           copied from the app on every launch
 stack/docker/…                     (so an app update carries the stack's
 stack/services/model-router/…       own files with it)
-stack/.env                         the operator's; written by setup, never overwritten
-stack/version.json                 which release's images are installed
+stack/.env                         the operator's: written by the settings form; the app
+                                   adds TEKTONIX_DESKTOP and the SANDBOX_* defaults when
+                                   they are missing and leaves everything else alone
+stack/version.json                 which release's images are installed, the image id that
+                                   proves it, and which compose file they were started under
+prefs.json                         automatic updates, pre-releases, the page last shown
 ```
 
 Images come from `ghcr.io/djg3dk/tektonix-<name>:<tag>` and are tagged with
 the local names the compose file uses (`tektonix-<name>:latest`), so one
 compose file serves both this app and a source checkout.
+
+The updater endpoint in `tauri.conf.json` is the plugin's required
+placeholder; at run time the app points the updater at the chosen release's
+own `latest.json` (`stack.rs`, `updater_endpoint`), so a release candidate
+can update to the next candidate.
 
 ## Building
 

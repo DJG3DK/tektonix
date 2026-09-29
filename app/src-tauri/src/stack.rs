@@ -1,15 +1,19 @@
 //! The stack under the app: the compose files it ships, the .env it keeps,
 //! the released images it pulls, and `docker compose` around them.
 //!
-//! Layout, under the app's local data directory (`%LOCALAPPDATA%\Tektonix`
-//! on Windows):
+//! Layout, under the app's local data directory
+//! (`%LOCALAPPDATA%\io.tektonix.desktop` on Windows, the bundle identifier):
 //!
 //!   stack/docker-compose.yml        copied from the app's resources on every
 //!   stack/docker/...                launch, so an app update carries the
 //!   stack/services/model-router/... stack's own files with it
-//!   stack/.env                      the operator's: written by setup, never
-//!                                   overwritten
-//!   stack/version.json              which release's images are installed
+//!   stack/.env                      the operator's: written by the settings
+//!                                   form; prepare adds the app's own lines
+//!                                   when missing and leaves the rest alone
+//!   stack/version.json              which release's images are installed,
+//!                                   the image id that proves it, and which
+//!                                   compose file they were started under
+//!   prefs.json                      the app's own preferences
 //!
 //! Images come from GHCR as ghcr.io/djg3dk/tektonix-<name>:<tag> and are
 //! tagged with the local name the compose file uses (tektonix-<name>:latest),

@@ -123,6 +123,25 @@ def test_the_projects_folder_opens_through_a_command_not_the_opener_plugin():
         assert "opener:allow-open-path" not in json.loads(cap.read_text())["permissions"]
 
 
+def test_the_desktop_docs_describe_the_app_as_it_is():
+    """One window since 3b3e365, a data path under the bundle identifier, a
+    form that sets the first password, and an installer Windows users are
+    pointed at (2026-09-29: all four were stale)."""
+    app_readme = (REPO / "app/README.md").read_text()
+    lib = (REPO / "app/src-tauri/src/lib.rs").read_text()
+    stack = (REPO / "app/src-tauri/src/stack.rs").read_text()
+    conf = json.loads((REPO / "app/src-tauri/tauri.conf.json").read_text())
+    for text, where in ((app_readme, "app/README.md"), (lib, "lib.rs")):
+        assert "second window" not in text, f"{where}: one window, two pages"
+    assert "never overwritten" not in app_readme, "prepare adds the app's own lines to .env"
+    for text, where in ((app_readme, "app/README.md"), (stack, "stack.rs")):
+        assert f"%LOCALAPPDATA%\\{conf['identifier']}" in text, f"{where}: the data path is under the bundle identifier"
+        assert "%LOCALAPPDATA%\\Tektonix`" not in text and "%LOCALAPPDATA%\\Tektonix\n" not in text, where
+    assert "dashboard.json" not in (REPO / "frontend/src/components/TitleBar.tsx").read_text()
+    for doc in ("README.md", "INSTALL.md"):
+        assert "x64-setup.exe" in (REPO / doc).read_text(), f"{doc} points Windows users at the desktop installer"
+
+
 def test_the_app_has_one_tray_icon():
     """app.trayIcon in the config made Tauri build a tray of its own, with
     no menu and no handler, beside the one lib.rs builds (2026-09-29)."""
