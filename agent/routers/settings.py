@@ -151,7 +151,7 @@ async def set_github_settings(request: Request, req: GitHubSettingsPatch, user: 
         if not modes:
             continue
         await audit.record(
-            request.app.state.store, actor=user.email, action="github.source_policy", target=repo,
+            audit_store(request), actor=user.email, action="github.source_policy", target=repo,
             detail=", ".join(f"{name}={mode}" for name, mode in sorted(modes.items())),
         )
     request.app.state.github_poll_wake.set()

@@ -489,7 +489,7 @@ async def update_user_access_endpoint(request: Request, user_id: int, req: Updat
         # single most consequential thing on the Users panel, and the person
         # it is granted to has no other way to learn who did it.
         await audit.record(
-            request.app.state.store, actor=user.email,
+            audit_store(request), actor=user.email,
             action="settings.auto_approve_repos" if req.auto_approve_repos is not None
             else "settings.auto_approve",
             target=target["email"],

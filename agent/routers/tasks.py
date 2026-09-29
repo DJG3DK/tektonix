@@ -29,6 +29,7 @@ from pydantic import BaseModel, Field
 
 from agent import audit, auth, history_index, lifecycle, live_state, planning_log, tasks, task_runtime
 from agent import config as agent_config
+from agent.routers import audit_store
 from agent.auth import User, check_repo_access, require_full_auth
 from agent.graph import read_with_retry
 from agent.messages import add_message
@@ -374,7 +375,7 @@ async def submit_operator_edits(request: Request, task_id: str, req: OperatorEdi
         # edit and runs the gate -- no model call in between.
         await _apply_transition(graph, thread_config, t.patch, t.as_node)
         await audit.record(
-            request.app.state.store, actor=user.email, action="task.operator_edit",
+            audit_store(request), actor=user.email, action="task.operator_edit",
             target=f'{values["repo"]}/{task_id[:8]}',
             detail=", ".join(f["path"] for f in files)[:200],
         )
@@ -421,7 +422,7 @@ async def merge_decision(request: Request, task_id: str, req: MergeDecisionReque
         pending = values["pending_merge_approval"]
         await _apply_transition(graph, thread_config, t.patch, t.as_node)
         await audit.record(
-            request.app.state.store, actor=user.email,
+            audit_store(request), actor=user.email,
             action="merge.approve" if req.decision == "approve" else "merge.request_changes",
             target=f'{values["repo"]}/{task_id[:8]}',
             detail=pending.get("sha", "")[:12] if req.decision == "approve" else (req.message or "")[:200],
@@ -487,7 +488,7 @@ async def approve_task(request: Request, task_id: str, req: ApprovalRequest, use
         # can see which command a person let through.
         first = (pending.get("action_requests") or [{}])[0]
         await audit.record(
-            request.app.state.store, actor=user.email,
+            audit_store(request), actor=user.email,
             action="command.approve" if req.decision == "approve" else "command.reject",
             target=f'{values["repo"]}/{task_id[:8]}',
             detail=_approval_summary(first, action_count),
