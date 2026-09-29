@@ -520,6 +520,8 @@ jobs:
         run: bash tests/test_bundle_entrypoints.sh
       - name: Backup script
         run: bash tests/test_backup_bundle.sh
+      - name: Cron wrappers on a fresh tree
+        run: bash tests/test_cron_wrappers.sh
       - name: Doctor runs on a tree with no configuration
         # It must report what is missing rather than crash -- that is exactly
         # the state a new contributor's checkout is in. Exit 1 (something

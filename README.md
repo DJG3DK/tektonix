@@ -243,8 +243,9 @@ the end of the turn. Paged reads return at least 500 lines whatever `limit` asks
   misleading "No matches found" forever. The repo search is `search_project` / `find_files`.
 - **Codebase-map first.** The cartographer's per-project map (`/skills/codebase-map/SKILL.md`) is
   advertised in the prompt and read before any directory walking — one read replaces a dozen
-  exploratory listings. The map refreshes every 30 minutes by cron (hash-gated: an unchanged repo
-  costs a tree walk, no model call) and immediately after every merge+deploy. A companion
+  exploratory listings. The map refreshes once a day, scheduled by the agent itself at the first
+  quiet moment (`agent/jobs.py`; hash-gated: an unchanged repo costs a tree walk, no model call),
+  and immediately after every merge+deploy. A companion
   `recent-changes` skill lists the newest commits with their files.
 - **Large files page.** `read_project_file` supports `offset`/`limit`; a truncated read says
   outright that re-requesting returns identical text and names the exact next call to make.
@@ -356,9 +357,9 @@ first. The app lands on **Planning**, not the raw task composer.
   against its own surface and clears 4.5:1, and `tests/test_themes.py` computes those ratios
   rather than trusting the comments. State colours (running, waiting, done, failed) deliberately
   do not change with the scheme: a colour that means something must not move with a preference.
-- **Consolidation status** — nightly memory-consolidation health on the Models tab: healthy, stale,
-  failed, or never-run. That last state is the one a log tail can never show you: if cron stops
-  firing entirely, an empty log looks exactly like a quiet night.
+- **Consolidation status** — daily memory-consolidation health on the Models tab: healthy, stale,
+  failed, or never-run. That last state is the one a log tail can never show you: if the job stops
+  running entirely, an empty log looks exactly like a quiet night.
 - **Analytics** (admin only) — computed from this box's own records: the router's per-call ledger
   (`services/model-router/logs/routing.jsonl`) and the work node's tool-result log. Per-role model
   usage carries two columns traces never could — what the router was **billed**, and how much of
@@ -524,8 +525,9 @@ and it's shared across every task and planning session for that project. A secon
   demoted rather than deleted when the pruner removes them, so the index is the archive. A semantic
   leg exists alongside it and is off by default — on this corpus, which is error strings, paths and
   commands, keyword search wins and the vector leg had to be measured before it could be trusted.
-- **Consolidation** (`agent/consolidation.py`, run nightly via
-  `scripts/consolidation-cron.sh`) reads a project's recent episodes plus its current memory and
+- **Consolidation** (`agent/consolidation.py`, scheduled by the agent itself once a day at the
+  first quiet moment, `agent/jobs.py`; `scripts/consolidation-cron.sh` remains for a host install
+  that prefers cron) reads a project's recent episodes plus its current memory and
   distills durable patterns into an updated memory file, skipping one-off noise.
 
   It uses `ProviderStrategy` for structured output, not a bare schema. Passing the schema alone
@@ -537,7 +539,7 @@ and it's shared across every task and planning session for that project. A secon
   `ProviderStrategy` passes.
 
   It also **fails loudly** now. `run_consolidation.py` exits non-zero with a banner naming the failed
-  projects, and the cron wrapper writes `data/last_consolidation.json` for the dashboard's
+  projects, and the scheduler (or the cron wrapper) writes `data/last_consolidation.json` for the dashboard's
   consolidation panel. Previously it printed a line and exited 0, which is why a broken run was
   indistinguishable from a healthy one.
 - **Freshness.** Memory has no timestamps of its own. The cartographer keeps a ledger of which
