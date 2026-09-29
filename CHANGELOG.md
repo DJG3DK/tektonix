@@ -8,7 +8,10 @@ A release-candidate app asked for images of its plain version, no such
 release existed, and the pull quietly fell back to the previous stable
 release: every candidate so far ran the v0.8.0 stack. The app now carries
 its release tag, pulls those images whenever the stack is behind it, and a
-missing image is an error rather than a swap.
+missing image is an error rather than a swap. The stack record is proven
+by the image it names; an early candidate's record, which named a tag it
+never pulled, is not trusted. A running task is not interrupted for this:
+the automatic pass moves the stack once the agent is idle.
 
 An update is a newer release. With pre-releases off, the stable release
 older than the installed candidate was offered as an update.

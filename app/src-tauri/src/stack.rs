@@ -57,9 +57,15 @@ pub struct Container {
     pub health: String,
 }
 
+/// What the stack runs: the release tag, and the id of the agent image
+/// that tag was pulled as. The id is the proof; a record without one (an
+/// early candidate wrote the requested tag whether or not the pull got it)
+/// or whose image is no longer the local one is not trusted.
 #[derive(Serialize, Deserialize, Clone, Default)]
 pub struct Version {
     pub tag: String,
+    #[serde(default)]
+    pub image_id: Option<String>,
 }
 
 /// The app's own preferences, in the data directory beside the stack.
@@ -255,9 +261,27 @@ pub fn installed_version(app: &AppHandle) -> Option<String> {
     serde_json::from_str::<Version>(&text).ok().map(|v| v.tag).filter(|t| !t.is_empty())
 }
 
-fn write_version(app: &AppHandle, tag: &str) -> Result<(), String> {
-    let text = serde_json::to_string(&Version { tag: tag.into() }).map_err(|e| e.to_string())?;
+fn read_version(app: &AppHandle) -> Option<Version> {
+    let text = std::fs::read_to_string(version_path(app).ok()?).ok()?;
+    serde_json::from_str::<Version>(&text).ok().filter(|v| !v.tag.is_empty())
+}
+
+fn write_version(app: &AppHandle, tag: &str, image_id: Option<String>) -> Result<(), String> {
+    let text = serde_json::to_string(&Version { tag: tag.into(), image_id }).map_err(|e| e.to_string())?;
     std::fs::write(version_path(app)?, text).map_err(|e| e.to_string())
+}
+
+/// The id of the agent image the compose file runs, as Docker has it now.
+async fn local_agent_image_id() -> Option<String> {
+    let out = proc::capture("docker", &["image", "inspect", &local_name("agent"), "--format", "{{.Id}}"], None).await.ok()?;
+    let id = out.trim().to_string();
+    (!id.is_empty()).then_some(id)
+}
+
+/// Does the record say what the local images are? True only when it names
+/// an image id and that is the image Docker has under the local name.
+fn record_is_proven(record: &Version, local_id: Option<&str>) -> bool {
+    matches!((record.image_id.as_deref(), local_id), (Some(a), Some(b)) if a == b)
 }
 
 /// The release this app was built from: the tag the release workflow bakes
@@ -310,7 +334,7 @@ pub async fn pull(app: &AppHandle, tag: &str) -> Result<(), String> {
         }
         proc::capture("docker", &["tag", &remote, &local_name(name)], None).await.map_err(|e| e.to_string())?;
     }
-    write_version(app, tag)?;
+    write_version(app, tag, local_agent_image_id().await)?;
     Ok(())
 }
 
@@ -318,18 +342,30 @@ pub async fn pull(app: &AppHandle, tag: &str) -> Result<(), String> {
 /// app over an older stack (or a stack recorded as `latest` by the old
 /// fallback) pulls its own images before it starts; a stack the automatic
 /// update already moved ahead of the app is left where it is.
-pub async fn ensure_own_release(app: &AppHandle) -> Result<(), String> {
+/// Says whether it pulled, so the caller knows to restart the stack on it.
+pub async fn ensure_own_release(app: &AppHandle) -> Result<bool, String> {
     let wanted = release_tag(app);
-    match installed_version(app) {
-        Some(have) if !newer_than(&wanted, &have) => Ok(()),
-        have => {
-            note(app, match have {
-                Some(h) => format!("This app is {wanted}; the stack is {h}. Pulling {wanted}."),
-                None => format!("Pulling the {wanted} stack."),
-            });
-            pull(app, &wanted).await
+    let record = read_version(app);
+    let local = local_agent_image_id().await;
+    let proven = record.as_ref().is_some_and(|r| record_is_proven(r, local.as_deref()));
+    if let Some(r) = &record {
+        if proven && !newer_than(&wanted, &r.tag) {
+            return Ok(false);
         }
     }
+    // A running task is not interrupted for this: the automatic pass
+    // comes back to it once the agent is idle.
+    if agent_busy().await == Some(true) {
+        note(app, format!("The agent is busy; the stack moves to {wanted} when it is idle."));
+        return Ok(false);
+    }
+    note(app, match &record {
+        Some(r) if proven => format!("This app is {wanted}; the stack is {}. Pulling {wanted}.", r.tag),
+        Some(r) => format!("The stack record says {} but cannot be verified. Pulling {wanted}.", r.tag),
+        None => format!("Pulling the {wanted} stack."),
+    });
+    pull(app, &wanted).await?;
+    Ok(true)
 }
 
 fn compose_args<'a>(dir: &'a Path, rest: &[&'a str]) -> Vec<String> {
@@ -502,6 +538,18 @@ mod tests {
     }
 
     #[test]
+    fn a_record_is_trusted_only_with_the_image_it_names() {
+        let legacy = Version { tag: "v0.9.0".into(), image_id: None };
+        assert!(!record_is_proven(&legacy, Some("sha256:abc")), "an early candidate's record names no image");
+        let mine = Version { tag: "v0.9.0-rc13".into(), image_id: Some("sha256:abc".into()) };
+        assert!(record_is_proven(&mine, Some("sha256:abc")));
+        assert!(!record_is_proven(&mine, Some("sha256:other")), "someone retagged the local image");
+        assert!(!record_is_proven(&mine, None), "no local image at all");
+        let old: Version = serde_json::from_str(r#"{"tag":"latest"}"#).unwrap();
+        assert_eq!(old.image_id, None, "the old record still parses");
+    }
+
+    #[test]
     fn a_pre_release_sorts_below_its_release_and_above_the_one_before() {
         assert!(newer_than("v0.9.0-rc11", "v0.8.0"));
         assert!(newer_than("v0.9.0-rc12", "v0.9.0-rc11"));
@@ -537,14 +585,17 @@ mod tests {
 /// `busy` count. An agent too old to report it counts as busy, so an
 /// automatic update never pulls a running task's containers out from
 /// under it.
+/// Whether the agent has a task in flight; None when it cannot be asked
+/// (the stack is down, or not yet up).
+pub async fn agent_busy() -> Option<bool> {
+    let client = reqwest::Client::builder().timeout(std::time::Duration::from_secs(5)).build().ok()?;
+    let r = client.get(HEALTH).send().await.ok()?;
+    let v = r.json::<serde_json::Value>().await.ok()?;
+    v.get("busy").and_then(|b| b.as_u64()).map(|b| b > 0)
+}
+
 pub async fn agent_idle() -> bool {
-    let client = match reqwest::Client::builder().timeout(std::time::Duration::from_secs(5)).build() {
-        Ok(c) => c,
-        Err(_) => return false,
-    };
-    let Ok(r) = client.get(HEALTH).send().await else { return false };
-    let Ok(v) = r.json::<serde_json::Value>().await else { return false };
-    v.get("busy").and_then(|b| b.as_u64()) == Some(0)
+    agent_busy().await == Some(false)
 }
 
 /// Where the updater's manifest for a release lives: with the installer,
@@ -593,6 +644,13 @@ pub async fn install_app_update(app: &AppHandle) -> Result<(), String> {
 /// One automatic pass: the stack when a newer release is out and the agent
 /// is idle, then the app itself. Says what it did and why not.
 pub async fn auto_update_pass(app: &AppHandle) -> Result<String, String> {
+    // Whatever the preference says, the stack runs this app's release: a
+    // newly installed app over an older stack corrects it here, once the
+    // agent is idle, since the panel's Start is not offered while it runs.
+    if ensure_own_release(app).await? {
+        note(app, "Restarting the stack on its images.");
+        up(app).await?;
+    }
     let prefs = read_prefs(app);
     if !prefs.auto_update {
         return Ok("automatic updates are off".into());
