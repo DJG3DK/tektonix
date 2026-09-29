@@ -130,3 +130,14 @@ def _task_workspace_is_the_project_workspace(request, monkeypatch):
     monkeypatch.setattr(_ws, "remove", _remove)
     # Asks the live reviewer for its rules and runs the sandbox; not here.
     monkeypatch.setattr(_ws, "refresh_generated", _refresh_generated)
+
+
+@pytest.fixture(autouse=True)
+def _retrieval_log_in_tmp(monkeypatch, tmp_path):
+    """The memory-index and recall telemetry (agent/episode_recall.py)
+    defaults to the live log. Tests that build a prompt with the memory
+    index were writing into it: two bursts of offers and reads with one
+    timestamp on 2026-09-29, indistinguishable from a task's until read
+    closely. Every test writes to its own scratch file instead."""
+    from agent import episode_recall
+    monkeypatch.setattr(episode_recall, "LOG_PATH", tmp_path / "retrieval_events.jsonl")
