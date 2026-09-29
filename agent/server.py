@@ -1349,9 +1349,10 @@ _PLANNING_COST_MIRROR_MIN_DELTA = 0.005
 async def _mirror_planning_cost(store, repo: str, session_id: str, cost: float) -> None:
     """Display only. Budget enforcement reads the tracker, never this."""
     try:
-        item = await store.aget(("planning", repo), session_id)
-        if item:
-            await store.aput(("planning", repo), session_id, {**item.value, "cost_usd": cost})
+        async with live_state.planning_meta_lock(session_id):  # the carry (agent/tasks.py) writes the same row
+            item = await store.aget(("planning", repo), session_id)
+            if item:
+                await store.aput(("planning", repo), session_id, {**item.value, "cost_usd": cost})
     except Exception:  # noqa: BLE001 -- a display mirror must never break the turn
         logger.exception("could not mirror planning cost for %s", session_id)
 

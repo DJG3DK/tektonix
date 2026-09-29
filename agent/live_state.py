@@ -53,6 +53,21 @@ task_recorders: dict[str, planning_log.Recorder] = {}
 # pop it on delete live in agent/routers/planning.py.
 planning_recorders: dict[str, planning_log.Recorder] = {}
 
+# session_id -> a lock over that session's planning meta row. The carry onto
+# a build task (agent/tasks.py carry_planning_cost) and the live cost mirror
+# (server._mirror_planning_cost) both read, modify and write the whole row;
+# without this a mirrored cost could land between the carry's read and its
+# write and be lost, or the carry under the mirror's (2026-09-29 audit, A7).
+planning_meta_locks: dict[str, asyncio.Lock] = {}
+
+
+def planning_meta_lock(session_id: str) -> asyncio.Lock:
+    lock = planning_meta_locks.get(session_id)
+    if lock is None:
+        lock = planning_meta_locks[session_id] = asyncio.Lock()
+    return lock
+
+
 # Fire-and-forget work that must not be garbage collected mid-run. asyncio
 # keeps only a WEAK reference to a bare create_task, so a background refresh
 # could vanish halfway and silently never happen.

@@ -74,3 +74,29 @@ def test_the_throttle_is_small_enough_to_be_useful():
     updates every round. Too large and the number would sit stale between
     them -- which is the bug this exists to fix."""
     assert 0 < server._PLANNING_COST_MIRROR_MIN_DELTA <= 0.02
+
+
+@pytest.mark.asyncio
+async def test_a_mirror_landing_during_the_carry_is_not_lost():
+    """Both read-modify-write the whole row. Unserialised, the mirror's read
+    happened before the carry's write, and its own write then put the
+    un-carried row back (2026-09-29 audit, A7)."""
+    import asyncio
+
+    from agent.tasks import carry_planning_cost
+
+    class _SlowStore(_Store):
+        async def aget(self, ns, key):
+            item = await super().aget(ns, key)   # the row as read, then a round trip's worth of yielding
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+            return item
+
+    store = _SlowStore({"session_id": "s1", "cost_usd": 1.0, "carried_cost_usd": 0.0})
+    carried, _ = await asyncio.gather(
+        carry_planning_cost(store, "webapp", "s1", "task-1"),
+        server._mirror_planning_cost(store, "webapp", "s1", 2.0),
+    )
+    assert carried == 1.0
+    assert store.value["carried_cost_usd"] == 1.0 and store.value["built_task_ids"] == ["task-1"]
+    assert store.value["cost_usd"] == 2.0
