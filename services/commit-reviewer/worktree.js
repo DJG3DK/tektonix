@@ -262,8 +262,9 @@ async function materializeDependencyDirs(
  * They run with network, because fetching is the entire point -- so on a
  * host install this is the one place agent-influenced code runs contained
  * AND online, and containment is the only thing standing between it and the
- * machine. In the compose bundle it runs in this process like every other
- * check (runAgentCode), which is itself a container without the Docker socket.
+ * machine. In the compose bundle runAgentCode hands it to the agent, which
+ * starts the same container: this process never runs it, since it holds the
+ * secret that authorises a merge.
  *
  * Returns the directories that were installed fresh, so the caller knows not
  * to mount live's copy over them.

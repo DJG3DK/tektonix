@@ -23,11 +23,13 @@
 // This file is the entry point pm2 runs and keeps what ties a review
 // together: the project map, the state and history files, which branch is
 // the review unit, the queue, reviewProject's orchestration and the verdict,
-// and the control server. The rest is in four modules -- exec.js (how
-// anything is run), worktree.js (the review checkout), checks.js (the
-// mechanical checks and whose failures they are) and prompt.js (what the
-// model is shown and how its answer is read) -- and every name the tests
-// import is still exported from here.
+// and the control server. The rest is in six modules -- exec.js (how
+// anything is run), sandbox.js (where agent-authored code runs: a container
+// this process starts, or one the agent starts for it), node-modules-source.js
+// (whose installed dependencies a review borrows), worktree.js (the review
+// checkout), checks.js (the mechanical checks and whose failures they are)
+// and prompt.js (what the model is shown and how its answer is read) -- and
+// every name the tests import is still exported from here.
 
 const fs = require('fs');
 const path = require('path');
@@ -593,7 +595,8 @@ async function reviewProject(project, cfg, routerKey, requested = null) {
     const hasBlockingFindings = (review.findings || []).some((f) => f.severity === 'blocking');
     // audit H-9: ANY omitted file forces NEEDS_FIXES in NODE -- not left to
     // the model, which the prompt could talk out of it. (An unreadable diff
-    // never reaches this point: it returns right after the git diff call.)
+    // never reaches this point: the git diff call throws, and the outer
+    // catch records a harness failure for the agent to see.)
     const omittedFiles = review._omittedFiles || [];
     const diffIncomplete = omittedFiles.length > 0;
     if (diffIncomplete) {
@@ -701,17 +704,20 @@ async function reviewProject(project, cfg, routerKey, requested = null) {
   }
 }
 
-// Localhost-only control port so the dashboard (a separate pm2 process, port
-// 4100) can trigger an immediate review instead of the caller waiting out
-// the rest of a 2-min poll window — same "Check now" idea as manually
-// refreshing, just without waiting. Never exposed outside 127.0.0.1; nginx
-// doesn't proxy to it, only agent-review's server.js does (server-side).
+// Control port so the dashboard (a separate process, port 4100) can trigger
+// an immediate review instead of the caller waiting out the rest of a 2-min
+// poll window — same "Check now" idea as manually refreshing, just without
+// waiting. Loopback on a host install; in the bundle it binds 0.0.0.0 so the
+// sibling containers can reach it, with the ports still unpublished (see the
+// bind below). Nothing proxies to it from outside: agent-review's server.js
+// calls it server-side, and the mutating call takes the shared secret.
 const CONTROL_PORT = Number(process.env.REVIEW_CONTROL_PORT) || 4101;
 function startControlServer(routerKey) {
   const server = http.createServer((req, res) => {
-    // Liveness, unauthenticated on purpose: this port is 127.0.0.1-only and
-    // nothing here is a secret (a configured secret reports `true`, never its
-    // value). No model call, no review started -- safe to poll. 503 when a
+    // Liveness, unauthenticated on purpose: this port is reachable only from
+    // the host's loopback or the bundle's own containers, and nothing here
+    // is a secret (a configured secret reports `true`, never its value). No
+    // model call, no review started -- safe to poll. 503 when a
     // dependency is missing, so a status-code-only probe is still correct.
     if (req.method === 'GET' && req.url === '/health') {
       const checks = {

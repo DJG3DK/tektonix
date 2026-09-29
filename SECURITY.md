@@ -120,8 +120,8 @@ image comes from server-owned config, and the hardening flags are fixed.
 Before each review the reviewer asks the agent's probe whether docker and
 the image are there, and a missing image starts a build on the agent's side.
 Without `AGENT_SANDBOX_URL` the bundle's reviewer refuses, like any other
-deployment that cannot contain the code. The database checks below are
-refused outright in the bundle.
+deployment that cannot contain the code. The database checks below run in
+the bundle too, against throwaway services of their own.
 
 Handing the bundle's reviewer the Docker socket instead would give that
 container host-root equivalent, which is why the agent — already holding the

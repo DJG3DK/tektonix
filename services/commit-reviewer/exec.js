@@ -52,9 +52,12 @@ function run(cmd, args, cwd, timeoutMs = 300_000) {
 // stops the code reaching the machine, the sealed environment stops it
 // reading the reviewer's own variables on the way past.
 //
-// What stays on the host is db:drift / db:seed / test:e2e, which talk to
-// Postgres and Redis on loopback -- inside a container "localhost" is the
-// container. SECURITY.md has the reasoning.
+// On a host install db:drift / db:seed / test:e2e still run on the host,
+// because they talk to Postgres and Redis on loopback and inside a container
+// "localhost" is the container. The bundle gives them their own
+// checks-postgres and checks-redis and runs them in the sandbox like every
+// other check (agent/review_sandbox.py, since 2026-09-27). SECURITY.md has
+// the reasoning.
 function sealedEnv(extra) {
   return {
     PATH: process.env.PATH,
@@ -90,8 +93,9 @@ const git = (cwd, args) => run('git', [...GIT_SAFE, ...args], cwd);
 // bundle asks the agent to start the same container (sandbox.js, "THE BUNDLE
 // DELEGATES"); anything else refuses. Never this process: it holds the
 // secret that authorises a merge. The one exception is runDatabaseCheck's
-// three commands on a host install -- SECURITY.md, "The database checks,
-// which stay on the host" -- and the bundle refuses those outright.
+// three commands on a host install -- SECURITY.md, "The database checks:
+// contained in the bundle, on the host still not" -- which the bundle hands
+// to the agent whole (sandbox.js runDelegatedDatabaseCheck).
 //
 // sealedEnv is still applied inside the container: it stops secrets reaching
 // the command, which containment does not do on its own.

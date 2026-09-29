@@ -16,8 +16,11 @@ what the container can see:
 
   * the worktree must sit directly under REVIEW_WORKTREE_ROOT, be named for
     the project, and be a git worktree of THAT project's live checkout;
-  * every extra mount must come from inside the live checkout, is forced
-    read-only, and may only land where the reviewer's own layout puts it;
+  * every extra mount must come from inside the live checkout -- or, for a
+    node_modules tree alone, from the agent's own workspace template for
+    the project, which is what a review borrows when live's install cannot
+    run on Linux (node-modules-source.js) -- is forced read-only, and may
+    only land where the reviewer's own layout puts it;
   * the image is chosen here, from server-owned config;
   * the hardening flags are this module's, never the request's.
 
