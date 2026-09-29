@@ -89,6 +89,21 @@ def test_each_secret_is_mounted_only_where_it_is_read():
     assert set(n for n, m in mounts.items() if "bundlesecrets" in m) == {"postgres"}
 
 
+def test_the_review_dashboard_can_read_the_router_s_ledger_and_key_in_the_bundle():
+    """Its Router tab read services/model-router/logs/routing.jsonl and the
+    router's .env: host paths the container does not have. The ledger is
+    the routerlogs volume, named by the same variable the agent uses, and
+    the key comes from the environment."""
+    services = render()["services"]
+    review = services["agent-review"]
+    mounts = _volumes(review)
+    assert review["environment"]["MODEL_ROUTER_LEDGER"].startswith(mounts["routerlogs"])
+    assert review["environment"]["MODEL_ROUTER_LEDGER"] == services["agent"]["environment"]["MODEL_ROUTER_LEDGER"]
+    ro = [v for v in review["volumes"] if v["type"] == "volume" and v["source"] == "routerlogs"][0]
+    assert ro.get("read_only") is True
+    assert review["environment"]["OPENROUTER_API_KEY"] == "placeholder"
+
+
 def test_the_containers_that_write_into_the_operator_s_folder_take_puid_and_pgid():
     """Set from .env, applied by each entrypoint (tests/test_bundle_entrypoints.sh).
     Unset they default to 0, which is what every install before had."""

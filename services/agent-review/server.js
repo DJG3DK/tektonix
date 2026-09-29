@@ -76,7 +76,12 @@ function own(record, name) {
 }
 
 // The router's ledger, one line per model call (services/model-router/router/ledger.py).
-const ROUTING_LOG = path.join(AGENT_HOME, 'services/model-router/logs/routing.jsonl');
+// A host install has it beside the router; the bundle keeps it in the
+// routerlogs volume and names the path (MODEL_ROUTER_LEDGER), the same
+// variable the agent reads for its Analytics page. Before that the Router
+// tab read a path that does not exist in the container and showed nothing.
+const ROUTING_LOG = process.env.MODEL_ROUTER_LEDGER
+    || path.join(AGENT_HOME, 'services/model-router/logs/routing.jsonl');
 
 // The last path segment of a model id -- the same shortening the console does.
 function labelForModel(id) {
@@ -662,7 +667,17 @@ function requireControlSecret(req, res, next) {
     next();
 }
 
+// The bundle hands the key over in the environment (or a *_FILE, the
+// convention the other secrets use); a host install keeps it in the
+// router's own .env, which is where it belongs there.
 function readOpenRouterKey() {
+    if (process.env.OPENROUTER_API_KEY) return process.env.OPENROUTER_API_KEY.trim();
+    if (process.env.OPENROUTER_API_KEY_FILE) {
+        try {
+            const v = fs.readFileSync(process.env.OPENROUTER_API_KEY_FILE, 'utf8').trim();
+            if (v) return v;
+        } catch { /* fall through to the file beside the router */ }
+    }
     try {
         const env = fs.readFileSync(path.join(AGENT_HOME, 'services/model-router/.env'), 'utf8');
         const m = env.match(/^OPENROUTER_API_KEY=(.+)$/m);

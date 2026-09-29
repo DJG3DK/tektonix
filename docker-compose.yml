@@ -308,6 +308,12 @@ services:
       REVIEW_CONTROL_SECRET_FILE: /app/shared/review_control_secret
       MODEL_ROUTER_URL: http://router:4001
       REVIEW_CONTROL_HOST: commit-reviewer
+      # The dashboard's Router tab: the router's ledger (the routerlogs
+      # volume, read-only, the same path the agent reads) and the upstream
+      # key for the balance card. Both used to be read from host paths the
+      # container does not have, so the tab was empty in the bundle.
+      MODEL_ROUTER_LEDGER: /app/router-logs/routing.jsonl
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:?set OPENROUTER_API_KEY in .env}
       TEKTONIX_BUNDLE: "1"
       PUID: ${PUID:-0}
       PGID: ${PGID:-0}
@@ -319,6 +325,7 @@ services:
       - ${PROJECTS_DIR:?set PROJECTS_DIR in .env}:/projects
       - reviewshared:/app/shared:ro
       - reviewstate:/app/review-state
+      - routerlogs:/app/router-logs:ro
     logging: *logging
     restart: unless-stopped
 
