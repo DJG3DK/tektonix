@@ -57,11 +57,6 @@ async fn machine_git_identity() -> (String, String) {
 }
 
 #[tauri::command]
-fn stack_dir(app: AppHandle) -> Result<String, String> {
-    Ok(stack::dir(&app)?.display().to_string())
-}
-
-#[tauri::command]
 fn installed_version(app: AppHandle) -> Option<String> {
     stack::installed_version(&app)
 }
@@ -161,14 +156,6 @@ async fn app_update_check(app: AppHandle) -> Result<stack::AppUpdate, String> {
 #[tauri::command]
 async fn app_update_install(app: AppHandle) -> Result<(), String> {
     stack::install_app_update(&app).await
-}
-
-#[tauri::command]
-async fn auto_update_now(
-    app: AppHandle,
-    lock: tauri::State<'_, stack::StackLock>,
-) -> Result<String, String> {
-    stack::auto_update_pass(&app, &lock).await
 }
 
 /// Automatic updates: two minutes after start, then every six hours. Each
@@ -299,17 +286,13 @@ fn show_console(app: &AppHandle) -> Result<(), String> {
 
 fn show_panel_page(app: &AppHandle) -> Result<(), String> {
     let w = app.get_webview_window("main").ok_or("no window")?;
-    let url: tauri::Url = "tauri://localhost/index.html"
-        .parse()
-        .map_err(|e: url::ParseError| e.to_string())?;
     // On Windows the app's own pages are served from http://tauri.localhost.
-    let url = if cfg!(windows) {
+    let page = if cfg!(windows) {
         "http://tauri.localhost/index.html"
-            .parse()
-            .map_err(|e: url::ParseError| e.to_string())?
     } else {
-        url
+        "tauri://localhost/index.html"
     };
+    let url: tauri::Url = page.parse().map_err(|e: url::ParseError| e.to_string())?;
     w.navigate(url).map_err(|e| e.to_string())?;
     let _ = w.show();
     let _ = w.set_focus();
@@ -494,7 +477,6 @@ pub fn run() {
             settings_get,
             settings_save,
             machine_git_identity,
-            stack_dir,
             installed_version,
             stack_install,
             stack_up,
@@ -508,7 +490,6 @@ pub fn run() {
             app_version,
             app_update_check,
             app_update_install,
-            auto_update_now,
             logs_follow,
             logs_stop,
             open_console,

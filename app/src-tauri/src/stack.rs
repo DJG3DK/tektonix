@@ -152,7 +152,6 @@ pub fn read_prefs_view(app: &AppHandle) -> PrefsView {
 /// Whether someone is using the window right now: it is shown and has the
 /// focus. An update never restarts the app under a person's hands.
 pub fn window_in_use(app: &AppHandle) -> bool {
-    use tauri::Manager;
     match app.get_webview_window("main") {
         Some(w) => w.is_visible().unwrap_or(false) && w.is_focused().unwrap_or(false),
         None => false,
@@ -932,6 +931,261 @@ pub async fn update_to(app: &AppHandle, tag: &str) -> Result<(), String> {
     up(app).await
 }
 
+/// The agent, from the public health route's `busy` count. Only no answer
+/// at all means the stack is down; any answer that does not say counts as
+/// busy (update::busy_in), so an automatic update never pulls a running
+/// task's containers out from under it.
+pub async fn agent_state() -> Agent {
+    let Ok(client) = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+    else {
+        return Agent::Busy;
+    };
+    let Ok(r) = client.get(HEALTH).send().await else {
+        return Agent::Down;
+    };
+    let body = r.text().await.unwrap_or_default();
+    if update::busy_in(&body) {
+        Agent::Busy
+    } else {
+        Agent::Idle
+    }
+}
+
+/// Where the updater's manifest for a release lives: with the installer,
+/// on that release. `releases/latest/download` would skip pre-releases.
+pub fn updater_endpoint(tag: &str) -> String {
+    format!("https://github.com/{REPO}/releases/download/{tag}/latest.json")
+}
+
+#[derive(Serialize, Clone)]
+pub struct AppUpdate {
+    pub available: bool,
+    pub version: String,
+    pub tag: String,
+}
+
+/// The app's updater for one release: its manifest lives on that release
+/// (updater_endpoint), and releases are ordered the way the stack orders
+/// them (version_key). The plugin's default is semver, which reads a
+/// pre-release label as text, so `rc14 < rc9`: an rc9 app saw rc10 to rc22
+/// as older and never moved (2026-09-29).
+fn updater(app: &AppHandle, tag: &str) -> Result<tauri_plugin_updater::Updater, String> {
+    use tauri_plugin_updater::UpdaterExt;
+    let endpoint: tauri::Url = updater_endpoint(tag)
+        .parse()
+        .map_err(|e: url::ParseError| e.to_string())?;
+    app.updater_builder()
+        .endpoints(vec![endpoint])
+        .map_err(|e| e.to_string())?
+        .version_comparator(|current, release| {
+            app_update_wanted(&current.to_string(), &release.version.to_string())
+        })
+        .build()
+        .map_err(|e| e.to_string())
+}
+
+/// Whether a release's app replaces the running one: the stack's ordering,
+/// nothing else.
+pub fn app_update_wanted(current: &str, release: &str) -> bool {
+    newer_than(release, current)
+}
+
+/// Is a newer app than this one attached to the newest release?
+pub async fn check_app_update(app: &AppHandle) -> Result<AppUpdate, String> {
+    let latest = latest_release(wants_prereleases(app)).await?;
+    let updater = updater(app, &latest.tag_name)?;
+    match updater.check().await {
+        Ok(Some(u)) => Ok(AppUpdate {
+            available: true,
+            version: u.version.clone(),
+            tag: latest.tag_name,
+        }),
+        Ok(None) => Ok(AppUpdate {
+            available: false,
+            version: String::new(),
+            tag: latest.tag_name,
+        }),
+        Err(e) => Err(format!("could not check the app's own update: {e}")),
+    }
+}
+
+/// Download and install the newest app, then restart into it.
+pub async fn install_app_update(app: &AppHandle) -> Result<(), String> {
+    let latest = latest_release(wants_prereleases(app)).await?;
+    let updater = updater(app, &latest.tag_name)?;
+    let Some(update) = updater.check().await.map_err(|e| e.to_string())? else {
+        return Err("this app is already the newest".into());
+    };
+    note(app, format!("Downloading app {}...", update.version));
+    update
+        .download_and_install(|_, _| {}, || {})
+        .await
+        .map_err(|e| format!("app update failed: {e}"))?;
+    note(app, "App updated; restarting.");
+    app.restart();
+}
+
+/// One automatic pass: the stack onto this app's release, then the app
+/// itself when a newer release is out. The stack follows the app rather
+/// than the newest release, so its images always run under the compose
+/// file they were released with; the new app brings the stack along at
+/// its next pass. Says what it did and why not.
+pub async fn auto_update_pass(app: &AppHandle, lock: &StackLock) -> Result<String, String> {
+    let guard = lock.0.try_lock();
+    let settings = read_settings(app)?;
+    let ready = settings.openrouter_api_key_set && !settings.projects_dir.is_empty();
+    if let Some(why) = update::pass_skip_reason(ready, read_version(app).is_some(), guard.is_err())
+    {
+        return Ok(why.into());
+    }
+    // Whatever the preference says, the stack runs this app's release: a
+    // newly installed app over an older stack corrects it here, once the
+    // agent is idle. A stack the operator stopped stays stopped; the new
+    // images and compose file are there for the next Start.
+    match ensure_own_release(app).await? {
+        StackMove::Pull { restart: true } | StackMove::Recompose { restart: true } => {
+            note(app, "Restarting the stack on this app's release.");
+            up(app).await?;
+        }
+        StackMove::Pull { restart: false } => {
+            note(
+                app,
+                "The stack is stopped; the new images run from the next Start.",
+            );
+        }
+        StackMove::Recompose { restart: false } => stamp_compose(app)?,
+        StackMove::Busy | StackMove::Current => {}
+    }
+    let prefs = read_prefs(app);
+    if !prefs.auto_update {
+        return Ok("automatic updates are off".into());
+    }
+    // The app replaces itself only when nothing is going on: no task in
+    // flight, and nobody at the window. 2026-09-29: it reinstalled itself
+    // while the operator was typing to a running task, and took the window.
+    let mine = check_app_update(app).await?;
+    if !mine.available {
+        return Ok("up to date".into());
+    }
+    if agent_state().await == Agent::Busy {
+        return Ok(format!(
+            "app {} is out; it installs when the agent is idle, or from the panel",
+            mine.version
+        ));
+    }
+    if window_in_use(app) {
+        return Ok(format!(
+            "app {} is out; it installs when this window is not in use, or from the panel",
+            mine.version
+        ));
+    }
+    note(
+        app,
+        format!("A newer app ({}) is out; installing it", mine.version),
+    );
+    install_app_update(app).await?;
+    Ok(format!("installing app {}", mine.version))
+}
+
+/// The first account's password, chosen on the setup form instead of read
+/// out of a container. The agent seeds the account with a one-time
+/// password and requires a change before anything else; this does that
+/// change through the same two routes a person would use: sign in with
+/// the one-time password, then set the chosen one. Nothing is stored here.
+/// Ok(false) when there is no one-time password to use (the account
+/// already has its password), which is the normal case after the first
+/// start.
+pub async fn set_first_password(
+    app: &AppHandle,
+    email: &str,
+    password: &str,
+) -> Result<bool, String> {
+    if password.trim().is_empty() {
+        return Ok(false);
+    }
+    // Checked here, before the one-time password is read: reading it
+    // deletes it, and the agent's refusal of a weak password then left no
+    // way to sign in at all (2026-09-29).
+    if let Some(problem) = password_problem(password) {
+        return Err(problem.into());
+    }
+    let one_time = match initial_password(app).await {
+        Ok(p) if !p.is_empty() => p,
+        _ => return Ok(false),
+    };
+    // From here on the one-time password is spent, so every failure hands
+    // it back and the operator finishes by hand.
+    if let Err(e) = change_first_password(email, &one_time, password).await {
+        return Err(with_one_time_password(&e, &one_time));
+    }
+    note(app, "Your password is set. Sign in to the console with it.");
+    Ok(true)
+}
+
+/// The agent's own rules (agent/auth.py validate_password_strength), in its
+/// own words, so the panel refuses exactly what the agent would refuse.
+pub fn password_problem(password: &str) -> Option<&'static str> {
+    if password.chars().count() < 12 {
+        return Some("password must be at least 12 characters");
+    }
+    if !password.chars().any(char::is_lowercase) {
+        return Some("password must include a lowercase letter");
+    }
+    if !password.chars().any(char::is_uppercase) {
+        return Some("password must include an uppercase letter");
+    }
+    if !password.chars().any(|c| c.is_ascii_digit()) {
+        return Some("password must include a digit");
+    }
+    None
+}
+
+/// What the panel shows when the chosen password could not be set after
+/// the one-time password was read: the one-time password itself, so the
+/// sign-in can still happen.
+pub fn with_one_time_password(error: &str, one_time: &str) -> String {
+    format!(
+        "{error}. Sign in to the console with the one-time password {one_time} and choose your password there."
+    )
+}
+
+async fn change_first_password(email: &str, one_time: &str, password: &str) -> Result<(), String> {
+    let client = reqwest::Client::builder()
+        .cookie_store(true)
+        .timeout(std::time::Duration::from_secs(20))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let base = DASHBOARD;
+    let login = client
+        .post(format!("{base}/api/auth/login"))
+        .json(&serde_json::json!({"email": email, "password": one_time}))
+        .send()
+        .await
+        .map_err(|e| format!("sign-in failed: {e}"))?;
+    if !login.status().is_success() {
+        return Err(format!(
+            "the agent refused the first sign-in ({})",
+            login.status()
+        ));
+    }
+    let change = client
+        .post(format!("{base}/api/auth/change-password"))
+        .json(&serde_json::json!({"current_password": one_time, "new_password": password}))
+        .send()
+        .await
+        .map_err(|e| format!("setting the password failed: {e}"))?;
+    if !change.status().is_success() {
+        let body = change.text().await.unwrap_or_default();
+        return Err(format!(
+            "the agent refused that password: {}",
+            body.chars().take(200).collect::<String>()
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1287,259 +1541,4 @@ mod tests {
         );
         assert_eq!(hint("ééééé"), "•••••");
     }
-}
-
-/// The agent, from the public health route's `busy` count. Only no answer
-/// at all means the stack is down; any answer that does not say counts as
-/// busy (update::busy_in), so an automatic update never pulls a running
-/// task's containers out from under it.
-pub async fn agent_state() -> Agent {
-    let Ok(client) = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(5))
-        .build()
-    else {
-        return Agent::Busy;
-    };
-    let Ok(r) = client.get(HEALTH).send().await else {
-        return Agent::Down;
-    };
-    let body = r.text().await.unwrap_or_default();
-    if update::busy_in(&body) {
-        Agent::Busy
-    } else {
-        Agent::Idle
-    }
-}
-
-/// Where the updater's manifest for a release lives: with the installer,
-/// on that release. `releases/latest/download` would skip pre-releases.
-pub fn updater_endpoint(tag: &str) -> String {
-    format!("https://github.com/{REPO}/releases/download/{tag}/latest.json")
-}
-
-#[derive(Serialize, Clone)]
-pub struct AppUpdate {
-    pub available: bool,
-    pub version: String,
-    pub tag: String,
-}
-
-/// The app's updater for one release: its manifest lives on that release
-/// (updater_endpoint), and releases are ordered the way the stack orders
-/// them (version_key). The plugin's default is semver, which reads a
-/// pre-release label as text, so `rc14 < rc9`: an rc9 app saw rc10 to rc22
-/// as older and never moved (2026-09-29).
-fn updater(app: &AppHandle, tag: &str) -> Result<tauri_plugin_updater::Updater, String> {
-    use tauri_plugin_updater::UpdaterExt;
-    let endpoint: tauri::Url = updater_endpoint(tag)
-        .parse()
-        .map_err(|e: url::ParseError| e.to_string())?;
-    app.updater_builder()
-        .endpoints(vec![endpoint])
-        .map_err(|e| e.to_string())?
-        .version_comparator(|current, release| {
-            app_update_wanted(&current.to_string(), &release.version.to_string())
-        })
-        .build()
-        .map_err(|e| e.to_string())
-}
-
-/// Whether a release's app replaces the running one: the stack's ordering,
-/// nothing else.
-pub fn app_update_wanted(current: &str, release: &str) -> bool {
-    newer_than(release, current)
-}
-
-/// Is a newer app than this one attached to the newest release?
-pub async fn check_app_update(app: &AppHandle) -> Result<AppUpdate, String> {
-    let latest = latest_release(wants_prereleases(app)).await?;
-    let updater = updater(app, &latest.tag_name)?;
-    match updater.check().await {
-        Ok(Some(u)) => Ok(AppUpdate {
-            available: true,
-            version: u.version.clone(),
-            tag: latest.tag_name,
-        }),
-        Ok(None) => Ok(AppUpdate {
-            available: false,
-            version: String::new(),
-            tag: latest.tag_name,
-        }),
-        Err(e) => Err(format!("could not check the app's own update: {e}")),
-    }
-}
-
-/// Download and install the newest app, then restart into it.
-pub async fn install_app_update(app: &AppHandle) -> Result<(), String> {
-    let latest = latest_release(wants_prereleases(app)).await?;
-    let updater = updater(app, &latest.tag_name)?;
-    let Some(update) = updater.check().await.map_err(|e| e.to_string())? else {
-        return Err("this app is already the newest".into());
-    };
-    note(app, format!("Downloading app {}...", update.version));
-    update
-        .download_and_install(|_, _| {}, || {})
-        .await
-        .map_err(|e| format!("app update failed: {e}"))?;
-    note(app, "App updated; restarting.");
-    app.restart();
-}
-
-/// One automatic pass: the stack onto this app's release, then the app
-/// itself when a newer release is out. The stack follows the app rather
-/// than the newest release, so its images always run under the compose
-/// file they were released with; the new app brings the stack along at
-/// its next pass. Says what it did and why not.
-pub async fn auto_update_pass(app: &AppHandle, lock: &StackLock) -> Result<String, String> {
-    let guard = lock.0.try_lock();
-    let settings = read_settings(app)?;
-    let ready = settings.openrouter_api_key_set && !settings.projects_dir.is_empty();
-    if let Some(why) = update::pass_skip_reason(ready, read_version(app).is_some(), guard.is_err())
-    {
-        return Ok(why.into());
-    }
-    // Whatever the preference says, the stack runs this app's release: a
-    // newly installed app over an older stack corrects it here, once the
-    // agent is idle. A stack the operator stopped stays stopped; the new
-    // images and compose file are there for the next Start.
-    match ensure_own_release(app).await? {
-        StackMove::Pull { restart: true } | StackMove::Recompose { restart: true } => {
-            note(app, "Restarting the stack on this app's release.");
-            up(app).await?;
-        }
-        StackMove::Pull { restart: false } => {
-            note(
-                app,
-                "The stack is stopped; the new images run from the next Start.",
-            );
-        }
-        StackMove::Recompose { restart: false } => stamp_compose(app)?,
-        StackMove::Busy | StackMove::Current => {}
-    }
-    let prefs = read_prefs(app);
-    if !prefs.auto_update {
-        return Ok("automatic updates are off".into());
-    }
-    // The app replaces itself only when nothing is going on: no task in
-    // flight, and nobody at the window. 2026-09-29: it reinstalled itself
-    // while the operator was typing to a running task, and took the window.
-    let mine = check_app_update(app).await?;
-    if !mine.available {
-        return Ok("up to date".into());
-    }
-    if agent_state().await == Agent::Busy {
-        return Ok(format!(
-            "app {} is out; it installs when the agent is idle, or from the panel",
-            mine.version
-        ));
-    }
-    if window_in_use(app) {
-        return Ok(format!(
-            "app {} is out; it installs when this window is not in use, or from the panel",
-            mine.version
-        ));
-    }
-    note(
-        app,
-        format!("A newer app ({}) is out; installing it", mine.version),
-    );
-    install_app_update(app).await?;
-    Ok(format!("installing app {}", mine.version))
-}
-
-/// The first account's password, chosen on the setup form instead of read
-/// out of a container. The agent seeds the account with a one-time
-/// password and requires a change before anything else; this does that
-/// change through the same two routes a person would use: sign in with
-/// the one-time password, then set the chosen one. Nothing is stored here.
-/// Ok(false) when there is no one-time password to use (the account
-/// already has its password), which is the normal case after the first
-/// start.
-pub async fn set_first_password(
-    app: &AppHandle,
-    email: &str,
-    password: &str,
-) -> Result<bool, String> {
-    if password.trim().is_empty() {
-        return Ok(false);
-    }
-    // Checked here, before the one-time password is read: reading it
-    // deletes it, and the agent's refusal of a weak password then left no
-    // way to sign in at all (2026-09-29).
-    if let Some(problem) = password_problem(password) {
-        return Err(problem.into());
-    }
-    let one_time = match initial_password(app).await {
-        Ok(p) if !p.is_empty() => p,
-        _ => return Ok(false),
-    };
-    // From here on the one-time password is spent, so every failure hands
-    // it back and the operator finishes by hand.
-    if let Err(e) = change_first_password(email, &one_time, password).await {
-        return Err(with_one_time_password(&e, &one_time));
-    }
-    note(app, "Your password is set. Sign in to the console with it.");
-    Ok(true)
-}
-
-/// The agent's own rules (agent/auth.py validate_password_strength), in its
-/// own words, so the panel refuses exactly what the agent would refuse.
-pub fn password_problem(password: &str) -> Option<&'static str> {
-    if password.chars().count() < 12 {
-        return Some("password must be at least 12 characters");
-    }
-    if !password.chars().any(char::is_lowercase) {
-        return Some("password must include a lowercase letter");
-    }
-    if !password.chars().any(char::is_uppercase) {
-        return Some("password must include an uppercase letter");
-    }
-    if !password.chars().any(|c| c.is_ascii_digit()) {
-        return Some("password must include a digit");
-    }
-    None
-}
-
-/// What the panel shows when the chosen password could not be set after
-/// the one-time password was read: the one-time password itself, so the
-/// sign-in can still happen.
-pub fn with_one_time_password(error: &str, one_time: &str) -> String {
-    format!(
-        "{error}. Sign in to the console with the one-time password {one_time} and choose your password there."
-    )
-}
-
-async fn change_first_password(email: &str, one_time: &str, password: &str) -> Result<(), String> {
-    let client = reqwest::Client::builder()
-        .cookie_store(true)
-        .timeout(std::time::Duration::from_secs(20))
-        .build()
-        .map_err(|e| e.to_string())?;
-    let base = DASHBOARD;
-    let login = client
-        .post(format!("{base}/api/auth/login"))
-        .json(&serde_json::json!({"email": email, "password": one_time}))
-        .send()
-        .await
-        .map_err(|e| format!("sign-in failed: {e}"))?;
-    if !login.status().is_success() {
-        return Err(format!(
-            "the agent refused the first sign-in ({})",
-            login.status()
-        ));
-    }
-    let change = client
-        .post(format!("{base}/api/auth/change-password"))
-        .json(&serde_json::json!({"current_password": one_time, "new_password": password}))
-        .send()
-        .await
-        .map_err(|e| format!("setting the password failed: {e}"))?;
-    if !change.status().is_success() {
-        let body = change.text().await.unwrap_or_default();
-        return Err(format!(
-            "the agent refused that password: {}",
-            body.chars().take(200).collect::<String>()
-        ));
-    }
-    Ok(())
 }

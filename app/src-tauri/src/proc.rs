@@ -56,8 +56,7 @@ fn command(program: &str, args: &[&str], cwd: Option<&Path>) -> Command {
     cmd
 }
 
-fn missing(program: &str, e: &std::io::Error) -> bool {
-    let _ = program;
+fn missing(e: &std::io::Error) -> bool {
     e.kind() == std::io::ErrorKind::NotFound
 }
 
@@ -73,7 +72,7 @@ pub async fn capture(
         .output()
         .await
         .map_err(|e| {
-            if missing(program, &e) {
+            if missing(&e) {
                 ProcError::Missing(program.into())
             } else {
                 ProcError::Io(e)
@@ -110,7 +109,7 @@ pub fn spawn_piped(
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| {
-            if missing(program, &e) {
+            if missing(&e) {
                 ProcError::Missing(program.into())
             } else {
                 ProcError::Io(e)
@@ -192,33 +191,25 @@ pub fn spawn_streaming(
     let mut child = spawn_piped(program, args, cwd)?;
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
-    for (pipe, which) in [
-        (
-            stdout.map(|s| Box::new(s) as Box<dyn tokio::io::AsyncRead + Unpin + Send>),
-            "out",
-        ),
-        (
-            stderr.map(|s| Box::new(s) as Box<dyn tokio::io::AsyncRead + Unpin + Send>),
-            "err",
-        ),
-    ] {
-        let _ = which;
-        if let Some(pipe) = pipe {
-            let a = app.clone();
-            let l = label.to_string();
-            tokio::spawn(async move {
-                let mut lines = BufReader::new(pipe).lines();
-                while let Ok(Some(line)) = lines.next_line().await {
-                    let _ = a.emit(
-                        LOG_EVENT,
-                        LogLine {
-                            stream: l.clone(),
-                            line,
-                        },
-                    );
-                }
-            });
-        }
+    let pipes = [
+        stdout.map(|s| Box::new(s) as Box<dyn tokio::io::AsyncRead + Unpin + Send>),
+        stderr.map(|s| Box::new(s) as Box<dyn tokio::io::AsyncRead + Unpin + Send>),
+    ];
+    for pipe in pipes.into_iter().flatten() {
+        let a = app.clone();
+        let l = label.to_string();
+        tokio::spawn(async move {
+            let mut lines = BufReader::new(pipe).lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                let _ = a.emit(
+                    LOG_EVENT,
+                    LogLine {
+                        stream: l.clone(),
+                        line,
+                    },
+                );
+            }
+        });
     }
     Ok(Streaming { child })
 }

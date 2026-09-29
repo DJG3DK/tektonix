@@ -142,6 +142,22 @@ def test_the_desktop_docs_describe_the_app_as_it_is():
         assert "x64-setup.exe" in (REPO / doc).read_text(), f"{doc} points Windows users at the desktop installer"
 
 
+def test_no_dead_commands_and_a_policy_on_the_panel_page():
+    """stack_dir was never called, and auto_update_now could self-install
+    from any page that reached it: unused privileged surface. The panel
+    page builds its rows from text and carries a CSP; the release build
+    sets up no emulator for an amd64-only image."""
+    commands = _registered_commands()
+    assert "stack_dir" not in commands and "auto_update_now" not in commands
+    conf = json.loads((REPO / "app/src-tauri/tauri.conf.json").read_text())
+    assert conf["app"]["security"]["csp"].startswith("default-src 'self'")
+    assert "innerHTML" not in (REPO / "app/src/main.js").read_text()
+    assert "setup-qemu" not in (REPO / ".github/workflows/release.yml").read_text()
+    stack = (REPO / "app/src-tauri/src/stack.rs").read_text()
+    assert stack.count("use tauri::Manager") == 0 and "use tauri::{AppHandle, Emitter, Manager};" in stack
+    assert re.search(r"^(pub )?(async )?fn ", stack[stack.index("#[cfg(test)]\nmod tests"):], re.M) is None, "nothing after mod tests"
+
+
 def test_the_app_has_one_tray_icon():
     """app.trayIcon in the config made Tauri build a tray of its own, with
     no menu and no handler, beside the one lib.rs builds (2026-09-29)."""

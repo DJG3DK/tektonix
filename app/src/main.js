@@ -171,11 +171,15 @@ async function refreshStatus() {
   let rows = [];
   try { rows = await invoke("stack_status"); } catch (e) { /* not up yet */ }
   const tbody = $("containers").querySelector("tbody");
-  tbody.innerHTML = "";
+  tbody.textContent = "";
   for (const r of rows) {
     const tr = document.createElement("tr");
-    const st = r.health ? `${r.state} (${r.health})` : r.state;
-    tr.innerHTML = `<td>${r.service}</td><td class="state-${r.state}">${st}</td>`;
+    const service = document.createElement("td");
+    service.textContent = r.service;
+    const state = document.createElement("td");
+    state.className = `state-${r.state}`;
+    state.textContent = r.health ? `${r.state} (${r.health})` : r.state;
+    tr.append(service, state);
     tbody.appendChild(tr);
   }
   const agent = rows.find((r) => r.service === "agent");
