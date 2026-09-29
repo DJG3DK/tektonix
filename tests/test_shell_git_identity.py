@@ -37,3 +37,16 @@ def test_a_commit_through_the_helper_carries_the_identity(tmp_path, monkeypatch)
 
     out = asyncio.run(go())
     assert out["output"].strip() == "Danny <danny@example.test>"
+
+
+def test_the_sandbox_and_the_host_shell_share_one_identity_tuple(monkeypatch):
+    """A variable added to one used to be missing from the other (2026-09-29
+    audit, A15)."""
+    from agent.tools import sandbox
+    assert sandbox.GIT_IDENTITY_VARS is shell.GIT_IDENTITY_VARS
+    for k in shell.GIT_IDENTITY_VARS:
+        monkeypatch.setenv(k, f"v-{k}")
+    env = shell._safe_base_env()
+    args = sandbox.git_identity_args()
+    for k in shell.GIT_IDENTITY_VARS:
+        assert env[k] == f"v-{k}" and f"{k}=v-{k}" in args

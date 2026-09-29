@@ -31,7 +31,7 @@ import socket
 import contextlib
 import uuid
 
-from agent.tools.shell import ShellTimeout
+from agent.tools.shell import GIT_IDENTITY_VARS, ShellTimeout
 
 logger = logging.getLogger("tektonix")
 
@@ -94,13 +94,11 @@ SANDBOX_IMAGE = "tektonix-sandbox:latest"  # built from docker/agent-sandbox/Doc
 # own. The bundle sets these on the agent (docker-compose.yml, from
 # ADMIN_EMAIL); a host install has the operator's global git config, which
 # the sandbox cannot see either. Passed through when set, so `git commit`
-# the model runs in the sandbox works in both.
-_GIT_IDENTITY_VARS = ("GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL")
-
-
+# the model runs in the sandbox works in both. The names are shell.py's
+# GIT_IDENTITY_VARS: the same four reach a host-side git command.
 def git_identity_args() -> list[str]:
     args: list[str] = []
-    for k in _GIT_IDENTITY_VARS:
+    for k in GIT_IDENTITY_VARS:
         v = os.environ.get(k, "").strip()
         if v:
             args += ["-e", f"{k}={v}"]

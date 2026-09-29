@@ -197,7 +197,7 @@ def test_the_push_the_file_asks_for_has_nothing_to_push_with(poisoned_repo, monk
     # The git identity rides along when the operator set one (dc7a6ca, so a
     # commit in the sandbox works): a name and an address, which authenticate
     # nothing. Whether it is set depends on the machine running this.
-    identity = [v for v in env_values if v.split("=", 1)[0] in sandbox._GIT_IDENTITY_VARS]
+    identity = [v for v in env_values if v.split("=", 1)[0] in sandbox.GIT_IDENTITY_VARS]
     # DJANGO_TEST_PROCESSES: the container's own CPU count, so a test runner
     # does not size itself from the host's (sandbox.SANDBOX_TEST_ENV). No secret.
     assert sorted(set(env_values) - set(identity)) == \

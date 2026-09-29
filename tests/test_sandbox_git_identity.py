@@ -9,7 +9,7 @@ from agent.tools import sandbox
 
 
 def test_the_identity_is_passed_through_only_when_set(monkeypatch):
-    for k in sandbox._GIT_IDENTITY_VARS:
+    for k in sandbox.GIT_IDENTITY_VARS:
         monkeypatch.delenv(k, raising=False)
     assert sandbox.git_identity_args() == []
     monkeypatch.setenv("GIT_AUTHOR_NAME", "Tektonix")

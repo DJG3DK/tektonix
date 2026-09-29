@@ -62,6 +62,13 @@ def _kill_process_group(proc: "asyncio.subprocess.Process") -> None:
         pass  # already exited
 
 
+# Git's identity: the one set of host variables a shell command and a sandbox
+# container both carry. Not a secret, and every commit needs it. One tuple,
+# imported by sandbox.py, so a variable added here reaches both (2026-09-29
+# audit, A15: the four names were spelled out in each file).
+GIT_IDENTITY_VARS = ("GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL")
+
+
 # The ONLY host env vars a shell command gets by default. Deliberately does NOT
 # include os.environ (audit C-2): agent-authored code runs through this path
 # (checks.py executes `npm run <script>`, and package.json is a file the agent
@@ -86,7 +93,7 @@ def _safe_base_env() -> dict:
     # the gap; in the compose bundle there is none, and the scrub above ate
     # the identity compose had set: "Please tell me who you are" at the final
     # commit, twice, on the first Windows install (2026-09-29).
-    for key in ("GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL"):
+    for key in GIT_IDENTITY_VARS:
         value = os.environ.get(key, "").strip()
         if value:
             base[key] = value
