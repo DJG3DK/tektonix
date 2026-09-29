@@ -41,6 +41,7 @@ export function RemoveProject({ name, live, open, onOpenChange, onRemoved }: {
 
   useEffect(() => {
     if (!open) return;
+    // oxlint-disable-next-line react/set-state-in-effect -- the previous answer is cleared before asking again; opening is the external event
     setCheckout(null);
     let cancelled = false;
     checkoutRemovable(name)

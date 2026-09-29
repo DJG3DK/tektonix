@@ -1,3 +1,4 @@
+/* oxlint-disable react/only-export-components -- helpers exported for their tests; an edit here remounts the file under Fast Refresh, which is fine */
 import { useEffect, useState } from "react";
 import {
   Area,
@@ -22,7 +23,7 @@ import { modelColor, shortModel } from "../format";
 
 // Fixed order + color per agent/classify.py's own taxonomy -- a category
 // never shifts color as the mix of tasks changes.
-export const CATEGORY_COLORS: Record<string, string> = {
+const CATEGORY_COLORS: Record<string, string> = {
   "bug-fix": "#f85149",
   feature: "#3fb950",
   "ui-styling": "#a56ef5",

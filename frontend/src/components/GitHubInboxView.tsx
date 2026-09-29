@@ -69,6 +69,7 @@ export function GitHubInboxView({ isAdmin, onOpenTask }: { isAdmin: boolean; onO
   }, []);
 
   useEffect(() => {
+    // oxlint-disable-next-line react/set-state-in-effect -- the load it starts is async; state lands after the await, not in the effect
     void load();
     const t = setInterval(() => void load(), 30_000);
     return () => clearInterval(t);

@@ -1,3 +1,4 @@
+/* oxlint-disable react/only-export-components -- helpers exported for their tests; an edit here remounts the file under Fast Refresh, which is fine */
 import { memo, useState } from "react";
 import { modelColor, relativeTime, shortModel } from "../format";
 import { artifactImages, splitArtifactImages } from "../artifactImages";

@@ -36,7 +36,10 @@ export function ApiKeysPanel() {
       setError(e instanceof Error ? e.message : "could not load");
     }
   }
-  useEffect(() => { void load(); }, []);
+  useEffect(() => {
+    // oxlint-disable-next-line react/set-state-in-effect -- the load it starts is async; state lands after the await, not in the effect
+    void load();
+  }, []);
 
   const readOnly = managed?.managed_by === "compose";
   const dirty = readOnly ? [] : Object.entries(edits).filter(([, v]) => v.trim() !== "");

@@ -109,6 +109,7 @@ function AuthenticatedApp({ user, onLogout, onUserChanged }: { user: CurrentUser
   }, []);
 
   useEffect(() => {
+    // oxlint-disable-next-line react/set-state-in-effect -- the load it starts is async; state lands after the await, not in the effect
     refreshRepos();
     refreshTasks();
     refreshPlanningSessions();
@@ -124,6 +125,7 @@ function AuthenticatedApp({ user, onLogout, onUserChanged }: { user: CurrentUser
     if (!pending) return;
     if (pending.taskId && tasksLoaded) {
       const t = tasks.find((x) => x.task_id === pending.taskId);
+      // oxlint-disable-next-line react/set-state-in-effect -- resolves the deep link once the list it names has loaded; that load is the external event
       if (t) setSelected(t);
       else setMissing(`Task ${pending.taskId.slice(0, 8)} is not in your task list — it may have been deleted, or be older than the list goes back.`);
       setPending(null);
@@ -155,7 +157,9 @@ function AuthenticatedApp({ user, onLogout, onUserChanged }: { user: CurrentUser
 
   // Back / forward: apply the URL the browser moved to.
   const listsRef = useRef({ tasks, planningSessions });
-  listsRef.current = { tasks, planningSessions };
+  useEffect(() => {
+    listsRef.current = { tasks, planningSessions };
+  });
   useEffect(() => {
     const onPop = () => {
       const r = parseRoute(window.location.pathname);

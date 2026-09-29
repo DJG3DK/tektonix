@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import type { ReviewGateResult } from "../types";
 import "./ReviewGatePanel.css";
 
@@ -12,7 +12,13 @@ import "./ReviewGatePanel.css";
 export function ReviewGatePanel({ result, minimized = false }: { result: ReviewGateResult; minimized?: boolean }) {
   const ready = result.verdict === "READY";
   const [open, setOpen] = useState(!minimized);
-  useEffect(() => setOpen(!minimized), [minimized]);
+  // Follows the prop on the transition only, so a manual "show" while
+  // minimized sticks. Adjusted during render, not in an effect.
+  const [wasMinimized, setWasMinimized] = useState(minimized);
+  if (wasMinimized !== minimized) {
+    setWasMinimized(minimized);
+    setOpen(!minimized);
+  }
 
   if (!open) {
     return (

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { RouteBadge } from "./RouteSelect";
 import type { TaskMeta } from "../types";
 import type { useTaskStream } from "../useTaskStream";
@@ -53,11 +53,10 @@ export function TaskView({ task, stream, setGeneration }: Props) {
   // heights: these are chat bubbles, a rendered diff and a wall of build
   // output are two orders of magnitude apart, and a spacer sized from an
   // average of those two is a scrollbar that lies.
+  // Starts over for every task: App keys this view by task id, so another
+  // task is a fresh mount, and a window someone expanded on the last one
+  // cannot carry over to mount rows nobody asked for.
   const [windowSize, setWindowSize] = useState(LOG_WINDOW);
-  // Reset when the view moves to another task: the new log is a different
-  // conversation, and inheriting a window someone expanded on the last one
-  // mounts rows nobody asked for.
-  useEffect(() => setWindowSize(LOG_WINDOW), [task.task_id]);
 
   // Follows the newest entry while the reader is at the bottom, and stops
   // the moment they scroll up (audit H-16) -- see useStickToBottom for why
@@ -79,9 +78,14 @@ export function TaskView({ task, stream, setGeneration }: Props) {
   // to notice a badge and find a button. Closing it is fine -- the Changes
   // button reopens it, and nothing merges until a decision is made.
   const awaitingMerge = displayStatus === "awaiting_merge";
-  useEffect(() => {
+  // On the transition INTO awaiting_merge, not while in it: closing the
+  // panel must stick until the next parking. Adjusted during render rather
+  // than in an effect, so the panel is open on the same frame.
+  const [wasAwaiting, setWasAwaiting] = useState(awaitingMerge);
+  if (wasAwaiting !== awaitingMerge) {
+    setWasAwaiting(awaitingMerge);
     if (awaitingMerge) setDiffOpen(true);
-  }, [awaitingMerge]);
+  }
   const budgetPct = Math.min(100, (stream.costSoFar / Math.max(task.budget_usd, 0.01)) * 100);
 
   // Phase-aware: silence during a check run or a review wait is expected and

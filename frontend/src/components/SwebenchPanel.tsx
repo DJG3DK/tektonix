@@ -85,6 +85,7 @@ export function SwebenchPanel() {
   // One real run at a time: a diagnostic experiment does not hold the box.
   const blocking = runs.find((r) => r.state === "running" && r.kind !== "diagnostic");
   useEffect(() => {
+    // oxlint-disable-next-line react/set-state-in-effect -- the load it starts is async; state lands after the await, not in the effect
     void load();
     const t = setInterval(() => void load(), anyRunning ? POLL_RUNNING_MS : POLL_IDLE_MS);
     return () => clearInterval(t);

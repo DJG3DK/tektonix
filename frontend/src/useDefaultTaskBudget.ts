@@ -45,6 +45,12 @@ export function useBudgetInput(): [number, (v: number) => void] {
   const defaultBudget = useDefaultTaskBudget();
   const [budget, setBudget] = useState<number>(defaultBudget);
   const [touched, setTouched] = useState(false);
-  useEffect(() => { if (!touched) setBudget(defaultBudget); }, [defaultBudget, touched]);
+  // Follows the default until touched. Adjusted during render, not in an
+  // effect: the input never shows the old default for a frame.
+  const [seenDefault, setSeenDefault] = useState(defaultBudget);
+  if (seenDefault !== defaultBudget) {
+    setSeenDefault(defaultBudget);
+    if (!touched) setBudget(defaultBudget);
+  }
   return [budget, (v: number) => { setTouched(true); setBudget(v); }];
 }

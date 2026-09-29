@@ -79,7 +79,10 @@ export function PushPanel() {
     }
   }, [supported]);
 
-  useEffect(() => { void refresh(); }, [refresh]);
+  useEffect(() => {
+    // oxlint-disable-next-line react/set-state-in-effect -- the load it starts is async; state lands after the await, not in the effect
+    void refresh();
+  }, [refresh]);
 
   async function enable() {
     setBusy(true);

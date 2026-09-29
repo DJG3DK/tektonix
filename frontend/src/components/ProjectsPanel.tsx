@@ -135,7 +135,10 @@ export function ProjectsPanel({ onChanged }: { onChanged?: () => void | Promise<
       // projects, which is what anyone came here for.
     }
   }
-  useEffect(() => { void load(); void loadArchives(); }, []);
+  useEffect(() => {
+    // oxlint-disable-next-line react/set-state-in-effect -- the load it starts is async; state lands after the await, not in the effect
+    void load(); void loadArchives();
+  }, []);
 
   async function handleDetect() {
     setStage("detecting");

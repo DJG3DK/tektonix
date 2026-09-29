@@ -185,6 +185,7 @@ export function DiffPanel({ taskId, open, onClose, live, awaitingMerge, onDecide
 
   useEffect(() => {
     if (!open) return;
+    // oxlint-disable-next-line react/set-state-in-effect -- the load it starts is async; state lands after the await, not in the effect
     void refresh();
     // Live mode keeps polling so the shading tracks the agent's edits in
     // near-real time; the final look is a settled commit, one fetch is right.

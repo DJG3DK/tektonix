@@ -58,11 +58,14 @@ function ProviderPicker({
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
-    // model changed underneath us -> stale list
+  // model changed underneath us -> stale list. Adjusted during render so
+  // the old model's endpoints never get a frame under the new one.
+  const [listedFor, setListedFor] = useState(modelId);
+  if (listedFor !== modelId) {
+    setListedFor(modelId);
     setEndpoints(null);
     setLoadError(null);
-  }, [modelId]);
+  }
 
   useEffect(() => {
     if (!open) return;
@@ -369,6 +372,7 @@ function ModelConfigPins() {
   }
 
   useEffect(() => {
+    // oxlint-disable-next-line react/set-state-in-effect -- the load it starts is async; state lands after the await, not in the effect
     load();
   }, []);
 

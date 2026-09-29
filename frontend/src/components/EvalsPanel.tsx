@@ -49,6 +49,7 @@ export function EvalsPanel() {
 
   const running = Boolean(data?.status?.running);
   useEffect(() => {
+    // oxlint-disable-next-line react/set-state-in-effect -- the load it starts is async; state lands after the await, not in the effect
     void load();
     const t = setInterval(() => void load(), running ? POLL_RUNNING_MS : POLL_IDLE_MS);
     return () => clearInterval(t);
@@ -62,11 +63,17 @@ export function EvalsPanel() {
   const baseline = shownIndex >= 0 ? fullRuns[shownIndex + 1] : undefined;
   const { regressed, fixed } = shown ? compareRuns(shown, baseline) : { regressed: [], fixed: [] };
 
-  // The full report (assertions, diffs) for the run on screen.
+  // The full report (assertions, diffs) for the run on screen. The old
+  // report is dropped during render, the moment the selection moves, so a
+  // run's assertions never sit under another run's name while its own load.
+  const [reportFor, setReportFor] = useState<string | undefined>(undefined);
+  if (reportFor !== shown?.name) {
+    setReportFor(shown?.name);
+    setReport(null);
+  }
   useEffect(() => {
     if (!shown) return;
     let live = true;
-    setReport(null);
     getEvalRun(shown.name).then((r) => live && setReport(r)).catch(() => {});
     return () => {
       live = false;
@@ -197,6 +204,7 @@ export function EvalsPanel() {
             <span>
               Running — <strong>{status.done}</strong> of {status.tasks_total} done, {status.passed} passed,{" "}
               {usd(status.spent_usd)} spent
+              {/* oxlint-disable-next-line react/purity -- elapsed time; the panel re-renders on every poll, which is the clock */}
               {status.started_at && <> · {minutes(Date.now() / 1000 - status.started_at)} in</>}
             </span>
             <button type="button" className="evals-btn-secondary" onClick={() => void stop()} disabled={busy !== null}>

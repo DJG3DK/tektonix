@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { setTheme as saveTheme } from "../api";
 import { applyTheme, isThemeId, THEMES, type ThemeId } from "../themes";
 import type { CurrentUser } from "../types";
@@ -75,7 +75,11 @@ export function AppearancePanel({ user, onUserChanged }: {
   // The account is the source of truth: if it changes underneath this panel
   // (another device saved, or /api/auth/me refreshed), follow it rather than
   // keeping a selection the server has already disagreed with.
-  useEffect(() => { setChoice(saved); }, [saved]);
+  const [seenSaved, setSeenSaved] = useState(saved);
+  if (seenSaved !== saved) {
+    setSeenSaved(saved);
+    setChoice(saved);
+  }
 
   const dirty = choice !== saved;
 

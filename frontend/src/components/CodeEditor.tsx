@@ -60,7 +60,7 @@ const EXT_LANG: Record<string, string> = {
   kt: "kotlin", swift: "swift", dockerfile: "dockerfile", toml: "ini", ini: "ini",
 };
 
-export function languageFor(path: string): string {
+function languageFor(path: string): string {
   const name = path.split("/").pop()?.toLowerCase() ?? "";
   if (name === "dockerfile") return "dockerfile";
   return EXT_LANG[name.split(".").pop() ?? ""] ?? "plaintext";

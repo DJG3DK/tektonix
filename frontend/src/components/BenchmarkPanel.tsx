@@ -1,3 +1,4 @@
+/* oxlint-disable react/only-export-components -- helpers exported for their tests; an edit here remounts the file under Fast Refresh, which is fine */
 import type { BenchmarkWindow, Benchmarks } from "../types";
 import "./BenchmarkPanel.css";
 

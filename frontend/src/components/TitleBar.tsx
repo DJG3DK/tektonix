@@ -1,3 +1,4 @@
+/* oxlint-disable react/only-export-components -- insideDesktopApp() is the one non-component export, and App reads it */
 import { useEffect, useState } from "react";
 import "./TitleBar.css";
 

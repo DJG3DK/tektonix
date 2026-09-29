@@ -1,3 +1,4 @@
+/* oxlint-disable react/only-export-components -- helpers exported for their tests; an edit here remounts the file under Fast Refresh, which is fine */
 import {
   createContext,
   useCallback,
@@ -76,7 +77,9 @@ export function useSettingsSave(
 ) {
   const ctx = useContext(SaveCtx);
   const latest = useRef({ save, discard });
-  latest.current = { save, discard };
+  useEffect(() => {
+    latest.current = { save, discard };
+  });
 
   useEffect(() => {
     if (!ctx) return;
