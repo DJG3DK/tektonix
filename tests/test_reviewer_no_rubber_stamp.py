@@ -61,11 +61,22 @@ def test_a_missing_tool_is_never_marked_preexisting():
 
 def test_a_genuine_code_failure_on_base_still_counts_as_preexisting():
     """The baseline exists for a real reason: a check already broken on main
-    must not be blamed on this commit. Only missing TOOLS are excluded."""
-    checks = [{"name": "test", "ok": False, "output": "AssertionError: expected 3 to equal 4"}]
-    out = _classify_then_baseline(checks, {"test": False})
+    must not be blamed on this commit. Only missing TOOLS are excluded --
+    while another check still verified the commit."""
+    checks = [{"name": "test", "ok": False, "output": "AssertionError: expected 3 to equal 4"},
+              {"name": "lint", "ok": True, "output": ""}]
+    out = _classify_then_baseline(checks, {"test": False, "lint": True})
     assert out[0].get("preexisting") is True
     assert not out[0].get("infrastructure")
+
+
+def test_the_only_check_red_on_main_too_verified_nothing():
+    """2026-09-29 audit, R7: alone, the same failure means no check verified
+    this commit, and that is escalated rather than passed."""
+    checks = [{"name": "test", "ok": False, "output": "AssertionError: expected 3 to equal 4"}]
+    out = _classify_then_baseline(checks, {"test": False})
+    assert out[0].get("infrastructure") is True and not out[0].get("preexisting")
+    assert out[0]["output"].startswith("SETUP: the only configured check fails on the base commit as well")
 
 
 def test_a_module_resolution_error_stays_the_agents_problem():

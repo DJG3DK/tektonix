@@ -129,13 +129,18 @@ function applyBaseline(checkResults, baselineForBase) {
   // Two or more all red on both commits, or the only configured check red
   // on both with nothing else passing (2026-09-29 audit, R7: a project with
   // one check was left unguarded by the count alone).
+  // A genuine failure that main already has stays pre-existing while some
+  // other check still verified the commit; the only check red on both
+  // commits verified nothing, whatever broke it, and says so.
   const nothingPassed = !checkResults.some((c) => !c.infrastructure && c.ok);
   if (compared.length >= 1 && compared.every((c) => !c.ok && c.preexisting) && (compared.length >= 2 || nothingPassed)) {
+    const why = compared.length >= 2
+      ? 'every check fails on the base commit as well, so the review environment cannot run this project'
+      : 'the only configured check fails on the base commit as well, so no check verified this commit';
     for (const c of compared) {
       c.preexisting = false;
       c.infrastructure = true;
-      c.output = `SETUP: every check fails on the base commit as well, so the review environment cannot run `
-        + `this project; nothing is known about the code either way.\n${c.output || ''}`;
+      c.output = `SETUP: ${why}; nothing is known about the code either way.\n${c.output || ''}`;
     }
   }
   return checkResults;
