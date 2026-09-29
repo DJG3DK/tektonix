@@ -524,7 +524,14 @@ pub async fn latest_release(include_prereleases: bool) -> Result<Release, String
         return Err(format!("GitHub answered {} for the releases", r.status()));
     }
     let all = r.json::<Vec<Release>>().await.map_err(|e| format!("unexpected answer from GitHub: {e}"))?;
-    all.into_iter().find(|rel| !rel.draft).ok_or_else(|| "no releases yet".to_string())
+    newest_release(all).ok_or_else(|| "no releases yet".to_string())
+}
+
+/// The newest by version among the published ones. GitHub's listing is
+/// not newest first: on 2026-09-29 it led with rc9 above rc14, and the app
+/// announced rc9 as the release that was out.
+pub fn newest_release(all: Vec<Release>) -> Option<Release> {
+    all.into_iter().filter(|rel| !rel.draft).max_by_key(|rel| version_key(&rel.tag_name))
 }
 
 pub async fn check_update(app: &AppHandle) -> Result<UpdateInfo, String> {
@@ -581,6 +588,14 @@ mod tests {
         assert_eq!(image_ref("agent", "v0.9.0"), "ghcr.io/djg3dk/tektonix-agent:v0.9.0");
         assert_eq!(local_name("reviewer"), "tektonix-reviewer:latest");
         assert_eq!(IMAGES, ["agent", "router", "reviewer", "sandbox"]);
+    }
+
+    #[test]
+    fn the_newest_release_is_chosen_by_version_not_by_listing_order() {
+        let rel = |tag: &str, draft: bool| Release { tag_name: tag.into(), html_url: String::new(), body: String::new(), draft };
+        let all = vec![rel("v0.9.0-rc9", false), rel("v0.9.0-rc14", false), rel("v0.9.0-rc15", true), rel("v0.9.0-rc13", false)];
+        assert_eq!(newest_release(all).map(|r| r.tag_name).as_deref(), Some("v0.9.0-rc14"), "a draft never counts");
+        assert!(newest_release(vec![]).is_none());
     }
 
     #[test]

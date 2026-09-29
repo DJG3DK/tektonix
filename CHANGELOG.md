@@ -14,6 +14,8 @@ The Updates section always shows both versions and both buttons, the
 pre-release switch sits next to Check for updates, a release-candidate app
 counts release candidates as releases whether or not that switch is on,
 and a stack whose release cannot be verified is offered the app's own.
+The newest release is chosen by version: GitHub's listing led with rc9
+above rc14, and the app announced rc9 as the release that was out.
 
 ### A long check no longer looks like a silent agent
 
