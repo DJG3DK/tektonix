@@ -326,11 +326,12 @@ KNOBS: dict[str, dict] = {
         "label": "Review wait timeout",
         "help": (
             "How long to wait for the independent review service on one commit. A real "
-            "review of a large diff has been measured near 7 minutes, including a full "
-            "dependency install and test suite, so leave headroom above that."
+            "review of a large diff has been measured near 7 minutes here and past ten in a "
+            "desktop sandbox, including a full dependency install and test suite. While the "
+            "service reports it is still reviewing, the wait goes on to four times this."
         ),
         "unit": "s",
-        "default": 900.0,
+        "default": 1800.0,
         "min": 120.0,
         "max": 7200.0,
         "env": None,

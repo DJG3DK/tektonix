@@ -292,3 +292,41 @@ async function main() {
 }
 
 main().catch((e) => { console.error(e); process.exit(1); });
+
+
+test('node_modules comes from live, else from the agent\'s workspace template; a Windows install is passed over', () => {
+    const { nodeModulesSource, foreignInstall } = require('../services/commit-reviewer/node-modules-source.js');
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'nm-src-'));
+    try {
+        const live = path.join(root, 'live'); const tpl = path.join(root, 'tpl');
+        fs.mkdirSync(path.join(tpl, 'node_modules', '@esbuild', 'linux-x64'), { recursive: true });
+        assert.equal(nodeModulesSource({ live, sandbox: tpl }, '.')?.which, 'template', 'live has no install: the template');
+        fs.mkdirSync(path.join(live, 'node_modules', '.bin'), { recursive: true });
+        fs.writeFileSync(path.join(live, 'node_modules', '.bin', 'vitest.cmd'), '');
+        assert.equal(foreignInstall(path.join(live, 'node_modules')), true);
+        assert.equal(nodeModulesSource({ live, sandbox: tpl }, '.')?.which, 'template', 'a Windows install is not usable');
+        fs.rmSync(path.join(live, 'node_modules', '.bin', 'vitest.cmd'));
+        fs.mkdirSync(path.join(live, 'node_modules', '@rollup', 'rollup-linux-x64-gnu'), { recursive: true });
+        assert.equal(nodeModulesSource({ live, sandbox: tpl }, '.')?.which, 'live', 'a Linux install in live wins');
+        assert.equal(nodeModulesSource({ live: path.join(root, 'none') }, '.'), null);
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('in the bundle the reviewer does not bind-mount in its own container: the agent mounts into the check container', async () => {
+    const { materializeDependencyDirs, delegated } = require('../services/commit-reviewer/worktree.js');
+    const saved = [process.env.TEKTONIX_BUNDLE, process.env.AGENT_SANDBOX_URL];
+    process.env.TEKTONIX_BUNDLE = '1'; process.env.AGENT_SANDBOX_URL = 'http://agent:8100';
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'deleg-'));
+    try {
+        assert.equal(delegated(), true);
+        const live = path.join(root, 'live'); const wt = path.join(root, 'wt');
+        fs.mkdirSync(path.join(live, 'vendor'), { recursive: true }); fs.mkdirSync(wt);
+        const out = await materializeDependencyDirs({ live, dependencyDirs: ['vendor'] }, wt, {});
+        assert.deepEqual(out.issues, [], 'no mount was attempted, so no permission error');
+        assert.deepEqual(out.mounted, ['vendor']);
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+        if (saved[0] === undefined) delete process.env.TEKTONIX_BUNDLE; else process.env.TEKTONIX_BUNDLE = saved[0];
+        if (saved[1] === undefined) delete process.env.AGENT_SANDBOX_URL; else process.env.AGENT_SANDBOX_URL = saved[1];
+    }
+});

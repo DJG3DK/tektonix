@@ -181,19 +181,64 @@ def branch_verdict(project_state: dict | None, branch: str | None) -> dict | Non
     return None
 
 
-async def _read_state(project: str, branch: str | None = None) -> dict | None:
+async def _read_project(project: str) -> dict | None:
+    """The reviewer's whole record for a project: the latest verdict, the
+    per-branch verdicts, and `inProgress` while it is reviewing."""
     async with httpx.AsyncClient(timeout=15) as client:
         r = await client.get(f"http://{REVIEW_SERVICE_HOST}:{REVIEW_SERVICE_PORT}/api/review/status",
                              headers=_CONTROL_HEADERS)
         r.raise_for_status()
-        return branch_verdict(r.json().get(project), branch)
+        return r.json().get(project)
+
+
+async def _read_state(project: str, branch: str | None = None) -> dict | None:
+    return branch_verdict(await _read_project(project), branch)
+
+
+async def _still_reviewing(project: str, expect_sha: str) -> str | None:
+    """The step the reviewer is on for this sha, or None when it is not
+    working on it (or cannot be asked)."""
+    try:
+        record = await _read_project(project)
+    except httpx.HTTPError:
+        return None
+    progress = (record or {}).get("inProgress") or {}
+    if _reviewed_sha_is(progress.get("sha"), expect_sha):
+        return str(progress.get("step") or "reviewing")
+    return None
+
+
+# A review the service says it is still running is waited for past the
+# timeout, up to this many times it. 2026-09-29: a project's suite ran ten
+# minutes and more in the desktop sandbox, the reviewer ran it in turn, and
+# the wait gave up while the reviewer was working.
+STILL_REVIEWING_FACTOR = 4
+
+
+def _reviewed_after(state: dict, after: float | None) -> bool:
+    """False when the record predates `after` (a unix time): a re-review
+    asked for on a sha the reviewer already judged must wait for the NEW
+    verdict, not read back the old one. A record without a time counts."""
+    if after is None:
+        return True
+    stamp = state.get("reviewedAt")
+    if not stamp:
+        return True
+    try:
+        from datetime import datetime
+        when = datetime.fromisoformat(str(stamp).replace("Z", "+00:00")).timestamp()
+    except (TypeError, ValueError):
+        return True
+    return when >= after - 2.0
 
 
 async def wait_for_review(project: str, expect_sha: str, timeout: int = 900, poll_interval: int = 5,
-                          branch: str | None = None) -> dict:
+                          branch: str | None = None, after: float | None = None) -> dict:
     """Polls until the review service has reviewed `expect_sha` specifically,
     not just any review -- a stale result for an older sha would otherwise
-    silently pass a since-changed diff. Raises TimeoutError past `timeout`.
+    silently pass a since-changed diff. Raises TimeoutError past `timeout`,
+    unless the service reports it is still reviewing this sha: then the
+    wait goes on, to STILL_REVIEWING_FACTOR times the timeout.
 
     A single transient poll failure (connection refused, a 500) is treated
     as "not ready yet" rather than aborting the wait, since the review
@@ -201,17 +246,25 @@ async def wait_for_review(project: str, expect_sha: str, timeout: int = 900, pol
     hits the same timeout as before.
     """
     elapsed = 0
-    while elapsed < timeout:
+    last_note = 0
+    while True:
         try:
             state = await (_read_state(project, branch) if branch else _read_state(project))
         except httpx.HTTPError as e:
             logger.warning("wait_for_review: transient poll failure for %s (will retry): %s", project, e)
             state = None
-        if state and _reviewed_sha_is(state.get("lastReviewedSha"), expect_sha):
+        if state and _reviewed_sha_is(state.get("lastReviewedSha"), expect_sha) and _reviewed_after(state, after):
             return state
+        if elapsed >= timeout:
+            step = await _still_reviewing(project, expect_sha) if elapsed < timeout * STILL_REVIEWING_FACTOR else None
+            if step is None:
+                raise TimeoutError(f"review service did not review {expect_sha[:12]} within {int(elapsed)}s")
+            if elapsed - last_note >= 60:
+                logger.info("wait_for_review: %s still reviewing %s (%s) after %ds; waiting on",
+                            project, expect_sha[:12], step, int(elapsed))
+                last_note = elapsed
         await asyncio.sleep(poll_interval)
         elapsed += poll_interval
-    raise TimeoutError(f"review service did not review {expect_sha[:12]} within {timeout}s")
 
 
 async def merge_and_deploy(project: str, branch: str | None = None) -> dict:
@@ -497,7 +550,10 @@ async def ship_as_pull_request(project: str, branch: str, sha: str, title: str) 
     # The push authenticates by what the remote is: see push_to_github.
     configured = await _git("config --local --get remote.origin.url", live, timeout=15)
     origin = configured["output"].strip() if configured["ok"] else ""
-    push = await push_to_github(live, origin, slug, branch, token, name=branch)
+    # Forced: the branch may have been pushed before and rebased since (the
+    # gate rebases onto the base before review), and a task branch is the
+    # agent's own to move.
+    push = await push_to_github(live, origin, slug, f"+{branch}:refs/heads/{branch}", token, name=branch)
     if not push["ok"]:
         return {"stage": "ship", **push}
 
@@ -507,7 +563,7 @@ async def ship_as_pull_request(project: str, branch: str, sha: str, title: str) 
             body=f"Opened by Tektonix for task branch `{branch}` at `{sha[:12]}`.\n\n"
                  f"The automated review gate passed before this was opened.",
         )
-    except (PermissionError, LookupError, ValueError) as e:
+    except (PermissionError, LookupError, ValueError, httpx.HTTPError) as e:
         return {"ok": False, "stage": "ship", "error": f"could not open a pull request: {e}"}
 
     return {"ok": True, "shipped": "pull_request", "pull_request": pr["url"],

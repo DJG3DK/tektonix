@@ -13,6 +13,18 @@
 const fs = require('fs');
 const path = require('path');
 const { AGENT_HOME, log, run, git, runAgentCode } = require('./exec');
+const { nodeModulesSource } = require('./node-modules-source');
+
+/** In the bundle the agent runs every check in a container it starts, with
+ * the mounts it is asked for; this container holds no docker socket and no
+ * mount capability. Read per call so a test can set it. */
+function delegated() {
+    return process.env.TEKTONIX_BUNDLE === '1' && Boolean(process.env.AGENT_SANDBOX_URL);
+}
+
+// A dependency install with no cache, over a bind mount, into a Windows
+// folder scanned by Defender: five minutes was not enough (2026-09-29).
+const INSTALL_TIMEOUT_MS = 900_000;
 
 // Review-only credentials, one subtree per project mirroring each project's
 // own relative secret paths. Never contains production values.
@@ -148,6 +160,14 @@ async function materializeDependencyDirs(
       continue;
     }
     if (fs.existsSync(dest)) continue;         // the branch brought its own
+    if (delegated()) {
+      // The agent mounts live's copy into the check container itself
+      // (sandbox.js mountSpecs); a bind here would need a capability this
+      // container does not have, and failed as a "check" the agent was
+      // told to fix.
+      mounted.push(rel);
+      continue;
+    }
     fs.mkdirSync(dest, { recursive: true });
     const m = await runCmd('mount', ['--bind', src, dest], '/');
     if (!m.ok) {
@@ -365,20 +385,20 @@ async function setupWorktree(project, cfg, sha, base, { depsChangedOverride = nu
       // into a real, isolated worktree node_modules, never the symlinked
       // one used below — nothing here can write through to live's.
       const frozen = await runAgentCode(cfg, worktreePath, '.', pm,
-        ['install', '--frozen-lockfile', '--ignore-scripts'], 300_000, undefined, 'bridge');
+        ['install', '--frozen-lockfile', '--ignore-scripts'], INSTALL_TIMEOUT_MS, undefined, 'bridge');
       if (frozen.ok) {
         // fall through, node_modules already installed
       } else if (/ERR_PNPM_OUTDATED_LOCKFILE/.test(frozen.output)) {
         setupIssues.push({ name: 'lockfile-consistency', ok: false, output: frozen.output.slice(-4000) });
         const lenient = await runAgentCode(cfg, worktreePath, '.', pm,
-          ['install', '--prefer-offline', '--ignore-scripts'], 300_000, undefined, 'bridge');
+          ['install', '--prefer-offline', '--ignore-scripts'], INSTALL_TIMEOUT_MS, undefined, 'bridge');
         if (!lenient.ok) throw new Error(`pnpm install failed even non-frozen: ${lenient.output.slice(0, 1000)}`);
       } else {
         throw new Error(`pnpm install --frozen-lockfile failed: ${frozen.output.slice(0, 1000)}`);
       }
     } else {
       const install = await runAgentCode(cfg, worktreePath, '.', pm,
-        ['install', '--prefer-offline', '--ignore-scripts'], 300_000, undefined, 'bridge');
+        ['install', '--prefer-offline', '--ignore-scripts'], INSTALL_TIMEOUT_MS, undefined, 'bridge');
       if (!install.ok) throw new Error(`${pm} install failed: ${install.output.slice(0, 1000)}`);
     }
     // A root install only covers the whole repo when the root manifest really
@@ -404,7 +424,7 @@ async function setupWorktree(project, cfg, sha, base, { depsChangedOverride = nu
       const dir = path.join(worktreePath, rel);
       log(`[${project}] ${rel}/ is a standalone package the root install did not cover — installing it`);
       const sub = await runAgentCode(cfg, worktreePath, path.relative(worktreePath, dir) || '.', pm,
-        ['install', '--prefer-offline', '--ignore-scripts'], 300_000, undefined, 'bridge');
+        ['install', '--prefer-offline', '--ignore-scripts'], INSTALL_TIMEOUT_MS, undefined, 'bridge');
       if (!sub.ok) {
         setupIssues.push({ name: `install (${rel})`, ok: false, output: sub.output.slice(-4000) });
       }
@@ -441,12 +461,17 @@ async function setupWorktree(project, cfg, sha, base, { depsChangedOverride = nu
     }
 
     for (const rel of cfg.nodeModulesDirs || []) {
-      const liveNodeModules = path.join(cfg.live, rel, 'node_modules');
+      const source = nodeModulesSource(cfg, rel);
       const targetDir = path.join(worktreePath, rel);
       const targetNodeModules = path.join(targetDir, 'node_modules');
-      if (!fs.existsSync(liveNodeModules)) continue;
+      if (!source) {
+        log(`${rel === '.' ? '' : rel + '/'}node_modules: neither live nor the agent's workspace has a usable install -- checks that need it will fail`);
+        continue;
+      }
+      const liveNodeModules = source.dir;
+      if (source.which !== 'live') log(`${rel === '.' ? '' : rel + '/'}node_modules borrowed from the agent's workspace: live has none a Linux check can run`);
       fs.mkdirSync(targetDir, { recursive: true });
-      if (cfg.bindMountNodeModules) {
+      if (cfg.bindMountNodeModules && !delegated()) {
         fs.mkdirSync(targetNodeModules, { recursive: true });
         const mount = await run('mount', ['--bind', liveNodeModules, targetNodeModules], '/');
         if (!mount.ok) throw new Error(`bind mount failed for ${rel}: ${mount.output.slice(0, 500)}`);
@@ -540,6 +565,7 @@ async function setupWorktree(project, cfg, sha, base, { depsChangedOverride = nu
       setupIssues.push({ name: `mount (${rel})`, ok: false, output: `${src} does not exist on the live checkout.` });
       continue;
     }
+    if (delegated()) continue;                 // mounted into the check container by the agent
     fs.mkdirSync(dest, { recursive: true });
     const m = await run('mount', ['--bind', src, dest], '/');
     if (!m.ok) {
@@ -690,6 +716,7 @@ async function sweepLeftoverWorktrees(root = WORKTREE_ROOT, projects = {}) {
 }
 
 module.exports = {
+  delegated, INSTALL_TIMEOUT_MS,
   REVIEW_SECRETS_ROOT, WORKTREE_ROOT, NM_BUILD_CACHES, detectNodeModulesDirs,
   materializeDependencyDirs, installChangedDependencies, packagesNeedingOwnInstall,
   liveInstallIsStale, setupWorktree, cleanupWorktree, sweepLeftoverWorktrees,

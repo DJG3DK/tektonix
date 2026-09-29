@@ -2,6 +2,39 @@
 
 ## Unreleased
 
+### The review runs in the bundle the way it runs on a host
+
+An audit of the whole path from a passing check to a merged pull request,
+as it runs under Docker Desktop, found where each step could fail
+silently. In the bundle the reviewer now: borrows the agent's own Linux
+node_modules when the operator's checkout has none or a Windows one; never
+tries to bind-mount inside its own container, which it cannot; records a
+setup failure as a verdict the harness produced instead of leaving the
+agent to wait out its timeout; listens on its control port before its
+first poll, so a trigger right after a restart is not refused; forgets a
+review a crash left in progress; gives a dependency install fifteen
+minutes; and logs each check's result with its duration and a line a
+minute while one runs. A check that times out is a harness failure, not
+a failing check to be re-run on the base commit and waved through. A
+re-review waits for a verdict newer than the request. A harness failure
+does not count toward the run of failures that escalates a branch. The
+final commit's git commands get three minutes on a slow bind mount, a
+fresh project's lint and typecheck checks get ten in review, the task
+branch is pushed forced before a pull request, and a failed pull-request
+call is reported as one.
+
+### A verdict the harness produced is asked about again
+
+When the reviewer's own sandbox call failed, its verdict said "could not
+RUN test", and the gate then refused to ask again because the commit had
+not changed, telling the coder to fix code that was never judged. Both
+sides now treat a verdict blocked only by the harness as no verdict: the
+gate asks once more, and the reviewer reviews the commit again.
+
+The agent keeps waiting for a verdict while the reviewer reports it is
+still on that commit, up to four times the review wait, whose default is
+now thirty minutes: a desktop sandbox runs a long suite past the old wait.
+
 ### A long suite fits in the sandbox
 
 A five-minute suite here took over ten in a two-core sandbox under Docker

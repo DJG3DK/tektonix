@@ -715,7 +715,7 @@ async def test_self_committed_head_is_adopted_instead_of_polling_stale_sha(monke
     must adopt the real HEAD as the pending commit instead."""
     seen = {}
 
-    async def _wait(repo, sha, timeout, branch=None):
+    async def _wait(repo, sha, timeout, branch=None, after=None):
         seen["sha"] = sha
         return {"verdict": "NEEDS_FIXES", "summary": "reviewed head", "findings": []}
 
@@ -1099,3 +1099,50 @@ async def test_a_clean_tree_on_a_branch_level_with_main_still_counts_as_no_diff(
     state = _state(no_diff_streak=0, committed_sha=None)
     result = await vs._verify_and_ship(state, config=None)
     assert result["no_diff_streak"] == 1 and result["pending_feedback"] is not None
+
+
+HARNESS_FAILED = {
+    "lastReviewedSha": "abc123", "verdict": "NEEDS_FIXES",
+    "summary": "The gate could not RUN test (test: the agent's sandbox endpoint did not answer)",
+    "checkResults": [{"name": "test", "ok": False, "infrastructure": True, "output": "SETUP: did not answer"}],
+}
+
+
+async def test_a_harness_failed_verdict_is_asked_about_again_once_not_nudged(monkeypatch):
+    """2026-09-29: the reviewer's sandbox call timed out, its verdict said
+    'could not RUN test', and the gate told the coder to fix its code."""
+    monkeypatch.setattr(vs, "run_all_checks", _fake_checks(all_ok=True))
+    monkeypatch.setattr(vs, "git_diff", _fake_return(""))
+    monkeypatch.setattr(vs, "current_sha", _fake_return("abc123"))
+    asked = []
+
+    async def review(state, repo, sha):
+        asked.append(sha)
+        return {"committed_sha": None, "review_gate_result": {"lastReviewedSha": sha, "verdict": "READY"}}
+
+    monkeypatch.setattr(vs, "_review_and_deploy", review)
+    state = _state(committed_sha="abc123", review_gate_result=dict(HARNESS_FAILED), stale_pending_review_streak=0)
+
+    result = await vs._verify_and_ship(state, config=None)
+
+    assert asked == ["abc123"], "the reviewer is asked again: its last verdict was its own failure"
+    assert result["harness_retry_sha"] == "abc123"
+    assert "pending_feedback" not in result
+
+
+async def test_a_second_harness_failure_on_the_same_sha_is_treated_like_any_stale_verdict(monkeypatch):
+    monkeypatch.setattr(vs, "run_all_checks", _fake_checks(all_ok=True))
+    monkeypatch.setattr(vs, "git_diff", _fake_return(""))
+    monkeypatch.setattr(vs, "current_sha", _fake_return("abc123"))
+
+    async def fail_if_called(*_a, **_k):
+        raise AssertionError("must not re-ask twice for the same sha")
+
+    monkeypatch.setattr(vs, "_review_and_deploy", fail_if_called)
+    state = _state(committed_sha="abc123", review_gate_result=dict(HARNESS_FAILED),
+                   stale_pending_review_streak=0, harness_retry_sha="abc123")
+
+    result = await vs._verify_and_ship(state, config=None)
+
+    assert result["stale_pending_review_streak"] == 1
+    assert "pending_feedback" in result

@@ -293,14 +293,16 @@ function mountSpecs(cfg, worktreePath) {
     // live node_modules read-only at its own absolute path makes every such
     // entry resolve, and it is the same mount the symlink layout already gets.
     for (const rel of cfg.nodeModulesDirs || []) {
-        const liveNm = path.join(cfg.live, rel, 'node_modules');
+        const source = nodeModulesSource(cfg, rel);
+        if (!source) continue;              // installed nowhere usable: nothing to mount
         let target;
         try {
-            target = fs.realpathSync(liveNm);
+            target = fs.realpathSync(source.dir);
         } catch {
-            continue;                       // not installed in live: nothing to mount
+            continue;
         }
-        if (!isInside(target, cfg.live) || seen.has(target)) continue;
+        const inside = isInside(target, cfg.live) || (cfg.sandbox && isInside(target, cfg.sandbox));
+        if (!inside || seen.has(target)) continue;
         seen.add(target);
         specs.push({ src: target, dst: target });
     }
@@ -451,6 +453,14 @@ async function runDelegated(cfg, worktreePath, relDir, cmd, args, timeoutMs, ext
     });
     if (!secret) return setup('REVIEW_CONTROL_SECRET is not configured, so the agent would refuse the request');
     let res;
+    const startedAt = Date.now();
+    const label = `${cmd} ${(args || []).join(' ')}`.trim();
+    // A long check is silent otherwise: the only lines were its start and its
+    // verdict, ten minutes apart, and an operator watching the log read that
+    // as a hang (2026-09-29).
+    const heartbeat = setInterval(() => {
+        log(`  still running ${label} (${Math.round((Date.now() - startedAt) / 1000)}s of ${Math.round(body.timeoutMs / 1000)}s allowed)`);
+    }, 60_000);
     try {
         res = await fetchImpl(`${DELEGATE_URL}/api/internal/review-sandbox/run`, {
             method: 'POST',
@@ -459,7 +469,10 @@ async function runDelegated(cfg, worktreePath, relDir, cmd, args, timeoutMs, ext
             signal: AbortSignal.timeout(body.timeoutMs + 60_000),
         });
     } catch (err) {
+        clearInterval(heartbeat);
         return setup(`the agent's sandbox endpoint did not answer (${describeFetchError(err)})`);
+    } finally {
+        clearInterval(heartbeat);
     }
     let data = null;
     try { data = await res.json(); } catch { /* reported below */ }

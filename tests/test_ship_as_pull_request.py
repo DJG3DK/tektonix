@@ -209,7 +209,8 @@ def test_an_ssh_origin_is_pushed_by_remote_name(monkeypatch):
     Putting a token on the command line would do nothing except risk logging
     it."""
     cmd, env, _ = _ship_capturing_push(monkeypatch, "git@github.com:o/r.git")
-    assert cmd.strip().endswith("origin agent/t1")
+    # Forced: the branch may have been pushed before and rebased since.
+    assert cmd.strip().endswith("origin +agent/t1:refs/heads/agent/t1")
     assert "credential.helper" not in cmd
     assert env is None
 

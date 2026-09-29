@@ -562,3 +562,20 @@ def test_a_long_check_keeps_the_connection_alive_with_whitespace_then_the_json(b
     assert r.text.startswith("  "), "keepalive spaces came before the answer"
     assert r.json() == {"ok": True, "code": 0, "output": "slow but green\n", "image": "tektonix-sandbox:latest"}
     assert r.headers["content-type"].startswith("application/json")
+
+
+def test_a_node_modules_mount_from_the_agent_s_workspace_template_is_accepted(tmp_path):
+    """In the bundle the reviewer borrows the template's Linux install when
+    live has none a Linux check can run (node-modules-source.js)."""
+    from agent.review_sandbox import RejectedRequest, _checked_mounts
+    live = tmp_path / "live"
+    template = tmp_path / "ws" / "proj"
+    (live / ".git").mkdir(parents=True)
+    (template / "node_modules").mkdir(parents=True)
+    (template / "src").mkdir()
+    nm = str(template / "node_modules")
+    assert _checked_mounts([(nm, nm)], str(live), str(template)) == [(os.path.realpath(nm), nm)]
+    with pytest.raises(RejectedRequest):
+        _checked_mounts([(nm, nm)], str(live))                      # no template known: refused as before
+    with pytest.raises(RejectedRequest):
+        _checked_mounts([(str(template / "src"), str(template / "src"))], str(live), str(template))

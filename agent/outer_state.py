@@ -128,6 +128,10 @@ class AgentState(TypedDict):
     # review verdict actually runs (real progress); escalates once past
     # STALE_PENDING_REVIEW_LIMIT.
     stale_pending_review_streak: int
+    # The pending sha whose harness-failed verdict was already re-asked
+    # about once (verify_and_ship): a second harness failure on the same
+    # sha is nudged and escalated like any other stale verdict.
+    harness_retry_sha: str | None
 
     # Which inner deep-agent thread this task is on -- 0 is the original
     # (un-suffixed thread_id, so existing tasks are unaffected); each
@@ -247,6 +251,7 @@ def initial_state(
         execution_log=[],
         last_failed_edit_signature=None,
         stale_pending_review_streak=0,
+        harness_retry_sha=None,
         inner_thread_generation=0,
         incomplete_plan_streak=0,
         short_conclusion_streak=0,

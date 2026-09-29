@@ -572,3 +572,18 @@ machinery), then 1 (large, and the only one that needs a new dependency). 5's
 re-ranker last, and only if the telemetry says ordering is the problem -- that
 telemetry is now the "History searches used" number on the Benchmarks panel
 above. 2 needs nothing.
+
+## Bundle ship path: what the 2026-09-29 audit left open
+
+**Status:** not started. Found by an audit of the review-and-ship path as it
+runs in the compose bundle; the findings that broke the first Windows ship
+are fixed. These did not, and are cheap to lose track of.
+
+- The agent image has no ssh client, so a project with an SSH origin cannot push from the bundle: install openssh-client, or push over https with the token for GitHub remotes.
+- The base branch is `main` in four places (verify_and_ship, review_gate, github_ci): a `master` repository opens its pull request against a branch that does not exist. Record the default branch as `base_branch` at onboarding.
+- In pull-request mode live never receives merged code, so post-merge check detection never runs and a project onboarded without checks is reviewed with none; and `fetch origin main` runs without the token, so a private https repo's base goes stale. Detect from the task branch, and fetch with the credential helper.
+- Push mode in the bundle runs the deploy steps unsandboxed in the agent-review container, on the operator's checkout: skip them, or run them through the delegated sandbox.
+- A failed review model call becomes a blocking finding the coder is asked to fix; mark it a harness failure.
+- The agent runs npm scripts while the reviewer runs `review.checks`, so the two gates can disagree; one list.
+- A review queued behind another is not `inProgress`, so the agent's wait is not extended for it; record the queue in state.
+- Not in the bundle image: gitleaks (secret scan reports "binary not found" as a plain failure), and usage.jsonl lives in the image rather than a volume.

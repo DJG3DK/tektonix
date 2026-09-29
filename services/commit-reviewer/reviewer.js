@@ -188,6 +188,19 @@ function updateState(mutate) {
 // overwrote the first's and the first lost its round history and its READY.
 const MAX_BRANCH_RECORDS = 40;
 
+/**
+ * A verdict that blocked only because a check could not RUN (a fault in the
+ * harness: sandbox unreachable, image missing) says nothing about the
+ * commit. Such a record does not make the commit "already reviewed": the
+ * next request reviews it again, which is the only way a fixed harness ever
+ * gets to judge it. 2026-09-29: a reviewer whose sandbox call timed out
+ * left a record the gate then refused to re-ask about, forever.
+ */
+function harnessFailed(record) {
+  const checks = (record && Array.isArray(record.checkResults)) ? record.checkResults : [];
+  return record && record.verdict !== 'READY' && checks.some((c) => c && c.infrastructure && !c.ok);
+}
+
 function branchRecord(projectState, branch) {
   if (!projectState || !branch) return null;
   const rec = projectState.branches && Object.hasOwn(projectState.branches, branch)
@@ -390,7 +403,10 @@ async function detectNewCommit(project, cfg, prev = loadState()[project], reques
   // from THAT branch's record, so another task's review in between does not
   // make this one look new.
   const prevForRef = branchRecord(prev, ref);
-  if (prevForRef && prevForRef.lastReviewedSha === head) return null;
+  if (prevForRef && prevForRef.lastReviewedSha === head && !harnessFailed(prevForRef)) return null;
+  if (prevForRef && prevForRef.lastReviewedSha === head) {
+    log(`[${project}] ${ref} at ${head.slice(0, 12)} was last blocked by the review harness itself, not by a finding -- reviewing it again`);
+  }
 
   // Don't review a moving target: the workspace holding this branch must be
   // clean. Since 2026-09-23 each task has its own worktree, so that is
@@ -611,7 +627,11 @@ async function reviewProject(project, cfg, routerKey, requested = null) {
     // stays set until a READY clears it. This service only records the flag;
     // verify_and_ship reads it -- on a real project it stops looping and
     // hands the task to a human, on a benchmark it ships the fix as disputed.
-    const consecutiveNeedsFixes = verdict === 'READY' ? 0 : (prevState?.consecutiveNeedsFixes || 0) + 1;
+    // A round the harness lost says nothing about the code, so it neither
+    // adds to the run of failures nor resets it.
+    const consecutiveNeedsFixes = verdict === 'READY' ? 0
+      : infraFailed ? (prevState?.consecutiveNeedsFixes || 0)
+      : (prevState?.consecutiveNeedsFixes || 0) + 1;
     const wasEscalated = Boolean(prevState?.escalated);
     // Computed BEFORE appendHistory below writes this round's own entry —
     // otherwise a later round would double-count this one (once read back
@@ -666,11 +686,25 @@ async function reviewProject(project, cfg, routerKey, requested = null) {
     return { started: true };
   } catch (err) {
     log(`[${project}] review failed with an internal error: ${err.message}`);
+    // Recorded as a verdict the harness produced, so the agent waiting on
+    // this sha learns the reason now instead of waiting out its timeout and
+    // reporting "did not review" (2026-09-29). Like any harness verdict it
+    // does not count as a review of the commit: the next request tries again.
+    const record = {
+      branch: unit.branch, base: unit.base, lastReviewedSha: sha, verdict: 'NEEDS_FIXES',
+      summary: `The gate could not set up the review (${String(err.message || err).slice(0, 300)}), so no check ran `
+        + 'and nothing was learned about this commit either way. This is a fault in the review harness, '
+        + 'not in the code under review.',
+      findings: [], omittedFiles: [], agentResponses: 0,
+      checkResults: [{ name: 'setup', ok: false, infrastructure: true, output: `SETUP: ${String(err.stack || err.message || err).slice(-2000)}` }],
+      agentMessage: null, reviewedAt: new Date().toISOString(), consecutiveNeedsFixes: 0, escalated: true,
+    };
     updateState((state) => {
       // Own-property check first: `project` came in over HTTP, and a key like
       // __proto__ must never reach the delete (CodeQL js/prototype-polluting-assignment).
       if (!(Object.hasOwn(state, project) && state[project]?.inProgress?.sha === sha)) return false;
       delete state[project].inProgress;
+      state[project] = { ...state[project], ...record, branches: withBranchRecord(state[project], unit.branch, record) };
     });
     return { started: true, error: err.message };
   } finally {
@@ -846,9 +880,25 @@ async function main() {
     }
   };
 
-  await tick();
-  setInterval(tick, POLL_MS);
+  // A review left "in progress" by a crash or a restart would hold the
+  // agent's wait (and the merge gate) for a sha nobody is working on.
+  updateState((state) => {
+    let changed = false;
+    for (const project of Object.keys(state)) {
+      if (state[project] && typeof state[project] === 'object' && state[project].inProgress) {
+        log(`[${project}] a review of ${String(state[project].inProgress.sha || '').slice(0, 12)} was in progress when this service last stopped; it will be asked for again`);
+        delete state[project].inProgress;
+        changed = true;
+      }
+    }
+    return changed;
+  });
+  // The control port first: the first tick can run for many minutes when
+  // a branch is waiting, and the agent's trigger got connection-refused
+  // after every restart until it finished (2026-09-29).
   startControlServer(routerKey);
+  tick().catch((err) => log(`first tick failed: ${err.message}`));
+  setInterval(tick, POLL_MS);
 }
 
 if (require.main === module) {
@@ -865,7 +915,7 @@ module.exports = {
   detectNewCommit, reviewWithSonnet, buildAgentMessage, applyBaseline, TASK_BRANCH_RE,
   classifyInfrastructureFailures, packagesNeedingOwnInstall, baselineKey,
   detectNodeModulesDirs, NM_BUILD_CACHES,
-  branchRecord, withBranchRecord, computeFileChurn, queueReview, pendingReviews, sweepLeftoverWorktrees,
+  branchRecord, withBranchRecord, harnessFailed, computeFileChurn, queueReview, pendingReviews, sweepLeftoverWorktrees,
   liveInstallIsStale, readWorktreeFile, gatherReferencedFiles,
   extractAgentResponses, stripLeakedMarkup, REVIEW_RESPONSE_MARKER,
 };

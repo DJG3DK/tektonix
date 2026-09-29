@@ -150,7 +150,7 @@ _SKIP_DIRS = {
     "Pods", "elm-stuff",   # other ecosystems' vendored trees
 }
 
-CHECK_TIMEOUT_MS_DEFAULT = 300_000
+CHECK_TIMEOUT_MS_DEFAULT = 600_000
 
 
 class ProvisioningError(Exception):

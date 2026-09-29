@@ -78,6 +78,19 @@ test('once reviewed at its tip, nothing else is picked up -- no ping-pong', asyn
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
+test('a verdict the harness produced does not count as a review: the tip is picked up again', async () => {
+  const { root, cfg, newTip } = fixture();
+  try {
+    const prev = { branch: TASK_NEW, lastReviewedSha: newTip, verdict: 'NEEDS_FIXES',
+                   checkResults: [{ name: 'test', ok: false, infrastructure: true, output: 'SETUP: the agent did not answer' }] };
+    const unit = await detectNewCommit('p', cfg, prev);
+    assert.equal(unit?.sha, newTip, 'blocked by the harness, not by a finding: review again');
+    const judged = { branch: TASK_NEW, lastReviewedSha: newTip, verdict: 'NEEDS_FIXES',
+                     checkResults: [{ name: 'test', ok: false, output: '1 failing' }] };
+    assert.equal(await detectNewCommit('p', cfg, judged), null, 'a real failing check is a verdict');
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
 test('with the workspace off any task branch, the newest unmerged task branch wins and the backup is ignored', async () => {
   const { root, cfg } = fixture();
   try {

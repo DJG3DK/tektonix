@@ -313,6 +313,13 @@ def _merged_summary(deployed: dict) -> str:
     return "merged, deployed and pushed to GitHub" if deployed_something else "merged and pushed to GitHub"
 
 
+def _harness_failed(review: dict) -> bool:
+    """True when the verdict blocked only because a check could not run:
+    the reviewer marks such a check `infrastructure` (reviewer.js)."""
+    checks = review.get("checkResults") or []
+    return any(isinstance(c, dict) and c.get("infrastructure") and not c.get("ok") for c in checks)
+
+
 def _done_no_changes(state: AgentState, evidence: str = "") -> dict:
     """Terminal, non-escalated completion for a task that genuinely needed
     no code changes -- distinct from `_escalate` (nothing went wrong) and
@@ -677,6 +684,19 @@ async def _verify_and_ship_inner(state: AgentState, repo: str, repo_root: str,
                 }
 
             prior_review = state.get("review_gate_result") or {}
+            # A verdict the harness produced -- a check that could not RUN
+            # because the sandbox did not answer -- is not a judgement of the
+            # commit, and nudging the coder to "fix" it is asking for a code
+            # change that cannot help. Ask the reviewer again, once per sha;
+            # a fixed harness then gets to judge the commit (2026-09-29, the
+            # first Windows install).
+            if (prior_review.get("lastReviewedSha") == pending_sha and prior_review.get("verdict") != "READY"
+                    and _harness_failed(prior_review) and state.get("harness_retry_sha") != pending_sha):
+                logging.getLogger("tektonix").info(
+                    "verify_and_ship: the last verdict on %s was a harness failure, not a finding -- asking for review again",
+                    pending_sha[:12])
+                return {**(await _review_and_deploy(state, repo, pending_sha)),
+                        "harness_retry_sha": pending_sha, "stale_pending_review_streak": 0}
             if prior_review.get("lastReviewedSha") == pending_sha and prior_review.get("verdict") != "READY":
                 streak = state.get("stale_pending_review_streak", 0) + 1
                 if streak > STALE_PENDING_REVIEW_LIMIT:
@@ -956,6 +976,7 @@ async def _review_and_deploy(state: AgentState, repo: str, sha: str) -> dict:
     # than whichever of the project's parked branches it would guess at.
     from agent.tools.git import task_branch_name
     branch = task_branch_name(state["task_id"])
+    asked_at = time.time()
     try:
         await trigger_check(repo, branch)
     except Exception:  # noqa: BLE001
@@ -984,7 +1005,8 @@ async def _review_and_deploy(state: AgentState, repo: str, sha: str) -> dict:
     # The timeout is a runtime setting, so a large diff that needs longer can
     # be given it without a restart.
     try:
-        review = await wait_for_review(repo, sha, timeout=_rs.as_int("review_wait_timeout_s"), branch=branch)
+        review = await wait_for_review(repo, sha, timeout=_rs.as_int("review_wait_timeout_s"), branch=branch,
+                                       after=asked_at)
     except TimeoutError as e:
         return {"committed_sha": sha, **_escalate(str(e))}
 

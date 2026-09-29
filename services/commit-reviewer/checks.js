@@ -71,9 +71,11 @@ async function runChecks(cfg, worktreePath) {
     // audit C-2: sealed env -- these run agent-authored code, always in a
     // sandbox container: started here on a host install, by the agent in
     // the bundle. See runAgentCode and SECURITY.md.
+    const startedAt = Date.now();
     const r = await runAgentCode(cfg, worktreePath, check.dir, check.cmd, check.args,
                                  check.timeoutMs, check.env, check.network,
                                  check.stack || cfg.stack);
+    log(`  ${check.name}: ${r.ok ? 'passed' : (r.infrastructure || r.missingTool ? 'could not run' : 'failed')} in ${Math.round((Date.now() - startedAt) / 1000)}s`);
     results.push({
       name: check.name, ok: r.ok, output: r.output.slice(-4000),
       // Set by runAgentCode when the check could not be RUN -- a missing

@@ -158,7 +158,8 @@ def _checked_rel_dir(rel_dir: str) -> str:
     return rel
 
 
-def _checked_mounts(mounts: list[tuple[str, str]], live: str) -> list[tuple[str, str]]:
+def _checked_mounts(mounts: list[tuple[str, str]], live: str,
+                    template: str | None = None) -> list[tuple[str, str]]:
     """(real source, container target) for every extra mount, or refuse.
 
     Two shapes, the only two sandbox.js's mountArgs produces:
@@ -183,7 +184,13 @@ def _checked_mounts(mounts: list[tuple[str, str]], live: str) -> list[tuple[str,
         real = os.path.realpath(src)
         if not os.path.exists(real):
             continue
-        if real == live or not _inside(real, live):
+        # Live's tree, or the agent's own workspace template for this project:
+        # in the bundle the reviewer borrows the template's Linux node_modules
+        # when live has none a Linux check can run (node-modules-source.js).
+        template_real = os.path.realpath(template) if template else None
+        from_template = bool(template_real) and real != template_real and _inside(real, template_real) \
+            and "node_modules" in real.split(os.sep)
+        if not from_template and (real == live or not _inside(real, live)):
             raise RejectedRequest(f"mount source {src!r} is not inside the project's live checkout")
         norm_dst = os.path.normpath(dst)
         if norm_dst.startswith("/workspace/"):
@@ -238,7 +245,7 @@ def build_docker_argv(req: CheckRequest, container_name: str) -> tuple[list[str]
             raise RejectedRequest(f"env name {k!r} is not a plain identifier")
         env[k] = _no_nul(v, f"env {k}")
 
-    mounts = _checked_mounts(req.mounts or [], live)
+    mounts = _checked_mounts(req.mounts or [], live, cfg.get("sandbox"))
 
     argv = [
         "docker", "run", "--rm", "--name", container_name,
@@ -359,6 +366,8 @@ async def run_check(req: CheckRequest) -> dict:
     name = f"rvw-{uuid.uuid4().hex[:12]}"
     argv, image = build_docker_argv(req, name)
     timeout_s = clamp_timeout_ms(req.timeout_ms) / 1000
+    logging.getLogger("tektonix").info("review-sandbox: running %s for %s in %s (%ds allowed)",
+                                       " ".join([req.cmd, *req.args])[:120], req.project, name, int(timeout_s))
     if not await image_present(image):
         building = start_build(image)
         return _refusal(image, f"the sandbox image {image} is not built"
@@ -378,8 +387,15 @@ async def run_check(req: CheckRequest) -> dict:
     except TimeoutError:
         await sb._kill_container(name)
         await proc.wait()
-        return {"ok": False, "code": 124, "image": image,
-                "output": f"timed out after {int(timeout_s)}s"}
+        logging.getLogger("tektonix").warning("review-sandbox: %s %s timed out after %ds", req.project, req.cmd, int(timeout_s))
+        # Flagged as the harness's failure: a check that did not finish says
+        # nothing about the code, and counted as a plain failure it was
+        # re-run on the base commit, timed out there too, and waved through
+        # as pre-existing (2026-09-29).
+        return {"ok": False, "code": 124, "image": image, "infrastructure": True,
+                "output": f"SETUP: the check timed out after {int(timeout_s)}s and was stopped; nothing is known "
+                          f"about the code either way. Raise this check's timeoutMs in the project's review "
+                          f"settings if the suite genuinely needs longer."}
     except asyncio.CancelledError:
         await sb._kill_container(name)
         await proc.wait()

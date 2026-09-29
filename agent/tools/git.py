@@ -96,6 +96,12 @@ def token_env(token: str) -> dict[str, str]:
     return {GIT_TOKEN_ENV: token, "GIT_TERMINAL_PROMPT": "0"}
 
 
+# Commands that walk the whole tree. Thirty seconds was enough on a local
+# disk; a Windows bind mount under Docker Desktop is many times slower, and
+# a timeout here escalated a task at its final commit (2026-09-29).
+_TREE_TIMEOUT_S = 180
+
+
 async def git_diff(repo_root: str, staged: bool = False) -> str:
     """Includes newly created (untracked) files, not just changes to tracked
     ones. Plain `git diff` silently omits untracked files entirely, which
@@ -109,9 +115,9 @@ async def git_diff(repo_root: str, staged: bool = False) -> str:
     plain `git diff` (tree vs index) reads empty: task 41a1a0b1, 2026-09-28,
     ended "no changes needed" with 1,295 staged lines.
     """
-    await _git("add -A -N", repo_root, timeout=30)
+    await _git("add -A -N", repo_root, timeout=_TREE_TIMEOUT_S)
     cmd = "diff --staged" if staged else "diff HEAD"
-    r = await _git(cmd, repo_root, timeout=30)
+    r = await _git(cmd, repo_root, timeout=_TREE_TIMEOUT_S)
     return r["output"]
 
 
@@ -331,7 +337,7 @@ async def git_commit(repo_root: str, message: str, files: list[str] | None = Non
         # audit M-12: guard the blanket `git add -A`. Inspect what would be
         # staged and refuse obvious artifacts / a runaway file count, so the
         # agent cleans up rather than committing junk into the live repo.
-        status = await _git("status --porcelain", repo_root, timeout=30)
+        status = await _git("status --porcelain", repo_root, timeout=_TREE_TIMEOUT_S)
         if status["ok"]:
             pending = _porcelain_paths(status["output"])
             denied = [pth for pth in pending
@@ -349,7 +355,7 @@ async def git_commit(repo_root: str, message: str, files: list[str] | None = Non
                     "this usually means an un-ignored directory got created; clean it up or "
                     "pass an explicit file list.")}
     add_cmd = f"add {' '.join(files)}" if files else "add -A"
-    add = await _git(add_cmd, repo_root, timeout=30)
+    add = await _git(add_cmd, repo_root, timeout=_TREE_TIMEOUT_S)
     if not add["ok"]:
         return {"ok": False, "output": add["output"]}
     # Message via a temp file, not -m "...", so multi-line messages with
@@ -361,7 +367,7 @@ async def git_commit(repo_root: str, message: str, files: list[str] | None = Non
         f.write(message)
         msg_path = f.name
     try:
-        commit = await _git(f"commit --no-verify -F {msg_path}", repo_root, timeout=30)
+        commit = await _git(f"commit --no-verify -F {msg_path}", repo_root, timeout=_TREE_TIMEOUT_S)
     finally:
         Path(msg_path).unlink(missing_ok=True)
     return {"ok": commit["ok"], "output": commit["output"]}
