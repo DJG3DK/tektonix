@@ -26,6 +26,41 @@ function relativeLink(linkPath, target) {
     return path.relative(path.dirname(linkPath), target) || '.';
 }
 
+/**
+ * Why `rel` cannot be written into the worktree, or null when it can.
+ *
+ * Everything the review puts INTO the checkout -- a review credential, a
+ * link to live's generated code, a bind of live's data -- lands on a path
+ * the branch under review may have committed something at. A committed
+ * `.env.review -> <live>/.env` made the secret copy, which runs in this
+ * process and not in the sandbox, write review credentials over live's
+ * .env; a committed directory link did the same one level up, and a
+ * `data -> /etc` would have had `mount --bind` land live's data on the host
+ * (2026-09-29). So every component from the worktree down is lstat'ed: a
+ * link anywhere is refused, and so is a final entry that already exists,
+ * unless `existingDir` allows a real directory there (a mount goes over
+ * the branch's own copy, as it always has).
+ */
+function committedInTheWay(worktreePath, rel, { existingDir = false } = {}) {
+  if (typeof rel !== 'string' || path.isAbsolute(rel)) return `${rel} is not a relative path`;
+  const parts = rel.split(/[\\/]+/).filter((p) => p && p !== '.');
+  if (parts.includes('..')) return `${rel} leaves the worktree`;
+  let cur = worktreePath;
+  for (let i = 0; i < parts.length; i++) {
+    cur = path.join(cur, parts[i]);
+    let st;
+    try { st = fs.lstatSync(cur); } catch { return null; }   // absent from here down: free to create
+    const shown = path.relative(worktreePath, cur);
+    if (st.isSymbolicLink()) return `${shown} is a symlink in the branch under review`;
+    if (i === parts.length - 1) {
+      if (existingDir && st.isDirectory()) return null;
+      return `${shown} already exists in the branch under review`;
+    }
+    if (!st.isDirectory()) return `${shown} is not a directory in the branch under review`;
+  }
+  return null;
+}
+
 /** In the bundle the agent runs every check in a container it starts, with
  * the mounts it is asked for; this container holds no docker socket and no
  * mount capability. Read per call so a test can set it. */
@@ -177,6 +212,12 @@ async function materializeDependencyDirs(
       // container does not have, and failed as a "check" the agent was
       // told to fix.
       mounted.push(rel);
+      continue;
+    }
+    const inTheWay = committedInTheWay(worktreePath, rel);
+    if (inTheWay) {
+      issues.push({ name: `deps (${rel})`, ok: false,
+                    output: `${inTheWay}; live's ${rel} was not bound over it.` });
       continue;
     }
     fs.mkdirSync(dest, { recursive: true });
@@ -577,6 +618,12 @@ async function setupWorktree(project, cfg, sha, base, { depsChangedOverride = nu
       continue;
     }
     if (delegated()) continue;                 // mounted into the check container by the agent
+    const inTheWay = committedInTheWay(worktreePath, rel, { existingDir: true });
+    if (inTheWay) {
+      setupIssues.push({ name: `mount (${rel})`, ok: false,
+                         output: `${inTheWay}; live's ${rel} was not bound over it.` });
+      continue;
+    }
     fs.mkdirSync(dest, { recursive: true });
     const m = await run('mount', ['--bind', src, dest], '/');
     if (!m.ok) {
@@ -621,8 +668,27 @@ async function setupWorktree(project, cfg, sha, base, { depsChangedOverride = nu
       });
       continue;
     }
+    // Never through a link the branch committed, and never over a file it
+    // committed: see committedInTheWay. COPYFILE_EXCL closes the last gap,
+    // an entry that appears between the check and the copy.
+    const inTheWay = committedInTheWay(worktreePath, rel);
+    if (inTheWay) {
+      log(`[${project}] not copying review secret ${rel}: ${inTheWay}`);
+      setupIssues.push({
+        name: `review-secret (${rel})`,
+        ok: false,
+        output: `${inTheWay}. The review credential was not written there: a committed link or file ` +
+                `at a secret's path is how a branch redirects the copy at something outside its checkout.`,
+      });
+      continue;
+    }
     fs.mkdirSync(path.dirname(dest), { recursive: true });
-    fs.copyFileSync(src, dest);
+    try {
+      fs.copyFileSync(src, dest, fs.constants.COPYFILE_EXCL);
+    } catch (err) {
+      setupIssues.push({ name: `review-secret (${rel})`, ok: false,
+                         output: `could not write the review credential to ${rel}: ${err.message}` });
+    }
   }
 
   // Generated code (e.g. Prisma's client) that lives outside both git and
@@ -651,6 +717,14 @@ async function setupWorktree(project, cfg, sha, base, { depsChangedOverride = nu
     } else {
       const liveGenerated = path.join(cfg.live, g.dir);
       if (fs.existsSync(liveGenerated)) {
+        // A branch that committed g.dir, or a link at it, used to throw
+        // EEXIST here: closed, but as a harness failure nobody could read.
+        const inTheWay = committedInTheWay(worktreePath, g.dir);
+        if (inTheWay) {
+          setupIssues.push({ name: `generate (${g.dir})`, ok: false,
+                             output: `${inTheWay}; live's generated ${g.dir} was not linked over it.` });
+          continue;
+        }
         fs.mkdirSync(path.dirname(targetDir), { recursive: true });
         fs.symlinkSync(liveGenerated, targetDir);
       }
@@ -727,7 +801,7 @@ async function sweepLeftoverWorktrees(root = WORKTREE_ROOT, projects = {}) {
 }
 
 module.exports = {
-  delegated, INSTALL_TIMEOUT_MS, relativeLink,
+  delegated, INSTALL_TIMEOUT_MS, relativeLink, committedInTheWay,
   REVIEW_SECRETS_ROOT, WORKTREE_ROOT, NM_BUILD_CACHES, detectNodeModulesDirs,
   materializeDependencyDirs, installChangedDependencies, packagesNeedingOwnInstall,
   liveInstallIsStale, setupWorktree, cleanupWorktree, sweepLeftoverWorktrees,
