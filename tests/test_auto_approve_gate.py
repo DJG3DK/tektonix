@@ -268,3 +268,19 @@ def test_scratch_and_build_output_never_ask_even_with_a_repo(worktree):
 def test_a_broken_repo_root_fails_closed(tmp_path):
     """git failing (not a repo, gone, slow) must mean ask, not run."""
     assert _auto_when(str(tmp_path / "nope"))(_req("rm -rf /workspace/src")) is True
+
+
+
+def test_a_delete_through_a_variable_assigned_in_the_same_command_is_read(tmp_path):
+    """2026-09-29: the coder kept its scratch path in `P=` and every
+    `rm -f "$P"` asked for approval in auto mode, five times in one task."""
+    from agent.deep_agent import _deletions_that_lose_work, _expand_local_assignments
+    cmd = 'cd /workspace/frontend && P=/workspace/.scratch/PairSettingsModal.patch && cp a.ts "$P" && rm -f "$P"'
+    assert 'rm -f "/workspace/.scratch/PairSettingsModal.patch"' in _expand_local_assignments(cmd)
+    losses = _deletions_that_lose_work(cmd)
+    assert losses == ["/workspace/.scratch/PairSettingsModal.patch"], losses
+    # A tracked path through a variable is still a real deletion.
+    assert _deletions_that_lose_work('F=/workspace/src/app.ts; rm "$F"') == ["/workspace/src/app.ts"]
+    # A variable the command never assigned, or one holding a substitution, stays unreadable.
+    assert any(t.startswith("!") or "$" in t for t in _deletions_that_lose_work('rm -rf "$UNKNOWN"'))
+    assert any("$" in t or t.startswith("!") for t in _deletions_that_lose_work('D=$(mktemp -d); rm -rf "$D"'))

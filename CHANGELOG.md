@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Auto mode reads a delete through a variable
+
+The coder kept its scratch path in a shell variable and deleted through
+it, and auto mode asked for approval on every cleanup because it could
+not read the target. A variable assigned a plain value earlier in the same
+command is resolved now; one holding a substitution still asks.
+
 ### The LangChain family moves up
 
 langgraph 1.2.12, langchain 1.4.3, langchain-core 1.6.6, langchain-openai

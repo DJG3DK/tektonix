@@ -6,6 +6,7 @@ keys) by the outer "work" node.
 
 import logging
 import os
+import re
 import subprocess
 import warnings
 from pathlib import Path
@@ -479,11 +480,40 @@ def _target_is_scratch(target: str, cwd: str) -> bool:
     return any(seg in _REGENERABLE_NAMES for seg in segments)
 
 
+_ASSIGNMENT_RE = re.compile(
+    r"""(?:^|[;&|(]\s*|\s)([A-Za-z_][A-Za-z0-9_]*)=(?:"([^"$`]*)"|'([^']*)'|([^\s;&|"'$`()]+))(?=\s|;|&|\||$)""")
+
+
+def _expand_local_assignments(command: str) -> str:
+    """`P=/workspace/.scratch/x.patch && cp a "$P" && rm -f "$P"` deletes a
+    path the command itself spelled out. Substituting the plain assignments
+    made earlier in the same command lets the target be read. Only literal
+    values count: a value holding another variable, a substitution or a
+    quote stays unreadable, and the delete still asks. 2026-09-29: the coder
+    kept a scratch path in a variable and every cleanup asked for approval,
+    five times in one task, with auto mode on."""
+    values: dict[str, str] = {}
+    for m in _ASSIGNMENT_RE.finditer(command):
+        name = m.group(1)
+        value = next((g for g in m.groups()[1:] if g is not None), None)
+        if value is not None:
+            values[name] = value
+    if not values:
+        return command
+
+    def _sub(m: re.Match) -> str:
+        name = m.group(1) or m.group(2)
+        return values.get(name, m.group(0))
+
+    return re.sub(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)", _sub, command)
+
+
 def _deletions_that_lose_work(command: str) -> list[str]:
     """Targets of this command's deletions that are not scratch. Empty means
     nothing of value is being deleted. A target that cannot be read (a shell
     variable, an unparseable segment, `rm` with only flags) is reported, so
     the caller asks about it rather than assuming."""
+    command = _expand_local_assignments(command)
     cwd = _SANDBOX_CWD
     losses: list[str] = []
 
