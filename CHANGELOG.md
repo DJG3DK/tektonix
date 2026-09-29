@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### The throwaway Redis reports healthy
+
+It had no health probe, so the container table said "running" where every
+other row said "healthy". It answers `redis-cli ping` now, and the agent
+waits for that rather than for the container merely to have started.
+
 ### One window, and a desktop sign-in
 
 The app has one window: the console and the control panel take turns in

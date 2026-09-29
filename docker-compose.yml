@@ -119,7 +119,7 @@ services:
       checks-postgres:
         condition: service_healthy
       checks-redis:
-        condition: service_started
+        condition: service_healthy
     environment:
       # The entrypoint builds LANGGRAPH_PG_DSN and MODEL_ROUTER_KEY from these
       # generated files; set LANGGRAPH_PG_DSN yourself to use another database.
@@ -348,6 +348,11 @@ services:
     image: redis:7-alpine
     container_name: tektonix-checks-redis
     command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
     networks:
       - checks
     restart: unless-stopped
