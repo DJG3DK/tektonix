@@ -378,14 +378,20 @@ app.post('/api/projects/:name/merge', requireControlSecret, async (req, res) => 
         // everything on the chance that something did.
         const mergedFrom = (await git(p.live, ['rev-parse', 'HEAD'])).trim();
 
-        const output = await git(p.live, ['merge', '--ff-only', agentRef]);
+        // The SHA that was verified above, not the ref: a commit landing on
+        // the branch between the check and the merge would otherwise merge
+        // unreviewed (2026-09-29 audit, R6).
+        const output = await git(p.live, ['merge', '--ff-only', tipSha]);
         // The merge has landed whatever happens next: a verdict that cannot
         // be cleared (the state lock held past its wait, 2026-09-27) is logged
         // and the response stays a 200 with the push below still made.
         try {
             await clearReviewState(req.params.name, agentRef);
         } catch (e) {
-            log(`[${req.params.name}] merged, but the review verdict was not cleared: ${e.message}`);
+            // console.log: a `log` that did not exist here threw inside this
+            // catch, the caller got 409 after the merge had landed, and the
+            // push below never ran (2026-09-29 audit, R1).
+            console.log(`[${req.params.name}] merged, but the review verdict was not cleared: ${e.message}`);
         }
 
         // Push to the real GitHub remote as part of the merge, not as a
@@ -404,7 +410,10 @@ app.post('/api/projects/:name/merge', requireControlSecret, async (req, res) => 
         try {
             const remotes = (await git(p.live, ['remote'])).split('\n').map((r) => r.trim());
             if (remotes.includes('origin')) {
-                push = { ok: true, output: await git(p.live, ['push', 'origin', branch]) };
+                // Exactly the reviewed commit, and only onto what origin
+                // currently holds: `--force-with-lease` refuses if origin
+                // moved under us.
+                push = { ok: true, output: await git(p.live, ['push', '--force-with-lease', 'origin', `${tipSha}:refs/heads/${branch}`]) };
             }
         } catch (e) {
             push = { ok: false, error: e.message };

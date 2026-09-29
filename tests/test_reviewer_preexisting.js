@@ -53,3 +53,15 @@ test('every compared check failing on the base too is the environment, not a pre
     applyBaseline(some, { typecheck: false, lint: true });
     assert.ok(some[0].preexisting && !some[0].infrastructure, 'one red check on both is genuinely pre-existing');
 });
+
+
+test('a single configured check failing on both commits is the environment, not pre-existing', () => {
+    const { applyBaseline } = require('../services/commit-reviewer/reviewer.js');
+    const only = [{ name: 'test', ok: false, output: 'vitest: not found' }];
+    applyBaseline(only, { test: false });
+    assert.ok(only[0].infrastructure && !only[0].preexisting, JSON.stringify(only));
+    // One red check beside a passing one on both commits stays pre-existing.
+    const beside = [{ name: 'audit', ok: false, output: 'x' }, { name: 'test', ok: true }];
+    applyBaseline(beside, { audit: false, test: true });
+    assert.ok(beside[0].preexisting && !beside[0].infrastructure);
+});

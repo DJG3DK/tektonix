@@ -76,9 +76,18 @@ async def run_review_database_check(body: _DbCheckBody, _auth: None = Depends(re
     req = rs.DbCheckRequest(project=body.project, worktree=body.worktree, stack=body.stack,
                             mounts=[(m.src, m.dst) for m in body.mounts])
     try:
-        return {"results": await rs.run_database_check(req)}
+        rs.validate_database_check(req)
     except rs.RejectedRequest as e:
         raise HTTPException(400, f"refused: {e}") from e
+
+    async def results():
+        return {"results": await rs.run_database_check(req)}
+
+    # A refusal decided after the first byte cannot be a 400 any more; it is
+    # the same infrastructure result sandbox.js turns a 400 into.
+    return _streamed(results(), refused=lambda e: {
+        "results": [{"name": "setup", "ok": False, "infrastructure": True,
+                     "output": f"SETUP: the agent refused the database checks -- {e}"}]})
 
 
 # A check can run for many minutes, and the reviewer's fetch gives up on a
@@ -105,8 +114,18 @@ async def run_review_check(body: _RunBody, _auth: None = Depends(require_review_
     except rs.RejectedRequest as e:
         raise HTTPException(400, f"refused: {e}") from e
 
+    return _streamed(rs.run_check(req), refused=lambda e: {
+        "ok": False, "code": 1, "infrastructure": True, "output": f"SETUP: the agent refused this check -- {e}"})
+
+
+def _streamed(coro, refused) -> StreamingResponse:
+    """The answer starts at once and a space follows every KEEPALIVE_S
+    until `coro` ends, then its JSON; a refusal raised inside becomes
+    `refused(e)`. Shared by /run and /db-check: the database checks got
+    the same five-minute cut-off when they answered in one piece
+    (2026-09-29 audit, R5)."""
     async def stream():
-        task = asyncio.ensure_future(rs.run_check(req))
+        task = asyncio.ensure_future(coro)
         try:
             while True:
                 done, _ = await asyncio.wait({task}, timeout=KEEPALIVE_S)
@@ -116,8 +135,7 @@ async def run_review_check(body: _RunBody, _auth: None = Depends(require_review_
             try:
                 result = task.result()
             except rs.RejectedRequest as e:
-                result = {"ok": False, "code": 1, "infrastructure": True,
-                          "output": f"SETUP: the agent refused this check -- {e}"}
+                result = refused(e)
             yield json.dumps(result).encode("utf-8")
         except (asyncio.CancelledError, GeneratorExit):
             # The reviewer went away: the container must not outlive it.

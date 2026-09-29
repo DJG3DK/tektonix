@@ -223,3 +223,36 @@ async def test_when_every_retry_errors_the_original_empty_reply_goes_through():
     out = await mw.awrap_model_call(_req(), handler)
     assert is_empty_length_capped(_ai_message(out)), "the work node's nudge takes it from here; no error escapes"
     assert mw.quiet_model is QUIET, "a plain failure does not mark the seat"
+
+
+async def test_a_budget_refusal_on_the_retry_propagates():
+    """2026-09-29 audit, A3: the retry's exception handler swallowed the
+    budget guard's refusal, so a task past its ceiling kept going."""
+    from agent.middleware.budget_guard import BudgetExceededError
+    import pytest
+
+    class _Guarded(_Handler):
+        async def __call__(self, request):
+            if self.requests:
+                raise BudgetExceededError(5.0, 4.0)
+            return await super().__call__(request)
+
+    mw = EmptyReplyRetryMiddleware(FALLBACK, seat="coder")
+    with pytest.raises(BudgetExceededError):
+        await mw.awrap_model_call(_req(), _Guarded([_capped()]))
+
+
+def test_the_sync_retry_lets_a_budget_refusal_through_too():
+    from agent.middleware.budget_guard import BudgetExceededError
+    import pytest
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        if len(calls) > 1:
+            raise BudgetExceededError(5.0, 4.0)
+        return ModelResponse(result=[_capped()])
+
+    mw = EmptyReplyRetryMiddleware(FALLBACK, seat="coder")
+    with pytest.raises(BudgetExceededError):
+        mw.wrap_model_call(_req(), handler)

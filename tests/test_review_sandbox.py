@@ -594,3 +594,24 @@ def test_a_same_path_mount_of_live_s_generated_code_is_accepted_only_from_the_pr
         _checked_mounts([(g, g)], str(live), None, [])
     with pytest.raises(RejectedRequest):
         _checked_mounts([(str(live / "apps" / "api" / "src"),) * 2], str(live), None, ["apps/api/generated"])
+
+
+def test_a_long_database_check_keeps_the_connection_alive_too(bundle, monkeypatch):
+    """2026-09-29 audit, R5: /db-check answered in one piece, so a slow
+    drift-and-seed run hit the reviewer's five-minute cut-off like /run did."""
+    from agent.routers import review_sandbox as route
+
+    async def slow(_req):
+        await asyncio.sleep(0.25)
+        return [{"name": "db-drift", "ok": True, "output": "clean"}]
+
+    monkeypatch.setattr(route.rs, "run_database_check", slow)
+    monkeypatch.setattr(route.rs, "db_checks_enabled", lambda: True)
+    monkeypatch.setattr(route, "KEEPALIVE_S", 0.05)
+    c, h = _client(), {"X-Review-Secret": "the-secret"}
+    r = c.post("/api/internal/review-sandbox/db-check", json={"project": "shop", "worktree": bundle["wt"]}, headers=h)
+    assert r.status_code == 200 and r.text.startswith("  ")
+    assert r.json() == {"results": [{"name": "db-drift", "ok": True, "output": "clean"}]}
+    # A bad worktree is still refused before the first byte.
+    r = c.post("/api/internal/review-sandbox/db-check", json={"project": "shop", "worktree": "/etc"}, headers=h)
+    assert r.status_code == 400 and "refused" in r.json()["detail"]

@@ -1,6 +1,6 @@
 """EmptyReplyRetryMiddleware -- a reply that is nothing but exhausted
-reasoning is retried once, on the fallback seat, before the conversation
-sees it.
+reasoning is retried before the conversation sees it: first on the same
+seat with reasoning off, then on the fallback seat.
 
 Why this exists
 ---------------
@@ -22,7 +22,12 @@ everything. The note is only in the retry request, never persisted. If the
 fallback is empty too the reply goes through unchanged and the work node's
 nudge (EMPTY_REPLY_RETRIES, twice per pass) remains the last resort. At
 most MAX_RETRIES_PER_INVOCATION retries per agent invocation, reset in
-before_agent. On the coordinator it sits INSIDE PlanCodeModelMiddleware,
+before_agent; the count is per middleware instance, so parallel `task`
+calls of one seat type share it, and it is approximate for them.
+
+A retry that the budget guard refuses is not a failed retry: the ceiling
+is the answer, and it propagates (2026-09-29 audit, A3: it was logged and
+the conversation ran on past its budget). On the coordinator it sits INSIDE PlanCodeModelMiddleware,
 which sets the model on every call and would otherwise replace the retry's
 fallback model with its own pick.
 """
@@ -35,6 +40,7 @@ import re
 from langchain_core.messages import AIMessage, HumanMessage
 
 from agent.harness_voice import harness
+from agent.middleware.budget_guard import BudgetExceededError
 from langchain.agents.middleware.types import AgentMiddleware
 
 logger = logging.getLogger("tektonix")
@@ -178,6 +184,8 @@ class EmptyReplyRetryMiddleware(AgentMiddleware):
                 return response
             try:
                 response = handler(retry)
+            except BudgetExceededError:
+                raise
             except Exception as e:  # noqa: BLE001 -- see _retry_failed
                 self._retry_failed(where, model, e)
         return response
@@ -193,6 +201,8 @@ class EmptyReplyRetryMiddleware(AgentMiddleware):
                 return response
             try:
                 response = await handler(retry)
+            except BudgetExceededError:
+                raise
             except Exception as e:  # noqa: BLE001 -- see _retry_failed
                 self._retry_failed(where, model, e)
         return response

@@ -126,7 +126,11 @@ function applyBaseline(checkResults, baselineForBase) {
   // commit with nothing checked (2026-09-29: a dangling link to generated
   // code failed typecheck, lint, tests and coverage on both commits alike).
   const compared = checkResults.filter((c) => !c.infrastructure && baselineForBase && Object.hasOwn(baselineForBase, c.name));
-  if (compared.length >= 2 && compared.every((c) => !c.ok && c.preexisting)) {
+  // Two or more all red on both commits, or the only configured check red
+  // on both with nothing else passing (2026-09-29 audit, R7: a project with
+  // one check was left unguarded by the count alone).
+  const nothingPassed = !checkResults.some((c) => !c.infrastructure && c.ok);
+  if (compared.length >= 1 && compared.every((c) => !c.ok && c.preexisting) && (compared.length >= 2 || nothingPassed)) {
     for (const c of compared) {
       c.preexisting = false;
       c.infrastructure = true;

@@ -428,6 +428,15 @@ class DbCheckRequest:
     stack: str | None = None
 
 
+def validate_database_check(req: DbCheckRequest) -> None:
+    """The refusals a caller can be told about before the answer starts:
+    the project and worktree checks run_database_check would make first.
+    The route calls this so a bad request is still a 400, not a streamed
+    setup row (2026-09-29 audit, R5)."""
+    live, _cfg = _project_live(_no_nul(req.project, "project"))
+    _checked_worktree(req, live)
+
+
 def _parse_dsn(url: str) -> dict:
     """user, password, host, port of a postgresql:// URL. No library: the URL
     is server config and the pieces go into a URL the checks are given."""

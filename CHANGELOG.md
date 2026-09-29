@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+### The merge lands the reviewed commit, not whatever the branch holds now
+
+The merge route fast-forwarded to the branch name and pushed the branch,
+so a commit that arrived after the verdict would have shipped under it.
+It now merges and pushes the reviewed commit itself, and a branch that
+moved past it is refused.
+
+### A single red check is not "the environment"
+
+The reviewer treated one check that was already failing before the
+change as an all-red environment and passed it. One check is compared as
+itself; the environment rule needs two or more, or nothing green at all.
+
+### The database check streams too
+
+The database drift and seed check answered in one piece, so a slow run
+hit the reviewer's five-minute cut-off the way the ordinary checks used
+to. It keeps the connection alive the same way now; a bad request is
+still refused before the first byte.
+
+### The budget ceiling survives an empty-reply retry
+
+The retry of an empty, reasoning-exhausted reply swallowed every error,
+including the budget guard's refusal, so a task past its ceiling ran on.
+The refusal propagates.
+
 ### Recall records where the memory it used was ranked
 
 A used episode carries the rank the search offered it at, and a section
