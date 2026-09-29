@@ -663,6 +663,11 @@ def _atomic_write_config(text: str) -> None:
             fh.write(text)
             fh.flush()
             os.fsync(fh.fileno())
+        # mkstemp makes the file 0600. In the bundle the router reads this
+        # file as its own unprivileged user while the agent writes it, so
+        # world-readable -- it holds pins and rates, never a key (the
+        # example config says `api_key: os.environ/...` for that reason).
+        os.chmod(tmp, 0o644)
         os.replace(tmp, ROUTER_CONFIG_PATH)
     except Exception:
         try:

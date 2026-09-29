@@ -20,7 +20,23 @@
 # tektonix-<service>-1, tektonix_checks, tektonix_pgdata. An install made
 # before 2026-09-28 was three-d-agent; keep its data by putting
 # COMPOSE_PROJECT_NAME=three-d-agent and POSTGRES_DB=three_d_agent in .env.
+#
+# Who runs as what: the router runs as its own unprivileged user always
+# (docker/router/entrypoint.sh). The agent and the two review services
+# write into PROJECTS_DIR, so on Linux they should run as the operator:
+# PUID and PGID in .env (`id -u`, `id -g`), and their entrypoints drop to
+# that user after fixing up the volumes' ownership. Unset, they stay root,
+# which is what Docker Desktop's bind mounts need and what every install
+# before 2026-09-29 had.
 name: tektonix
+
+# Container logs are json-file by default and grow without bound; a busy
+# agent writes gigabytes in a month. Ten files of ten megabytes each.
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "10"
 
 services:
   postgres:
@@ -37,8 +53,18 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-}
       MODEL_ROUTER_KEY: ${MODEL_ROUTER_KEY:-}
       POSTGRES_DB: ${POSTGRES_DB:-tektonix}
+      TEKTONIX_PG_SECRET_DIR: /run/tektonix-pg
+      TEKTONIX_ROUTER_KEY_DIR: /run/tektonix-router
+      TEKTONIX_LEGACY_SECRETS_DIR: /run/tektonix-secrets
     volumes:
       - pgdata:/var/lib/postgresql/data
+      # One volume per secret, each mounted only where it is read: the
+      # router and the reviewer never see the database password. Before
+      # 2026-09-29 both lived in `bundlesecrets`, which every consumer
+      # mounted whole; it stays mounted here alone so an upgrade carries
+      # its values over (init-secrets.sh copies them on first start).
+      - pgsecret:/run/tektonix-pg
+      - routerkey:/run/tektonix-router
       - bundlesecrets:/run/tektonix-secrets
       - ./docker/postgres/init-secrets.sh:/tektonix/init-secrets.sh:ro
     healthcheck:
@@ -46,6 +72,7 @@ services:
       interval: 5s
       timeout: 3s
       retries: 20
+    logging: *logging
     restart: unless-stopped
 
   router:
@@ -59,7 +86,7 @@ services:
         condition: service_healthy
     environment:
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:?set OPENROUTER_API_KEY in .env}
-      MODEL_ROUTER_KEY_FILE: /run/tektonix-secrets/model_router_key
+      MODEL_ROUTER_KEY_FILE: /run/tektonix-router/model_router_key
     # Image HEALTHCHECK already probes /health/liveliness. Named here so the
     # agent's depends_on can wait on it: a first task that starts while the
     # router is still booting dies mid-call with "peer closed connection".
@@ -86,7 +113,8 @@ services:
       - ${ROUTER_CONFIG:-./services/model-router/config.example.yaml}:/app/config.seed.yaml:ro
       - routerconfig:/app/router-config
       - routerlogs:/app/logs
-      - bundlesecrets:/run/tektonix-secrets:ro
+      - routerkey:/run/tektonix-router:ro
+    logging: *logging
     restart: unless-stopped
 
   # The sandbox image every task and check runs in. Built here, with
@@ -95,6 +123,9 @@ services:
   # window: on a slow first download the agent was declared unhealthy before
   # it had started serving, and the whole stack failed (2026-09-28). The
   # container itself does nothing and exits at once; the image is the point.
+  # (The agent's entrypoint still builds it when it is missing, which is
+  # the desktop app's case: it pulls the release image and tags it, and
+  # runs `up --no-build`.)
   sandbox-image:
     image: tektonix-sandbox:latest
     pull_policy: build
@@ -123,9 +154,12 @@ services:
     environment:
       # The entrypoint builds LANGGRAPH_PG_DSN and MODEL_ROUTER_KEY from these
       # generated files; set LANGGRAPH_PG_DSN yourself to use another database.
-      POSTGRES_PASSWORD_FILE: /run/tektonix-secrets/postgres_password
+      POSTGRES_PASSWORD_FILE: /run/tektonix-pg/postgres_password
       POSTGRES_DB: ${POSTGRES_DB:-tektonix}
-      MODEL_ROUTER_KEY_FILE: /run/tektonix-secrets/model_router_key
+      MODEL_ROUTER_KEY_FILE: /run/tektonix-router/model_router_key
+      # Run as this user after the entrypoint's setup (see the header).
+      PUID: ${PUID:-0}
+      PGID: ${PGID:-0}
       # With /v1: the agent's OpenAI client appends /chat/completions to
       # this. Without it the first model call of the first task was the
       # router's 404 (2026-09-28).
@@ -171,8 +205,13 @@ services:
       # The desktop app sets these from the machine's size.
       SANDBOX_CPUS: ${SANDBOX_CPUS:-2}
       SANDBOX_MEMORY: ${SANDBOX_MEMORY:-2g}
-      # Shared with the two review containers, which read the same file.
-      AGENT_PROJECTS_JSON: /app/data/projects.json
+      # What the two review containers need from this one, and nothing
+      # else: projects.json and the review-control secret, in a volume of
+      # their own. They used to mount the whole data volume read-only, which
+      # also holds AUTH_SECRET_KEY and the encrypted first password. The
+      # entrypoint moves both files over on the first start after an upgrade.
+      TEKTONIX_SHARED_DIR: /app/shared
+      AGENT_PROJECTS_JSON: /app/shared/projects.json
       # Worktrees must live somewhere AGENT_HOST_PATH_MAP can translate, or
       # the sandbox asks the host daemon to mount a path that exists only
       # inside this container -- which succeeds, empty, and silently. The
@@ -219,14 +258,19 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
       - ${PROJECTS_DIR:?set PROJECTS_DIR in .env}:/projects
       - agentdata:/app/data
+      - reviewshared:/app/shared
       - agentlogs:/app/logs
       - routerconfig:/app/router-config
       - routerlogs:/app/router-logs:ro
-      - bundlesecrets:/run/tektonix-secrets:ro
-      # The sandbox image is built on first run from this context.
+      - pgsecret:/run/tektonix-pg:ro
+      - routerkey:/run/tektonix-router:ro
+      # The sandbox image's build context, for the entrypoint's fallback
+      # build when the image is missing (compose builds it above; the
+      # desktop app pulls it).
       - ./docker/agent-sandbox:/app/docker/agent-sandbox:ro
     ports:
       - "${BIND_ADDRESS:-127.0.0.1}:${AGENT_PORT:-8100}:8100"
+    logging: *logging
     restart: unless-stopped
 
   # The review gate. This is the part that makes a merge mean something: one
@@ -256,23 +300,26 @@ services:
       start_period: 20s
     environment:
       AGENT_HOME: /app
-      AGENT_PROJECTS_JSON: /app/data/projects.json
+      AGENT_PROJECTS_JSON: /app/shared/projects.json
       REVIEW_STATE_DIR: /app/review-state
-      # Written by the agent's entrypoint into the shared data volume on first
+      # Written by the agent's entrypoint into the shared volume on first
       # run, so all three containers agree without it being in compose or in
       # anyone's shell history.
-      REVIEW_CONTROL_SECRET_FILE: /app/data/review_control_secret
+      REVIEW_CONTROL_SECRET_FILE: /app/shared/review_control_secret
       MODEL_ROUTER_URL: http://router:4001
       REVIEW_CONTROL_HOST: commit-reviewer
       TEKTONIX_BUNDLE: "1"
+      PUID: ${PUID:-0}
+      PGID: ${PGID:-0}
       GIT_AUTHOR_NAME: ${GIT_USER_NAME:-Tektonix}
       GIT_AUTHOR_EMAIL: ${GIT_USER_EMAIL:-${ADMIN_EMAIL:-admin@example.com}}
       GIT_COMMITTER_NAME: ${GIT_USER_NAME:-Tektonix}
       GIT_COMMITTER_EMAIL: ${GIT_USER_EMAIL:-${ADMIN_EMAIL:-admin@example.com}}
     volumes:
       - ${PROJECTS_DIR:?set PROJECTS_DIR in .env}:/projects
-      - agentdata:/app/data:ro
+      - reviewshared:/app/shared:ro
       - reviewstate:/app/review-state
+    logging: *logging
     restart: unless-stopped
 
   commit-reviewer:
@@ -295,14 +342,16 @@ services:
       start_period: 20s
     environment:
       AGENT_HOME: /app
-      AGENT_PROJECTS_JSON: /app/data/projects.json
+      AGENT_PROJECTS_JSON: /app/shared/projects.json
       REVIEW_STATE_DIR: /app/review-state
-      REVIEW_CONTROL_SECRET_FILE: /app/data/review_control_secret
+      REVIEW_CONTROL_SECRET_FILE: /app/shared/review_control_secret
       # The reviewer's own model call goes through the router like every other
       # call, so its choice and its spend are visible in one place.
       MODEL_ROUTER_URL: http://router:4001/v1
-      MODEL_ROUTER_KEY_FILE: /run/tektonix-secrets/model_router_key
+      MODEL_ROUTER_KEY_FILE: /run/tektonix-router/model_router_key
       TEKTONIX_BUNDLE: "1"
+      PUID: ${PUID:-0}
+      PGID: ${PGID:-0}
       GIT_AUTHOR_NAME: ${GIT_USER_NAME:-Tektonix}
       GIT_AUTHOR_EMAIL: ${GIT_USER_EMAIL:-${ADMIN_EMAIL:-admin@example.com}}
       GIT_COMMITTER_NAME: ${GIT_USER_NAME:-Tektonix}
@@ -318,9 +367,10 @@ services:
       REVIEW_WORKTREE_ROOT: /projects/.tektonix-review-worktrees
     volumes:
       - ${PROJECTS_DIR:?set PROJECTS_DIR in .env}:/projects
-      - agentdata:/app/data:ro
+      - reviewshared:/app/shared:ro
       - reviewstate:/app/review-state
-      - bundlesecrets:/run/tektonix-secrets:ro
+      - routerkey:/run/tektonix-router:ro
+    logging: *logging
     restart: unless-stopped
 
   # The database checks' own Postgres and Redis: throwaway, on the internal
@@ -350,6 +400,7 @@ services:
       interval: 5s
       timeout: 3s
       retries: 20
+    logging: *logging
     restart: unless-stopped
 
   checks-redis:
@@ -370,6 +421,7 @@ services:
       retries: 20
     networks:
       - checks
+    logging: *logging
     restart: unless-stopped
 
 networks:
@@ -386,15 +438,33 @@ networks:
     name: tektonix_checks
     internal: true
 
+# Ten named volumes. `docker compose down` keeps them; `down -v` destroys
+# them. Worth backing up: pgdata, routerconfig, agentdata, and the two
+# secret volumes (docs/backup.md, scripts/backup.sh --bundle). The rest is
+# regenerated or is only logs. docker/README.md lists the same ten.
 volumes:
+  # The router's live config: the model pins the Models page writes.
   routerconfig:
+  # Everything the agent remembers: tasks, memory, users.
   pgdata:
   # Verdicts and their history. Separate from agentdata because the agent owns
   # that one and these two write this one.
   reviewstate:
-  # The generated database password and router key. Written by postgres's
-  # entrypoint wrapper, read-only everywhere else.
+  # The generated database password, written by postgres's entrypoint
+  # wrapper (init-secrets.sh) and read by the agent alone.
+  pgsecret:
+  # The generated router key, written there too; read by the router, the
+  # agent and the commit reviewer.
+  routerkey:
+  # Where both of those lived before 2026-09-29. Mounted by postgres only,
+  # so an upgrade keeps its password; empty on a fresh install.
   bundlesecrets:
+  # The agent's own: AUTH_SECRET_KEY, the encrypted first password, the
+  # daily jobs' markers. Nothing else mounts it.
   agentdata:
+  # What the agent hands the two review services: projects.json and the
+  # review-control secret. Read-only for them.
+  reviewshared:
   agentlogs:
+  # The router's ledger, one line per model call; the Analytics page reads it.
   routerlogs:

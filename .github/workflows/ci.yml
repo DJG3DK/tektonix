@@ -506,6 +506,10 @@ jobs:
         run: bash tests/test_install_prereqs.sh
       - name: Deploy poller
         run: bash tests/test_deploy_poll.sh
+      - name: Bundle entrypoints
+        # The three containers' first-run, upgrade and PUID decisions, with
+        # the privileged tools stubbed.
+        run: bash tests/test_bundle_entrypoints.sh
       - name: Doctor runs on a tree with no configuration
         # It must report what is missing rather than crash -- that is exactly
         # the state a new contributor's checkout is in. Exit 1 (something

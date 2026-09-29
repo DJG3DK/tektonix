@@ -6,6 +6,14 @@ FROM python:3.12-slim
 RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
+# The router runs as this user (the entrypoint drops to it after seeding
+# the config): it reads a key and a config and appends to a ledger, none
+# of which needs root. The two directories it touches are its own from the
+# start, so a volume first created from this image is owned by it too.
+RUN useradd --system --uid 10001 --user-group --home-dir /app --shell /usr/sbin/nologin router \
+    && mkdir -p /app/logs /app/router-config \
+    && chown router:router /app/logs /app/router-config
+
 WORKDIR /app
 COPY services/model-router/requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt

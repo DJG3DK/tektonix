@@ -37,8 +37,14 @@ COPY docker/stack-images.json ./docker/stack-images.json
 # missing path; compose mounts the real one over it when there is one.
 COPY projects.example.json ./projects.json
 
+# Root until the entrypoint has made the volumes the operator's, then the
+# PUID/PGID from .env when set (docker/reviewer/entrypoint.sh).
+COPY docker/reviewer/entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
 ENV AGENT_HOME=/app \
     NODE_ENV=production \
     TEKTONIX_BUNDLE=1
 EXPOSE 4100 4101
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 CMD ["node", "services/agent-review/server.js"]

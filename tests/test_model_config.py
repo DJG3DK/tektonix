@@ -12,6 +12,8 @@ comment line inside a params block, a differently-named neighboring entry)
 that could silently corrupt the real file.
 """
 
+import stat
+
 import pytest
 
 import agent.model_config as model_config
@@ -160,6 +162,13 @@ def test_set_pins_rejects_model_not_in_catalog(config_path):
 def test_set_pins_raises_if_role_missing_from_config(config_path):
     with pytest.raises(model_config.PinBlockNotFoundError):
         model_config.set_pins({"agent-vision": "deepseek/deepseek-v4-pro"}, FAKE_CATALOG)
+
+
+def test_the_config_is_written_world_readable_for_the_router_s_own_user(config_path):
+    """In the bundle the router runs unprivileged and the agent writes this
+    file; mkstemp's 0600 would have hidden every repin from it."""
+    model_config._atomic_write_config("model_list: []\n")
+    assert stat.S_IMODE(config_path.stat().st_mode) == 0o644
 
 
 def test_format_rate_matches_the_files_own_decimal_style():

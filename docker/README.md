@@ -56,6 +56,18 @@ docker compose up -d
 `up -d` builds whatever changed, from cache, so it is seconds when nothing
 did and a few minutes after a release. No `--build` needed.
 
+**Installed before 2026-09-28?** The compose project was called
+`three-d-agent` then, and its volumes carry that prefix. Without the two
+lines below, `up -d` starts a second, empty stack named `tektonix` beside
+your data:
+
+```
+COMPOSE_PROJECT_NAME=three-d-agent
+POSTGRES_DB=three_d_agent
+```
+
+Put them in `.env` before the first `up -d` after the pull.
+
 ## What you need
 
 Docker Desktop (Windows/macOS) or Docker Engine (Linux). Nothing else —
@@ -96,10 +108,19 @@ an error.
 
 ## First run
 
-The entrypoint generates `AUTH_SECRET_KEY` and `REVIEW_CONTROL_SECRET` into the
-data volume, writes an empty `projects.json`, waits for Postgres, and builds
-the sandbox image if the host does not already have it. All of it is
-idempotent: `down` and `up` again changes nothing.
+Compose builds the sandbox image (the `sandbox-image` service) before the
+agent starts. The agent's entrypoint then generates `AUTH_SECRET_KEY` into
+the data volume and `REVIEW_CONTROL_SECRET` into the volume it shares with
+the review services, writes an empty `projects.json` beside it, and waits
+for Postgres. All of it is idempotent: `down` and `up` again changes
+nothing.
+
+On Linux, set `PUID` and `PGID` in `.env` to your own ids (`id -u`, `id -g`)
+so the files the agent and the review services create in `PROJECTS_DIR` --
+worktrees, commits, merges -- are yours rather than root's. Each container
+chowns its own volumes and drops to that user at start. Unset, they run as
+root, which is what Docker Desktop's bind mounts want and what every install
+before 2026-09-29 did.
 
 ## The review gate is in the bundle
 
@@ -107,9 +128,11 @@ idempotent: `down` and `up` again changes nothing.
 branch is reviewed by a second model and only a READY verdict merges, which is
 the whole point of the thing and used to be missing from the easiest install.
 
-They share the agent's data volume read-only, so the control secret the agent
-generates on first run already matches, and they read the same `projects.json`
-a project onboarded from the dashboard writes.
+They mount, read-only, the one volume the agent shares with them
+(`reviewshared`): the control secret it generates on first run, so all three
+already agree, and the same `projects.json` a project onboarded from the
+dashboard writes. Nothing else of the agent's -- not its signing key, not
+the database password -- is reachable from either of them.
 
 The agent does not become ready until the router answers, and the reviewers
 do not become ready until the agent does. A first task that used to start
@@ -150,12 +173,36 @@ connection". `depends_on: service_healthy` is what closes that.
 
 ## Data
 
-Four named volumes: `pgdata` (tasks, memory, users — this is the one worth
-backing up), `agentdata` (generated secrets), `agentlogs`, `routerlogs`.
-`docker compose down` keeps them; `down -v` destroys them.
+Ten named volumes. `docker compose down` keeps them; `down -v` destroys them.
+
+| Volume | Holds | Back it up? |
+|---|---|---|
+| `pgdata` | tasks, memory, users, sessions | **yes** — `scripts/backup.sh --bundle` |
+| `routerconfig` | the model pins the Models page writes | **yes** — it is the only copy |
+| `agentdata` | `AUTH_SECRET_KEY`, the encrypted first password, the daily jobs' markers | **yes** — the database is unreadable without the key |
+| `pgsecret` | the generated database password | **yes** — lost with it, the agent cannot open a surviving `pgdata` |
+| `routerkey` | the generated router key | yes, or regenerate: delete it and restart |
+| `reviewshared` | `projects.json` and the review-control secret, for the review services | `projects.json` is worth a copy |
+| `reviewstate` | verdicts and their history | optional |
+| `bundlesecrets` | where the two secrets lived before 2026-09-29; postgres reads it once on upgrade | no |
+| `agentlogs`, `routerlogs` | the agent's logs and the router's per-call ledger | no |
+
+The projects themselves are in `PROJECTS_DIR` on the host, not in a volume.
+Restore is in `docs/backup.md`.
 
 ## Model pins
 
-`services/model-router/config.yaml` is mounted read-only if you have one. Without
-it the image ships `config.example.yaml`, which is a working default rather
-than a stub.
+The router's live config is `config.yaml` in the `routerconfig` volume: the
+Models page writes pins there and the router re-reads it on its next call.
+On the **first boot only**, the volume is empty and the router seeds it from
+`ROUTER_CONFIG` in `.env` when set, else the committed
+`services/model-router/config.example.yaml` (a working default, not a
+stub). After that the volume's file is yours: a restart, an upgrade or a
+changed `ROUTER_CONFIG` never overwrites it, so pins set from the dashboard
+survive. To reseed from a file, empty the volume first:
+
+```bash
+docker compose down router
+docker volume rm tektonix_routerconfig
+docker compose up -d
+```
