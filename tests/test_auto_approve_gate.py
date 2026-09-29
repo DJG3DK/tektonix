@@ -294,3 +294,61 @@ def test_an_assignment_after_the_delete_does_not_rewrite_its_target():
     assert _deletions_that_lose_work('P=src; rm -rf "$P"; P=/tmp/x') == ["/workspace/src"]
     assert _deletions_that_lose_work('P=/tmp/x; rm -rf "$P"; P=src') == []
     assert _deletions_that_lose_work('P=src; P=/tmp/y; rm -rf "$P"') == [], "the assignment in force at the delete"
+
+
+# 2026-09-29 audit, A2: delete forms the gate did not recognise. None of these
+# is parsed; each reads as unreadable, so it asks.
+HIDDEN_DELETES = [
+    "env rm -rf src", "env P=1 /bin/rm -rf src", "ls src | xargs rm -rf", "find src -print0 | xargs -0 rm",
+    "sh -c 'rm -rf src'", 'bash -c "cd src; rm -rf lib"', "find src -name '*.ts' -exec rm {} +",
+    "find src -exec sh -c 'rm -rf $1' _ {} \\;", "timeout 5 rm -rf src", "nohup rm -rf src &",
+    "git reset --hard", "git reset --hard HEAD~1", "git clean --force -d",
+    # the cd ran in a subshell that has exited, so this deletes /workspace/apps
+    "(cd /tmp); rm -rf apps", "(cd /tmp && ls); rm -rf apps", "(cd /tmp; (cd /var/tmp)); rm -rf apps",
+]
+
+
+def test_a_delete_run_through_another_command_asks():
+    when = INTERRUPT_ON_AUTO_APPROVE["bash"]["when"]
+    for command in HIDDEN_DELETES:
+        assert when(_req(command)) is True, f"auto mode must gate: {command}"
+
+
+def test_a_delete_run_through_another_command_asks_whatever_git_says(worktree):
+    """Unreadable means ask even when the repo could be consulted."""
+    for command in HIDDEN_DELETES:
+        assert _auto_when(worktree)(_req(command)) is True, command
+
+
+def test_a_cd_inside_a_subshell_moves_nothing_outside_it():
+    from agent.deep_agent import _deletions_that_lose_work
+    assert _deletions_that_lose_work("(cd /tmp); rm -rf x") == ["/workspace/x"]
+    # Inside the subshell the cd still counts.
+    assert _deletions_that_lose_work("(cd /tmp && rm -rf x)") == []
+    assert _deletions_that_lose_work("(cd /tmp && (cd /var/tmp) && rm -rf x)") == []
+    # An unbalanced `)` cannot pop past the top level.
+    assert _deletions_that_lose_work("cd /tmp ); rm -rf x") == []
+
+
+def test_wrappers_that_run_no_delete_do_not_ask():
+    when = INTERRUPT_ON_AUTO_APPROVE["bash"]["when"]
+    for command in ["env | grep PATH", "xargs -n1 echo < list", "sh -c 'npm test'", "timeout 60 npm test",
+                    "find src -name '*.ts' | xargs grep -l TODO", "find src -name '*.ts' -exec cat {} +",
+                    "git reset --soft HEAD~1", "git reset HEAD -- src/x.ts"]:
+        assert when(_req(command)) is False, f"auto mode should not prompt for: {command}"
+
+
+def test_a_move_onto_a_tracked_file_asks_and_a_rename_to_a_new_name_does_not(worktree):
+    """`mv` loses the file it lands on. A move into a tracked directory
+    overwrites nothing unless the same name is already tracked there."""
+    for command in ["mv x.ts apps/storefront/src/html.ts",
+                    "cd /workspace/apps/storefront && mv new.ts src/html.ts",
+                    "cd /workspace/apps/storefront/src && mv ../html.ts .",   # lands on src/html.ts
+                    "mv -f x.ts apps/storefront/src/html.ts", "mv -t apps/storefront/src x.ts",
+                    "mv x.ts /etc/x.ts", 'mv x.ts "$DEST"']:
+        assert _auto_when(worktree)(_req(command)) is True, command
+    for command in ["mv apps/storefront/src/html.ts apps/storefront/src/html2.ts",
+                    "mv x.ts apps/storefront/src/", "mv x.ts /tmp/x.ts", "mv dist build"]:
+        assert _auto_when(worktree)(_req(command)) is False, command
+    # Without a repo to ask, a move inside the worktree asks: unknown means ask.
+    assert _auto_when()(_req("mv x.ts apps/storefront/src/")) is True

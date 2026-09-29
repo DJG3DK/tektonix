@@ -425,32 +425,61 @@ _REGENERABLE_NAMES = frozenset({
 # a relative target resolves against that unless the command cd's first.
 _SANDBOX_CWD = "/workspace"
 
-_SEGMENT_SPLIT = _re.compile(r"\|\||&&|[;|\n()]")
+_SEGMENT_SPLIT = _re.compile(r"(\|\||&&|[;|\n()])")   # separators kept: `(` and `)` mark a subshell
 _DELETE_COMMANDS = ("rm", "rmdir", "shred", "unlink")
+# Commands that run another command they are given: `env rm`, `xargs rm`,
+# `sh -c 'rm …'`, `find … -exec rm`. What they run is not parsed here; a
+# delete word among their arguments makes the segment unreadable, so it
+# asks (2026-09-29 audit, A2).
+_WRAPPER_COMMANDS = frozenset({
+    "env", "xargs", "sh", "bash", "dash", "zsh", "busybox", "nice", "nohup", "time", "timeout",
+    "sudo", "doas", "exec", "command", "builtin", "eval", "find", "stdbuf", "ionice", "setsid",
+    "chroot", "parallel", "watch",
+})
+_DELETE_WORD_RE = _re.compile(r"""(^|[\s;&|('"])(rm|rmdir|shred|unlink)(\s|$)""")
 # Marks a loss entry that is not a path to look up: a shell variable, an
 # unparseable segment, `rm` with only flags, a wholesale `git clean -f`.
 # Those always ask, whatever git says about the worktree.
 _ALWAYS = "\x00"
 _UNPARSEABLE = _ALWAYS + "unparseable"
+# Marks a path a `mv` lands on. Only a tracked FILE at that exact path is a
+# loss: `mv new.ts src/` into a tracked directory overwrites nothing.
+_OVERWRITE = "\x01"
 
 
-def _segments(command: str) -> list[list[str]]:
-    """The command split into simple segments, each tokenised. A segment that
-    will not tokenise comes back as one unparseable token, so a caller fails
-    closed on it instead of skipping past it."""
+def _segments(command: str) -> list[tuple[int, list[str]]]:
+    """The command split into simple segments, each tokenised, with the
+    subshell depth it runs at. A segment that will not tokenise comes back
+    as one unparseable token, so a caller fails closed on it instead of
+    skipping past it."""
     import shlex
-    out: list[list[str]] = []
+    out: list[tuple[int, list[str]]] = []
+    depth = 0
     for raw in _SEGMENT_SPLIT.split(command):
+        if raw == "(":
+            depth += 1
+            continue
+        if raw == ")":
+            depth = max(0, depth - 1)
+            continue
         raw = raw.strip()
-        if not raw:
+        if not raw or raw in ("||", "&&", ";", "|"):
             continue
         try:
             tokens = shlex.split(raw, posix=True)
         except ValueError:
-            tokens = [_UNPARSEABLE]
+            tokens = [_UNPARSEABLE, raw]                      # the text kept, so a delete in it is seen
         if tokens:
-            out.append(tokens)
+            out.append((depth, tokens))
     return out
+
+
+def _hides_a_delete(tokens: list[str]) -> bool:
+    """A delete command among a wrapper's arguments -- as its own word
+    (`xargs rm`), a path (`env /bin/rm`), or inside a string it hands to a
+    shell (`sh -c 'cd x; rm -rf y'`)."""
+    return any(tok.rsplit("/", 1)[-1] in _DELETE_COMMANDS or _DELETE_WORD_RE.search(tok)
+               for tok in tokens[1:])
 
 
 def _resolve(target: str, cwd: str) -> str:
@@ -518,9 +547,12 @@ def _deletions_that_lose_work(command: str) -> list[str]:
     the caller asks about it rather than assuming."""
     command = _expand_local_assignments(command)
     cwd = _SANDBOX_CWD
+    # The cwd outside each open subshell: `(cd /tmp); rm -rf x` deletes
+    # /workspace/x, because the cd ran in a child that has since exited.
+    outer_cwds: list[str] = []
     losses: list[str] = []
 
-    def _record(targets: list[str]) -> None:
+    def _record(targets: list[str], prefix: str = "") -> None:
         for t in targets:
             if any(ch in t for ch in "$`") or t.startswith(_ALWAYS):
                 losses.append(_ALWAYS + t)                    # unreadable: ask, never resolve
@@ -534,16 +566,31 @@ def _deletions_that_lose_work(command: str) -> list[str]:
                 # a `rm -rf .git` straight through. Always ask.
                 losses.append(_ALWAYS + resolved)
             else:
-                losses.append(resolved)
+                losses.append(prefix + resolved)
 
-    for tokens in _segments(command):
+    for depth, tokens in _segments(command):
+        while len(outer_cwds) < depth:
+            outer_cwds.append(cwd)                            # entering a subshell
+        while len(outer_cwds) > depth:
+            cwd = outer_cwds.pop()                            # leaving one: its cd is gone
+        if tokens[0] == _UNPARSEABLE:
+            # `bash -c "cd src; rm -rf lib"` splits at the `;` into two halves
+            # that will not tokenise. The half with the delete word asks; a
+            # heredoc line with a stray apostrophe does not (2026-09-29).
+            if _DELETE_WORD_RE.search(tokens[1]):
+                losses.append(_ALWAYS + tokens[1].strip())
+            continue
         head = tokens[0].rsplit("/", 1)[-1]
         if head == "cd" and len(tokens) > 1 and not any(ch in tokens[1] for ch in "$`"):
             cwd = _resolve(tokens[1], cwd)
             continue
         if head == "git" and "clean" in tokens[1:4] and any(
-                t.startswith("-") and not t.startswith("--") and "f" in t for t in tokens):
+                (t.startswith("-") and not t.startswith("--") and "f" in t) or t == "--force"
+                for t in tokens):
             losses.append(_ALWAYS + "git clean -f")           # removes untracked work wholesale
+            continue
+        if head == "git" and "reset" in tokens[1:4] and "--hard" in tokens:
+            losses.append(_ALWAYS + "git reset --hard")       # throws away every uncommitted edit
             continue
         if head == "find" and "-delete" in tokens:
             paths = []
@@ -553,6 +600,19 @@ def _deletions_that_lose_work(command: str) -> list[str]:
                 paths.append(tok)
             _record(paths or ["."])
             continue
+        if head in _WRAPPER_COMMANDS and _hides_a_delete(tokens):
+            losses.append(_ALWAYS + " ".join(tokens))         # a delete run by something else: ask
+            continue
+        if head == "mv":
+            args = [t for t in tokens[1:] if not t.startswith("-")]
+            if len(args) < 2 or any(t == "-t" or t.startswith("--target-directory") for t in tokens):
+                losses.append(_ALWAYS + " ".join(tokens))     # a form not read here: ask
+                continue
+            dest, sources = args[-1], args[:-1]
+            # The file `mv` lands on, or the file it becomes inside a directory.
+            _record([dest, *(dest.rstrip("/") + "/" + s.rstrip("/").rsplit("/", 1)[-1] for s in sources)],
+                    prefix=_OVERWRITE)
+            continue
         if head in _DELETE_COMMANDS:
             targets = [t for t in tokens[1:] if not t.startswith("-")]
             if not targets:
@@ -560,6 +620,23 @@ def _deletions_that_lose_work(command: str) -> list[str]:
                 continue
             _record(targets)
     return losses
+
+
+def _is_tracked_file(repo_root: str, target: str) -> bool:
+    """Is there a tracked file at exactly this path? The `mv` question: a
+    move onto a tracked file overwrites it, a move into a tracked directory
+    does not. Unknown means ask, as in _covers_tracked_files."""
+    rel = target[len(_SANDBOX_CWD) + 1:] if target.startswith(_SANDBOX_CWD + "/") else target
+    if not rel or rel == _SANDBOX_CWD:
+        return True
+    try:
+        r = subprocess.run(["git", "-C", repo_root, "ls-files", "--", rel],
+                           capture_output=True, text=True, timeout=10)
+    except Exception:  # noqa: BLE001 -- unknown means ask
+        return True
+    if r.returncode != 0:
+        return True
+    return rel in r.stdout.splitlines()
 
 
 def _covers_tracked_files(repo_root: str, target: str) -> bool:
@@ -605,8 +682,14 @@ def _bash_deletes_real_work(req, repo_root: str | None = None) -> bool:
     for target in targets:
         if target.startswith(_ALWAYS):
             return True                                      # unreadable, or a wholesale clean
+        overwrite = target.startswith(_OVERWRITE)
+        target = target[len(_OVERWRITE):] if overwrite else target
         if not (target == _SANDBOX_CWD or target.startswith(_SANDBOX_CWD + "/")):
             return True                                      # outside the worktree: always ask
+        if overwrite:
+            if _is_tracked_file(repo_root, target):
+                return True                                  # a mv onto tracked content
+            continue
         if _covers_tracked_files(repo_root, target):
             return True
     return False
