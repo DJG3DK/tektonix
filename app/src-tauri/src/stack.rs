@@ -873,6 +873,36 @@ mod tests {
     }
 
     #[test]
+    fn the_password_rules_are_the_agents_and_run_before_anything_is_spent() {
+        // agent/auth.py validate_password_strength, rule for rule.
+        assert_eq!(
+            password_problem("Short1a"),
+            Some("password must be at least 12 characters")
+        );
+        assert_eq!(
+            password_problem("correct horse battery staple"),
+            Some("password must include an uppercase letter"),
+            "2026-09-29: a long all-lowercase passphrase passed the panel, the agent refused it, and the one-time password was gone"
+        );
+        assert_eq!(
+            password_problem("CORRECT HORSE BATTERY 1"),
+            Some("password must include a lowercase letter")
+        );
+        assert_eq!(
+            password_problem("Correct Horse Battery"),
+            Some("password must include a digit")
+        );
+        assert_eq!(password_problem("Correct Horse Battery 1"), None);
+        assert_eq!(
+            password_problem("Ünïcödé pässwörd 1"),
+            None,
+            "letters outside ASCII are letters"
+        );
+        let msg = with_one_time_password("the agent refused the first sign-in (401)", "abc-def");
+        assert!(msg.contains("abc-def") && msg.starts_with("the agent refused"));
+    }
+
+    #[test]
     fn a_secret_is_hinted_never_shown() {
         assert_eq!(hint("sk-or-v1-abcdefgh1234"), "••••••••1234");
         assert_eq!(hint("short"), "•••••");
@@ -1039,10 +1069,53 @@ pub async fn set_first_password(
     if password.trim().is_empty() {
         return Ok(false);
     }
+    // Checked here, before the one-time password is read: reading it
+    // deletes it, and the agent's refusal of a weak password then left no
+    // way to sign in at all (2026-09-29).
+    if let Some(problem) = password_problem(password) {
+        return Err(problem.into());
+    }
     let one_time = match initial_password(app).await {
         Ok(p) if !p.is_empty() => p,
         _ => return Ok(false),
     };
+    // From here on the one-time password is spent, so every failure hands
+    // it back and the operator finishes by hand.
+    if let Err(e) = change_first_password(email, &one_time, password).await {
+        return Err(with_one_time_password(&e, &one_time));
+    }
+    note(app, "Your password is set. Sign in to the console with it.");
+    Ok(true)
+}
+
+/// The agent's own rules (agent/auth.py validate_password_strength), in its
+/// own words, so the panel refuses exactly what the agent would refuse.
+pub fn password_problem(password: &str) -> Option<&'static str> {
+    if password.chars().count() < 12 {
+        return Some("password must be at least 12 characters");
+    }
+    if !password.chars().any(char::is_lowercase) {
+        return Some("password must include a lowercase letter");
+    }
+    if !password.chars().any(char::is_uppercase) {
+        return Some("password must include an uppercase letter");
+    }
+    if !password.chars().any(|c| c.is_ascii_digit()) {
+        return Some("password must include a digit");
+    }
+    None
+}
+
+/// What the panel shows when the chosen password could not be set after
+/// the one-time password was read: the one-time password itself, so the
+/// sign-in can still happen.
+pub fn with_one_time_password(error: &str, one_time: &str) -> String {
+    format!(
+        "{error}. Sign in to the console with the one-time password {one_time} and choose your password there."
+    )
+}
+
+async fn change_first_password(email: &str, one_time: &str, password: &str) -> Result<(), String> {
     let client = reqwest::Client::builder()
         .cookie_store(true)
         .timeout(std::time::Duration::from_secs(20))
@@ -1074,6 +1147,5 @@ pub async fn set_first_password(
             body.chars().take(200).collect::<String>()
         ));
     }
-    note(app, "Your password is set. Sign in to the console with it.");
-    Ok(true)
+    Ok(())
 }

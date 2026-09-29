@@ -56,6 +56,28 @@ def test_the_app_bundles_every_stack_file_the_compose_file_binds():
     assert conf["bundle"]["createUpdaterArtifacts"] is True
 
 
+def test_the_app_checks_the_agents_password_rules_before_spending_the_one_time_password():
+    """2026-09-29: the panel checked only the length. A long all-lowercase
+    passphrase passed it, the agent refused it, and by then the one-time
+    password had been read (which deletes it): no way in. The app and the
+    panel now carry the agent's rules, in the agent's words, so a new rule
+    in auth.py fails here until both copies know it."""
+    from agent.auth import validate_password_strength
+
+    tripping = ["Short1a", "correct horse battery staple", "CORRECT HORSE BATTERY 1", "Correct Horse Battery"]
+    messages = {validate_password_strength(p) for p in tripping}
+    assert None not in messages and len(messages) == 4, "one input per rule"
+    assert validate_password_strength("Correct Horse Battery 1") is None
+    rust = (REPO / "app/src-tauri/src/stack.rs").read_text()
+    panel = (REPO / "app/src/main.js").read_text()
+    for msg in messages:
+        assert f'"{msg}"' in rust, f"stack.rs password_problem lacks: {msg}"
+        assert f'"{msg}"' in panel, f"main.js passwordProblem lacks: {msg}"
+    body = rust.split("pub async fn set_first_password", 1)[1]
+    assert body.index("password_problem(password)") < body.index("initial_password(app)"), "the rules run before the one-time password is read"
+    assert "with_one_time_password(" in body, "a failure after the read hands the one-time password back"
+
+
 def test_the_app_version_is_one_number_in_three_places():
     conf = json.loads((REPO / "app/src-tauri/tauri.conf.json").read_text())
     pkg = json.loads((REPO / "app/package.json").read_text())

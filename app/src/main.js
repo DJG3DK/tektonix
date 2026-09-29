@@ -69,6 +69,17 @@ $("docker-install").onclick = async () => {
 
 // ── Setup ────────────────────────────────────────────────────────────────────
 let settings = null;
+
+// The agent's password rules (agent/auth.py validate_password_strength), in
+// its words. The Rust side checks them again before the one-time password
+// is spent; this is so the form says so before the stack starts.
+function passwordProblem(pw) {
+  if (pw.length < 12) return "password must be at least 12 characters";
+  if (!/\p{Ll}/u.test(pw)) return "password must include a lowercase letter";
+  if (!/\p{Lu}/u.test(pw)) return "password must include an uppercase letter";
+  if (!/[0-9]/.test(pw)) return "password must include a digit";
+  return null;
+}
 async function afterDocker() {
   settings = await invoke("settings_get");
   $("stack-version").textContent = "";
@@ -110,6 +121,10 @@ $("setup-form").onsubmit = async (ev) => {
   $("setup-save").disabled = true;
   $("setup-error").classList.add("hidden");
   try {
+    const pw = $("setup-password").value;
+    if (pw && pw !== $("setup-password-2").value) throw new Error("the two passwords differ");
+    const problem = pw && passwordProblem(pw);
+    if (problem) throw new Error(problem);
     const key = $("setup-key").value.trim();
     settings = await invoke("settings_save", {
       key: key || null, projectsDir: $("setup-dir").value, adminEmail: $("setup-email").value,
@@ -117,9 +132,6 @@ $("setup-form").onsubmit = async (ev) => {
     });
     await invoke("prefs_set", { autoUpdate: $("setup-auto-update").checked, includePrereleases: $("setup-prereleases").checked });
     void showAutoStatus();
-    const pw = $("setup-password").value;
-    if (pw && pw !== $("setup-password-2").value) throw new Error("the two passwords differ");
-    if (pw && pw.length < 12) throw new Error("the password needs at least 12 characters");
     await showStack();
     if (!(await invoke("installed_version"))) {
       const set = await runStack("stack_install", { password: pw || null });
