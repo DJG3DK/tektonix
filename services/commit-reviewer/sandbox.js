@@ -85,6 +85,15 @@ const MEMORY = '2g';
 const CPUS = '2';
 const PIDS = '512';
 
+// Not exec.js's log: exec.js requires this module, and a require back would
+// hand this file exec's exports before they exist. Same line, same shape.
+function log(msg) {
+    console.log(`[${new Date().toISOString()}] ${msg}`);
+}
+
+// How often a delegated check that is still running says so.
+const HEARTBEAT_MS = 60_000;
+
 const IN_CONTAINER = process.env.TEKTONIX_BUNDLE === '1';
 const DELEGATE_URL = (process.env.AGENT_SANDBOX_URL || '').replace(/\/+$/, '');
 
@@ -512,7 +521,7 @@ function delegatedRequest(cfg, worktreePath, relDir, cmd, args, timeoutMs, extra
  * the docker socket or running the code itself.
  */
 async function runDelegated(cfg, worktreePath, relDir, cmd, args, timeoutMs, extraEnv, network, stack,
-                            { secret, fetchImpl = fetch } = {}) {
+                            { secret, fetchImpl = fetch, heartbeatMs = HEARTBEAT_MS } = {}) {
     const body = delegatedRequest(cfg, worktreePath, relDir, cmd, args, timeoutMs, extraEnv, network, stack);
     const setup = (why) => ({
         ok: false, code: 1, infrastructure: true,
@@ -525,10 +534,13 @@ async function runDelegated(cfg, worktreePath, relDir, cmd, args, timeoutMs, ext
     const label = `${cmd} ${(args || []).join(' ')}`.trim();
     // A long check is silent otherwise: the only lines were its start and its
     // verdict, ten minutes apart, and an operator watching the log read that
-    // as a hang (2026-09-29).
+    // as a hang (2026-09-29). The line went to a `log` this file did not
+    // have, so the first beat of the first check over a minute was a
+    // ReferenceError in a timer, which takes the process down (2026-09-29,
+    // the same day).
     const heartbeat = setInterval(() => {
         log(`  still running ${label} (${Math.round((Date.now() - startedAt) / 1000)}s of ${Math.round(body.timeoutMs / 1000)}s allowed)`);
-    }, 60_000);
+    }, heartbeatMs);
     try {
         res = await fetchImpl(`${DELEGATE_URL}/api/internal/review-sandbox/run`, {
             method: 'POST',

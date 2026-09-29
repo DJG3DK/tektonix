@@ -255,6 +255,38 @@ test('a delegated run authenticates, and a refusal or an outage is infrastructur
     }
 });
 
+test('a delegated check that runs past the heartbeat is reported as still running, not crashed', async () => {
+    // The heartbeat logged through a name this file never defined; the
+    // first beat threw inside a timer, which is an uncaught exception and
+    // the end of the process. Tests never waited a minute, so nothing saw it.
+    const s = freshSandbox('1', 'http://agent:8100');
+    const { live, wt } = fixtureWorktree();
+    const lines = [];
+    const orig = console.log;
+    console.log = (...a) => lines.push(a.join(' '));
+    const uncaught = [];
+    const onUncaught = (e) => uncaught.push(e);
+    process.on('uncaughtException', onUncaught);
+    try {
+        const slow = async () => {
+            await new Promise((r) => setTimeout(r, 120));
+            return { ok: true, status: 200, json: async () => ({ ok: true, code: 0, output: 'done' }) };
+        };
+        const r = await s.runDelegated({ live }, wt, '.', 'npm', ['test'], 5_000, {}, 'none', null,
+            { secret: 's3cret', fetchImpl: slow, heartbeatMs: 30 });
+        assert.equal(r.ok, true);
+        const beats = () => lines.filter((l) => /still running npm test/.test(l)).length;
+        assert.ok(beats() >= 1, `no heartbeat line in: ${lines.join(' | ')}`);
+        const after = beats();
+        await new Promise((r) => setTimeout(r, 100));
+        assert.equal(beats(), after, 'the heartbeat keeps beating after the check returned');
+    } finally {
+        console.log = orig;
+        process.off('uncaughtException', onUncaught);
+    }
+    assert.deepEqual(uncaught, [], `the heartbeat threw: ${uncaught.map((e) => e.message).join('; ')}`);
+});
+
 test('a check that could not be RUN is flagged as infrastructure, not as failing', () => {
     // The distinction decides whose problem it is. Everything downstream
     // reads `.infrastructure`; without it, "the sandbox image has no go" is
