@@ -95,7 +95,6 @@ jobs:
 
   images:
     name: Images — ${{ matrix.image }}
-    needs: gate
     runs-on: ubuntu-latest
     needs: [gate, check]
     if: needs.check.outputs.published != 'true'

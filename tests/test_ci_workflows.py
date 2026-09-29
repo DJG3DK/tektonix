@@ -207,10 +207,16 @@ def test_dependabot_watches_every_manifest_in_the_tree():
     for entry in doc["updates"]:
         for d in entry.get("directories") or [entry["directory"]]:
             watched.add((entry["package-ecosystem"], d))
-    # .claude holds agent worktrees on a development box: whole checkouts.
-    skip = {"node_modules", ".git", ".claude", "evals", "logoloom", ".venv", "target"}
+    # Tracked files only: a development box also holds agent worktrees under
+    # .claude, review worktrees under the reviewer, and installed packages,
+    # each a manifest Dependabot has no business watching.
+    tracked = subprocess.run(["git", "-C", str(REPO), "ls-files", "-z"], capture_output=True, check=True).stdout
+    skip = {"evals", "logoloom"}
     expected: set[tuple[str, str]] = set()
-    for p in REPO.rglob("*"):
+    for raw in tracked.split(b"\0"):
+        if not raw:
+            continue
+        p = REPO / raw.decode()
         if any(part in skip for part in p.relative_to(REPO).parts):
             continue
         rel = "/" if p.parent == REPO else "/" + p.parent.relative_to(REPO).as_posix()
@@ -254,3 +260,23 @@ def test_the_real_doctor_survives_the_step_on_this_tree(tmp_path):
     script = _doctor_step_script().replace("/tmp/doctor.out", str(tmp_path / "doctor.out"))
     proc = subprocess.run(["bash", "-eo", "pipefail", "-c", script], cwd=REPO, capture_output=True, text=True)
     assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+def test_no_workflow_repeats_a_key():
+    """2026-09-29: a merge left `needs:` twice in one job. yaml.safe_load
+    keeps the last value and says nothing; GitHub refuses the file, and
+    every push then shows a release run that failed at start-up."""
+    class _Strict(yaml.SafeLoader):
+        pass
+
+    def _mapping(loader, node):
+        seen = set()
+        for key_node, _ in node.value:
+            key = loader.construct_object(key_node)
+            assert key not in seen, f"{key!r} repeated at line {key_node.start_mark.line + 1}"
+            seen.add(key)
+        return loader.construct_mapping(node, deep=True)
+
+    _Strict.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _mapping)
+    for wf in sorted((REPO / ".github" / "workflows").glob("*.yml")):
+        yaml.load(wf.read_text(), Loader=_Strict)
