@@ -81,7 +81,7 @@ check "a changed POSTGRES_PASSWORD after first init is not written for the agent
 check "and the log says how to rotate" 'grep -q -- "--rotate" "$T/err"'
 run_init POSTGRES_PASSWORD=mine
 check "the same value as stored is not a rotation" '! grep -q -- "--rotate" "$T/err"'
-env -i PATH="$PATH" TEKTONIX_PG_SECRET_DIR="$T/v/pg" POSTGRES_PASSWORD=changed-later POSTGRES_DB=tektonix sh "$INIT" --rotate >/dev/null 2>"$T/err"
+env -i PATH="$PATH" TEKTONIX_PG_SECRET_DIR="$T/v/pg" TEKTONIX_ROUTER_KEY_DIR="$T/v/rk" POSTGRES_PASSWORD=changed-later POSTGRES_DB=tektonix sh "$INIT" --rotate >/dev/null 2>"$T/err"
 check "--rotate alters the role with the value as a psql variable and rewrites the file" \
     '[[ "$(cat "$T/v/pg/postgres_password")" == changed-later ]] && grep -q "^psql .*-v pw=changed-later .*ALTER USER" "$T/calls" && ! grep -q "PASSWORD .changed-later" "$T/calls"'
 
@@ -136,7 +136,10 @@ check "without a socket the supplementary groups are cleared, not guessed" 'grep
 
 # ---------------------------------------------------------------------------
 echo "reviewer entrypoint"
-REVIEWER="$ROOT/docker/reviewer/entrypoint.sh"
+# Its /app paths (the credential copies it chowns) point into the scratch
+# tree, as the agent entrypoint's do: on CI nothing may write under /app.
+sed "s|/app|$T/app|g" "$ROOT/docker/reviewer/entrypoint.sh" > "$T/reviewer-entrypoint.sh"
+REVIEWER="$T/reviewer-entrypoint.sh"
 : > "$T/calls"
 env -i PATH="$PATH" sh "$REVIEWER" node services/agent-review/server.js
 check "unset, the command runs as is" '[[ "$(calls)" == "node services/agent-review/server.js" ]]'

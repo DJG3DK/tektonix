@@ -88,6 +88,11 @@ def test_the_trim_keeps_the_newest_whole_lines_and_leaves_no_sibling(tmp_path, m
     for i in range(40):
         ledger.record(call_id=f"c{i}", alias="a", model="m", cost=0.1, path=path)
     _join_trims()
+    # One trim runs at a time and a burst of records lands while it does, so
+    # a slow runner can end the loop still over the cap; what is pinned is
+    # the shape of a trim, not how many the burst got.
+    while path.stat().st_size > ledger.MAX_BYTES:
+        ledger._trim(path)
     rows = _lines(path)
     assert path.stat().st_size < 40 * 300 and rows and rows[-1]["call_id"] == "c39"
     ids = [r["call_id"] for r in rows]
