@@ -43,20 +43,7 @@ if [ "$MODE" = host ]; then
     # as shell. A value saved from the Settings page may contain `$(` or a
     # backtick, and `. ./.env` would have executed it.
     PY_BIN="$AGENT_HOME/.venv/bin/python"; [ -x "$PY_BIN" ] || PY_BIN=python3
-    DSN=$("$PY_BIN" - "$AGENT_HOME/.env" <<'PY'
-import os, sys
-value = ""
-if os.path.exists(sys.argv[1]):
-    try:
-        from dotenv import dotenv_values
-        value = dotenv_values(sys.argv[1]).get("LANGGRAPH_PG_DSN") or ""
-    except ImportError:  # the agent's venv is not on PATH: a plain KEY=value read
-        for line in open(sys.argv[1]):
-            if line.startswith("LANGGRAPH_PG_DSN="):
-                value = line.split("=", 1)[1].strip().strip("\"'")
-sys.stdout.write(value)
-PY
-)
+    DSN=$("$PY_BIN" "$(dirname "${BASH_SOURCE[0]}")/env_value.py" LANGGRAPH_PG_DSN "$AGENT_HOME/.env")
     : "${DSN:?LANGGRAPH_PG_DSN is not set in $AGENT_HOME/.env}"
     # Custom format (-Fc): compressed, and restorable table by table with
     # pg_restore. --no-owner so a restore into a differently-named role works.

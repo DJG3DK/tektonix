@@ -213,6 +213,16 @@ def _format_value(value: str) -> str:
     needs_quote = value == "" or any(c in value for c in (' ', '\t', '#', '"', "'", '=', '$', '`', '\\'))
     if not needs_quote:
         return value
+    # `$` or a backtick goes in single quotes: literal to a shell that
+    # sources the file AND to dotenv, which takes single-quoted values as
+    # written. In double quotes a `$(...)` saved from the Settings page ran
+    # the moment a cron job did `. ./.env`, and there is no double-quoted
+    # spelling both readers agree on -- dotenv keeps `\$` as two characters.
+    # A value with both `$` and `'` has no shell-safe spelling dotenv reads
+    # back correctly; it takes the double-quoted form, and the scripts that
+    # read this file no longer source it (scripts/env_value.py).
+    if any(c in value for c in ('$', '`')) and "'" not in value:
+        return f"'{value}'"
     escaped = value.replace('\\', '\\\\').replace('"', '\\"')
     return f'"{escaped}"'
 

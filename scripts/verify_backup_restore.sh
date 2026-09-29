@@ -17,9 +17,11 @@ set -euo pipefail
 
 AGENT_HOME="${AGENT_HOME:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 cd "$AGENT_HOME"
-# shellcheck disable=SC1091
-set -a; . ./.env; set +a
-: "${LANGGRAPH_PG_DSN:?LANGGRAPH_PG_DSN is not set}"
+# The one value, parsed rather than sourced: a DSN saved from the Settings
+# page may contain `$(` or a backtick, and `. ./.env` ran it.
+PY_BIN="$AGENT_HOME/.venv/bin/python"; [ -x "$PY_BIN" ] || PY_BIN=python3
+LANGGRAPH_PG_DSN="${LANGGRAPH_PG_DSN:-$("$PY_BIN" "$AGENT_HOME/scripts/env_value.py" LANGGRAPH_PG_DSN "$AGENT_HOME/.env")}"
+: "${LANGGRAPH_PG_DSN:?LANGGRAPH_PG_DSN is not set in $AGENT_HOME/.env}"
 
 DUMP="${1:-$(ls -1t "${AGENT_HOME}"/backups/agent-*.dump 2>/dev/null | head -1 || true)}"
 if [ -z "$DUMP" ] || [ ! -f "$DUMP" ]; then
