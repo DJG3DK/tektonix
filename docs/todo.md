@@ -587,3 +587,4 @@ are fixed. These did not, and are cheap to lose track of.
 - The agent runs npm scripts while the reviewer runs `review.checks`, so the two gates can disagree; one list.
 - A review queued behind another is not `inProgress`, so the agent's wait is not extended for it; record the queue in state.
 - Not in the bundle image: gitleaks (secret scan reports "binary not found" as a plain failure), and usage.jsonl lives in the image rather than a volume.
+- An escalated task keeps the project's merge slot: an approved task on the same project waited sixteen minutes for "another task to finish its review and merge" while that task sat escalated. A task that escalates should release the slot.

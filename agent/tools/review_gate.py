@@ -226,11 +226,21 @@ async def _still_reviewing(project: str, expect_sha: str) -> str | None:
 STILL_REVIEWING_FACTOR = 4
 
 
+def _harness_failed(state: dict) -> bool:
+    checks = state.get("checkResults") or []
+    return state.get("verdict") != "READY" and any(
+        isinstance(c, dict) and c.get("infrastructure") and not c.get("ok") for c in checks)
+
+
 def _reviewed_after(state: dict, after: float | None) -> bool:
-    """False when the record predates `after` (a unix time): a re-review
-    asked for on a sha the reviewer already judged must wait for the NEW
-    verdict, not read back the old one. A record without a time counts."""
-    if after is None:
+    """False when a HARNESS-FAILED record predates `after` (a unix time): a
+    re-review asked for after the harness was fixed must wait for the new
+    verdict, not read the failure back. A real verdict counts whatever its
+    age: the reviewer does not review the same commit twice, so a re-check
+    after the operator's merge approval reads the verdict it already gave
+    (2026-09-29: two approved tasks waited out the timeout on a READY that
+    was sitting there). A record without a time counts."""
+    if after is None or not _harness_failed(state):
         return True
     stamp = state.get("reviewedAt")
     if not stamp:

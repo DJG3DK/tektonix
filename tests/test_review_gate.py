@@ -111,7 +111,7 @@ async def test_a_re_review_waits_for_a_verdict_newer_than_the_request(monkeypatc
 
     async def fake_state(project):
         polls["n"] += 1
-        old = {"lastReviewedSha": FULL, "verdict": "NEEDS_FIXES", "reviewedAt": "2026-09-29T00:00:00Z"}
+        old = {"lastReviewedSha": FULL, "reviewedAt": "2026-09-29T00:00:00Z", **HARNESS}
         new = {"lastReviewedSha": FULL, "verdict": "READY", "reviewedAt": "2026-09-29T12:00:00Z"}
         return new if polls["n"] >= 3 else old
 
@@ -123,8 +123,16 @@ async def test_a_re_review_waits_for_a_verdict_newer_than_the_request(monkeypatc
     assert state["verdict"] == "READY" and polls["n"] >= 3
 
 
-def test_a_record_without_a_time_or_without_a_request_time_counts():
+HARNESS = {"verdict": "NEEDS_FIXES", "checkResults": [{"name": "test", "ok": False, "infrastructure": True}]}
+
+
+def test_only_a_harness_failed_record_must_be_newer_than_the_request():
     from agent.tools.review_gate import _reviewed_after
+    old = "2026-09-29T00:00:00Z"
     assert _reviewed_after({"lastReviewedSha": FULL}, 1.0)
-    assert _reviewed_after({"reviewedAt": "2026-09-29T00:00:00Z"}, None)
-    assert not _reviewed_after({"reviewedAt": "2026-09-29T00:00:00Z"}, 4_000_000_000.0)
+    assert _reviewed_after({"reviewedAt": old, **HARNESS}, None)
+    assert not _reviewed_after({"reviewedAt": old, **HARNESS}, 4_000_000_000.0), "the harness failure must be re-judged"
+    # A real verdict, READY or not, is the answer however old: the reviewer
+    # never reviews the same commit twice, so waiting for a newer one hangs.
+    assert _reviewed_after({"reviewedAt": old, "verdict": "READY"}, 4_000_000_000.0)
+    assert _reviewed_after({"reviewedAt": old, "verdict": "NEEDS_FIXES", "checkResults": [{"name": "lint", "ok": False}]}, 4_000_000_000.0)

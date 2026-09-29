@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### An approved merge reads the verdict it already has
+
+The rule that makes a re-review wait for a verdict newer than the request
+applied to every re-check, including the one after the operator's merge
+approval; the reviewer does not review the same commit twice, so two
+approved tasks waited out the timeout on a READY that was sitting there.
+Only a verdict the harness produced has to be re-judged.
+
 ### Tasks that need you have their own group
 
 An escalated task, or one waiting for your look at the diff, was filed
