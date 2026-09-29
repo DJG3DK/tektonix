@@ -133,13 +133,15 @@ def test_the_shipped_defaults_are_the_operators_proven_values():
     """2026-09-28: the defaults were the first week's guesses (180s model
     calls, 120s checks, 200 model calls a run) and every real install had
     to raise them by hand. These are the values the reference deployment
-    runs after a month of tasks; a fresh install starts from them."""
+    runs after a month of tasks; a fresh install starts from them. The
+    suite timeout is fifteen minutes since 2026-09-29: a five-minute suite
+    here took over ten in a two-core sandbox under Docker Desktop."""
     proven = {
         "parallel_tasks_per_project": 10, "planning_read_budget": 50, "planning_search_budget": 50,
         "planning_turn_budget_usd": 15.0, "planning_stall_timeout_s": 1200, "default_task_budget_usd": 10.0,
         "model_call_run_limit": 400, "tool_call_run_limit": 500, "model_call_timeout_s": 300,
         "planning_model_call_timeout_s": 1200, "check_lint_timeout_s": 600, "check_typecheck_timeout_s": 600,
-        "check_test_timeout_s": 600, "check_review_test_timeout_s": 900, "frontend_build_timeout_s": 600,
+        "check_test_timeout_s": 900, "check_review_test_timeout_s": 900, "frontend_build_timeout_s": 600,
         "sandbox_command_timeout_s": 300, "summarization_trigger_tokens": 250000, "summarization_keep_tokens": 90000,
         "memory_progressive_disclosure": 1, "memory_inline_token_budget": 3000, "review_wait_timeout_s": 900, "ci_wait_timeout_s": 3600,
         "auto_heal_attempts": 3,

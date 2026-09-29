@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### A long suite fits in the sandbox
+
+A five-minute suite here took over ten in a two-core sandbox under Docker
+Desktop, past the shell's ten-minute ceiling. The sandbox's cores and
+memory are now set in .env (SANDBOX_CPUS, SANDBOX_MEMORY); the desktop app
+writes half the machine's cores and four gigabytes once. The shell's
+ceiling follows the suite timeout, whose default is fifteen minutes, and
+the coder is told to run the whole suite through run_checks.
+
+Dependency updates arrive weekly as pull requests, the LangChain family
+grouped as one.
+
 ### An update never takes the window from you
 
 The app installed its own update while a task was running and the

@@ -26,6 +26,7 @@ import asyncio
 from agent import runtime_settings as _rs
 import logging
 import os
+import re
 import socket
 import contextlib
 import uuid
@@ -104,8 +105,18 @@ def git_identity_args() -> list[str]:
         if v:
             args += ["-e", f"{k}={v}"]
     return args
-SANDBOX_MEMORY_LIMIT = "2g"
-SANDBOX_CPU_LIMIT = "2"
+# The caps a check or a shell command runs under. Two cores and two
+# gigabytes fit the shared host; a desktop install with a machine to itself
+# sets SANDBOX_CPUS and SANDBOX_MEMORY in its .env (the app writes them from
+# the machine's size). 2026-09-29: a suite that takes five minutes here took
+# over ten in a two-core sandbox under Docker Desktop, past every timeout.
+def _cap(env: str, default: str, pattern: str) -> str:
+    value = os.environ.get(env, "").strip()
+    return value if re.fullmatch(pattern, value) else default
+
+
+SANDBOX_MEMORY_LIMIT = _cap("SANDBOX_MEMORY", "2g", r"[1-9]\d*[gmGM]")
+SANDBOX_CPU_LIMIT = _cap("SANDBOX_CPUS", "2", r"[1-9]\d?(\.\d+)?")
 # No swap on top of the memory limit. Unset, docker gives a container as much
 # swap again, so an oversized test run thrashes the host's disk for minutes
 # before it is killed -- 31 such kills in two benchmark runs (2026-09-24),

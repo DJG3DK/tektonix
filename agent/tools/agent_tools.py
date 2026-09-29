@@ -39,6 +39,7 @@ from agent.tools.files import (BinaryFileError, PathEscapeError, _resolve, read_
 from agent.tools import bash_advice
 from agent.tools.sandbox import run_shell_sandboxed
 from agent.tools.tool_errors import tool_errors_to_text
+from agent import runtime_settings as _rs
 from agent.tools.shell import ShellTimeout
 from agent.tools.vision import describe_image_bytes
 
@@ -294,8 +295,10 @@ def make_agent_tools(
     @tool_errors_to_text
     # The timeout argument is clamped below; see audit H-18.
     async def bash(command: str, timeout: int = 120) -> str:
-        """Run a shell command -- for RUNNING things: tests, builds, rg, git
-        status, a script you wrote.
+        """Run a shell command -- for RUNNING things: a single test file, a
+        build, rg, git status, a script you wrote. For the project's whole
+        check suite use `run_checks`: it has the suite's own timeout, while a
+        long suite through this tool runs out of time and tells you nothing.
 
         NOT for reading or editing files. Use `read` to read one and `edit` /
         `write` to change one: those run in-process, while every call to this
@@ -366,9 +369,10 @@ def make_agent_tools(
             # audit H-18: the model supplies `timeout`; clamp it to a hard
             # ceiling. bash holds the per-project lock for its whole run, so an
             # unbounded value (or a nonsense one) lets a single confused turn
-            # wedge the project for everyone else. 600s is well above any
-            # legitimate build/test step.
-            _BASH_TIMEOUT_CEILING = 600
+            # wedge the project for everyone else. The ceiling is the test
+            # suite's own timeout (Settings > Check timeouts), never under ten
+            # minutes: a suite the checks are allowed to run, the shell is too.
+            _BASH_TIMEOUT_CEILING = max(600, _rs.as_int("check_test_timeout_s"))
             try:
                 timeout = int(timeout)
             except (TypeError, ValueError):

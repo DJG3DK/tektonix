@@ -1,0 +1,32 @@
+# Dependency updates arrive as pull requests, weekly, grouped so one PR
+# moves the LangChain family together (they version in step).
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      langchain:
+        patterns: ["langchain*", "langgraph*", "deepagents"]
+      python-minor:
+        update-types: ["minor", "patch"]
+  - package-ecosystem: npm
+    directory: /frontend
+    schedule:
+      interval: weekly
+    groups:
+      frontend-minor:
+        update-types: ["minor", "patch"]
+  - package-ecosystem: npm
+    directory: /app
+    schedule:
+      interval: weekly
+  - package-ecosystem: cargo
+    directory: /app/src-tauri
+    schedule:
+      interval: weekly
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

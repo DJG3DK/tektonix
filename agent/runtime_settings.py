@@ -204,7 +204,7 @@ KNOBS: dict[str, dict] = {
             "than as running out of time."
         ),
         "unit": "s",
-        "default": 600.0,
+        "default": 900.0,
         "min": 60.0,
         "max": 7200.0,
         "env": None,

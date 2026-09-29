@@ -187,11 +187,29 @@ pub fn prepare(app: &AppHandle) -> Result<PathBuf, String> {
     }
     // This is the desktop app: the single-user sign-in rules (agent/auth.py,
     // desktop_install). Only the app writes this line.
-    let content = std::fs::read_to_string(&env).unwrap_or_default();
+    let mut content = std::fs::read_to_string(&env).unwrap_or_default();
     if get_env_value(&content, "TEKTONIX_DESKTOP").as_deref() != Some("1") {
-        std::fs::write(&env, set_env_line(&content, "TEKTONIX_DESKTOP", "1")).map_err(|e| e.to_string())?;
+        content = set_env_line(&content, "TEKTONIX_DESKTOP", "1");
     }
+    // A machine of its own: checks get half its cores and four gigabytes,
+    // written once so the operator can change them in the file.
+    if get_env_value(&content, "SANDBOX_CPUS").is_none() {
+        content = set_env_line(&content, "SANDBOX_CPUS", &sandbox_cpus(machine_cores()).to_string());
+    }
+    if get_env_value(&content, "SANDBOX_MEMORY").is_none() {
+        content = set_env_line(&content, "SANDBOX_MEMORY", "4g");
+    }
+    std::fs::write(&env, content).map_err(|e| e.to_string())?;
     Ok(dst)
+}
+
+fn machine_cores() -> usize {
+    std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4)
+}
+
+/// Half the machine, never fewer than two, never more than eight.
+pub fn sandbox_cpus(cores: usize) -> usize {
+    (cores / 2).clamp(2, 8)
 }
 
 // ── .env ─────────────────────────────────────────────────────────────────────
@@ -588,6 +606,13 @@ mod tests {
         assert_eq!(image_ref("agent", "v0.9.0"), "ghcr.io/djg3dk/tektonix-agent:v0.9.0");
         assert_eq!(local_name("reviewer"), "tektonix-reviewer:latest");
         assert_eq!(IMAGES, ["agent", "router", "reviewer", "sandbox"]);
+    }
+
+    #[test]
+    fn checks_get_half_the_machine_within_bounds() {
+        assert_eq!(sandbox_cpus(2), 2);
+        assert_eq!(sandbox_cpus(8), 4);
+        assert_eq!(sandbox_cpus(32), 8);
     }
 
     #[test]

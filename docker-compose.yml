@@ -167,6 +167,10 @@ services:
       # directories and every task would read an empty repo -- silently.
       # See agent/tools/sandbox.py's host_path().
       AGENT_HOST_PATH_MAP: /projects=${PROJECTS_DIR:?set PROJECTS_DIR in .env}
+      # What a check or a shell command may use (agent/tools/sandbox.py).
+      # The desktop app sets these from the machine's size.
+      SANDBOX_CPUS: ${SANDBOX_CPUS:-2}
+      SANDBOX_MEMORY: ${SANDBOX_MEMORY:-2g}
       # Shared with the two review containers, which read the same file.
       AGENT_PROJECTS_JSON: /app/data/projects.json
       # Worktrees must live somewhere AGENT_HOST_PATH_MAP can translate, or
