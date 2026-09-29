@@ -1803,24 +1803,15 @@ async def _start_task(goal: str, repo: str, budget_usd: float | None, route: str
     return await tasks.start_task(app, goal, repo, budget_usd, route, **kwargs)
 
 
-
-
-
-
-# The commit-reviewer service's own dashboard API (router credit balance,
-# per-model spend). The frontend used to call that service directly, but a
-# deployment may put it behind a separate reverse-proxy auth that this app's
-# own users have no session for (this one did). That silently 401'd the
-# balance fetch for anyone who had only logged into Tektonix's own auth,
-# and BalanceStrip.tsx swallows any fetch failure (renders nothing rather
-# than an error), so the balance just vanished from the sidebar with no
-# visible cause. This passthrough re-uses this app's own auth instead, so
-# the balance only ever depends on being logged into Tektonix itself.
-#
-# The address is review_gate's, as the /_review/ proxy's is: a hardcoded
-# 127.0.0.1:4100 here ignored REVIEW_SERVICE_HOST, so in the compose bundle
-# the balance asked a loopback where nothing listens while the gate and the
-# proxy reached the review container.
+# The router credit balance, behind this app's own auth. The frontend used
+# to call the commit-reviewer's dashboard API for it, and a deployment may
+# put that service behind a separate reverse-proxy auth this app's users
+# have no session for (this one did): the fetch 401'd, BalanceStrip.tsx
+# swallows any fetch failure, and the balance just vanished from the sidebar
+# (2026-08-24). It then went through this app as a proxy to the review
+# service, which reads the key from a file only a host install has, so the
+# bundle's card was empty while the key worked fine (2026-09-28). Now the
+# route asks OpenRouter itself with the key the router bills.
 
 
 @app.get("/api/router-balance")
@@ -1841,13 +1832,23 @@ async def get_router_balance(user: User = Depends(require_full_auth)):
     from agent.model_config import _openrouter_key  # noqa: PLC0415
     key = _openrouter_key()
     if not key:
-        raise HTTPException(503, "no OpenRouter key: set OPENROUTER_API_KEY and restart the agent")
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        resp = await client.get("https://openrouter.ai/api/v1/credits", headers={"Authorization": f"Bearer {key}"})
+        # Read on every call, so no restart is involved: the next request
+        # after the key is saved (Settings -> Environment) succeeds.
+        raise HTTPException(503, "no OpenRouter key: set OPENROUTER_API_KEY in the router's .env")
+    # An upstream that is down, slow or answering nonsense is a 502 with a
+    # fixed sentence, not a 500 with a traceback in the log (2026-09-29).
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get("https://openrouter.ai/api/v1/credits", headers={"Authorization": f"Bearer {key}"})
+    except httpx.HTTPError as e:
+        raise HTTPException(502, f"could not reach OpenRouter for the credits request: {type(e).__name__}")
     if resp.status_code != 200:
         raise HTTPException(502, f"OpenRouter answered {resp.status_code} to the credits request")
-    body = resp.json().get("data") or {}
-    total, used = float(body.get("total_credits") or 0), float(body.get("total_usage") or 0)
+    try:
+        body = resp.json().get("data") or {}
+        total, used = float(body.get("total_credits") or 0), float(body.get("total_usage") or 0)
+    except (ValueError, TypeError, AttributeError):
+        raise HTTPException(502, "OpenRouter's credits reply was not the expected JSON")
     data = {"totalCredits": total, "totalUsage": used, "remaining": total - used}
     _balance_cache.update(data=data, at=now)
     return data

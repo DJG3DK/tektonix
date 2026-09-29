@@ -60,6 +60,52 @@ def test_router_balance_asks_openrouter_with_this_deployments_key_behind_this_ap
     assert client.get("/api/router-balance").status_code == 200 and _FakeAsyncClient.calls == 1, "cached for a minute"
 
 
+def _wired(monkeypatch, client_cls):
+    import agent.model_config as mc
+
+    monkeypatch.setattr(mc, "_openrouter_key", lambda: "sk-or-v1-thekey")
+    monkeypatch.setitem(srv.app.dependency_overrides, srv.require_full_auth, lambda: _FAKE_USER)
+    monkeypatch.setattr(srv.httpx, "AsyncClient", client_cls)
+    monkeypatch.setattr(srv, "_balance_cache", {"data": None, "at": 0.0})
+    return TestClient(srv.app)
+
+
+def test_an_unreachable_openrouter_is_a_502_with_a_fixed_sentence(monkeypatch):
+    """httpx errors were unhandled, so a network blip was a 500 with a
+    traceback and the card showed nothing it could explain (2026-09-29)."""
+    class _Down(_FakeAsyncClient):
+        async def get(self, url, headers=None):
+            raise srv.httpx.ConnectError("connection refused")
+
+    res = _wired(monkeypatch, _Down).get("/api/router-balance")
+    assert res.status_code == 502
+    assert res.json()["detail"] == "could not reach OpenRouter for the credits request: ConnectError"
+    assert "sk-or" not in res.text
+
+
+def test_a_non_json_reply_is_a_502_not_a_500(monkeypatch):
+    class _Garbage(_FakeAsyncClient):
+        async def get(self, url, headers=None):
+            r = _FakeResponse(None)
+            r.json = lambda: (_ for _ in ()).throw(ValueError("not json"))
+            return r
+
+    res = _wired(monkeypatch, _Garbage).get("/api/router-balance")
+    assert res.status_code == 502 and "expected JSON" in res.json()["detail"]
+
+
+def test_a_missing_key_does_not_ask_for_a_restart(monkeypatch):
+    """The key is read on every call, so the sentence that told the operator
+    to restart the agent sent them to do something that was not needed."""
+    import agent.model_config as mc
+
+    monkeypatch.setattr(mc, "_openrouter_key", lambda: None)
+    monkeypatch.setitem(srv.app.dependency_overrides, srv.require_full_auth, lambda: _FAKE_USER)
+    monkeypatch.setattr(srv, "_balance_cache", {"data": None, "at": 0.0})
+    res = TestClient(srv.app).get("/api/router-balance")
+    assert res.status_code == 503 and "restart" not in res.json()["detail"]
+
+
 def test_without_a_key_the_card_gets_a_reason_not_a_500(monkeypatch):
     import agent.model_config as mc
 
