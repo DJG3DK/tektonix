@@ -17,7 +17,7 @@ T="$(mktemp -d)"; trap 'rm -rf "$T"' EXIT
 
 pass=0; fail=0
 ok()   { pass=$((pass+1)); echo "  ok   $1"; }
-bad()  { fail=$((fail+1)); echo "  FAIL $1"; }
+bad()  { fail=$((fail+1)); echo "  FAIL $1"; echo "       stderr: $(tail -c 400 "$T/err" 2>/dev/null | tr '\n' '|')"; echo "       calls:  $(tail -n 3 "$T/calls" 2>/dev/null | tr '\n' '|')"; }
 check() { if eval "$2"; then ok "$1"; else bad "$1"; fi; }
 
 # Stubs on PATH. Each records its arguments; setpriv and the entrypoints'
@@ -27,6 +27,12 @@ for stub in docker-entrypoint.sh uvicorn setpriv chown useradd groupadd docker p
     printf '#!/bin/sh\necho "%s $*" >> "%s/calls"\n' "$stub" "$T" > "$T/bin/$stub"
     chmod +x "$T/bin/$stub"
 done
+# The entrypoints drop privileges only when they ARE root (`id -u`); the
+# suite runs unprivileged on CI, so the question is answered as root here
+# and the drop itself is a stubbed setpriv. Everything else id is asked
+# goes to the real one.
+printf '#!/bin/sh\n[ "$1" = -u ] && [ $# = 1 ] && { echo 0; exit 0; }\nexec /usr/bin/id "$@"\n' > "$T/bin/id"
+chmod +x "$T/bin/id"
 PY="$(command -v python3)"
 ln -s "$PY" "$T/bin/python"
 export PATH="$T/bin:$PATH"

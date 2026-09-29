@@ -42,7 +42,9 @@ def _seed(tmp_path: Path, live_exists: bool) -> tuple[str, str]:
     (fake_bin / "uvicorn").chmod(0o755)
     r = subprocess.run(["sh", str(REPO / "docker/router/entrypoint.sh")], capture_output=True, text=True, timeout=30,
                        env={**os.environ, "PATH": f"{fake_bin}:{os.environ['PATH']}",
-                            "MODEL_ROUTER_CONFIG_SEED": str(seed), "MODEL_ROUTER_CONFIG": str(live)})
+                            "MODEL_ROUTER_CONFIG_SEED": str(seed), "MODEL_ROUTER_CONFIG": str(live),
+                            # The ledger directory is created too; its default is under /app.
+                            "MODEL_ROUTER_LEDGER": str(tmp_path / "logs" / "routing.jsonl")})
     assert r.returncode == 0, r.stderr
     return r.stdout, live.read_text()
 

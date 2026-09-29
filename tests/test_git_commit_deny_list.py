@@ -25,7 +25,12 @@ def _run(args, cwd):
 
 
 @pytest.fixture
-def repo(tmp_path):
+def repo(tmp_path, monkeypatch):
+    # git_commit takes its identity from the process environment (the
+    # bundle and the desktop app set it); a fresh CI runner has none.
+    for key, value in (("GIT_AUTHOR_NAME", "t"), ("GIT_AUTHOR_EMAIL", "t@x"),
+                       ("GIT_COMMITTER_NAME", "t"), ("GIT_COMMITTER_EMAIL", "t@x")):
+        monkeypatch.setenv(key, value)
     _run(["init", "-q", "-b", "main"], tmp_path)
     (tmp_path / "app.py").write_text("v1\n")
     _run(["add", "-A"], tmp_path)
