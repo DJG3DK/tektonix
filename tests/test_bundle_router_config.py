@@ -92,3 +92,12 @@ def test_the_agent_is_given_the_router_s_v1_base_like_a_host_install():
     compose = yaml.safe_load((REPO / "docker-compose.yml").read_text())
     assert compose["services"]["agent"]["environment"]["MODEL_ROUTER_URL"] == "http://router:4001/v1"
     assert (REPO / ".env.example").read_text().count("MODEL_ROUTER_URL=http://127.0.0.1:4001/v1") == 1
+
+
+def test_the_installer_writes_the_router_s_v1_base():
+    """2026-09-29 audit, I2: install.sh wrote the router URL without /v1, so
+    every model call on a fresh host install was a 404 while health stayed
+    green (liveness strips the path)."""
+    text = (REPO / "install.sh").read_text()
+    assert "MODEL_ROUTER_URL=http://127.0.0.1:4001/v1" in text
+    assert "MODEL_ROUTER_URL=http://127.0.0.1:4001\n" not in text

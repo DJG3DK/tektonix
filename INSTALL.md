@@ -551,18 +551,13 @@ admin over the session the console already required. That works on a host
 install and in the container bundle, where there is no nginx at all, so
 nothing below is required any more.
 
-`install.sh` still writes an nginx location for it on a new vhost, which keeps
-the traffic out of the Python process. It is now an optimisation rather than a
-prerequisite. If you already have a vhost and want the same, add it by hand:
-
-```nginx
-location /_review/ {
-    proxy_pass         http://127.0.0.1:4100/;
-    proxy_set_header   X-Review-Secret <the value in services/shared/.env>;
-    proxy_set_header   Host $host;
-    proxy_set_header   X-Forwarded-Proto $scheme;
-}
-```
+Nothing in nginx may inject `X-Review-Secret`. An older `install.sh` (2026-09-18
+to 2026-09-29) wrote a `location /_review/` block into the vhost that proxied
+straight to the review service and added the secret to every request, which
+made merge and restart reachable by anyone who could reach the host. If your
+vhost has that block, delete it, reload nginx, and rotate
+`REVIEW_CONTROL_SECRET` in both `.env` and `services/shared/.env`;
+`scripts/doctor.py` fails while the block is present.
 
 **Both sides need `REVIEW_CONTROL_SECRET`,** and they read it from different
 files: the agent from its own `.env`, the two Node services from

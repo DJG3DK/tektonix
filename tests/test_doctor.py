@@ -77,7 +77,8 @@ def at(monkeypatch):
         if skip_external:
             monkeypatch.setattr(doctor, "CHECKS", tuple(
                 c for c in doctor.CHECKS
-                if c.__name__ not in ("check_pm2", "check_sandbox_image", "check_dashboard")))
+                if c.__name__ not in ("check_pm2", "check_sandbox_image", "check_dashboard",
+                                      "check_nginx_review_block")))
         return doctor.run_all()
     return _at
 

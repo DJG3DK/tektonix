@@ -67,15 +67,19 @@ def test_the_review_secret_example_names_the_file_the_services_read():
     assert "services/model-router/.env" not in block
 
 
-def test_the_installer_nginx_vhost_exposes_the_review_dashboard():
-    """The review UI's mutating routes require X-Review-Secret. The browser
-    never holds it; nginx injects it on /_review/. A vhost without that
-    location makes Check now / merge / restart 401 after a by-the-book
-    install."""
+def test_no_reverse_proxy_injects_the_review_secret():
+    """2026-09-29 audit, I1: install.sh's vhost proxied /_review/ straight to
+    the review service and added X-Review-Secret to every request, so any
+    caller on the internet could merge and restart. The agent's own
+    /_review/ proxy (agent/routers/review_proxy.py) is the one path: it
+    requires an admin session and injects the secret itself."""
     text = pathlib.Path("install.sh").read_text()
-    assert "location /_review/" in text
-    assert "X-Review-Secret" in text
-    assert "location /_review/" in pathlib.Path("INSTALL.md").read_text()
+    assert "X-Review-Secret" not in text
+    assert "location /_review/" not in text
+    assert "127.0.0.1:4100" not in text
+    docs = pathlib.Path("INSTALL.md").read_text()
+    assert "proxy_set_header   X-Review-Secret" not in docs
+    assert "rotate" in docs and "X-Review-Secret" in docs, "the docs tell an older install what to do"
 
 
 def test_vision_falls_back_to_the_router_s_real_port():

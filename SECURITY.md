@@ -50,6 +50,9 @@ capabilities are intended and which would be real vulnerabilities.
   the box; only its public half goes to the browser.
 - Model output is not trusted-but-verified so much as *gated*: an independent
   review service and (optionally) a human approve every merge.
+- The two review services listen on loopback and are reached only through
+  the agent's own `/_review/` proxy, which requires an admin session and
+  injects the control secret itself. No reverse proxy may add that header.
 
 **Genuine vulnerabilities** — please do report:
 

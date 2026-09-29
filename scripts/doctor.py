@@ -25,6 +25,7 @@ import base64
 import hashlib
 import json
 import os
+import pathlib
 import re
 import stat
 import subprocess
@@ -199,6 +200,31 @@ def check_review_secret(report: Report) -> None:
                     f"agent {fingerprint(agent_secret)} vs services {fingerprint(service_side)} -- merges will be refused")
 
 
+def check_nginx_review_block(report: Report, nginx_root: str = "/etc/nginx") -> None:
+    """Until 2026-09-29 install.sh wrote a `location /_review/` block that
+    added X-Review-Secret to every request: an anonymous merge-and-restart
+    button on any domain install. install.sh leaves an existing vhost
+    alone, so an older install keeps the hole until the block is deleted."""
+    root = pathlib.Path(nginx_root)
+    if not root.is_dir():
+        return
+    offenders = []
+    for path in root.rglob("*"):
+        try:
+            if path.is_file() and "X-Review-Secret" in path.read_text(errors="replace"):
+                offenders.append(str(path))
+        except OSError:
+            continue
+    if offenders:
+        # Basenames only: the report refuses to print anything shaped like a
+        # secret, and a long path reads as one.
+        names = ", ".join(sorted({pathlib.Path(o).name for o in offenders})[:3])
+        report.fail("nginx injects X-Review-Secret", f"delete the /_review/ location in {names} under {nginx_root}, "
+                    "reload nginx, and rotate REVIEW_CONTROL_SECRET (INSTALL.md, review dashboard)")
+    else:
+        report.ok("no reverse proxy injects the review secret", "")
+
+
 def check_projects(report: Report) -> None:
     """A project whose live or sandbox path is wrong fails at the first tool
     call, or -- worse -- merges into the wrong place."""
@@ -338,6 +364,7 @@ CHECKS = (
     check_agent_env,
     check_router_pairing,
     check_review_secret,
+    check_nginx_review_block,
     check_projects,
     check_dashboard,
     check_sandbox_image,
