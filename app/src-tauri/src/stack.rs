@@ -750,8 +750,10 @@ pub async fn latest_release(include_prereleases: bool) -> Result<Release, String
             .await
             .map_err(|e| format!("unexpected answer from GitHub: {e}"));
     }
-    // Newest first; drafts never count, pre-releases do.
-    let url = format!("https://api.github.com/repos/{REPO}/releases?per_page=10");
+    // Drafts never count, pre-releases do. The listing is neither version-
+    // ordered nor short: 22 candidates by 2026-09-29, and a page of ten
+    // missed the newest.
+    let url = releases_url();
     let r = client
         .get(&url)
         .send()
@@ -765,6 +767,11 @@ pub async fn latest_release(include_prereleases: bool) -> Result<Release, String
         .await
         .map_err(|e| format!("unexpected answer from GitHub: {e}"))?;
     newest_release(all).ok_or_else(|| "no releases yet".to_string())
+}
+
+/// GitHub's largest page: every release this repository is likely to have.
+pub fn releases_url() -> String {
+    format!("https://api.github.com/repos/{REPO}/releases?per_page=100")
 }
 
 /// The newest by version among the published ones. GitHub's listing is
@@ -881,6 +888,11 @@ mod tests {
             "a draft never counts"
         );
         assert!(newest_release(vec![]).is_none());
+    }
+
+    #[test]
+    fn the_release_listing_asks_for_the_largest_page() {
+        assert!(releases_url().ends_with("/releases?per_page=100"));
     }
 
     #[test]
