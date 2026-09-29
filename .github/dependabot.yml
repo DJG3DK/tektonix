@@ -1,11 +1,14 @@
 # Dependency updates arrive as pull requests, weekly, grouped so one PR
-# moves the LangChain family together (they version in step).
+# moves the LangChain family together (they version in step). Majors of
+# development-only packages and the Actions are grouped too: on the first
+# run each of those opened its own PR, fourteen at once (2026-09-29).
 version: 2
 updates:
   - package-ecosystem: pip
     directory: /
     schedule:
       interval: weekly
+    open-pull-requests-limit: 5
     groups:
       langchain:
         patterns: ["langchain*", "langgraph*", "deepagents"]
@@ -15,18 +18,28 @@ updates:
     directory: /frontend
     schedule:
       interval: weekly
+    open-pull-requests-limit: 5
     groups:
       frontend-minor:
         update-types: ["minor", "patch"]
+      frontend-dev-major:
+        dependency-type: development
+        update-types: ["major"]
   - package-ecosystem: npm
     directory: /app
     schedule:
       interval: weekly
+    open-pull-requests-limit: 3
   - package-ecosystem: cargo
     directory: /app/src-tauri
     schedule:
       interval: weekly
+    open-pull-requests-limit: 3
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+    open-pull-requests-limit: 3
+    groups:
+      actions:
+        patterns: ["*"]

@@ -382,30 +382,3 @@ across any router move.
 Closed items from the first forty are not repeated as work. Mainstream
 blockers (licence, CLI, four processes, internet-as-perimeter) did not
 move and are still not this agent's job unless the operator says so.
-
----
-
-## Resolution (2026-09-23, same day)
-
-Every finding above, and what was done. Commits are on `main`.
-
-| # | Finding | Resolution | Commit |
-|---|---|---|---|
-| F1 | `redis-cli flushdb` used `run()` | **Fixed.** `runSealed`; the env test covers the redis child; the call-site pin now forbids `run()` anywhere in `runDatabaseCheck`. | `63ec085` |
-| F2 | `server.py` said 5,600 lines | **Fixed**, and recounted with every later move (now 3,659). | `7b5392a` |
-| F3 | `rate_limit.py` named `server.py` | **Fixed.** | `7b5392a` |
-| F4 | `graph.py` named `_run_task` on the server | **Fixed.** | `7b5392a` |
-| F5 | Supervisor / auto-resume saw the newest 50 | **Fixed.** Both read the whole namespace filtered by status (`_tasks_in`). The same window also sat under the inbox's "still being handled" check (newest 100), where a live task outside it re-proposed its alert; fixed with it. Tested with 60 and 150 tasks. | `eede564` |
-| F6 | `push_failed` healed permanent refusals | **Fixed.** The pattern needs a transport failure (DNS, timeout, reset, hung-up remote, 5xx); workflow scope, 403, publickey, protected branch and missing repo are in the LEAVE list. | `5247bc7` |
-| F7 | `/planning` and `/` not inverses | **Fixed, and worse than reported:** pushing `/` over `/planning` made Back return to `/planning`, which pushed `/` again, so Back was trapped. A synonym is now *replaced*; the pair is pinned. `selected` is kept on Back by design (the task stream stays warm), now said in a comment. | `56881bd` |
-| F8 | Tasks / planning HTTP in `server.py` | **Done.** `agent/task_runtime.py` (the live run state), then `agent/routers/tasks.py`, then `agent/routers/planning.py`, one per commit, inventory and repo-scope green throughout. None of the three imports the server (pinned). The repo-scope test learned to resolve string annotations, which the move would otherwise have hidden. | `bcc0045`, `732c25e`, `5a6f87f` |
-| F9 | Runbook hardcoded the install path | **Fixed.** | `7b5392a` |
-| F10 | One click answers every pending action | **Documented and pinned.** Docstring names the one-card assumption; a test with two different actions fails if a per-action UI arrives without changing the function. | `fd266c2` |
-| F11 | Infra escalations heal unless globally off | **Made visible.** The knob's label says "(0 = off)" -- the panel shows help only as a tooltip, which a phone never shows -- and the help says there is no per-task switch. No per-task mute (a product feature, not asked). | `a180783` |
-| F12 | Admin URLs open a blank pane for a restricted user | **Fixed.** The pane says the view is for admins; the APIs were already the boundary. | `148ef20` |
-
-Also fixed in this pass, raised at the end of the first: **a task parked for
-an approval lost its uncommitted work** when another task took the workspace
-(twice on one task that day). On an approval resume and on every later pass,
-the task now reclaims its own labelled stash onto the commit it was based on;
-a pop that fails keeps the stash. `9987edd`, `25dd166`.
