@@ -6,6 +6,7 @@
 mod docker;
 mod proc;
 mod stack;
+mod update;
 
 use std::sync::Arc;
 use tauri::menu::{Menu, MenuItem};
@@ -67,7 +68,12 @@ fn installed_version(app: AppHandle) -> Option<String> {
 /// First start: pull the release this app was built for, up, and set the
 /// password chosen on the form (nothing if the account already has one).
 #[tauri::command]
-async fn stack_install(app: AppHandle, password: Option<String>) -> Result<bool, String> {
+async fn stack_install(
+    app: AppHandle,
+    password: Option<String>,
+    lock: tauri::State<'_, stack::StackLock>,
+) -> Result<bool, String> {
+    let _one_at_a_time = lock.0.lock().await;
     stack::prepare(&app)?;
     stack::pull(&app, &stack::release_tag(&app)).await?;
     stack::up(&app).await?;
@@ -79,14 +85,18 @@ async fn stack_install(app: AppHandle, password: Option<String>) -> Result<bool,
 }
 
 #[tauri::command]
-async fn stack_up(app: AppHandle) -> Result<(), String> {
+async fn stack_up(app: AppHandle, lock: tauri::State<'_, stack::StackLock>) -> Result<(), String> {
+    let _one_at_a_time = lock.0.lock().await;
     stack::prepare(&app)?;
-    stack::ensure_own_release(&app).await?;
-    stack::up(&app).await
+    stack::start(&app).await
 }
 
 #[tauri::command]
-async fn stack_down(app: AppHandle) -> Result<(), String> {
+async fn stack_down(
+    app: AppHandle,
+    lock: tauri::State<'_, stack::StackLock>,
+) -> Result<(), String> {
+    let _one_at_a_time = lock.0.lock().await;
     stack::down(&app).await
 }
 
@@ -106,7 +116,12 @@ async fn stack_check_update(app: AppHandle) -> Result<stack::UpdateInfo, String>
 }
 
 #[tauri::command]
-async fn stack_update(app: AppHandle, tag: String) -> Result<(), String> {
+async fn stack_update(
+    app: AppHandle,
+    tag: String,
+    lock: tauri::State<'_, stack::StackLock>,
+) -> Result<(), String> {
+    let _one_at_a_time = lock.0.lock().await;
     stack::update_to(&app, &tag).await
 }
 
@@ -143,17 +158,23 @@ async fn app_update_install(app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
-async fn auto_update_now(app: AppHandle) -> Result<String, String> {
-    stack::auto_update_pass(&app).await
+async fn auto_update_now(
+    app: AppHandle,
+    lock: tauri::State<'_, stack::StackLock>,
+) -> Result<String, String> {
+    stack::auto_update_pass(&app, &lock).await
 }
 
 /// Automatic updates: two minutes after start, then every six hours. Each
 /// pass is one line in the log pane; a failure is a line too, never a dialog.
+/// A pass that finds a stack operation under way (the first install, a
+/// Start from the panel) skips rather than joining it.
 fn spawn_auto_updater(app: AppHandle) {
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(std::time::Duration::from_secs(120)).await;
         loop {
-            match stack::auto_update_pass(&app).await {
+            let lock = app.state::<stack::StackLock>();
+            match stack::auto_update_pass(&app, &lock).await {
                 Ok(what) => {
                     let _ = app.emit(
                         proc::LOG_EVENT,
@@ -283,7 +304,7 @@ fn restore_last_page(app: AppHandle) {
     }
     tauri::async_runtime::spawn(async move {
         for _ in 0..60 {
-            if stack::agent_busy().await.is_some() {
+            if stack::agent_state().await != update::Agent::Down {
                 let _ = show_console(&app);
                 return;
             }
@@ -389,6 +410,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .manage(Arc::new(LogFollow(Mutex::new(None))))
+        .manage(stack::StackLock::default())
         .setup(|app| {
             build_main_window(app.handle())?;
             build_tray(app.handle())?;

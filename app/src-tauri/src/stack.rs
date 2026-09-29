@@ -17,6 +17,7 @@
 //! source checkout's `--build` would.
 
 use crate::proc;
+use crate::update::{self, Agent, StackMove};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Emitter, Manager};
@@ -60,19 +61,29 @@ pub struct Container {
 /// What the stack runs: the release tag, and the id of the agent image
 /// that tag was pulled as. The id is the proof; a record without one (an
 /// early candidate wrote the requested tag whether or not the pull got it)
-/// or whose image is no longer the local one is not trusted.
+/// or whose image is no longer the local one is not trusted. The compose
+/// fingerprint says which app's compose file the images were last started
+/// under (update::StackMove::Recompose).
 #[derive(Serialize, Deserialize, Clone, Default)]
 pub struct Version {
     pub tag: String,
     #[serde(default)]
     pub image_id: Option<String>,
+    #[serde(default)]
+    pub compose: Option<String>,
 }
+
+/// Stack operations one at a time: install, Start, Stop, an update from
+/// the panel, and the automatic pass, which skips rather than waits.
+#[derive(Default)]
+pub struct StackLock(pub tokio::sync::Mutex<()>);
 
 /// The app's own preferences, in the data directory beside the stack.
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Prefs {
-    /// Check on startup and every few hours; update the stack when a newer
-    /// release is out and the agent is idle, then the app itself.
+    /// Check on startup and every few hours; update the app when a newer
+    /// release is out and nothing is going on. The stack follows the app's
+    /// release (auto_update_pass), preference or not.
     pub auto_update: bool,
     /// Count pre-releases (a dash in the tag) as releases.
     pub include_prereleases: bool,
@@ -371,13 +382,39 @@ fn read_version(app: &AppHandle) -> Option<Version> {
         .filter(|v| !v.tag.is_empty())
 }
 
-fn write_version(app: &AppHandle, tag: &str, image_id: Option<String>) -> Result<(), String> {
-    let text = serde_json::to_string(&Version {
-        tag: tag.into(),
-        image_id,
-    })
-    .map_err(|e| e.to_string())?;
+fn write_version(app: &AppHandle, record: &Version) -> Result<(), String> {
+    let text = serde_json::to_string(record).map_err(|e| e.to_string())?;
     std::fs::write(version_path(app)?, text).map_err(|e| e.to_string())
+}
+
+/// Record that the stack was (or is next) started under this app's compose
+/// file. After every `up`, and when a stopped stack's next Start will use it.
+fn stamp_compose(app: &AppHandle) -> Result<(), String> {
+    let Some(mut record) = read_version(app) else {
+        return Ok(());
+    };
+    let now = Some(compose_fingerprint(app)?);
+    if record.compose != now {
+        record.compose = now;
+        write_version(app, &record)?;
+    }
+    Ok(())
+}
+
+/// The shipped compose file's fingerprint: FNV-1a over its bytes, hex.
+/// Change detection only, so no hashing crate for it.
+fn compose_fingerprint(app: &AppHandle) -> Result<String, String> {
+    let bytes = std::fs::read(dir(app)?.join("docker-compose.yml")).map_err(|e| e.to_string())?;
+    Ok(fingerprint(&bytes))
+}
+
+pub fn fingerprint(bytes: &[u8]) -> String {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in bytes {
+        h ^= u64::from(*b);
+        h = h.wrapping_mul(0x0100_0000_01b3);
+    }
+    format!("{h:016x}")
 }
 
 /// The id of the agent image the compose file runs, as Docker has it now.
@@ -401,7 +438,7 @@ async fn local_agent_image_id() -> Option<String> {
 
 /// Does the record say what the local images are? True only when it names
 /// an image id and that is the image Docker has under the local name.
-fn record_is_proven(record: &Version, local_id: Option<&str>) -> bool {
+pub fn record_is_proven(record: &Version, local_id: Option<&str>) -> bool {
     matches!((record.image_id.as_deref(), local_id), (Some(a), Some(b)) if a == b)
 }
 
@@ -459,70 +496,103 @@ pub fn local_name(name: &str) -> String {
     format!("tektonix-{name}:latest")
 }
 
-/// Pull one release's images and tag them with the local names. The images
-/// are published before the installer (release.yml), so a release the app
-/// knows always has them; a missing image is an error, never a quiet swap
-/// for some other release's code.
+/// Pull one release's images and tag them with the local names: every pull
+/// first, then every tag (update::pull_commands), so a pull that fails
+/// leaves the local names on one release. The images are published before
+/// the installer (release.yml), so a release the app knows always has
+/// them; a missing image is an error, never a quiet swap for some other
+/// release's code.
 pub async fn pull(app: &AppHandle, tag: &str) -> Result<(), String> {
-    for name in IMAGES {
-        let remote = image_ref(name, tag);
-        note(app, format!("Pulling {remote}"));
-        let code = proc::stream(app, "docker", "docker", &["pull", &remote], None)
-            .await
-            .map_err(|e| e.to_string())?;
-        if code != 0 {
-            return Err(format!("could not pull {remote} (exit {code}). Is this machine online, and is {tag} a published release?"));
+    for cmd in update::pull_commands(tag) {
+        let args: Vec<&str> = cmd.iter().map(String::as_str).collect();
+        if args[0] == "pull" {
+            let remote = args[1];
+            note(app, format!("Pulling {remote}"));
+            let code = proc::stream(app, "docker", "docker", &args, None)
+                .await
+                .map_err(|e| e.to_string())?;
+            if code != 0 {
+                return Err(format!("could not pull {remote} (exit {code}). Is this machine online, and is {tag} a published release?"));
+            }
+        } else {
+            proc::capture("docker", &args, None)
+                .await
+                .map_err(|e| e.to_string())?;
         }
-        proc::capture("docker", &["tag", &remote, &local_name(name)], None)
-            .await
-            .map_err(|e| e.to_string())?;
     }
-    write_version(app, tag, local_agent_image_id().await)?;
-    Ok(())
+    write_version(
+        app,
+        &Version {
+            tag: tag.into(),
+            image_id: local_agent_image_id().await,
+            compose: Some(compose_fingerprint(app)?),
+        },
+    )
 }
 
-/// The stack this app runs is at least the release it was built from. A new
-/// app over an older stack (or a stack recorded as `latest` by the old
-/// fallback) pulls its own images before it starts; a stack the automatic
-/// update already moved ahead of the app is left where it is.
-/// Says whether it pulled, so the caller knows to restart the stack on it.
-pub async fn ensure_own_release(app: &AppHandle) -> Result<bool, String> {
+/// The stack this app runs is at least the release it was built from, under
+/// this app's compose file. A new app over an older stack (or a stack
+/// recorded as `latest` by the old fallback) pulls its own images; a stack
+/// moved ahead of the app by hand is left where it is. The decision is
+/// update::own_release_move; this carries out the pull half and returns
+/// the decision, so the caller knows whether to restart the stack.
+pub async fn ensure_own_release(app: &AppHandle) -> Result<StackMove, String> {
     let wanted = release_tag(app);
     let record = read_version(app);
     let local = local_agent_image_id().await;
-    let proven = record
-        .as_ref()
-        .is_some_and(|r| record_is_proven(r, local.as_deref()));
-    if let Some(r) = &record {
-        if proven && !newer_than(&wanted, &r.tag) {
-            return Ok(false);
-        }
-    }
-    // A running task is not interrupted for this: the automatic pass
-    // comes back to it once the agent is idle.
-    if agent_busy().await == Some(true) {
-        note(
+    let compose = compose_fingerprint(app)?;
+    let seen = update::Seen {
+        app_tag: &wanted,
+        record: record.as_ref(),
+        local_id: local.as_deref(),
+        compose: &compose,
+        agent: agent_state().await,
+    };
+    let decision = update::own_release_move(&seen);
+    match &decision {
+        StackMove::Current => {}
+        // A running task is not interrupted for this: the automatic pass
+        // comes back to it once the agent is idle.
+        StackMove::Busy => note(
             app,
             format!("The agent is busy; the stack moves to {wanted} when it is idle."),
-        );
-        return Ok(false);
+        ),
+        StackMove::Recompose { .. } => note(
+            app,
+            format!("The stack is {wanted} but was started under an older app's compose file."),
+        ),
+        StackMove::Pull { .. } => {
+            let proven = record
+                .as_ref()
+                .is_some_and(|r| record_is_proven(r, local.as_deref()));
+            note(
+                app,
+                match &record {
+                    Some(r) if proven => format!(
+                        "This app is {wanted}; the stack is {}. Pulling {wanted}.",
+                        r.tag
+                    ),
+                    Some(r) => format!(
+                        "The stack record says {} but cannot be verified. Pulling {wanted}.",
+                        r.tag
+                    ),
+                    None => format!("Pulling the {wanted} stack."),
+                },
+            );
+            pull(app, &wanted).await?;
+        }
     }
-    note(
-        app,
-        match &record {
-            Some(r) if proven => format!(
-                "This app is {wanted}; the stack is {}. Pulling {wanted}.",
-                r.tag
-            ),
-            Some(r) => format!(
-                "The stack record says {} but cannot be verified. Pulling {wanted}.",
-                r.tag
-            ),
-            None => format!("Pulling the {wanted} stack."),
-        },
-    );
-    pull(app, &wanted).await?;
-    Ok(true)
+    Ok(decision)
+}
+
+/// Start, from the panel: this app's release when the registry answers,
+/// else the images already here (update::start_on_local_images), then up.
+pub async fn start(app: &AppHandle) -> Result<(), String> {
+    if let Err(e) = ensure_own_release(app).await {
+        let present = local_agent_image_id().await.is_some();
+        note(app, update::start_on_local_images(&e, present)?);
+    }
+    up(app).await
 }
 
 fn compose_args<'a>(dir: &'a Path, rest: &[&'a str]) -> Vec<String> {
@@ -568,6 +638,7 @@ pub async fn up(app: &AppHandle) -> Result<(), String> {
             "docker compose up failed (exit {code}); the lines above are Docker's own"
         ));
     }
+    stamp_compose(app)?;
     wait_healthy(app).await
 }
 
@@ -817,6 +888,7 @@ mod tests {
         let legacy = Version {
             tag: "v0.9.0".into(),
             image_id: None,
+            compose: None,
         };
         assert!(
             !record_is_proven(&legacy, Some("sha256:abc")),
@@ -825,6 +897,7 @@ mod tests {
         let mine = Version {
             tag: "v0.9.0-rc13".into(),
             image_id: Some("sha256:abc".into()),
+            compose: None,
         };
         assert!(record_is_proven(&mine, Some("sha256:abc")));
         assert!(
@@ -943,24 +1016,26 @@ mod tests {
     }
 }
 
-/// Whether the agent has nothing in flight: the public health route's
-/// `busy` count. An agent too old to report it counts as busy, so an
-/// automatic update never pulls a running task's containers out from
-/// under it.
-/// Whether the agent has a task in flight; None when it cannot be asked
-/// (the stack is down, or not yet up).
-pub async fn agent_busy() -> Option<bool> {
-    let client = reqwest::Client::builder()
+/// The agent, from the public health route's `busy` count. Only no answer
+/// at all means the stack is down; any answer that does not say counts as
+/// busy (update::busy_in), so an automatic update never pulls a running
+/// task's containers out from under it.
+pub async fn agent_state() -> Agent {
+    let Ok(client) = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(5))
         .build()
-        .ok()?;
-    let r = client.get(HEALTH).send().await.ok()?;
-    let v = r.json::<serde_json::Value>().await.ok()?;
-    v.get("busy").and_then(|b| b.as_u64()).map(|b| b > 0)
-}
-
-pub async fn agent_idle() -> bool {
-    agent_busy().await == Some(false)
+    else {
+        return Agent::Busy;
+    };
+    let Ok(r) = client.get(HEALTH).send().await else {
+        return Agent::Down;
+    };
+    let body = r.text().await.unwrap_or_default();
+    if update::busy_in(&body) {
+        Agent::Busy
+    } else {
+        Agent::Idle
+    }
 }
 
 /// Where the updater's manifest for a release lives: with the installer,
@@ -1037,62 +1112,66 @@ pub async fn install_app_update(app: &AppHandle) -> Result<(), String> {
     app.restart();
 }
 
-/// One automatic pass: the stack when a newer release is out and the agent
-/// is idle, then the app itself. Says what it did and why not.
-pub async fn auto_update_pass(app: &AppHandle) -> Result<String, String> {
+/// One automatic pass: the stack onto this app's release, then the app
+/// itself when a newer release is out. The stack follows the app rather
+/// than the newest release, so its images always run under the compose
+/// file they were released with; the new app brings the stack along at
+/// its next pass. Says what it did and why not.
+pub async fn auto_update_pass(app: &AppHandle, lock: &StackLock) -> Result<String, String> {
+    let guard = lock.0.try_lock();
+    let settings = read_settings(app)?;
+    let ready = settings.openrouter_api_key_set && !settings.projects_dir.is_empty();
+    if let Some(why) = update::pass_skip_reason(ready, read_version(app).is_some(), guard.is_err())
+    {
+        return Ok(why.into());
+    }
     // Whatever the preference says, the stack runs this app's release: a
     // newly installed app over an older stack corrects it here, once the
-    // agent is idle, since the panel's Start is not offered while it runs.
-    if ensure_own_release(app).await? {
-        note(app, "Restarting the stack on its images.");
-        up(app).await?;
+    // agent is idle. A stack the operator stopped stays stopped; the new
+    // images and compose file are there for the next Start.
+    match ensure_own_release(app).await? {
+        StackMove::Pull { restart: true } | StackMove::Recompose { restart: true } => {
+            note(app, "Restarting the stack on this app's release.");
+            up(app).await?;
+        }
+        StackMove::Pull { restart: false } => {
+            note(
+                app,
+                "The stack is stopped; the new images run from the next Start.",
+            );
+        }
+        StackMove::Recompose { restart: false } => stamp_compose(app)?,
+        StackMove::Busy | StackMove::Current => {}
     }
     let prefs = read_prefs(app);
     if !prefs.auto_update {
         return Ok("automatic updates are off".into());
     }
-    let info = check_update(app).await?;
-    if info.available {
-        if !agent_idle().await {
-            return Ok(format!(
-                "{} is out, waiting for the agent to be idle",
-                info.latest
-            ));
-        }
-        note(
-            app,
-            format!("Updating the stack to {} (the agent is idle)", info.latest),
-        );
-        update_to(app, &info.latest).await?;
-    }
     // The app replaces itself only when nothing is going on: no task in
     // flight, and nobody at the window. 2026-09-29: it reinstalled itself
     // while the operator was typing to a running task, and took the window.
     let mine = check_app_update(app).await?;
-    if mine.available {
-        if !agent_idle().await {
-            return Ok(format!(
-                "app {} is out; it installs when the agent is idle, or from the panel",
-                mine.version
-            ));
-        }
-        if window_in_use(app) {
-            return Ok(format!(
-                "app {} is out; it installs when this window is not in use, or from the panel",
-                mine.version
-            ));
-        }
-        note(
-            app,
-            format!("A newer app ({}) is out; installing it", mine.version),
-        );
-        install_app_update(app).await?;
+    if !mine.available {
+        return Ok("up to date".into());
     }
-    Ok(if info.available {
-        format!("updated the stack to {}", info.latest)
-    } else {
-        "up to date".into()
-    })
+    if agent_state().await == Agent::Busy {
+        return Ok(format!(
+            "app {} is out; it installs when the agent is idle, or from the panel",
+            mine.version
+        ));
+    }
+    if window_in_use(app) {
+        return Ok(format!(
+            "app {} is out; it installs when this window is not in use, or from the panel",
+            mine.version
+        ));
+    }
+    note(
+        app,
+        format!("A newer app ({}) is out; installing it", mine.version),
+    );
+    install_app_update(app).await?;
+    Ok(format!("installing app {}", mine.version))
 }
 
 /// The first account's password, chosen on the setup form instead of read
