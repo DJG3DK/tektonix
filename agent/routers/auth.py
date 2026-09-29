@@ -431,17 +431,15 @@ async def create_user_endpoint(request: Request, req: CreateUserRequest, user: U
     error = auth.validate_password_strength(req.password)
     if error:
         raise HTTPException(400, error)
-    if await auth.get_user_by_email(request.app.state.auth_pool, req.email.strip().lower()):
-        raise HTTPException(409, "a user with this email already exists")
-    row = await auth.create_user(
-        request.app.state.auth_pool, req.email.strip().lower(), req.password, req.role, req.allowed_repos,
-        must_change_password=True,
-    )
+    scope: list[str] = []
     if req.auto_approve_commands:
         # A brand-new account cannot be handed a blanket switch: it is scoped
-        # to the projects it was just granted, and an admin account (whose
-        # allowed_repos is None, meaning everything) must name them.
-        scope = req.auto_approve_repos if req.auto_approve_repos is not None else req.allowed_repos
+        # to the projects it is being granted, and an admin account (whose
+        # allowed_repos is None, meaning everything) must name them. Checked
+        # before create_user: this block once ran after it, so a bad scope
+        # returned 400 with the account already made and no audit line, and
+        # the retry hit 409 (2026-09-29).
+        scope = list(req.auto_approve_repos if req.auto_approve_repos is not None else req.allowed_repos or [])
         if not scope:
             raise HTTPException(400, (
                 "auto mode for a new account needs the projects it covers -- send "
@@ -449,7 +447,14 @@ async def create_user_endpoint(request: Request, req: CreateUserRequest, user: U
         unknown = [r for r in scope if r not in agent_config.PROJECTS]
         if unknown:
             raise HTTPException(400, f"unknown project(s): {', '.join(sorted(unknown))}")
-        await auth.update_auto_approve(request.app.state.auth_pool, row["id"], True, list(scope))
+    if await auth.get_user_by_email(request.app.state.auth_pool, req.email.strip().lower()):
+        raise HTTPException(409, "a user with this email already exists")
+    row = await auth.create_user(
+        request.app.state.auth_pool, req.email.strip().lower(), req.password, req.role, req.allowed_repos,
+        must_change_password=True,
+    )
+    if req.auto_approve_commands:
+        await auth.update_auto_approve(request.app.state.auth_pool, row["id"], True, scope)
         row = {**row, "auto_approve_commands": True, "auto_approve_repos": sorted(set(scope))}
         await audit.record(audit_store(request), actor=user.email, action="settings.auto_approve",
                            target=row["email"],
