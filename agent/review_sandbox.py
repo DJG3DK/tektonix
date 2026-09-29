@@ -16,11 +16,10 @@ what the container can see:
 
   * the worktree must sit directly under REVIEW_WORKTREE_ROOT, be named for
     the project, and be a git worktree of THAT project's live checkout;
-  * every extra mount must come from inside the live checkout -- or, for a
-    node_modules tree alone, from the agent's own workspace template for
-    the project, which is what a review borrows when live's install cannot
-    run on Linux (node-modules-source.js) -- is forced read-only, and may
-    only land where the reviewer's own layout puts it;
+  * every extra mount must come from inside the live checkout, is forced
+    read-only, and may only land where the reviewer's own layout puts it
+    (the agent's own workspace template was allowed for a day, 2026-09-29,
+    and is not: every task shares its files by hardlink);
   * the image is chosen here, from server-owned config;
   * the hardening flags are this module's, never the request's.
 
@@ -179,7 +178,7 @@ def _generated_dirs(project: str) -> list[str]:
 
 
 def _checked_mounts(mounts: list[tuple[str, str]], live: str,
-                    template: str | None = None, generated: list[str] | None = None) -> list[tuple[str, str]]:
+                    generated: list[str] | None = None) -> list[tuple[str, str]]:
     """(real source, container target) for every extra mount, or refuse.
 
     Two shapes, the only two sandbox.js's mountArgs produces:
@@ -204,13 +203,11 @@ def _checked_mounts(mounts: list[tuple[str, str]], live: str,
         real = os.path.realpath(src)
         if not os.path.exists(real):
             continue
-        # Live's tree, or the agent's own workspace template for this project:
-        # in the bundle the reviewer borrows the template's Linux node_modules
-        # when live has none a Linux check can run (node-modules-source.js).
-        template_real = os.path.realpath(template) if template else None
-        from_template = bool(template_real) and real != template_real and _inside(real, template_real) \
-            and "node_modules" in real.split(os.sep)
-        if not from_template and (real == live or not _inside(real, live)):
+        # Live's tree and nothing else. The agent's workspace template was
+        # accepted for node_modules for a day (2026-09-29): every task
+        # workspace hardlinks it, so a task could rewrite the tools a review
+        # then ran. When live cannot lend, the reviewer installs its own.
+        if real == live or not _inside(real, live):
             raise RejectedRequest(f"mount source {src!r} is not inside the project's live checkout")
         norm_dst = os.path.normpath(dst)
         if norm_dst.startswith("/workspace/"):
@@ -266,7 +263,7 @@ def build_docker_argv(req: CheckRequest, container_name: str) -> tuple[list[str]
             raise RejectedRequest(f"env name {k!r} is not a plain identifier")
         env[k] = _no_nul(v, f"env {k}")
 
-    mounts = _checked_mounts(req.mounts or [], live, cfg.get("sandbox"), _generated_dirs(req.project))
+    mounts = _checked_mounts(req.mounts or [], live, _generated_dirs(req.project))
 
     argv = [
         "docker", "run", "--rm", "--name", container_name,

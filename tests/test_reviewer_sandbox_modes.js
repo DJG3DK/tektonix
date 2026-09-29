@@ -411,10 +411,11 @@ test('a failed fetch is described by its cause, which is what a person can act o
 });
 
 
-test('a configured node_modules dir is mounted from the agent\'s template when live has none', () => {
-    // 2026-09-29: the helper was called here without being imported, and
-    // every review of a project with nodeModulesDirs failed with a
-    // ReferenceError -- the one path no test exercised.
+test('a configured node_modules dir is mounted from live, and never from the agent\'s template', () => {
+    // 2026-09-29, twice: the helper was called here without being imported,
+    // and every review of a project with nodeModulesDirs failed with a
+    // ReferenceError; then the template was a source for a day, and a tree
+    // every task shares by hardlink would have been the review's tools.
     const s = freshSandbox('1', 'http://agent:8100');
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'nmdirs-'));
     try {
@@ -422,8 +423,11 @@ test('a configured node_modules dir is mounted from the agent\'s template when l
         fs.mkdirSync(path.join(live, '.git'), { recursive: true });
         fs.mkdirSync(path.join(tpl, 'node_modules', 'left-pad'), { recursive: true });
         fs.mkdirSync(wt, { recursive: true });
+        const none = s.delegatedRequest({ live, sandbox: tpl, nodeModulesDirs: ['.'] }, wt, '.', 'npm', ['test'], 1000, {}, 'none');
+        assert.ok(!none.mounts.some((m) => m.src.startsWith(tpl)), JSON.stringify(none.mounts));
+        fs.mkdirSync(path.join(live, 'node_modules', 'left-pad'), { recursive: true });
         const body = s.delegatedRequest({ live, sandbox: tpl, nodeModulesDirs: ['.'] }, wt, '.', 'npm', ['test'], 1000, {}, 'none');
-        const nm = fs.realpathSync(path.join(tpl, 'node_modules'));
+        const nm = fs.realpathSync(path.join(live, 'node_modules'));
         assert.ok(body.mounts.some((m) => m.src === nm && m.dst === nm), JSON.stringify(body.mounts));
     } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });

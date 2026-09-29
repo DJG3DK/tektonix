@@ -243,8 +243,10 @@ function hasNodeModulesSegment(p) {
  * from a check, its content flowing into the check output, the review and
  * the agent's feedback. The bundle's receiving side (agent/review_sandbox.py
  * _checked_mounts) refused that already; a host install runs docker itself
- * and had no second check. Same rule here now: strictly inside one of the
- * roots, never a root itself, and a node_modules component in the path.
+ * and had no second check. Same rule here now: strictly inside the live
+ * checkout (the one root; the agent's workspace template is not borrowed,
+ * see node-modules-source.js), never the root itself, and a node_modules
+ * component in the path.
  */
 function mountableNodeModules(target, roots) {
     if (!hasNodeModulesSegment(target)) return false;
@@ -290,7 +292,6 @@ function mountSpecs(cfg, worktreePath) {
     const specs = [];
     const seen = new Set();
     const liveRoot = realOrResolved(cfg.live);
-    const templateRoot = cfg.sandbox ? realOrResolved(cfg.sandbox) : null;
 
     for (const rel of [...(cfg.dependencyDirs || []), ...(cfg.readOnlyMounts || [])]) {
         const src = path.join(cfg.live, rel);
@@ -378,7 +379,7 @@ function mountSpecs(cfg, worktreePath) {
         } catch {
             continue;
         }
-        if (!mountableNodeModules(target, [liveRoot, templateRoot]) || seen.has(target)) continue;
+        if (!mountableNodeModules(target, [liveRoot]) || seen.has(target)) continue;
         seen.add(target);
         specs.push({ src: target, dst: target });
     }

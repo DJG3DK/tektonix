@@ -13,7 +13,7 @@
 const fs = require('fs');
 const path = require('path');
 const { AGENT_HOME, log, run, git, runAgentCode } = require('./exec');
-const { nodeModulesSource } = require('./node-modules-source');
+const { nodeModulesSource, unborrowable } = require('./node-modules-source');
 
 /**
  * A symlink target inside the worktree, written relative to the link. An
@@ -412,9 +412,17 @@ async function setupWorktree(project, cfg, sha, base, { depsChangedOverride = nu
   if (staleLive.length) {
     log(`[${project}] live's installed dependencies do not match its own lockfile (${staleLive.slice(0, 3).join('; ')}${staleLive.length > 3 ? '; ...' : ''}) -- installing fresh for this review instead of borrowing them`);
   }
-  const depsChanged = depsChangedOverride === null
+  // Live has nothing a Linux container can run (the app's fresh clone, or a
+  // Windows install): the review installs its own, for the base commit as
+  // much as for the branch, so the two are provisioned alike. Never the
+  // agent's workspace template -- node-modules-source.js says why.
+  const cannotBorrow = unborrowable(cfg);
+  if (cannotBorrow.length) {
+    log(`[${project}] live has no node_modules a Linux check can run for ${cannotBorrow.join(', ')} -- installing fresh for this review`);
+  }
+  const depsChanged = cannotBorrow.length > 0 || (depsChangedOverride === null
     ? /package\.json|pnpm-lock\.yaml|package-lock\.json/.test(diffFiles) || staleLive.length > 0
-    : depsChangedOverride;
+    : depsChangedOverride);
 
   const setupIssues = [];
   if (depsChanged) {
@@ -425,7 +433,7 @@ async function setupWorktree(project, cfg, sha, base, { depsChangedOverride = nu
     // needs a native build (bcrypt) or a codegen step (prisma) has that step
     // run explicitly elsewhere, or surfaces as a test failure the reviewer
     // reports -- both preferable to arbitrary code execution on install.
-    log(`[${project}] dependency files changed — running a real install at the workspace root instead of symlinking`);
+    log(`[${project}] ${cannotBorrow.length ? "live's install cannot be borrowed" : 'dependency files changed'} — running a real install at the workspace root instead of symlinking`);
     const pm = fs.existsSync(path.join(cfg.live, 'pnpm-lock.yaml')) ? 'pnpm' : 'npm';
     if (pm === 'pnpm') {
       // Try frozen first — this is the exact check GitHub CI does
@@ -518,11 +526,12 @@ async function setupWorktree(project, cfg, sha, base, { depsChangedOverride = nu
       const targetDir = path.join(worktreePath, rel);
       const targetNodeModules = path.join(targetDir, 'node_modules');
       if (!source) {
-        log(`${rel === '.' ? '' : rel + '/'}node_modules: neither live nor the agent's workspace has a usable install -- checks that need it will fail`);
+        // Unreachable while unborrowable() forces the install branch; kept
+        // so a future caller of this loop still fails loudly.
+        log(`${rel === '.' ? '' : rel + '/'}node_modules: live has no usable install -- checks that need it will fail`);
         continue;
       }
       const liveNodeModules = source.dir;
-      if (source.which !== 'live') log(`${rel === '.' ? '' : rel + '/'}node_modules borrowed from the agent's workspace: live has none a Linux check can run`);
       fs.mkdirSync(targetDir, { recursive: true });
       if (cfg.bindMountNodeModules && !delegated()) {
         fs.mkdirSync(targetNodeModules, { recursive: true });

@@ -1,13 +1,21 @@
 'use strict';
 /**
- * Where a review borrows a project's installed node_modules from.
+ * Where a review borrows a project's installed node_modules from: live's
+ * own install, or nowhere.
  *
- * Live's own install first, as always. In the bundle live is the operator's
- * checkout: cloned by the app it has no install at all, and cloned on Windows
- * it has one built for Windows (win32 esbuild and rollup binaries, .cmd
- * shims) that a Linux check container cannot run. The agent's own workspace
- * template (cfg.sandbox) holds a Linux install made for this project, so it
- * is the second candidate. 2026-09-29, the first Windows install.
+ * In the bundle live is the operator's checkout: cloned by the app it has
+ * no install at all, and cloned on Windows it has one built for Windows
+ * (win32 esbuild and rollup binaries, .cmd shims) that a Linux check
+ * container cannot run. For one day (2026-09-29) the agent's own workspace
+ * template (cfg.sandbox) was the second candidate. It is not one any more:
+ * every task workspace is a HARDLINK copy of that template
+ * (agent/workspaces.py), so a task command that rewrites a file in
+ * node_modules in place -- `printf 'exit 0' > node_modules/.bin/eslint`
+ * -- changes the tool the review would then run, and the read-only mount
+ * does not help because the write happened before the review. When live's
+ * install cannot be borrowed the review installs its own (worktree.js,
+ * the same --ignore-scripts install a changed lockfile gets), which no
+ * task shares.
  */
 const fs = require('fs');
 const path = require('path');
@@ -30,19 +38,23 @@ function foreignInstall(dir) {
 }
 
 /**
- * The directory to borrow for `<rel>/node_modules`, or null when neither
- * live nor the template has a usable one. `reason` says which was taken.
+ * The directory to borrow for `<rel>/node_modules`, or null when live has
+ * no usable one. `which` is always 'live'; kept in the shape callers read.
  */
 function nodeModulesSource(cfg, rel) {
-    const candidates = [['live', cfg.live], ['template', cfg.sandbox]];
-    for (const [which, root] of candidates) {
-        if (!root) continue;
-        const dir = path.join(root, rel, 'node_modules');
-        if (!fs.existsSync(dir)) continue;
-        if (foreignInstall(dir)) continue;
-        return { dir, which };
-    }
-    return null;
+    if (!cfg.live) return null;
+    const dir = path.join(cfg.live, rel, 'node_modules');
+    if (!fs.existsSync(dir) || foreignInstall(dir)) return null;
+    return { dir, which: 'live' };
 }
 
-module.exports = { nodeModulesSource, foreignInstall };
+/**
+ * The configured package directories whose node_modules live cannot lend:
+ * none installed, or an install a Linux container cannot run. Any of them
+ * means the review installs its own dependencies rather than borrowing.
+ */
+function unborrowable(cfg) {
+    return (cfg.nodeModulesDirs || []).filter((rel) => !nodeModulesSource(cfg, rel));
+}
+
+module.exports = { nodeModulesSource, foreignInstall, unborrowable };

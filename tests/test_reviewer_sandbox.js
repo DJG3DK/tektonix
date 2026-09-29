@@ -138,21 +138,26 @@ test('a generated-code link is mounted only when it points at live\'s copy of th
     assert.deepStrictEqual(sandbox.mountSpecs(cfg, wt), [{ src: gen, dst: gen }]);
 });
 
-test('a configured node_modules dir whose live copy resolves to a root is refused', () => {
+test('a configured node_modules dir whose live copy resolves outside live is refused', () => {
     // cfg.nodeModulesDirs mounts live/<rel>/node_modules by its real path.
-    // Were that a link to the checkout (or to the agent's template root),
-    // the root would be mounted whole.
+    // Were that a link to the checkout, the root would be mounted whole;
+    // were it a link into the agent's workspace template, a tree every task
+    // shares by hardlink would be the review's tools.
     const { root, live, wt } = scratchProject();
     const tpl = path.join(root, 'tpl');
     fs.mkdirSync(path.join(tpl, 'node_modules'), { recursive: true });
     fs.mkdirSync(path.join(live, 'pkg'), { recursive: true });
     fs.symlinkSync(tpl, path.join(live, 'pkg', 'node_modules'));
     assert.deepStrictEqual(sandbox.mountSpecs({ live, sandbox: tpl, nodeModulesDirs: ['pkg'] }, wt), []);
-    // The same entry pointing at a real dependency tree in the template is fine.
     fs.rmSync(path.join(live, 'pkg', 'node_modules'));
     fs.symlinkSync(path.join(tpl, 'node_modules'), path.join(live, 'pkg', 'node_modules'));
-    const nm = fs.realpathSync(path.join(tpl, 'node_modules'));
-    assert.deepStrictEqual(sandbox.mountSpecs({ live, sandbox: tpl, nodeModulesDirs: ['pkg'] }, wt), [{ src: nm, dst: nm }]);
+    assert.deepStrictEqual(sandbox.mountSpecs({ live, sandbox: tpl, nodeModulesDirs: ['pkg'] }, wt), [],
+        'the template is not a source, whatever live links to');
+    // A real tree inside live is what this loop is for.
+    fs.rmSync(path.join(live, 'pkg', 'node_modules'));
+    fs.mkdirSync(path.join(live, 'pkg', 'node_modules'));
+    const nm = fs.realpathSync(path.join(live, 'pkg', 'node_modules'));
+    assert.deepStrictEqual(sandbox.mountSpecs({ live, nodeModulesDirs: ['pkg'] }, wt), [{ src: nm, dst: nm }]);
 });
 
 test('a real node_modules directory needs no mount of its own', () => {

@@ -294,20 +294,25 @@ async function main() {
 main().catch((e) => { console.error(e); process.exit(1); });
 
 
-test('node_modules comes from live, else from the agent\'s workspace template; a Windows install is passed over', () => {
-    const { nodeModulesSource, foreignInstall } = require('../services/commit-reviewer/node-modules-source.js');
+test('node_modules comes from live or from nowhere: a Windows install is passed over, the agent\'s template is never borrowed', () => {
+    // The template was the second candidate for a day (2026-09-29). Every
+    // task workspace hardlinks it, so a task could rewrite the linter the
+    // review then ran; now a live that cannot lend means a fresh install.
+    const { nodeModulesSource, foreignInstall, unborrowable } = require('../services/commit-reviewer/node-modules-source.js');
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'nm-src-'));
     try {
         const live = path.join(root, 'live'); const tpl = path.join(root, 'tpl');
         fs.mkdirSync(path.join(tpl, 'node_modules', '@esbuild', 'linux-x64'), { recursive: true });
-        assert.equal(nodeModulesSource({ live, sandbox: tpl }, '.')?.which, 'template', 'live has no install: the template');
+        assert.equal(nodeModulesSource({ live, sandbox: tpl }, '.'), null, 'live has no install: nothing to borrow');
+        assert.deepEqual(unborrowable({ live, sandbox: tpl, nodeModulesDirs: ['.', 'web'] }), ['.', 'web']);
         fs.mkdirSync(path.join(live, 'node_modules', '.bin'), { recursive: true });
         fs.writeFileSync(path.join(live, 'node_modules', '.bin', 'vitest.cmd'), '');
         assert.equal(foreignInstall(path.join(live, 'node_modules')), true);
-        assert.equal(nodeModulesSource({ live, sandbox: tpl }, '.')?.which, 'template', 'a Windows install is not usable');
+        assert.equal(nodeModulesSource({ live, sandbox: tpl }, '.'), null, 'a Windows install is not usable, and the template is not an answer');
         fs.rmSync(path.join(live, 'node_modules', '.bin', 'vitest.cmd'));
         fs.mkdirSync(path.join(live, 'node_modules', '@rollup', 'rollup-linux-x64-gnu'), { recursive: true });
-        assert.equal(nodeModulesSource({ live, sandbox: tpl }, '.')?.which, 'live', 'a Linux install in live wins');
+        assert.equal(nodeModulesSource({ live, sandbox: tpl }, '.')?.which, 'live', 'a Linux install in live is borrowed');
+        assert.deepEqual(unborrowable({ live, sandbox: tpl, nodeModulesDirs: ['.'] }), []);
         assert.equal(nodeModulesSource({ live: path.join(root, 'none') }, '.'), null);
     } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });

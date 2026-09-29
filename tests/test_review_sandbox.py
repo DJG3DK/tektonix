@@ -565,21 +565,23 @@ def test_a_long_check_keeps_the_connection_alive_with_whitespace_then_the_json(b
     assert r.headers["content-type"].startswith("application/json")
 
 
-def test_a_node_modules_mount_from_the_agent_s_workspace_template_is_accepted(tmp_path):
-    """In the bundle the reviewer borrows the template's Linux install when
-    live has none a Linux check can run (node-modules-source.js)."""
+def test_a_node_modules_mount_from_the_agent_s_workspace_template_is_refused(tmp_path):
+    """For a day (2026-09-29) the reviewer borrowed the template's Linux
+    install when live had none a Linux check could run. Every task
+    workspace hardlinks that template, so a task could rewrite the linter
+    the review then ran; the reviewer installs its own instead, and the
+    agent refuses the template whatever the project's config says."""
     from agent.review_sandbox import RejectedRequest, _checked_mounts
     live = tmp_path / "live"
     template = tmp_path / "ws" / "proj"
     (live / ".git").mkdir(parents=True)
     (template / "node_modules").mkdir(parents=True)
-    (template / "src").mkdir()
     nm = str(template / "node_modules")
-    assert _checked_mounts([(nm, nm)], str(live), str(template)) == [(os.path.realpath(nm), nm)]
-    with pytest.raises(RejectedRequest):
-        _checked_mounts([(nm, nm)], str(live))                      # no template known: refused as before
-    with pytest.raises(RejectedRequest):
-        _checked_mounts([(str(template / "src"), str(template / "src"))], str(live), str(template))
+    with pytest.raises(RejectedRequest, match="live checkout"):
+        _checked_mounts([(nm, nm)], str(live))
+    live_nm = live / "node_modules"
+    live_nm.mkdir()
+    assert _checked_mounts([(str(live_nm), str(live_nm))], str(live)) == [(os.path.realpath(str(live_nm)), str(live_nm))]
 
 
 def test_a_same_path_mount_of_live_s_generated_code_is_accepted_only_from_the_project_s_rule(tmp_path):
@@ -590,11 +592,11 @@ def test_a_same_path_mount_of_live_s_generated_code_is_accepted_only_from_the_pr
     gen.mkdir(parents=True)
     (live / "apps" / "api" / "src").mkdir()
     g = str(gen)
-    assert _checked_mounts([(g, g)], str(live), None, ["apps/api/generated"]) == [(os.path.realpath(g), g)]
+    assert _checked_mounts([(g, g)], str(live), ["apps/api/generated"]) == [(os.path.realpath(g), g)]
     with pytest.raises(RejectedRequest):
-        _checked_mounts([(g, g)], str(live), None, [])
+        _checked_mounts([(g, g)], str(live), [])
     with pytest.raises(RejectedRequest):
-        _checked_mounts([(str(live / "apps" / "api" / "src"),) * 2], str(live), None, ["apps/api/generated"])
+        _checked_mounts([(str(live / "apps" / "api" / "src"),) * 2], str(live), ["apps/api/generated"])
 
 
 def test_a_long_database_check_keeps_the_connection_alive_too(bundle, monkeypatch):
