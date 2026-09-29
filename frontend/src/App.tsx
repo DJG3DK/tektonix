@@ -35,6 +35,11 @@ function AuthenticatedApp({ user, onLogout, onUserChanged }: { user: CurrentUser
   const [repos, setRepos] = useState<string[]>([]);
   const [tasks, setTasks] = useState<TaskMeta[]>([]);
   const [selected, setSelected] = useState<TaskMeta | null>(null);
+  // `selected` is the record as it was when clicked. The list behind it
+  // refreshes every few seconds, and a resume with a budget top-up changes
+  // the record: the page showed "$5.15 of $5" for a task whose budget was
+  // $7 (2026-09-29). The task page reads the live record when there is one.
+  const liveSelected = selected ? (tasks.find((t) => t.task_id === selected.task_id) ?? selected) : null;
   const [planningSessions, setPlanningSessions] = useState<PlanningSessionMeta[]>([]);
   const [selectedPlanningSession, setSelectedPlanningSession] = useState<PlanningSessionMeta | null>(null);
   // The URL says where to start (see route.ts). With no path it is Planning:
@@ -317,7 +322,7 @@ function AuthenticatedApp({ user, onLogout, onUserChanged }: { user: CurrentUser
             <button type="button" onClick={() => setMissing(null)} aria-label="Dismiss">✕</button>
           </div>
         )}
-        {view === "task" && selected && <TaskView task={selected} stream={taskStream} setGeneration={setGeneration} />}
+        {view === "task" && selected && <TaskView task={liveSelected ?? selected} stream={taskStream} setGeneration={setGeneration} />}
         {view === "new-task" && <NewTaskPanel repos={repos} onSubmit={handleCreate} submitting={submitting} error={createError} onClearError={() => setCreateError(null)} />}
         {view === "analytics" && user.role === "admin" && (
           <Suspense fallback={<div style={{ padding: "2rem", color: "var(--text-muted, #888)" }}>Loading analytics...</div>}>

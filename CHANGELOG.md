@@ -16,6 +16,8 @@ An escalated task, or one waiting for your look at the diff, was filed
 into its category the moment it stopped, collapsed out of sight beside
 the finished ones. The sidebar now keeps them in a "Needs you" group under
 Running until they are over; only a finished task goes into a category.
+The task page reads the live task record, so a budget raised on resume
+shows on the bar instead of the number from when the task was opened.
 
 ### A review that checked nothing no longer passes
 
