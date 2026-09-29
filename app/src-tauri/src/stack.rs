@@ -147,12 +147,33 @@ pub fn write_prefs(app: &AppHandle, prefs: &Prefs) -> Result<Prefs, String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
-    std::fs::write(
+    write_atomic(
         &path,
-        serde_json::to_string_pretty(prefs).map_err(|e| e.to_string())?,
-    )
-    .map_err(|e| e.to_string())?;
+        serde_json::to_string_pretty(prefs)
+            .map_err(|e| e.to_string())?
+            .as_bytes(),
+    )?;
     Ok(prefs.clone())
+}
+
+/// Every file this module keeps goes through here: written whole to a
+/// sibling and renamed over the old one, so a crash mid-write leaves the
+/// old file, not a torn one. A torn prefs.json read as the defaults, which
+/// turned automatic updates back on. Says whether anything was written; an
+/// unchanged file is left alone.
+pub fn write_atomic(path: &Path, content: &[u8]) -> Result<bool, String> {
+    if std::fs::read(path).is_ok_and(|old| old == content) {
+        return Ok(false);
+    }
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let tmp = path.with_file_name(format!("{name}.tmp"));
+    std::fs::write(&tmp, content).map_err(|e| format!("could not write {}: {e}", tmp.display()))?;
+    std::fs::rename(&tmp, path)
+        .map_err(|e| format!("could not replace {}: {e}", path.display()))?;
+    Ok(true)
 }
 
 #[derive(Serialize, Clone)]
@@ -230,7 +251,7 @@ pub fn prepare(app: &AppHandle) -> Result<PathBuf, String> {
     if get_env_value(&content, "SANDBOX_MEMORY").is_none() {
         content = set_env_line(&content, "SANDBOX_MEMORY", "4g");
     }
-    std::fs::write(&env, content).map_err(|e| e.to_string())?;
+    write_atomic(&env, content.as_bytes())?;
     Ok(dst)
 }
 
@@ -419,7 +440,7 @@ pub fn save_settings(
     }
     content = set_env_line(&content, "GIT_USER_NAME", git_name.trim());
     content = set_env_line(&content, "GIT_USER_EMAIL", git_email.trim());
-    std::fs::write(&path, content).map_err(|e| e.to_string())?;
+    write_atomic(&path, content.as_bytes())?;
     read_settings(app)
 }
 
@@ -446,7 +467,7 @@ fn read_version(app: &AppHandle) -> Option<Version> {
 
 fn write_version(app: &AppHandle, record: &Version) -> Result<(), String> {
     let text = serde_json::to_string(record).map_err(|e| e.to_string())?;
-    std::fs::write(version_path(app)?, text).map_err(|e| e.to_string())
+    write_atomic(&version_path(app)?, text.as_bytes()).map(|_| ())
 }
 
 /// Record that the stack was (or is next) started under this app's compose
@@ -954,6 +975,30 @@ mod tests {
             Some("O''s"),
             "single quotes are literal"
         );
+    }
+
+    #[test]
+    fn a_file_is_replaced_whole_and_only_when_it_changed() {
+        let dir = std::env::temp_dir().join(format!("tektonix-write-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("prefs.json");
+        assert!(
+            write_atomic(&path, b"one").unwrap(),
+            "a new file is written"
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), b"one");
+        assert!(
+            !write_atomic(&path, b"one").unwrap(),
+            "the same content is not rewritten"
+        );
+        assert!(write_atomic(&path, b"two").unwrap());
+        assert_eq!(std::fs::read(&path).unwrap(), b"two");
+        let left: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(left, vec!["prefs.json"], "no temp file stays behind");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
