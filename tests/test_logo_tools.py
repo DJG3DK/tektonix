@@ -37,6 +37,14 @@ from agent.tools import logo_tools as lt
 BRIDGE = lt.BRIDGE
 needs_logoloom = pytest.mark.skipif(not lt.installed(),
                                     reason="LogoLoom not installed (services/logoloom)")
+# The bridge checks for its vectorizer before it looks at the path, so any
+# image_to_svg call on a box without vtracer answers "no vectorizer" -- the
+# path tests below need the binary as much as the tracing ones do
+# (2026-09-29 audit, T3; the same failure was hit by the previous audit-fix).
+_HAS_VTRACER = (BRIDGE.parent / "vendor" / "vtracer").is_file()
+needs_vtracer = pytest.mark.skipif(
+    not (lt.installed() and _HAS_VTRACER),
+    reason="vtracer not fetched (services/logoloom/fetch-vtracer.sh)")
 
 SVG = ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 40">'
        '<rect width="120" height="40" fill="#0b1020"/>'
@@ -76,7 +84,7 @@ def test_a_filename_that_is_a_shell_payload_does_not_run(tmp_path):
         canary.unlink(missing_ok=True)
 
 
-@needs_logoloom
+@needs_vtracer
 def test_a_missing_path_is_reported_before_any_shell_runs(tmp_path):
     r = _bridge("image_to_svg", {"imagePath": str(tmp_path / "x; id > /tmp/nope.txt"),
                                  "colorMode": "binary"})
@@ -109,11 +117,6 @@ def test_the_vectorizer_is_found_in_vendor_not_on_the_system_path():
         pytest.skip("vtracer not fetched (services/logoloom/fetch-vtracer.sh)")
     assert "vendor" in BRIDGE.read_text(), "bridge.mjs must put vendor/ on its own PATH"
 
-
-_HAS_VTRACER = (BRIDGE.parent / "vendor" / "vtracer").is_file()
-needs_vtracer = pytest.mark.skipif(
-    not (lt.installed() and _HAS_VTRACER),
-    reason="vtracer not fetched (services/logoloom/fetch-vtracer.sh)")
 
 
 def _png(tmp_path: Path, name: str = "logo.png") -> Path:
