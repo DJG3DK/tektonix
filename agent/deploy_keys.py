@@ -338,6 +338,22 @@ def configure_repo(live: str, key_file: Path) -> tuple[bool, str]:
     return _git(live, ["config", "core.sshCommand", cmd])
 
 
+def follow_move(project: str, old_live: str, new_live: str) -> bool:
+    """After a project's checkout changes, point the new one at the same
+    key. core.sshCommand is per-repo (configure_repo), so a move left it
+    in the old checkout and the new one pushed without the key
+    (2026-09-29). Returns whether there was a key to carry. The old
+    checkout is left as it was: nothing on disk moves."""
+    kf = _key_path(project)
+    if not kf.is_file():
+        return False
+    ok, ssh_cmd = _git(old_live, ["config", "--get", "core.sshCommand"])
+    if not (ok and str(kf) in (ssh_cmd or "")):
+        return False
+    configure_repo(new_live, kf)
+    return True
+
+
 def remove_key(project: str, live: str) -> KeyStatus:
     """Delete the key and unset the repo's pointer to it."""
     kf = _key_path(project)

@@ -1628,44 +1628,69 @@ def config_from_choices(live: str, sandbox: str, choices: dict) -> dict:
     return entry
 
 
+def _rewrite_projects(projects_path: Path, mutate) -> dict:
+    """Read projects.json, apply `mutate(data)`, write it back atomically.
+
+    Atomic because this file is read at import by the API, the reviewer and
+    the deploy service -- a half-written file breaks all three at once. The
+    read-modify-write runs under a lock beside the file, so two requests
+    (an add and a move, say) cannot each write the other's change away; the
+    temp file is unique rather than a fixed `.tmp`, so they cannot share
+    one either (2026-09-29).
+    """
+    import fcntl  # noqa: PLC0415 -- posix only, like the rest of the file locking
+    import tempfile  # noqa: PLC0415
+
+    projects_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(projects_path.with_name(projects_path.name + ".lock"), "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        data = json.loads(projects_path.read_text()) if projects_path.exists() else {"projects": {}}
+        data.setdefault("projects", {})
+        result = mutate(data)
+        fd, tmp = tempfile.mkstemp(dir=str(projects_path.parent), prefix=".projects.", suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w") as fh:
+                fh.write(json.dumps(data, indent=2) + "\n")
+            os.replace(tmp, projects_path)
+        except BaseException:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
+    return result
+
+
 def move_project_entry(projects_path: Path, name: str, live: str) -> dict:
     """Point an existing project at another checkout, atomically. The
     sandbox follows when it was the live path (a project that works in its
-    own tree); a separate workspace path is kept. Returns the new entry.
+    own tree); a separate workspace path is kept -- the move route rebuilds
+    that worktree against the new checkout. Returns the new entry.
     2026-09-28: the projects folder changed under the desktop app and the
     only way to follow it was to remove and re-add the project."""
-    data = json.loads(projects_path.read_text())
-    projects = data.get("projects") or {}
-    if name not in projects:
-        raise ProvisioningError(f"no project named {name!r} in {projects_path}")
-    entry = dict(projects[name])
-    old = entry.get("live")
-    entry["live"] = live
-    if not entry.get("sandbox") or entry.get("sandbox") == old:
-        entry["sandbox"] = live
-    projects[name] = entry
-    data["projects"] = projects
-    tmp = projects_path.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(data, indent=2) + "\n")
-    os.replace(tmp, projects_path)
-    return entry
+    def mutate(data: dict) -> dict:
+        projects = data["projects"]
+        if name not in projects:
+            raise ProvisioningError(f"no project named {name!r} in {projects_path}")
+        entry = dict(projects[name])
+        old = entry.get("live")
+        entry["live"] = live
+        if not entry.get("sandbox") or entry.get("sandbox") == old:
+            entry["sandbox"] = live
+        projects[name] = entry
+        return entry
+
+    return _rewrite_projects(projects_path, mutate)
 
 
 def write_project_entry(projects_path: Path, name: str, entry: dict) -> None:
-    """Atomic add of one project to projects.json. Atomic because this file
-    is read at import by the API, the reviewer, and the deploy service -- a
-    half-written file breaks all three at once."""
-    if projects_path.exists():
-        data = json.loads(projects_path.read_text())
-    else:
-        data = {"projects": {}}
-    data.setdefault("projects", {})
-    if name in data["projects"]:
-        raise ProvisioningError(f"{name!r} is already in projects.json")
-    data["projects"][name] = entry
-    tmp = projects_path.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(data, indent=2) + "\n")
-    os.replace(tmp, projects_path)
+    """Atomic add of one project to projects.json (see _rewrite_projects)."""
+    def mutate(data: dict) -> None:
+        if name in data["projects"]:
+            raise ProvisioningError(f"{name!r} is already in projects.json")
+        data["projects"][name] = entry
+
+    _rewrite_projects(projects_path, mutate)
 
 
 def create_worktree(live: str, sandbox: str, branch: str = "agent-base",

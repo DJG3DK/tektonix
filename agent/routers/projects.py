@@ -914,14 +914,26 @@ async def move_project_endpoint(request: Request, name: str, req: MoveProjectReq
     """Point a project at another checkout of the same repository.
 
     The path is held to the rules onboarding holds it to: absolute, under an
-    allowed root, not the agent's own tree, a git checkout. When both the old
-    and the new checkout name an origin, they must name the same repository;
-    a project is its repository, not its folder. Nothing on disk moves.
+    allowed root, not the agent's own tree, a git checkout, and not a path
+    another project already uses. When both the old and the new checkout
+    name an origin, they must name the same repository; a project is its
+    repository, not its folder. The operator's checkouts do not move.
+
+    The agent's own workspace does follow. On a host install and in the
+    bundle it is a git worktree of the live checkout (provisioning
+    .create_worktree), and a worktree belongs to one repository: after the
+    move its .git pointer still named the old checkout, the pointer check
+    in tools/git.py refused every command, and nothing said why
+    (2026-09-29). So a separate workspace is rebuilt against the new
+    checkout. A task's own worktree and a parked task's branch live in the
+    old repository the same way and cannot be carried, so the move refuses
+    while any exist.
     """
     auth.require_admin(user)
     import os  # noqa: PLC0415
-    from agent import provisioning  # noqa: PLC0415
+    from agent import deploy_keys, project_removal, provisioning, workspaces  # noqa: PLC0415
     from agent.config import _PROJECTS_CONFIG_PATH, reload_projects  # noqa: PLC0415
+    from agent.store_paging import all_items  # noqa: PLC0415
     from agent.tools import github_tools  # noqa: PLC0415
 
     entry = agent_config.PROJECTS.get(name)
@@ -937,8 +949,15 @@ async def move_project_endpoint(request: Request, name: str, req: MoveProjectReq
     if not os.path.isdir(os.path.join(new, ".git")):
         raise HTTPException(400, f"{new} is not a git checkout")
     old = entry.get("live") or ""
+    sandbox = entry.get("sandbox") or old
     if os.path.realpath(old) == new:
-        return {"ok": True, "live": new, "sandbox": entry.get("sandbox"), "unchanged": True}
+        return {"ok": True, "live": new, "sandbox": sandbox, "unchanged": True}
+    for other, cfg in agent_config.PROJECTS.items():
+        if other == name:
+            continue
+        for path in (cfg.get("live"), cfg.get("sandbox")):
+            if path and os.path.realpath(path) == new:
+                raise HTTPException(409, f"{new} is already {other}'s checkout")
 
     def origin_of(path: str) -> str | None:
         try:
@@ -948,17 +967,45 @@ async def move_project_endpoint(request: Request, name: str, req: MoveProjectReq
             return None
         return github_tools.repo_slug_from_remote(r.stdout) if r.returncode == 0 else None
 
-    old_slug, new_slug = origin_of(old), origin_of(new)
+    old_slug, new_slug = await asyncio.gather(asyncio.to_thread(origin_of, old), asyncio.to_thread(origin_of, new))
     if old_slug and new_slug and old_slug.lower() != new_slug.lower():
         raise HTTPException(409, f"{new} is a checkout of {new_slug}, not of {old_slug}; a project is its repository")
+
+    separate_workspace = os.path.realpath(sandbox) != os.path.realpath(old)
+    if separate_workspace:
+        own = await asyncio.to_thread(workspaces.existing, name)
+        if own:
+            raise HTTPException(409, (
+                f"{name} has {len(own)} task workspace(s) under the current checkout; "
+                "finish or remove those tasks first"))
+        parked = [i for i in await all_items(request.app.state.store, ("tasks", name))
+                  if (i.value or {}).get("status") in ("awaiting_approval", "awaiting_merge", "escalated")]
+        if parked:
+            raise HTTPException(409, (
+                f"{name} has {len(parked)} task(s) waiting on a decision, and their branches live in "
+                "the current checkout; approve, resume or stop them first"))
+        # Same path, new repository: the old registration goes through the
+        # old checkout's git, the new worktree is added from the new one.
+        ok, detail = await asyncio.to_thread(project_removal.remove_worktree, old, sandbox)
+        if not ok:
+            raise HTTPException(500, f"could not detach the workspace from {old}: {detail}")
+        ok, detail = await asyncio.to_thread(provisioning.create_worktree, new, sandbox)
+        if not ok:
+            # Put the old one back so the project is not left without a
+            # workspace; the projects file has not changed.
+            await asyncio.to_thread(provisioning.create_worktree, old, sandbox)
+            raise HTTPException(500, f"could not rebuild the workspace from {new}: {detail}")
     try:
         updated = provisioning.move_project_entry(_PROJECTS_CONFIG_PATH, name, new)
     except (provisioning.ProvisioningError, OSError, ValueError) as e:
         raise HTTPException(500, f"could not update the projects file: {e}")
     reload_projects()
+    github_tools._slug_cache.pop(name, None)     # the answer came from the old checkout
+    key_followed = await asyncio.to_thread(deploy_keys.follow_move, name, old, new)
     await audit.record(audit_store(request), actor=user.email, action="project.move", target=name,
                        detail=f"{old} -> {new}")
-    return {"ok": True, "live": updated["live"], "sandbox": updated.get("sandbox"), "unchanged": False}
+    return {"ok": True, "live": updated["live"], "sandbox": updated.get("sandbox"), "unchanged": False,
+            "workspace_rebuilt": separate_workspace, "deploy_key_followed": key_followed}
 
 
 @router.post("/api/projects/{name}/deploy-key")
