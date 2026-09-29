@@ -1,6 +1,6 @@
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { session, user } from "./test/fixtures";
 
 // The gate order in App is: loading -> landing/login -> forced password
@@ -121,6 +121,52 @@ describe("App — forced flows, in order", () => {
     getMe.mockResolvedValue(user());
     render(<App />);
     expect(await screen.findByRole("button", { name: /new plan/i })).toBeInTheDocument();
+  });
+});
+
+describe("App — inside the desktop app", () => {
+  // The desktop window is frameless: this strip is its only drag handle and
+  // its only close button. It rendered inside AuthenticatedApp, so the
+  // sign-in, change-password and 2FA-setup screens had neither (2026-09-29
+  // audit, U2).
+  const inApp = () => {
+    const win = { minimize: async () => {}, toggleMaximize: async () => {}, close: async () => {} };
+    (window as unknown as { __TAURI__: unknown }).__TAURI__ = { window: { getCurrentWindow: () => win } };
+  };
+  afterEach(() => {
+    delete (window as unknown as { __TAURI__?: unknown }).__TAURI__;
+    document.documentElement.classList.remove("in-desktop-app");
+  });
+
+  it("the sign-in screen has the title bar", async () => {
+    inApp();
+    getMe.mockRejectedValue(new Error("401"));
+    render(<App />);
+    await screen.findByRole("heading", { name: /sign in/i });
+    expect(screen.getByTestId("titlebar")).toBeInTheDocument();
+  });
+
+  it("the forced password change has the title bar", async () => {
+    inApp();
+    getMe.mockResolvedValue(user({ must_change_password: true }));
+    render(<App />);
+    await screen.findByRole("heading", { name: /change|password/i });
+    expect(screen.getByTestId("titlebar")).toBeInTheDocument();
+  });
+
+  it("the forced 2FA enrolment has the title bar", async () => {
+    inApp();
+    getMe.mockResolvedValue(user({ require_totp_setup: true }));
+    render(<App />);
+    await screen.findByRole("heading", { name: /two-factor|authenticator|2fa/i });
+    expect(screen.getByTestId("titlebar")).toBeInTheDocument();
+  });
+
+  it("a browser tab has none", async () => {
+    getMe.mockRejectedValue(new Error("401"));
+    render(<App />);
+    await screen.findByRole("heading", { name: /sign in/i });
+    expect(screen.queryByTestId("titlebar")).not.toBeInTheDocument();
   });
 });
 

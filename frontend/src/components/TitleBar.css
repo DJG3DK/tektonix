@@ -19,3 +19,6 @@
 .titlebar-btn--close:hover { background: #d9534f; color: #fff; }
 /* The shell fills the window under the strip. */
 .in-desktop-app .app-shell { height: calc(100vh - 30px); height: calc(100dvh - 30px); }
+/* The strip is above the auth gate too, so the sign-in and forced screens
+   (which centre themselves in the viewport) leave room for it. */
+.in-desktop-app .login-page { height: calc(100vh - 30px); height: calc(100dvh - 30px); }

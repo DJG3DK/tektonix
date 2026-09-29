@@ -4,8 +4,8 @@ import "./TitleBar.css";
 /* Inside the desktop app the dashboard window is frameless, so this strip is
    its title bar: a drag handle and the three window controls. Outside the
    app (a browser tab) it renders nothing. The app injects window.__TAURI__
-   into this page through its dashboard capability (app/src-tauri/
-   capabilities/dashboard.json). */
+   into this page through its capability (app/src-tauri/capabilities/
+   default.json). */
 type TauriWindow = {
   minimize: () => Promise<void>;
   toggleMaximize: () => Promise<void>;
@@ -36,13 +36,14 @@ export function insideDesktopApp(): boolean {
 }
 
 export function TitleBar() {
-  const [win, setWin] = useState<TauriWindow | null>(null);
+  // Read once: the app injects window.__TAURI__ before any script runs, so
+  // the answer cannot change after the first render.
+  const [win] = useState<TauriWindow | null>(() => currentWindow());
   useEffect(() => {
-    const w = currentWindow();
-    setWin(w);
-    if (w) document.documentElement.classList.add("in-desktop-app");
+    if (!win) return;
+    document.documentElement.classList.add("in-desktop-app");
     return () => document.documentElement.classList.remove("in-desktop-app");
-  }, []);
+  }, [win]);
   if (!win) return null;
   return (
     <div className="titlebar" data-tauri-drag-region data-testid="titlebar">

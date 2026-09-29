@@ -236,8 +236,6 @@ function AuthenticatedApp({ user, onLogout, onUserChanged }: { user: CurrentUser
     : "New task";
 
   return (
-    <>
-    <TitleBar />
     <div className={`app-shell ${mobilePane === "main" ? "show-main" : "show-list"}`}>
       <Sidebar
         tasks={tasks}
@@ -414,7 +412,6 @@ function AuthenticatedApp({ user, onLogout, onUserChanged }: { user: CurrentUser
         onGitHub={() => { setView("github"); setMobilePane("main"); }}
       />
     </div>
-    </>
   );
 }
 
@@ -459,8 +456,9 @@ export default function App() {
   // audit M-20: a visible loading state during the initial getMe(), so a slow
   // auth check is distinguishable from a crashed render (the ErrorBoundary now
   // catches the latter and shows its own fallback).
+  let page;
   if (!checked) {
-    return (
+    page = (
       <div style={{
         display: "flex", alignItems: "center", justifyContent: "center",
         minHeight: "100vh", color: "var(--text-muted, #888)",
@@ -469,18 +467,27 @@ export default function App() {
         Loading...
       </div>
     );
-  }
-  if (!user) {
+  } else if (!user) {
     // The console is its own host now (agent.tektonix.io), so signed out means
     // the sign-in form -- there is no public page in front of it to go back
     // to. tektonix.io serves the landing page, built separately from site/.
-    return <LoginPage onLoggedIn={setUser} />;
+    page = <LoginPage onLoggedIn={setUser} />;
+  } else if (user.must_change_password) {
+    page = <ChangePasswordPage onDone={() => setUser({ ...user, must_change_password: false })} />;
+  } else if (user.require_totp_setup) {
+    page = <SetupTotpPage onDone={() => setUser({ ...user, require_totp_setup: false, totp_enabled: true })} />;
+  } else {
+    page = <AuthenticatedApp user={user} onLogout={handleLogout} onUserChanged={setUser} />;
   }
-  if (user.must_change_password) {
-    return <ChangePasswordPage onDone={() => setUser({ ...user, must_change_password: false })} />;
-  }
-  if (user.require_totp_setup) {
-    return <SetupTotpPage onDone={() => setUser({ ...user, require_totp_setup: false, totp_enabled: true })} />;
-  }
-  return <AuthenticatedApp user={user} onLogout={handleLogout} onUserChanged={setUser} />;
+  // The title bar sits ABOVE the auth gate. The desktop window is frameless,
+  // so this strip is its only drag handle and its only close button; it used
+  // to render inside AuthenticatedApp, which left the sign-in, change-password
+  // and 2FA-setup screens with no way to move or close the window (2026-09-29
+  // audit, U2). Outside the app it renders nothing.
+  return (
+    <>
+      <TitleBar />
+      {page}
+    </>
+  );
 }
