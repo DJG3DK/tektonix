@@ -619,7 +619,12 @@ pub fn local_name(name: &str) -> String {
 /// them; a missing image is an error, never a quiet swap for some other
 /// release's code.
 pub async fn pull(app: &AppHandle, tag: &str) -> Result<(), String> {
-    for cmd in update::pull_commands(tag) {
+    let digests = release_digests(app, tag).await?;
+    match &digests {
+        Some(_) => note(app, format!("The image manifest for {tag} is signed by this app's key; pulling by digest.")),
+        None => note(app, format!("{tag} has no signed image manifest (releases before it was introduced); pulling by tag.")),
+    }
+    for cmd in update::pull_commands(tag, digests.as_ref())? {
         let args: Vec<&str> = cmd.iter().map(String::as_str).collect();
         if args[0] == "pull" {
             let remote = args[1];
@@ -644,6 +649,63 @@ pub async fn pull(app: &AppHandle, tag: &str) -> Result<(), String> {
             compose: Some(compose_fingerprint(app)?),
         },
     )
+}
+
+/// The release's signed image manifest (release.yml publishes digests.json
+/// and its .sig beside the installer), checked against the updater key
+/// this app was built with. None when the release has neither file, which
+/// every release before the manifest existed has; a manifest without its
+/// signature, or one this key did not sign, is an error, not a fallback.
+async fn release_digests(app: &AppHandle, tag: &str) -> Result<Option<update::Digests>, String> {
+    let client = reqwest::Client::builder()
+        .user_agent("tektonix-desktop")
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let base = format!("https://github.com/{REPO}/releases/download/{tag}/digests.json");
+    let fetch = |url: String| {
+        let client = client.clone();
+        async move {
+            let r = client
+                .get(&url)
+                .send()
+                .await
+                .map_err(|e| format!("could not reach GitHub for {url}: {e}"))?;
+            if r.status() == reqwest::StatusCode::NOT_FOUND {
+                return Ok::<Option<Vec<u8>>, String>(None);
+            }
+            if !r.status().is_success() {
+                return Err(format!("GitHub answered {} for {url}", r.status()));
+            }
+            Ok(Some(r.bytes().await.map_err(|e| e.to_string())?.to_vec()))
+        }
+    };
+    let manifest = fetch(base.clone()).await?;
+    let sig = fetch(format!("{base}.sig")).await?;
+    match (manifest, sig) {
+        (None, None) => Ok(None),
+        (Some(m), Some(s)) => {
+            let sig = String::from_utf8(s).map_err(|_| "the manifest signature is not text")?;
+            update::verified_digests(&updater_pubkey(app)?, &m, &sig).map(Some)
+        }
+        (Some(_), None) => Err(format!(
+            "{tag} has an image manifest but no signature for it"
+        )),
+        (None, Some(_)) => Err(format!("{tag} has a manifest signature but no manifest")),
+    }
+}
+
+/// The updater's public key, as configured: what signs the installer signs
+/// the image manifest.
+fn updater_pubkey(app: &AppHandle) -> Result<String, String> {
+    app.config()
+        .plugins
+        .0
+        .get("updater")
+        .and_then(|u| u.get("pubkey"))
+        .and_then(|p| p.as_str())
+        .map(str::to_string)
+        .ok_or_else(|| "no updater key in the app's configuration".to_string())
 }
 
 /// The stack this app runs is at least the release it was built from, under

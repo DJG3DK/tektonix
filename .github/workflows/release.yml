@@ -2,8 +2,11 @@ name: Release
 
 # On a version tag: publish the bundle's images to GHCR, so an install that
 # cannot build from source (the desktop app, a machine without the tree)
-# pulls the release instead. Each image is pushed as :vX.Y.Z; a release
-# (no dash in the tag) is also pushed as :latest, a pre-release is not.
+# pulls the release instead. Each image is pushed as :vX.Y.Z only; nothing
+# consumes a moving :latest, so none is pushed. The digest each image was
+# pushed as goes into digests.json on the GitHub release, signed with the
+# updater's key, and the desktop app pulls by those digests (stack.rs pull),
+# so a retagged image on the registry is not what an install gets.
 # The desktop app tags the pulled image with the local name compose uses
 # (tektonix-<service>:latest) and starts the stack with --no-build.
 #
@@ -69,10 +72,33 @@ jobs:
           fi
           echo "$TAG = $sha, on main, CI green"
 
+  # A tag whose release is already published (a release made by hand, or a
+  # draft published under a new tag name) is done: this repository's
+  # published releases are immutable, so an upload to one fails anyway, and
+  # a rebuild would repush its images under it.
+  check:
+    name: Is the release already published?
+    runs-on: ubuntu-latest
+    outputs:
+      published: ${{ steps.existing.outputs.published }}
+    steps:
+      - id: existing
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft' 2>/dev/null | grep -q false; then
+            echo "published=true" >> "$GITHUB_OUTPUT"; echo "release $TAG is already published; nothing to build"
+          else
+            echo "published=false" >> "$GITHUB_OUTPUT"
+          fi
+
   images:
     name: Images — ${{ matrix.image }}
     needs: gate
     runs-on: ubuntu-latest
+    needs: [gate, check]
+    if: needs.check.outputs.published != 'true'
     permissions:
       contents: read
       packages: write
@@ -106,7 +132,8 @@ jobs:
         run: echo "tag=${TAG#refs/tags/}" >> "$GITHUB_OUTPUT"
         env:
           TAG: ${{ github.event.inputs.tag || github.ref }}
-      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+      - id: build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: ${{ matrix.context }}
           file: ${{ matrix.dockerfile }}
@@ -115,18 +142,28 @@ jobs:
           # runs amd64 images under Rosetta in Docker Desktop meanwhile.
           platforms: linux/amd64
           push: true
-          # :latest follows releases only; a pre-release (a dash in the tag)
-          # publishes under its own tag alone.
-          tags: |
-            ghcr.io/djg3dk/tektonix-${{ matrix.image }}:${{ steps.version.outputs.tag }}
-            ${{ !contains(steps.version.outputs.tag, '-') && format('ghcr.io/djg3dk/tektonix-{0}:latest', matrix.image) || '' }}
+          tags: ghcr.io/djg3dk/tektonix-${{ matrix.image }}:${{ steps.version.outputs.tag }}
           cache-from: type=gha,scope=${{ matrix.image }}
           cache-to: type=gha,scope=${{ matrix.image }},mode=max
+      # Matrix jobs cannot hand a value each to the next job; a file each can.
+      - name: Record the digest
+        env:
+          IMAGE: ${{ matrix.image }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          mkdir -p digests
+          printf '%s %s\n' "$IMAGE" "$DIGEST" > "digests/$IMAGE"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: digest-${{ matrix.image }}
+          path: digests/${{ matrix.image }}
+          if-no-files-found: error
 
   app-windows:
     name: Desktop app — Windows installer
     runs-on: windows-latest
-    needs: images
+    needs: [check, images]
+    if: needs.check.outputs.published != 'true'
     # The signing key is read here and nowhere else. Protect this
     # environment with a required reviewer and the secrets are handed out
     # only after a person has looked at the run.
@@ -146,32 +183,14 @@ jobs:
       - uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: app/src-tauri
-      # A tag whose release is already published (a release made by hand,
-      # or a draft published under a new tag name) needs no second build, and
-      # this repository's published releases are immutable, so an upload to
-      # one fails anyway.
-      - name: Skip when the release is already published
-        id: existing
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ github.event.inputs.tag || github.ref_name }}
-        run: |
-          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft' 2>/dev/null | grep -q false; then
-            echo "published=true" >> "$GITHUB_OUTPUT"; echo "release $TAG is already published; nothing to build"
-          else
-            echo "published=false" >> "$GITHUB_OUTPUT"
-          fi
       - run: npm ci
         working-directory: app
-        if: steps.existing.outputs.published != 'true'
       # The installer, the updater manifest and the app's own version carry
       # the tag: Tektonix_0.9.0-rc13_x64-setup.exe, not a file named 0.9.0
       # for every candidate. Build-time only; nothing is committed. The tag
       # was checked against vX.Y.Z[-suffix] by the gate job, so what goes
       # into the sed is a version and nothing else.
       - name: Version the app after the tag
-        if: steps.existing.outputs.published != 'true'
         shell: bash
         working-directory: app
         env:
@@ -188,7 +207,6 @@ jobs:
       # own release (releases/download/<tag>/latest.json; stack.rs
       # updater_endpoint), so a candidate can update to the next candidate.
       - uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
-        if: steps.existing.outputs.published != 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -210,8 +228,44 @@ jobs:
           prerelease: ${{ contains(github.event.inputs.tag || github.ref_name, '-') }}
           includeUpdaterJson: true
           updaterJsonPreferNsis: true
+      # The image manifest: the digest each image was pushed as, signed with
+      # the same key as the installer, on the same release. The app verifies
+      # it with its embedded public key before pulling (update.rs
+      # verified_digests). Uploaded while the release is still a draft, so it
+      # is there when the release goes live.
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: digest-*
+          path: digests
+          merge-multiple: true
+      - name: Write and sign the image manifest
+        shell: bash
+        env:
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          node -e '
+            const fs = require("fs");
+            const images = {};
+            for (const f of fs.readdirSync("digests")) {
+              const [name, digest] = fs.readFileSync("digests/" + f, "utf8").trim().split(" ");
+              if (!/^sha256:[0-9a-f]{64}$/.test(digest)) throw new Error(name + ": no digest was recorded");
+              images[name] = digest;
+            }
+            for (const name of ["agent", "router", "reviewer", "sandbox"]) if (!images[name]) throw new Error(name + " has no digest");
+            fs.writeFileSync("digests.json", JSON.stringify({ tag: process.argv[1], images }));
+          ' "$TAG"
+          cat digests.json
+          (cd app && npx tauri signer sign -k "$TAURI_SIGNING_PRIVATE_KEY" -p "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" ../digests.json)
+          test -s digests.json.sig
+      - name: Attach the image manifest
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: gh release upload "$TAG" digests.json digests.json.sig --clobber --repo "$GITHUB_REPOSITORY"
       - name: Publish the release
-        if: steps.existing.outputs.published != 'true'
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

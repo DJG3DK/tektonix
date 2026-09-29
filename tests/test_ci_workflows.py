@@ -189,8 +189,8 @@ def test_the_gate_refuses_a_tag_off_main_or_without_a_green_ci_run(tmp_path):
 
 def test_nothing_builds_or_signs_before_the_gate():
     jobs = _jobs(RELEASE)
-    assert jobs["images"]["needs"] == "gate"
-    assert jobs["app-windows"]["needs"] == "images"
+    assert "gate" in jobs["images"]["needs"]
+    assert "images" in jobs["app-windows"]["needs"]
 
 
 # ---------------------------------------------------------------------------

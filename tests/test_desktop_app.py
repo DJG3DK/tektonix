@@ -28,7 +28,31 @@ def test_the_release_workflow_publishes_every_image_the_compose_file_names():
     # registry access.
     assert "packages" not in wf["permissions"]
     assert wf["jobs"]["images"]["permissions"]["packages"] == "write"
-    assert "app-windows" in wf["jobs"] and wf["jobs"]["app-windows"]["needs"] == "images"
+    assert "app-windows" in wf["jobs"] and "images" in wf["jobs"]["app-windows"]["needs"], "the installer is built after its images"
+
+
+def test_images_are_published_once_by_digest_and_signed():
+    """A re-run for an existing tag repushed its images under an immutable
+    release, and every stable tag moved a :latest nothing consumed. Now the
+    published check gates the images job, no :latest is pushed, and the
+    digest each image was pushed as is signed with the updater's key and
+    attached to the release before it goes live, for the app to pull by
+    (update.rs verified_digests)."""
+    wf = yaml.safe_load((REPO / ".github/workflows/release.yml").read_text())
+    images, app = wf["jobs"]["images"], wf["jobs"]["app-windows"]
+    assert set(images["needs"]) == {"gate", "check"} and "published" in images["if"]
+    assert set(app["needs"]) == {"check", "images"} and "published" in app["if"]
+    build = next(s for s in images["steps"] if s.get("uses", "").startswith("docker/build-push-action"))
+    assert ":latest" not in build["with"]["tags"] and "\n" not in build["with"]["tags"].strip()
+    assert build["id"] == "build" and any("steps.build.outputs.digest" in json.dumps(s) for s in images["steps"])
+    names = [s.get("name", s.get("uses", "")) for s in app["steps"]]
+    sign = next(i for i, n in enumerate(names) if n == "Write and sign the image manifest")
+    attach = next(i for i, n in enumerate(names) if n == "Attach the image manifest")
+    publish = next(i for i, n in enumerate(names) if n == "Publish the release")
+    assert sign < attach < publish, "signed and attached while the release is still a draft"
+    assert "tauri signer sign" in app["steps"][sign]["run"] and "digests.json.sig" in app["steps"][attach]["run"]
+    rust = (REPO / "app/src-tauri/src/stack.rs").read_text()
+    assert "releases/download/{tag}/digests.json" in rust, "the app reads the manifest from the tag's own release"
 
 
 def test_the_app_pulls_the_same_images_and_tags_them_with_the_compose_names():

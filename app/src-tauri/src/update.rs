@@ -3,6 +3,8 @@
 //! stack.rs gathers the facts and carries the decision out.
 
 use crate::stack::{image_ref, local_name, newer_than, record_is_proven, Version, IMAGES};
+use serde::Deserialize;
+use std::collections::BTreeMap;
 
 /// The agent, as the health route answered.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -105,17 +107,84 @@ pub fn busy_in(answer: &str) -> bool {
     }
 }
 
+/// A release's image manifest, `digests.json` beside the installer on the
+/// GitHub release: the digest each image was pushed as. Signed with the
+/// updater's key (release.yml), so a retagged image on the registry is
+/// not what the app pulls.
+#[derive(Deserialize, Debug, PartialEq, Eq)]
+pub struct Digests {
+    pub tag: String,
+    pub images: BTreeMap<String, String>,
+}
+
+/// Check the manifest against the app's updater key and read it. The key
+/// and the signature are base64 of the minisign text, the way the updater
+/// keeps them (tauri.conf.json's pubkey; the .sig files tauri signs).
+pub fn verified_digests(
+    pubkey_b64: &str,
+    manifest: &[u8],
+    sig_b64: &str,
+) -> Result<Digests, String> {
+    use base64::Engine;
+    let text = |b64: &str, what: &str| -> Result<String, String> {
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(b64.trim())
+            .map_err(|e| format!("{what} is not base64: {e}"))?;
+        String::from_utf8(bytes).map_err(|_| format!("{what} is not text"))
+    };
+    let key = minisign_verify::PublicKey::decode(&text(pubkey_b64, "the updater key")?)
+        .map_err(|e| format!("the updater key does not parse: {e}"))?;
+    let sig = minisign_verify::Signature::decode(&text(sig_b64, "the manifest signature")?)
+        .map_err(|e| format!("the manifest signature does not parse: {e}"))?;
+    key.verify(manifest, &sig, false)
+        .map_err(|e| format!("the image manifest is not signed by this app's key: {e}"))?;
+    serde_json::from_slice(manifest).map_err(|e| format!("the image manifest does not parse: {e}"))
+}
+
+/// The reference to pull for one image: by digest when the release's
+/// manifest names one, else by tag (releases before the manifest existed).
+pub fn pull_ref(name: &str, tag: &str, digests: Option<&Digests>) -> Result<String, String> {
+    match digests {
+        None => Ok(image_ref(name, tag)),
+        Some(d) => {
+            if d.tag != tag {
+                return Err(format!(
+                    "the image manifest is for {} but {tag} was asked for",
+                    d.tag
+                ));
+            }
+            let digest = d
+                .images
+                .get(name)
+                .filter(|s| s.starts_with("sha256:"))
+                .ok_or_else(|| {
+                    format!("the image manifest for {tag} names no digest for {name}")
+                })?;
+            Ok(format!(
+                "{}@{digest}",
+                image_ref(name, tag)
+                    .rsplit_once(':')
+                    .map_or("", |(repo, _)| repo)
+            ))
+        }
+    }
+}
+
 /// The docker commands that bring one release's images in, in order: every
 /// pull, then every tag. A failure on the third pull used to leave two
 /// images retagged to the new release and two on the old.
-pub fn pull_commands(tag: &str) -> Vec<Vec<String>> {
-    let pulls = IMAGES
+pub fn pull_commands(tag: &str, digests: Option<&Digests>) -> Result<Vec<Vec<String>>, String> {
+    let refs = IMAGES
         .iter()
-        .map(|name| vec!["pull".to_string(), image_ref(name, tag)]);
-    let tags = IMAGES
+        .map(|name| Ok((name, pull_ref(name, tag, digests)?)))
+        .collect::<Result<Vec<_>, String>>()?;
+    let pulls = refs
         .iter()
-        .map(|name| vec!["tag".to_string(), image_ref(name, tag), local_name(name)]);
-    pulls.chain(tags).collect()
+        .map(|(_, r)| vec!["pull".to_string(), r.clone()]);
+    let tags = refs
+        .iter()
+        .map(|(name, r)| vec!["tag".to_string(), r.clone(), local_name(name)]);
+    Ok(pulls.chain(tags).collect())
 }
 
 /// Start needs this app's release, but not the registry: when the pull
@@ -253,7 +322,7 @@ mod tests {
 
     #[test]
     fn every_image_is_pulled_before_any_is_retagged() {
-        let cmds = pull_commands("v0.9.0-rc17");
+        let cmds = pull_commands("v0.9.0-rc17", None).unwrap();
         assert_eq!(cmds.len(), 2 * IMAGES.len());
         let (pulls, tags) = cmds.split_at(IMAGES.len());
         assert!(pulls.iter().all(|c| c[0] == "pull"));
@@ -270,6 +339,59 @@ mod tests {
                 "tektonix-agent:latest"
             ]
         );
+    }
+
+    // scratch: a key pair and a prehashed minisign signature over MESSAGE,
+    // encoded as tauri encodes them. Made by a small script with a fixed
+    // seed; the key is a test key and signs nothing else.
+    const PUBKEY: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IHRlc3QKUldSWUl1dnVMdVl5S1NkZHJWZXd6VVhOakNpOTBUK3ZHUjhOWFhpazlzRWx3Q0tYRStDQzhveTMK";
+    const MESSAGE: &str = r#"{"tag":"v0.9.0-rc23","images":{"agent":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","router":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","reviewer":"sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","sandbox":"sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"}}"#;
+    const SIG: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSWUl1dnVMdVl5S1lQZGl5dEdhRnoreExsTkpYUmhTYmNQQUxDcWEvTCtNczVoZVBCQzdQaEhpaUcyZmVkZnNQclFsUGwwb04xU1dUcXRLQXJiT2xxQlVVcEpleGdKTHdnPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxCWZpbGU6ZGlnZXN0cy5qc29uCWhhc2hlZApSL29TdWIvRU9SL3pNRHYzUmxtSURheXBHNFFLS2dWM1FlTVF3eW1aMTVwTU16N3lTKys2S0xSbE85WldVY1kwZmMwUkNtMFY5amx6V2MyK2phQTFEZz09Cg==";
+
+    #[test]
+    fn the_image_manifest_is_taken_only_with_its_signature() {
+        let d = verified_digests(PUBKEY, MESSAGE.as_bytes(), SIG).unwrap();
+        assert_eq!(d.tag, "v0.9.0-rc23");
+        assert_eq!(d.images["agent"], format!("sha256:{}", "a".repeat(64)));
+        let tampered = MESSAGE.replace("aaaa", "eeee");
+        let err = verified_digests(PUBKEY, tampered.as_bytes(), SIG).unwrap_err();
+        assert!(err.contains("not signed by this app's key"), "{err}");
+        // The real updater key does not sign the test manifest either.
+        let conf: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        let real = conf["plugins"]["updater"]["pubkey"].as_str().unwrap();
+        assert!(verified_digests(real, MESSAGE.as_bytes(), SIG).is_err());
+        assert!(verified_digests("not base64!", MESSAGE.as_bytes(), SIG).is_err());
+        assert!(verified_digests(PUBKEY, MESSAGE.as_bytes(), "").is_err());
+    }
+
+    #[test]
+    fn a_release_with_a_manifest_is_pulled_by_digest_and_never_by_another_tag() {
+        let d = verified_digests(PUBKEY, MESSAGE.as_bytes(), SIG).unwrap();
+        let cmds = pull_commands("v0.9.0-rc23", Some(&d)).unwrap();
+        assert_eq!(
+            cmds[0],
+            vec![
+                "pull",
+                &format!("ghcr.io/djg3dk/tektonix-agent@sha256:{}", "a".repeat(64))
+            ]
+        );
+        assert_eq!(
+            cmds[IMAGES.len()],
+            vec![
+                "tag",
+                &format!("ghcr.io/djg3dk/tektonix-agent@sha256:{}", "a".repeat(64)),
+                "tektonix-agent:latest"
+            ]
+        );
+        let err = pull_commands("v0.9.0-rc24", Some(&d)).unwrap_err();
+        assert!(err.contains("is for v0.9.0-rc23"), "{err}");
+        let short = Digests {
+            tag: "v0.9.0-rc23".into(),
+            images: BTreeMap::from([("agent".to_string(), "sha256:abc".to_string())]),
+        };
+        let err = pull_commands("v0.9.0-rc23", Some(&short)).unwrap_err();
+        assert!(err.contains("names no digest for router"), "{err}");
     }
 
     #[test]

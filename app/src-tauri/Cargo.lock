@@ -4349,7 +4349,9 @@ dependencies = [
 name = "tektonix"
 version = "0.9.0"
 dependencies = [
+ "base64 0.22.1",
  "futures-util",
+ "minisign-verify",
  "reqwest 0.12.28",
  "semver",
  "serde",
