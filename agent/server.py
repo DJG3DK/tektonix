@@ -69,7 +69,7 @@ from agent.frontend_route import RouteDecision, classify_frontend
 from agent.planning_chat import build_planning_agent, classify_planning_difficulty, planning_thread_config, run_planning_turn
 from agent import auth
 from agent.auth import User
-from agent.notify import notify_operators, notify_operators_bg, task_alert, watch_services
+from agent.notify import notify_operators, notify_operators_bg, planning_url, task_alert, task_url, watch_services
 from agent.mailer import send_plain_email
 
 config = load_config()
@@ -155,7 +155,8 @@ async def _supervisor_deps():
             return False
 
     def notify(kind: str, repo: str, detail: str, values: dict) -> None:
-        _notify_bg(task_alert(kind, repo, values.get("goal", ""), values.get("cost_so_far"), detail), repo=repo)
+        _notify_bg(task_alert(kind, repo, values.get("goal", ""), values.get("cost_so_far"), detail), repo=repo,
+                   url=task_url(values["task_id"]) if values.get("task_id") else "/")
 
     return supervisor.Deps(
         projects=PROJECTS,
@@ -253,7 +254,7 @@ async def _auto_resume_orphaned_tasks(startup_delay: float = 5.0) -> None:
                 _notify_bg(task_alert(
                     "auto_resumed", repo, values.get("goal", ""), values.get("cost_so_far"),
                     "The server restarted mid-run; the task reconnected automatically and is working again."),
-                    repo=repo)
+                    repo=repo, url=task_url(task_id))
             except Exception:  # noqa: BLE001 -- one task's failure must not strand the others
                 logger.exception("auto-resume: failed to reconnect task %s", task_id)
 
@@ -723,7 +724,7 @@ async def _github_create_task(repo: str, goal: str, budget: float, route: str) -
 async def _github_notify(text: str, repo: str) -> None:
     settings = github_settings.current()
     if settings["notify"].get("telegram", True):
-        await notify_operators(app.state.auth_pool, text, repo)
+        await notify_operators(app.state.auth_pool, text, repo, url="/inbox")
     if settings["notify"].get("email"):
         to = settings["notify"].get("email_to") or config.admin_email
         try:
@@ -1272,7 +1273,7 @@ def _start_task_recorder(task_id: str, repo: str) -> None:
 _last_task_alert: dict[str, tuple] = {}
 
 
-def _notify_bg(text: str, repo: str | None = None) -> None:
+def _notify_bg(text: str, repo: str | None = None, url: str = "/") -> None:
     """The one door alerts leave through: resolves the auth pool defensively
     so an alert can NEVER break the code path it decorates -- app.state has
     no auth_pool during unit tests and the earliest startup moments, and
@@ -1286,7 +1287,7 @@ def _notify_bg(text: str, repo: str | None = None) -> None:
     pool = getattr(app.state, "auth_pool", None)
     if pool is None:
         return
-    notify_operators_bg(pool, text, repo)
+    notify_operators_bg(pool, text, repo, url)
 
 
 def _alert_task_status(task_id: str, status: str, repo: str, goal: str, cost: float | None, detail: str | None) -> None:
@@ -1301,7 +1302,7 @@ def _alert_task_status(task_id: str, status: str, repo: str, goal: str, cost: fl
     if _last_task_alert.get(task_id) == key:
         return
     _last_task_alert[task_id] = key
-    _notify_bg(task_alert(status, repo, goal, cost, detail), repo=repo)
+    _notify_bg(task_alert(status, repo, goal, cost, detail), repo=repo, url=task_url(task_id))
 
 
 # A planning turn is bounded by SILENCE, not by duration. Every log entry and
@@ -1731,7 +1732,7 @@ async def _run_planning_turn_bg(session_id: str, repo: str, text: str, attachmen
         _t_alert = locals().get("tracker")
         _notify_bg(task_alert(
             "planning_error", repo, text, _t_alert.total_cost if _t_alert is not None else None, str(e)[:400]),
-            repo=repo)
+            repo=repo, url=planning_url(session_id))
         # The spend up to the failure is just as real as a cancelled turn's,
         # and this path banked NEITHER it nor the draft -- a turn that crashed
         # after save_plan lost the plan and under-reported the session's cost.

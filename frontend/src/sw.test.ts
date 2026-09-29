@@ -15,7 +15,11 @@ function loadWorker() {
     location: { origin: ORIGIN },
     addEventListener: (type: string, fn: Listener) => { listeners[type] = fn; },
     registration: { showNotification: vi.fn(async (_title: string, _opts: { data: { url: string } }) => undefined) },
-    clients: { matchAll: vi.fn(async () => []), openWindow: vi.fn(async (_url: string) => undefined), claim: vi.fn() },
+    clients: {
+      matchAll: vi.fn(async (): Promise<Array<Record<string, unknown>>> => []),
+      openWindow: vi.fn(async (_url: string) => undefined),
+      claim: vi.fn(),
+    },
     skipWaiting: vi.fn(),
   };
   const src = readFileSync(join(__dirname, "..", "public", "sw.js"), "utf8");
@@ -45,6 +49,23 @@ describe("service worker notification targets", () => {
     [`${ORIGIN}/review/7`, "/review/7"],
   ])("a click on %s opens %s", async (url, expected) => {
     expect(await click(url)).toBe(expected);
+  });
+
+  it("a click on a task target moves the window the operator has open, rather than opening another", async () => {
+    // agent/notify.py sends /task/<id> (it sent "/" for every alert until
+    // 2026-09-29, audit U6); the worker takes the open window there.
+    const { self, listeners } = loadWorker();
+    const win = { url: `${ORIGIN}/planning/abc`, navigate: vi.fn(), focus: vi.fn(async () => undefined) };
+    self.clients.matchAll.mockResolvedValue([win]);
+    let pending: Promise<unknown> = Promise.resolve();
+    listeners.notificationclick({
+      notification: { close: () => undefined, data: { url: "/task/t1" } },
+      waitUntil: (p: Promise<unknown>) => { pending = p; },
+    });
+    await pending;
+    expect(win.navigate).toHaveBeenCalledWith("/task/t1");
+    expect(win.focus).toHaveBeenCalled();
+    expect(self.clients.openWindow).not.toHaveBeenCalled();
   });
 
   it("the notification itself stores only a same-origin path", async () => {

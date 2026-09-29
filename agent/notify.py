@@ -73,7 +73,18 @@ def _may_hear_about(role: str, allowed_repos, repo: str | None) -> bool:
     return allowed_repos is None or repo in allowed_repos
 
 
-async def _push_operators(auth_pool, text: str, repo: str | None) -> int:
+def task_url(task_id: str) -> str:
+    """Where a click on a task alert lands: the task's own page (route.ts
+    reads /task/<id>). Every alert opened "/" until 2026-09-29 (audit, U6),
+    which for an open window meant leaving whatever the operator was on."""
+    return f"/task/{task_id}"
+
+
+def planning_url(session_id: str) -> str:
+    return f"/planning/{session_id}"
+
+
+async def _push_operators(auth_pool, text: str, repo: str | None, url: str = "/") -> int:
     """The push half of the fan-out. Same recipients, same scoping rule, same
     never-raises contract as the Telegram half.
 
@@ -98,7 +109,7 @@ async def _push_operators(auth_pool, text: str, repo: str | None) -> int:
         if not _may_hear_about(t["role"], t["allowed_repos"], repo):
             continue
         ok, status = await push.send_one(t, title.strip() or "Tektonix", body,
-                                         url="/", tag=repo or "tektonix")
+                                         url=url, tag=repo or "tektonix")
         if ok:
             sent += 1
             await auth.mark_push_ok(auth_pool, t["endpoint"])
@@ -108,8 +119,11 @@ async def _push_operators(auth_pool, text: str, repo: str | None) -> int:
     return sent
 
 
-async def notify_operators(auth_pool, text: str, repo: str | None = None) -> int:
+async def notify_operators(auth_pool, text: str, repo: str | None = None, url: str = "/") -> int:
     """Send `text` to the users allowed to know about `repo`.
+
+    `url` is where a push notification opens (task_url / planning_url); the
+    Telegram half carries no link.
 
     audit H1: the fan-out used to reach everyone with a token configured,
     regardless of allowed_repos, while the message body carries the repo name,
@@ -135,16 +149,16 @@ async def notify_operators(auth_pool, text: str, repo: str | None = None) -> int
     # cost a Telegram alert, so its failures are swallowed the same way the
     # loop above swallows a failed send.
     try:
-        sent += await _push_operators(auth_pool, text, repo)
+        sent += await _push_operators(auth_pool, text, repo, url)
     except Exception:  # noqa: BLE001
         logger.exception("push: fan-out failed")
     return sent
 
 
-def notify_operators_bg(auth_pool, text: str, repo: str | None = None) -> None:
+def notify_operators_bg(auth_pool, text: str, repo: str | None = None, url: str = "/") -> None:
     """Fire-and-forget wrapper for call sites inside request/stream handlers."""
     try:
-        live_state.fire_and_forget(notify_operators(auth_pool, text, repo))
+        live_state.fire_and_forget(notify_operators(auth_pool, text, repo, url))
     except Exception:  # noqa: BLE001
         logger.exception("telegram: could not schedule notification")
 

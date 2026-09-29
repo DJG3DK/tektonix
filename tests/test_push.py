@@ -126,6 +126,21 @@ async def test_an_infrastructure_alert_goes_to_admins_only(fanout):
 
 
 @pytest.mark.asyncio
+async def test_the_alert_s_url_reaches_the_push_payload(monkeypatch, fanout):
+    """Every push opened "/" whatever it was about (2026-09-29 audit, U6)."""
+    urls = []
+
+    async def send_one(sub, title, body, url="/", tag=None):
+        urls.append(url)
+        return True, 200
+
+    monkeypatch.setattr(push, "send_one", send_one)
+    await notify._push_operators(_Pool(), "Task DONE\nx", repo=None, url=notify.task_url("abc123"))
+    assert urls == ["/task/abc123"]
+    assert notify.planning_url("s9") == "/planning/s9"
+
+
+@pytest.mark.asyncio
 async def test_the_first_line_becomes_the_title(fanout):
     await notify._push_operators(_Pool(), "Task ESCALATED\nneeds you", repo=None)
     assert fanout.sent[0][1] == "Task ESCALATED"

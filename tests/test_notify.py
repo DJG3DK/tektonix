@@ -107,7 +107,7 @@ async def test_notify_operators_survives_a_broken_recipient_query():
 def sent(monkeypatch):
     calls = []
     monkeypatch.setattr(server, "notify_operators_bg",
-                        lambda pool, text, repo=None: calls.append((text, repo)))
+                        lambda pool, text, repo=None, url="/": calls.append((text, repo, url)))
     monkeypatch.setattr(server.app.state, "auth_pool", object(), raising=False)
     server._last_task_alert.clear()
     return calls
@@ -117,6 +117,9 @@ def test_rest_states_alert_with_detail_and_cost(sent):
     server._alert_task_status("t1", "escalated", "my-service", "goal", 2.5, "why it stopped")
     assert len(sent) == 1 and "why it stopped" in sent[0][0] and "$2.50" in sent[0][0]
     assert sent[0][1] == "my-service", "the alert must carry its repo so the fan-out can scope it"
+    # A click lands on the task, not on "/" -- which for an open window meant
+    # leaving whatever the operator was looking at (2026-09-29 audit, U6).
+    assert sent[0][2] == "/task/t1"
 
 
 def test_running_and_stopped_never_alert(sent):
