@@ -51,7 +51,17 @@ test('a hanging dependency times out instead of blocking the deploy forever', as
   const fetchImpl = (url, { signal }) => new Promise((_, reject) => {
     signal.addEventListener('abort', () => reject(signal.reason));
   });
-  const failures = await runPreflight(['http://hang'], { fetchImpl, timeoutMs: 20 });
-  assert.equal(failures.length, 1);
-  assert.match(failures[0], /unreachable \(TimeoutError\)/);
+  // AbortSignal.timeout's timer is unref'd, and this fake fetch holds no
+  // handle of its own, so on Node 22 nothing keeps the loop alive and the
+  // runner cancels the case before the abort fires ("cancelledByParent").
+  // A ref'd timer that outlasts the timeout makes the case independent of
+  // the Node version (2026-09-29 audit, T5).
+  const keepAlive = setTimeout(() => {}, 5000);
+  try {
+    const failures = await runPreflight(['http://hang'], { fetchImpl, timeoutMs: 20 });
+    assert.equal(failures.length, 1);
+    assert.match(failures[0], /unreachable \(TimeoutError\)/);
+  } finally {
+    clearTimeout(keepAlive);
+  }
 });
