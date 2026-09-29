@@ -28,6 +28,7 @@ glance before it is trusted. Nothing is deleted from memory automatically.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -181,7 +182,8 @@ async def refresh_memory_freshness(repo: str, repo_root: str, project_backend, m
             ledger = {}
     mentions = find_path_mentions(memory_text, tree)
     ledger = update_ledger(ledger, mentions, today)
-    changed = last_change_dates(repo_root, {e["path"] for e in ledger.values()})
+    # One `git log` per cited path, off the loop (see cartographer.run_cartographer).
+    changed = await asyncio.to_thread(last_change_dates, repo_root, {e["path"] for e in ledger.values()})
     flags = stale_flags(ledger, changed)
     # Which section each flagged fact lives in, so a flag about a fact the
     # prompt is not carrying says where to read it.

@@ -117,3 +117,55 @@ def test_recent_changes_window_is_bounded(tmp_path):
     _, md = build_recent_changes("demo", str(root))
     assert md.count("\n### ") == CHANGES_COMMITS
     assert "feat: add a" not in md
+
+
+# --- the in-process run stays off the event loop -----------------------------
+
+@pytest.mark.asyncio
+async def test_the_inventory_walk_does_not_starve_the_loop(tmp_path, monkeypatch):
+    """Since the cartographer runs inside the API process (agent/jobs.py),
+    a synchronous build_inventory on the loop stalled every request and
+    WebSocket for the length of each project's walk (2026-09-29)."""
+    import asyncio
+    import time
+
+    from langgraph.store.memory import InMemoryStore
+
+    from agent import cartographer as cart
+    from agent.cartographer import MAP_MARKER_PATH, StoreBackend, project_namespace
+
+    inv = {"file_count": 1, "languages": {"py": 1}, "top_directories": [], "manifests": [],
+           "test_files": [], "docs": [], "tree": ["a.py"]}
+
+    def slow_inventory(repo, root):
+        time.sleep(0.3)          # a walk of a big tree, on whatever thread it is called from
+        return inv
+
+    async def quiet(*a, **k):
+        return {}
+
+    monkeypatch.setattr(cart, "build_inventory", slow_inventory)
+    monkeypatch.setattr(cart, "refresh_recent_changes", quiet)
+    monkeypatch.setattr(cart, "refresh_freshness", quiet)
+    monkeypatch.setitem(cart.PROJECTS, "demo", {"live": str(tmp_path), "sandbox": str(tmp_path)})
+    store = InMemoryStore()
+    # The marker already matches, so the run ends before any model call.
+    await StoreBackend(namespace=project_namespace("demo"), store=store).awrite(
+        MAP_MARKER_PATH, cart.inventory_hash(inv))
+
+    # A request handler that wants the loop every 10ms while the walk runs.
+    # On a blocked loop one of its gaps is the whole walk.
+    gaps: list[float] = []
+    async def ticker(until):
+        last = time.monotonic()
+        while not until.done():
+            await asyncio.sleep(0.01)
+            now = time.monotonic()
+            gaps.append(now - last)
+            last = now
+
+    run = asyncio.create_task(cart.run_cartographer(object(), "demo", store))
+    await ticker(run)
+    result = await run
+    assert result["mapped"] is False and result["reasoning"].startswith("repo structure unchanged")
+    assert max(gaps) < 0.15, f"the loop stalled for {max(gaps):.2f}s during a 300ms inventory walk"

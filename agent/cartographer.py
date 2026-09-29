@@ -29,6 +29,7 @@ Two deliberate constraints
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -343,7 +344,7 @@ async def refresh_recent_changes(repo: str, repo_root: str, store: BaseStore, pr
     No model call, so this runs on every cartographer tick for free."""
     from deepagents.backends.utils import file_data_to_string
 
-    head, content = build_recent_changes(repo, repo_root)
+    head, content = await asyncio.to_thread(build_recent_changes, repo, repo_root)
     if not head or not content:
         return {"changes": "no git history"}
     marker = await project_backend.aread(CHANGES_MARKER_PATH)
@@ -391,7 +392,10 @@ async def run_cartographer(
     repo_root = PROJECTS[repo]["sandbox"]
     project_backend = StoreBackend(namespace=project_namespace(repo), store=store)
 
-    inv = build_inventory(repo, repo_root)
+    # Off the loop: the inventory walks the tree and runs git, and since the
+    # cartographer moved in-process (agent/jobs.py) doing that here stalled
+    # every request and WebSocket for each project's walk (2026-09-29).
+    inv = await asyncio.to_thread(build_inventory, repo, repo_root)
     digest = inventory_hash(inv)
 
     # Cheap, model-free companions that run on every tick regardless of
