@@ -66,6 +66,27 @@ def test_both_rows_in_one_save_land_in_their_own_files(files):
     assert "MODEL_ROUTER_KEY=same" in agent.read_text()
 
 
+def test_a_value_with_a_newline_is_a_400_that_names_only_the_key(monkeypatch, files):
+    """InvalidValueError fell through to the catch-all and came back as a
+    500 "could not write the env file", which reads as a broken host rather
+    than a bad value (2026-09-29)."""
+    import agent.server as srv
+    from agent.auth import User
+    from fastapi.testclient import TestClient
+
+    def admin():
+        return User(id=1, email="a@b.co", role="admin", allowed_repos=None,
+                    totp_enabled=True, must_change_password=False)
+
+    monkeypatch.setitem(srv.app.dependency_overrides, srv.auth.get_current_user, admin)
+    monkeypatch.setitem(srv.app.dependency_overrides, srv.auth.require_full_auth, admin)
+    router, agent = files
+    r = TestClient(srv.app).post("/api/env-config", json={"updates": {"SMTP_HOST": "smtp.example\nAUTH_SECRET_KEY=x"}})
+    assert r.status_code == 400, r.text
+    assert "SMTP_HOST" in r.json()["detail"] and "smtp.example" not in r.json()["detail"]
+    assert agent.read_text() == "MODEL_ROUTER_KEY=agent-old\n", "a refused value was written"
+
+
 def test_a_duplicate_id_in_the_table_is_refused_rather_than_shadowed(monkeypatch, files):
     dup = tuple(dataclasses.replace(mk, id="") for mk in ec.MANAGED_KEYS)   # every id collapses to its key
     monkeypatch.setattr(ec, "MANAGED_KEYS", dup)

@@ -58,6 +58,10 @@ async def save_env_config(req: SaveEnvKeysRequest, user: User = Depends(require_
         raise HTTPException(status_code=400, detail=str(e))
     except env_config.ReadOnlyError as e:
         raise HTTPException(status_code=409, detail=str(e))
+    except env_config.InvalidValueError as e:
+        # The caller's value is the problem, not the file: the message names
+        # the key only. This fell through to the 500 below (2026-09-29).
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:  # noqa: BLE001
         logger.warning("env-config write failed for %s: %s", sorted(req.updates), type(e).__name__)
         raise HTTPException(status_code=500, detail="could not write the env file")
