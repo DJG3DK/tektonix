@@ -171,6 +171,20 @@ def test_a_merge_approval_approves_exactly_the_commit_shown():
     assert m["merge_approved_sha"] == values["pending_merge_approval"]["sha"] == m["committed_sha"]
 
 
+def test_a_decision_made_on_another_commit_is_refused():
+    """The panel sends the commit it showed. "Approve whatever is parked when
+    the request arrives" let a panel left open on an older diff approve a
+    commit the operator never saw (2026-09-29 audit, U3)."""
+    values, status = _values("awaiting_merge")
+    for decision, msg in (("approve", None), ("request_changes", "rename it")):
+        with pytest.raises(lc.Refused) as e:
+            lc.merge_decision(values, status, decision, msg, shown_sha="deadbeef")
+        assert e.value.status == 409
+    # The commit it showed, or no commit (an older client): unchanged.
+    assert lc.merge_decision(values, status, "approve", None, shown_sha=COMMIT).patch["merge_approved_sha"] == COMMIT
+    assert lc.merge_decision(values, status, "approve", None).patch["merge_approved_sha"] == COMMIT
+
+
 def test_a_gate_heal_never_calls_the_model():
     values, status = _values("escalated")
     t = _call("heal", values, status, "gate")

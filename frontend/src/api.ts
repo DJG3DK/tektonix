@@ -375,11 +375,15 @@ export async function submitMergeDecision(
   taskId: string,
   decision: "approve" | "request_changes",
   message?: string,
+  /** The commit the operator was looking at. The server refuses (409) when
+   * it is no longer the one parked for approval, so a decision made on one
+   * diff can never land on a later commit (2026-09-29 audit, U3). */
+  sha?: string | null,
 ): Promise<void> {
   const res = await apiFetch(`${API_BASE}/tasks/${taskId}/merge-decision`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ decision, message }),
+    body: JSON.stringify({ decision, message, sha: sha ?? undefined }),
   });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));

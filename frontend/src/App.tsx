@@ -320,7 +320,12 @@ function AuthenticatedApp({ user, onLogout, onUserChanged }: { user: CurrentUser
             <button type="button" onClick={() => setMissing(null)} aria-label="Dismiss">✕</button>
           </div>
         )}
-        {view === "task" && selected && <TaskView task={liveSelected ?? selected} stream={taskStream} setGeneration={setGeneration} />}
+        {/* Keyed by task: the composer draft, the resume panel and the diff
+            panel are per-task state, and without the key they carried over
+            from the task the operator just left (2026-09-29 audit, U3). The
+            stream is not affected -- it lives above, keyed by its own
+            arguments. */}
+        {view === "task" && selected && <TaskView key={selected.task_id} task={liveSelected ?? selected} stream={taskStream} setGeneration={setGeneration} />}
         {view === "new-task" && <NewTaskPanel repos={repos} onSubmit={handleCreate} submitting={submitting} error={createError} onClearError={() => setCreateError(null)} />}
         {view === "analytics" && user.role === "admin" && (
           <Suspense fallback={<div style={{ padding: "2rem", color: "var(--text-muted, #888)" }}>Loading analytics...</div>}>

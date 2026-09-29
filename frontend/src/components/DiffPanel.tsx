@@ -113,10 +113,21 @@ export function DiffPanel({ taskId, open, onClose, live, awaitingMerge, onDecide
   const [reverts, setReverts] = useState(0);
   const changed = Object.keys(edits).filter((p) => opened[p] && edits[p] !== opened[p].modified);
 
-  // A new commit to look at (or another task) invalidates everything open.
-  useEffect(() => {
+  // Another task, or a new commit to look at, invalidates what is shown.
+  // Done during render (React's "adjusting state when a prop changes")
+  // rather than in an effect, so the old task's diff never gets a frame on
+  // the new task's panel. Switching task used to clear only the open
+  // editors: the diff, the notes and the load error carried over until the
+  // next fetch landed (2026-09-29 audit, U3).
+  const [shown, setShown] = useState<{ task: string; head: string | null | undefined }>({ task: taskId, head: undefined });
+  if (shown.task !== taskId) {
+    setShown({ task: taskId, head: undefined });
+    setDiff(null); setLoadError(null); setNotes(""); setSendingBack(false); setDecisionError(null); setEditNote("");
     setOpened({}); setEdits({}); setEditing(null); setOpenError(null); setSaveError(null);
-  }, [taskId, diff?.head]);
+  } else if (shown.head !== diff?.head) {
+    setShown({ task: taskId, head: diff?.head });
+    setOpened({}); setEdits({}); setEditing(null); setOpenError(null); setSaveError(null);
+  }
 
   async function openEditor(path: string) {
     setOpenError(null);
@@ -154,11 +165,20 @@ export function DiffPanel({ taskId, open, onClose, live, awaitingMerge, onDecide
     }
   }
 
+  // Every fetch takes a ticket; only the newest one's answer is applied. A
+  // slow diff for the task the operator just left resolved after the switch
+  // and wrote that task's files into this one's panel -- the panel where
+  // Approve & merge lives.
+  const fetchSeq = useRef(0);
   const refresh = useCallback(async () => {
+    const ticket = ++fetchSeq.current;
     try {
-      setDiff(await getTaskDiff(taskId));
+      const d = await getTaskDiff(taskId);
+      if (ticket !== fetchSeq.current) return;
+      setDiff(d);
       setLoadError(null);
     } catch (e) {
+      if (ticket !== fetchSeq.current) return;
       setLoadError(e instanceof Error ? e.message : "failed to load diff");
     }
   }, [taskId]);
@@ -183,7 +203,9 @@ export function DiffPanel({ taskId, open, onClose, live, awaitingMerge, onDecide
     setDeciding(decision);
     setDecisionError(null);
     try {
-      await submitMergeDecision(taskId, decision, notes.trim() || undefined);
+      // The commit this panel is showing goes with the decision: the server
+      // refuses when it is no longer the one parked for approval.
+      await submitMergeDecision(taskId, decision, notes.trim() || undefined, diff?.head);
       setNotes("");
       setSendingBack(false);
       onDecided?.();

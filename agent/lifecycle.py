@@ -166,11 +166,20 @@ def resume(values: dict, store_status: str | None, *, message: str | None,
 
 
 def merge_decision(values: dict, store_status: str | None, decision: str,
-                   message: str | None) -> Transition:
+                   message: str | None, shown_sha: str | None = None) -> Transition:
     if decision not in ("approve", "request_changes"):
         raise Refused(400, "decision must be 'approve' or 'request_changes'")
     _require("merge_approve" if decision == "approve" else "merge_request_changes", values, store_status)
     pending = values["pending_merge_approval"]
+    # `shown_sha` is the commit the operator's panel had open. The gate below
+    # already pins the approval to the parked commit, but "the parked commit"
+    # is whatever is parked when the request ARRIVES: a panel left open on an
+    # older diff (or one that showed another task's diff, 2026-09-29 audit)
+    # approved a commit the operator never looked at. Old clients send none
+    # and keep the old behaviour.
+    if shown_sha and shown_sha != pending.get("sha"):
+        raise Refused(409, "the commit you were shown is no longer the one awaiting a decision -- "
+                           "reload the diff and decide again")
     if decision == "approve":
         # The EXACT sha the operator was shown: verify_and_ship merges only
         # when this equals the outstanding commit, so an approval can never

@@ -386,6 +386,9 @@ async def submit_operator_edits(request: Request, task_id: str, req: OperatorEdi
 class MergeDecisionRequest(BaseModel):
     decision: str  # "approve" | "request_changes"
     message: str | None = None
+    # The commit the operator was shown. Optional for older clients; when
+    # given, a mismatch with the parked commit is a 409 (see lifecycle).
+    sha: str | None = None
 
 @router.post("/api/tasks/{task_id}/merge-decision")
 async def merge_decision(request: Request, task_id: str, req: MergeDecisionRequest, user: User = Depends(require_full_auth)):
@@ -412,7 +415,7 @@ async def merge_decision(request: Request, task_id: str, req: MergeDecisionReque
         check_repo_access(user, values["repo"])
 
         try:
-            t = lifecycle.merge_decision(values, None, req.decision, req.message)
+            t = lifecycle.merge_decision(values, None, req.decision, req.message, shown_sha=req.sha)
         except lifecycle.Refused as e:
             raise HTTPException(e.status, e.detail)
         pending = values["pending_merge_approval"]

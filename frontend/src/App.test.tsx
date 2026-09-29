@@ -1,14 +1,14 @@
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { session, user } from "./test/fixtures";
+import { session, task, user } from "./test/fixtures";
 
 // The gate order in App is: loading -> landing/login -> forced password
 // change -> forced TOTP enrolment -> the app. Each branch is a real state an
 // operator can land in, and getting the order wrong locks someone out.
 
 const getMe = vi.fn();
-const listTasks = vi.fn(async () => []);
+const listTasks = vi.fn<() => Promise<import("./types").TaskMeta[]>>(async () => []);
 const listPlanningSessions = vi.fn(async () => []);
 const listRepos = vi.fn(async () => ["webapp"]);
 const logout = vi.fn(async () => {});
@@ -41,6 +41,9 @@ vi.mock("./api", async (importOriginal) => {
     createProject: (...a: unknown[]) => createProject(...a),
     createPlanningSession: (...a: unknown[]) => createPlanningSession(...a),
     getPlanningSession: (id: string) => getPlanningSession(id),
+    // The task view's stream hydrates from this; the bare fetch stub's `{}`
+    // has no `meta`.
+    getTask: async (id: string) => ({ meta: task({ task_id: id, status: "running" }), state: null, orphaned: false, seq: 0 }),
     setAuthFailureHandler: (fn: (() => void) | null) => {
       authFailureHandler = fn;
     },
@@ -52,6 +55,7 @@ import App from "./App";
 beforeEach(() => {
   authFailureHandler = null;
   getMe.mockReset();
+  listTasks.mockReset().mockResolvedValue([]);
   listRepos.mockClear();
   getGitHubSettings.mockReset();
   getGitHubSettings.mockResolvedValue({ env_token: false, settings: { tokens: {} } });
@@ -167,6 +171,28 @@ describe("App — inside the desktop app", () => {
     render(<App />);
     await screen.findByRole("heading", { name: /sign in/i });
     expect(screen.queryByTestId("titlebar")).not.toBeInTheDocument();
+  });
+});
+
+describe("App — per-task state", () => {
+  // Selecting a task pushes its URL; the next test expects to start on "/".
+  afterEach(() => window.history.replaceState(null, "", "/"));
+
+  it("a draft typed for one task does not follow the operator to the next", async () => {
+    // TaskView had no key, so React kept one instance across tasks and the
+    // composer, the resume panel and the diff panel all carried their state
+    // over (2026-09-29 audit, U3).
+    const a = task({ task_id: "task-a", goal: "first task", status: "running" });
+    const b = task({ task_id: "task-b", goal: "second task", status: "running" });
+    getMe.mockResolvedValue(user());
+    listTasks.mockResolvedValue([a, b]);
+    render(<App />);
+    await userEvent.click(await screen.findByText("first task"));
+    const box = await screen.findByLabelText("Message the agent");
+    await userEvent.type(box, "only for the first");
+    expect(box).toHaveValue("only for the first");
+    await userEvent.click(screen.getByText("second task"));
+    expect(await screen.findByLabelText("Message the agent")).toHaveValue("");
   });
 });
 
