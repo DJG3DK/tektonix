@@ -109,6 +109,13 @@ function execp(cmd, args, opts = {}) {
 }
 
 let _probe = null;
+let _probeStale = 0;
+
+// How long a host install's "unavailable" is believed before docker is asked
+// again. A yes is kept for the process: the image does not vanish. A no used
+// to be kept the same way, so a reviewer that started while Docker was still
+// coming up refused every review until someone restarted it (2026-09-29).
+const UNAVAILABLE_TTL_MS = Number(process.env.REVIEW_SANDBOX_RETRY_MS) || 60_000;
 
 /**
  * Whether checks can be sandboxed here, cached for the process.
@@ -118,8 +125,8 @@ let _probe = null;
  * `unavailable`, which the caller must refuse on. There is no answer that
  * means "run it here": this process holds the secret that authorises merges.
  */
-async function probe({ secret, fetchImpl = fetch } = {}) {
-    if (_probe) return _probe;
+async function probe({ secret, fetchImpl = fetch, now = Date.now } = {}) {
+    if (_probe && (_probe.mode !== 'unavailable' || now() < _probeStale)) return _probe;
     if (IN_CONTAINER) {
         if (!DELEGATE_URL) {
             _probe = { mode: 'unavailable',
@@ -140,11 +147,13 @@ async function probe({ secret, fetchImpl = fetch } = {}) {
     const d = await execp('docker', ['version', '--format', '{{.Server.Version}}']);
     if (!d.ok) {
         _probe = { mode: 'unavailable', reason: `docker is not usable here: ${d.out.trim().slice(0, 200)}` };
+        _probeStale = now() + UNAVAILABLE_TTL_MS;
         return _probe;
     }
     const img = await execp('docker', ['image', 'inspect', IMAGE, '--format', '{{.Id}}']);
     if (!img.ok) {
         _probe = { mode: 'unavailable', reason: `the sandbox image ${IMAGE} is not built on this host` };
+        _probeStale = now() + UNAVAILABLE_TTL_MS;
         return _probe;
     }
     _probe = { mode: 'sandbox', reason: `${IMAGE} on docker ${d.out.trim()}` };
@@ -177,7 +186,7 @@ async function delegatedProbe({ secret, fetchImpl = fetch } = {}) {
              reason: `checks run in ${data.image || 'the sandbox image'} started by the agent (${DELEGATE_URL})` };
 }
 
-function resetProbe() { _probe = null; }   // tests only
+function resetProbe() { _probe = null; _probeStale = 0; }   // tests only
 
 /**
  * The -v arguments a worktree needs for its checks to behave as they do on
@@ -624,4 +633,5 @@ function missingTool(output) {
 
 module.exports = { describeFetchError, probe, delegatedProbe, resetProbe, runSandboxed, runDelegated, runDelegatedDatabaseCheck, delegatedRequest, dockerArgs, mountArgs,
                    mountSpecs, nodeModulesLinks, isInside, mountableNodeModules, missingTool, imageFor, STACKS, IMAGE, IN_CONTAINER,
+                   UNAVAILABLE_TTL_MS,
                    DELEGATE_URL };

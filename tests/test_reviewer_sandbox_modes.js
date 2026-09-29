@@ -128,6 +128,44 @@ test('outside the bundle it looks for a real docker and a built image', async ()
     if (p.mode === 'unavailable') assert.ok(p.reason.length > 0);
 });
 
+test('outside the bundle, a docker that was down is asked again once the answer is stale', async () => {
+    // 2026-09-29: a reviewer started before Docker was up remembered
+    // "unavailable" for the life of the process and refused every review
+    // until it was restarted. A yes is still kept: the image does not vanish.
+    const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'fakedocker-'));
+    const state = path.join(bin, 'state');
+    fs.writeFileSync(state, 'down');
+    fs.writeFileSync(path.join(bin, 'docker'),
+        `#!/bin/sh\n[ "$(cat "${state}")" = up ] || { echo "Cannot connect to the Docker daemon" >&2; exit 1; }\necho 27.1\n`,
+        { mode: 0o755 });
+    const savedPath = process.env.PATH;
+    process.env.PATH = `${bin}:${savedPath}`;
+    try {
+        const s = freshSandbox(undefined);
+        let clock = 1_000_000;
+        const now = () => clock;
+        const first = await s.probe({ now });
+        assert.equal(first.mode, 'unavailable');
+        assert.ok(/Cannot connect/.test(first.reason), first.reason);
+
+        fs.writeFileSync(state, 'up');
+        const cached = await s.probe({ now });
+        assert.equal(cached.mode, 'unavailable', 'a fresh no is not re-asked on every check');
+
+        clock += s.UNAVAILABLE_TTL_MS + 1;
+        const retried = await s.probe({ now });
+        assert.equal(retried.mode, 'sandbox', `docker came up and the stale no was re-asked: ${retried.reason}`);
+
+        fs.writeFileSync(state, 'down');
+        clock += s.UNAVAILABLE_TTL_MS + 1;
+        const kept = await s.probe({ now });
+        assert.equal(kept.mode, 'sandbox', 'a yes is kept for the process');
+    } finally {
+        process.env.PATH = savedPath;
+        fs.rmSync(bin, { recursive: true, force: true });
+    }
+});
+
 test('the image is overridable, so a bundle build can pin its own', () => {
     const saved = process.env.AGENT_SANDBOX_IMAGE;
     process.env.AGENT_SANDBOX_IMAGE = 'someone-elses:tag';
