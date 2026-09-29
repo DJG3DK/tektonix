@@ -318,11 +318,17 @@ pub async fn machine_git_identity() -> (String, String) {
     (name.trim().to_string(), email.trim().to_string())
 }
 
+/// The last four characters behind eight dots. Characters, not bytes: this
+/// runs from settings_get at every launch, and a byte slice that split a
+/// multibyte character at the end of the key aborted the app until .env
+/// was edited by hand (panic = "abort").
 fn hint(secret: &str) -> String {
-    if secret.len() <= 8 {
-        return "•".repeat(secret.len());
+    let count = secret.chars().count();
+    if count <= 8 {
+        return "•".repeat(count);
     }
-    format!("••••••••{}", &secret[secret.len() - 4..])
+    let tail: String = secret.chars().skip(count - 4).collect();
+    format!("••••••••{tail}")
 }
 
 pub fn save_settings(
@@ -1050,6 +1056,12 @@ mod tests {
     fn a_secret_is_hinted_never_shown() {
         assert_eq!(hint("sk-or-v1-abcdefgh1234"), "••••••••1234");
         assert_eq!(hint("short"), "•••••");
+        assert_eq!(
+            hint("sk-or-v1-abcdefgh12é"),
+            "••••••••h12é",
+            "a multibyte character at the end is a character, not a panic"
+        );
+        assert_eq!(hint("ééééé"), "•••••");
     }
 }
 
