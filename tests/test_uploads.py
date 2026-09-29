@@ -63,6 +63,58 @@ def test_unsupported_type_rejected(monkeypatch, tmp_path):
     assert r.status_code == 415
 
 
+def _batches(repo):
+    d = repo / ".uploads"
+    return sorted(p.name for p in d.iterdir()) if d.exists() else []
+
+
+def test_two_attachments_with_one_name_are_two_files(monkeypatch, tmp_path):
+    """The second used to land over the first, with two manifest entries
+    pointing at one file (2026-09-29)."""
+    client, repo = _client(monkeypatch, tmp_path)
+    r = client.post("/api/uploads?repo=test-repo", files=[
+        ("files", ("data.csv", b"first\n", "text/csv")),
+        ("files", ("data.csv", b"second\n", "text/csv")),
+        ("files", ("data.csv", b"third\n", "text/csv")),
+    ])
+    assert r.status_code == 200, r.text
+    paths = [e["path"] for e in r.json()["files"]]
+    assert len(set(paths)) == 3
+    assert [p.rsplit("/", 1)[1] for p in paths] == ["data.csv", "data-2.csv", "data-3.csv"]
+    assert [(repo / p).read_bytes() for p in paths] == [b"first\n", b"second\n", b"third\n"]
+
+
+def test_a_refused_batch_leaves_nothing_behind(monkeypatch, tmp_path):
+    """A batch is all or nothing: files from a refused batch had no manifest
+    and no owner, and sat in the workspace for every later task to copy."""
+    client, repo = _client(monkeypatch, tmp_path)
+    r = client.post("/api/uploads?repo=test-repo", files=[
+        ("files", ("ok.csv", b"a,b\n", "text/csv")),
+        ("files", ("virus.exe", b"MZ", "application/octet-stream")),
+    ])
+    assert r.status_code == 415
+    assert _batches(repo) == [], "the accepted half of a refused batch is still on disk"
+
+
+def test_too_many_files_creates_no_batch_directory(monkeypatch, tmp_path):
+    from agent.routers import uploads
+    client, repo = _client(monkeypatch, tmp_path)
+    files = [("files", (f"f{i}.csv", b"x\n", "text/csv")) for i in range(uploads.UPLOAD_MAX_FILES + 1)]
+    assert client.post("/api/uploads?repo=test-repo", files=files).status_code == 413
+    assert _batches(repo) == []
+
+
+def test_a_failed_extraction_is_logged_under_the_files_name(monkeypatch, tmp_path, caplog):
+    import logging
+    client, repo = _client(monkeypatch, tmp_path)
+    with caplog.at_level(logging.INFO, logger="tektonix"):
+        r = client.post("/api/uploads?repo=test-repo",
+                        files=[("files", ("scan.pdf", b"%PDF-1.4 not really a pdf", "application/pdf"))])
+    assert r.status_code == 200 and r.json()["files"][0]["extracted_text"] is None
+    line = next(m for m in caplog.messages if "text extraction failed" in m)
+    assert "scan.pdf" in line and "None" not in line, line
+
+
 def test_attachments_note_covers_all_kinds():
     note = srv._attachments_note([
         {"path": ".uploads/x/shot.png", "kind": "image", "bytes": 10},

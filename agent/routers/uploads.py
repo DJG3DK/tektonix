@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import shutil
 import uuid
 from pathlib import Path
 
@@ -69,6 +70,10 @@ async def upload_files(repo: str, files: list[UploadFile] = File(...), user: Use
     if repo not in agent_config.PROJECTS:
         raise HTTPException(404, f"unknown repo {repo!r}")
     check_repo_access(user, repo)
+    # audit M-13: bound the file count before touching any of them -- and
+    # before the batch directory exists, so a refused batch leaves nothing.
+    if len(files) > UPLOAD_MAX_FILES:
+        raise HTTPException(413, f"too many files ({len(files)}); limit is {UPLOAD_MAX_FILES}")
     repo_root = agent_config.PROJECTS[repo]["sandbox"]
     # audit M-34: _ensure_uploads_ignored is synchronous (Path.exists,
     # write_text, subprocess.run) -- run it off the event loop.
@@ -76,18 +81,41 @@ async def upload_files(repo: str, files: list[UploadFile] = File(...), user: Use
     batch = uuid.uuid4().hex[:8]
     batch_dir = Path(repo_root) / UPLOADS_DIRNAME / batch
     batch_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        manifest = await _store_batch(files, batch, batch_dir)
+    except BaseException:
+        # A batch is all or nothing: the manifest is what the goal cites,
+        # and files from a refused batch had no manifest and no owner
+        # (2026-09-29).
+        await asyncio.to_thread(shutil.rmtree, batch_dir, True)
+        raise
+    return {"repo": repo, "files": manifest}
 
-    # audit M-13: bound the file count before touching any of them.
-    if len(files) > UPLOAD_MAX_FILES:
-        raise HTTPException(413, f"too many files ({len(files)}); limit is {UPLOAD_MAX_FILES}")
 
+def _unique_name(name: str, taken: set[str]) -> str:
+    """`report.csv`, then `report-2.csv`, `report-3.csv`: two attachments with
+    one filename used to be one file on disk, the second silently over the
+    first, with two manifest entries pointing at it (2026-09-29)."""
+    if name not in taken:
+        return name
+    stem, ext = Path(name).stem, Path(name).suffix
+    n = 2
+    while f"{stem}-{n}{ext}" in taken:
+        n += 1
+    return f"{stem}-{n}{ext}"
+
+
+async def _store_batch(files: list[UploadFile], batch: str, batch_dir: Path) -> list[dict]:
     manifest = []
+    taken: set[str] = set()
     for f in files:
         name = Path(f.filename or "file").name  # strip any path components
         ext = Path(name).suffix.lower()
         kind = UPLOAD_KINDS.get(ext)
         if kind is None:
             raise HTTPException(415, f"unsupported file type {ext!r} ({name})")
+        name = _unique_name(name, taken)
+        taken.update({name, f"{name}.txt"})     # the pdf's sibling text is a name too
         # audit M-13: stream to disk in chunks with a running counter, aborting
         # (and deleting the partial file) the moment it exceeds the cap -- the
         # old `await f.read()` materialized the whole file in memory first.
@@ -121,7 +149,7 @@ async def upload_files(repo: str, files: list[UploadFile] = File(...), user: Use
                 entry["pages"] = pages
             except Exception as e:  # noqa: BLE001 -- a scanned/encrypted pdf shouldn't fail the upload
                 entry["extracted_text"] = None
-                logger.info("uploads: text extraction failed for %s: %s", entry.get("name"), e)
+                logger.info("uploads: text extraction failed for %s: %s", name, e)
                 entry["note"] = "text extraction failed -- possibly scanned; no text layer"
         manifest.append(entry)
-    return {"repo": repo, "files": manifest}
+    return manifest
