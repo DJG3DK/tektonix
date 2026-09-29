@@ -60,7 +60,9 @@ def _is_instance_id(s: str) -> bool:
 _TEXT_LIMIT = 6000
 
 
-def _load(path: Path) -> dict | None:
+def _load(path: Path | None) -> dict | None:
+    if path is None:
+        return None
     try:
         return json.loads(path.read_text())
     except (OSError, ValueError):
@@ -78,9 +80,25 @@ def _alive(pid) -> bool:
 def _run_path(*parts: str) -> Path:
     """A path under RUNS_DIR from request values, or a 400."""
     try:
-        return safe_path.under(RUNS_DIR, *parts)
+        return safe_path.under(RUNS_DIR, *parts, resolve=True)
     except safe_path.PathOutsideRoot:
         raise HTTPException(400, "not a run name") from None
+
+
+def _in_run(d: Path, *parts: str) -> Path | None:
+    """A path under one run's directory from values the harness wrote -- an
+    instance id in summary.json, an `official_report` name. Not a request
+    value, so a bad one is not a 400 and must not be a 500 either: it is a
+    file the run does not have (2026-09-29 audit, A12)."""
+    try:
+        return safe_path.under(d, *parts, resolve=True)
+    except safe_path.PathOutsideRoot:
+        return None
+
+
+def _has(d: Path, *parts: str) -> bool:
+    p = _in_run(d, *parts)
+    return p is not None and p.is_file()
 
 
 def _run_dir(name: str) -> Path:
@@ -211,7 +229,7 @@ def combined(base: str, parts: list[dict]) -> dict:
 
 def _harness_tests(run_dir: Path, run_id: str, iid: str) -> dict | None:
     """Which graded tests failed, from the official harness's own report."""
-    rep = _load(safe_path.under(run_dir, "logs", "run_evaluation", run_id, "tektonix", iid, "report.json"))
+    rep = _load(_in_run(run_dir, "logs", "run_evaluation", run_id, "tektonix", iid, "report.json"))
     if not rep or iid not in rep:
         return None
     ts = rep[iid].get("tests_status") or {}
@@ -229,7 +247,7 @@ def _harness_notes(run_dir: Path, s: dict, run_id: str) -> dict:
     in its report), for runs graded before the runner kept it in the
     summary. `no_tests_collected` on pytest's own suite is the inner
     sessions printing "collected 0 items", not our failure (2026-09-25)."""
-    rep = _load(safe_path.under(run_dir, str(s.get("official_report") or f"tektonix.{run_id}.json"))) or {}
+    rep = _load(_in_run(run_dir, str(s.get("official_report") or f"tektonix.{run_id}.json"))) or {}
     notes = rep.get("failure_reasons")
     return notes if isinstance(notes, dict) else {}
 
@@ -333,7 +351,7 @@ def _run_tasks(name: str) -> dict:
             "reference_fails": iid in fails,
             "tests": _harness_tests(d, run_id, iid),
             "harness_note": row.get("harness_note") or notes.get(iid),
-            "has_trajectory": (d / "trajectories" / f"{iid}.json").is_file(),
+            "has_trajectory": _has(d, "trajectories", f"{iid}.json"),
             # The run that holds this task's files: a shard, for a split run.
             "run": name,
         })
@@ -388,7 +406,7 @@ async def get_task(name: str, instance_id: str, user: User = Depends(require_ful
                     patch = p.get("model_patch") or ""
     except OSError:
         pass
-    traj = _load(safe_path.under(d, "trajectories", f"{instance_id}.json"))
+    traj = _load(_in_run(d, "trajectories", f"{instance_id}.json"))
     # The reviewer's whole verdict -- summary, findings, the message it sent
     # the agent -- as the runner kept it (`review` in summary.json). A run from
     # before it was kept has only the verdict word.

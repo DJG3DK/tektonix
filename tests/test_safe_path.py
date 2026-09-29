@@ -49,3 +49,19 @@ def test_an_artifact_id_is_compared_never_globbed(tmp_path, monkeypatch):
     assert artifacts.load("shop", "a" * 32) is not None
     assert artifacts.load("shop", "*") is None and artifacts.load("shop", "a" * 31 + "?") is None
     assert artifacts.load("nope", "a" * 32) is None
+
+
+def test_a_link_inside_the_root_that_leaves_it_is_refused_only_when_resolved(tmp_path):
+    """The lexical check cannot see a symlink. Where the path must exist,
+    `resolve=True` follows it and compares the real paths."""
+    root, outside = tmp_path / "root", tmp_path / "outside"
+    root.mkdir(), outside.mkdir()
+    (outside / "secret").write_text("x")
+    (root / "link").symlink_to(outside)
+    (root / "inner").mkdir()
+    (root / "inner-link").symlink_to(root / "inner")
+    assert safe_path.under(root, "link", "secret") == root / "link" / "secret"     # lexical: passes
+    with pytest.raises(safe_path.PathOutsideRoot):
+        safe_path.under(root, "link", "secret", resolve=True)
+    assert safe_path.under(root, "inner-link", "f", resolve=True) == (root / "inner" / "f").resolve()
+    assert safe_path.under(root, "missing", "f", resolve=True) == (root / "missing" / "f").resolve()

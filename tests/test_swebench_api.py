@@ -305,3 +305,17 @@ def test_the_container_cleanup_matches_one_run_s_containers_only(monkeypatch):
     for other in ("sweb.eval.django__django-1.tektonix-x-s10", "sweb.eval.django__django-1.tektonix-x-s1-old",
                   "sweb.eval.django__django-1xtektonix-x-s1"):
         assert not pattern.search(other), other
+
+
+def test_a_bad_instance_id_written_by_the_harness_is_not_a_500(client, tmp_path):
+    """summary.json is the harness's file, not a request value. An instance
+    key that would leave the run directory used to raise PathOutsideRoot out
+    of the listing (2026-09-29 audit, A12)."""
+    _write(tmp_path, "odd-run", {"run_id": "odd-run", "selection": {"sample": 1}, "total": 1,
+                                 "started_at": "2026-09-24T12:00:00Z", "finished_at": "2026-09-24T13:00:00Z",
+                                 "official_report": "../../outside.json",
+                                 "instances": {"../../../etc/passwd": {"task_id": "t9", "outcome": "shipped"}}})
+    r = client.get("/api/swebench/runs/odd-run")
+    assert r.status_code == 200, r.text
+    task = r.json()["tasks"][0]
+    assert task["has_trajectory"] is False and task["tests"] is None and task["harness_note"] is None
