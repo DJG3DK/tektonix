@@ -58,13 +58,16 @@ planning_recorders: dict[str, planning_log.Recorder] = {}
 # (server._mirror_planning_cost) both read, modify and write the whole row;
 # without this a mirrored cost could land between the carry's read and its
 # write and be lost, or the carry under the mirror's (2026-09-29 audit, A7).
-planning_meta_locks: dict[str, asyncio.Lock] = {}
+# Keyed by loop as well as session, so a test's fresh loop never meets a
+# lock bound to an earlier one.
+planning_meta_locks: dict[tuple[int, str], asyncio.Lock] = {}
 
 
 def planning_meta_lock(session_id: str) -> asyncio.Lock:
-    lock = planning_meta_locks.get(session_id)
+    key = (id(asyncio.get_running_loop()), session_id)
+    lock = planning_meta_locks.get(key)
     if lock is None:
-        lock = planning_meta_locks[session_id] = asyncio.Lock()
+        lock = planning_meta_locks[key] = asyncio.Lock()
     return lock
 
 

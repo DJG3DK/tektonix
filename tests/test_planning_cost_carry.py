@@ -66,6 +66,45 @@ def test_the_sessions_spend_is_carried_onto_the_task_it_starts_once():
     assert store.records[(("planning", "proj"), "s1")]["carried_cost_usd"] == 1.75
 
 
+def test_a_carry_that_cannot_be_recorded_carries_nothing():
+    """The carry once returned the amount even when the write failed, so the
+    next build from the same session carried it again (2026-09-29). Unrecorded
+    means uncarried: the spend stays on the session as its own category."""
+    class _WriteFails(_Store):
+        async def aput(self, ns, key, value):
+            raise RuntimeError("database is down")
+
+    store = _WriteFails({(("planning", "proj"), "s-w"): {"session_id": "s-w", "repo": "proj", "cost_usd": 1.25}})
+    assert asyncio.run(tasks.carry_planning_cost(store, "proj", "s-w", "t1")) == 0.0
+    assert "carried_cost_usd" not in store.records[(("planning", "proj"), "s-w")]
+
+
+def test_a_live_cost_mirror_during_the_carry_is_not_written_away():
+    """Both the carry and server._mirror_planning_cost read, modify and write
+    the whole session row. Unserialised, whichever wrote second erased the
+    other's change (A7, 2026-09-29)."""
+    import agent.server as srv
+
+    class _Slow(_Store):
+        async def aget(self, ns, key):
+            await asyncio.sleep(0.02)      # a store round trip, long enough for the other writer to arrive
+            return await super().aget(ns, key)
+
+    store = _Slow({(("planning", "proj"), "s-m"): {"session_id": "s-m", "repo": "proj", "cost_usd": 1.25}})
+
+    async def both():
+        return await asyncio.gather(
+            tasks.carry_planning_cost(store, "proj", "s-m", "t1"),
+            srv._mirror_planning_cost(store, "proj", "s-m", 2.0),
+        )
+
+    carried, _ = asyncio.run(both())
+    row = store.records[(("planning", "proj"), "s-m")]
+    assert carried == 1.25
+    assert row["carried_cost_usd"] == 1.25 and row["built_task_ids"] == ["t1"], "the mirror wrote the carry away"
+    assert row["cost_usd"] == 2.0, "the carry wrote the live cost away"
+
+
 def test_a_task_without_a_session_or_with_an_unknown_one_carries_nothing():
     store = _Store({})
     app = _app(store)

@@ -103,26 +103,28 @@ async def carry_planning_cost(store, repo: str, session_id: str, task_id: str) -
     A session's spend is carried once: what it has spent beyond what earlier
     builds from the same session already carried. The session records what
     was carried and to which task, so the analytics page can show planning
-    spend that never became a task as its own category."""
-    async with live_state.planning_meta_lock(session_id):    # the cost mirror writes the same row
-        try:
+    spend that never became a task as its own category.
+
+    Nothing is carried unless the carry is recorded: a task that took the
+    spend while the session still said it was uncarried would be double
+    counted by the next build, so a failed write means 0.0 and the spend
+    stays on the session as its own category."""
+    try:
+        async with live_state.planning_meta_lock(session_id):    # the cost mirror writes the same row
             item = await store.aget(("planning", repo), session_id)
-        except Exception:  # noqa: BLE001 -- a store hiccup must not stop the task
-            logger.exception("planning cost carry: could not read session %s", session_id)
-            return 0.0
-        if not item or (item.value or {}).get("repo") not in (None, repo):
-            return 0.0
-        meta = dict(item.value)
-        spent = float(meta.get("cost_usd") or 0.0)
-        already = float(meta.get("carried_cost_usd") or 0.0)
-        carried = round(max(0.0, spent - already), 6)
-        meta["carried_cost_usd"] = round(already + carried, 6)
-        meta["built_task_ids"] = [*(meta.get("built_task_ids") or []), task_id]
-        try:
+            if not item or (item.value or {}).get("repo") not in (None, repo):
+                return 0.0
+            meta = dict(item.value)
+            spent = float(meta.get("cost_usd") or 0.0)
+            already = float(meta.get("carried_cost_usd") or 0.0)
+            carried = round(max(0.0, spent - already), 6)
+            meta["carried_cost_usd"] = round(already + carried, 6)
+            meta["built_task_ids"] = [*(meta.get("built_task_ids") or []), task_id]
             await store.aput(("planning", repo), session_id, meta)
-        except Exception:  # noqa: BLE001
-            logger.exception("planning cost carry: could not record the carry on session %s", session_id)
-        return carried
+    except Exception:  # noqa: BLE001 -- a store hiccup must not stop the task
+        logger.exception("planning cost carry: could not record the carry on session %s", session_id)
+        return 0.0
+    return carried
 
 
 async def run_task(

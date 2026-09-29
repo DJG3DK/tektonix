@@ -1355,7 +1355,9 @@ _PLANNING_COST_MIRROR_MIN_DELTA = 0.005
 
 
 async def _mirror_planning_cost(store, repo: str, session_id: str, cost: float) -> None:
-    """Display only. Budget enforcement reads the tracker, never this."""
+    """Display only. Budget enforcement reads the tracker, never this.
+    Under the session's meta lock (live_state.planning_meta_lock) so it cannot
+    land between the cost carry's read and write."""
     try:
         async with live_state.planning_meta_lock(session_id):  # the carry (agent/tasks.py) writes the same row
             item = await store.aget(("planning", repo), session_id)
