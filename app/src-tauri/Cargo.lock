@@ -4351,6 +4351,7 @@ version = "0.9.0"
 dependencies = [
  "futures-util",
  "reqwest 0.12.28",
+ "semver",
  "serde",
  "serde_json",
  "tauri",

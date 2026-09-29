@@ -857,6 +857,40 @@ mod tests {
     }
 
     #[test]
+    fn the_app_updater_orders_release_candidates_like_the_stack() {
+        // The comparator the updater is built with, against the versions the
+        // plugin hands it (no `v`: Cargo.toml's, and the manifest's).
+        for (current, release) in [
+            ("0.9.0-rc9", "0.9.0-rc10"),
+            ("0.9.0-rc19", "0.9.0-rc20"),
+            ("0.9.0-rc22", "0.9.0"),
+            ("0.9.0", "0.9.1-rc1"),
+        ] {
+            assert!(
+                app_update_wanted(current, release),
+                "{current} -> {release}"
+            );
+            assert!(
+                !app_update_wanted(release, current),
+                "{release} -> {current} is a downgrade"
+            );
+            assert_eq!(
+                app_update_wanted(current, release),
+                newer_than(release, current),
+                "the comparator and the stack agree"
+            );
+        }
+        assert!(!app_update_wanted("0.9.0-rc10", "0.9.0-rc10"));
+        // The plugin's default, which the comparator replaces: an rc9 app
+        // saw rc10 to rc22 as older (2026-09-29).
+        let sem = |v: &str| semver::Version::parse(v).unwrap();
+        assert!(
+            sem("0.9.0-rc10") < sem("0.9.0-rc9"),
+            "semver reads the label as text"
+        );
+    }
+
+    #[test]
     fn the_updater_manifest_lives_on_the_release_not_on_latest() {
         assert_eq!(
             updater_endpoint("v0.9.0-rc6"),
@@ -942,19 +976,36 @@ pub struct AppUpdate {
     pub tag: String,
 }
 
-/// Is a newer app than this one attached to the newest release?
-pub async fn check_app_update(app: &AppHandle) -> Result<AppUpdate, String> {
+/// The app's updater for one release: its manifest lives on that release
+/// (updater_endpoint), and releases are ordered the way the stack orders
+/// them (version_key). The plugin's default is semver, which reads a
+/// pre-release label as text, so `rc14 < rc9`: an rc9 app saw rc10 to rc22
+/// as older and never moved (2026-09-29).
+fn updater(app: &AppHandle, tag: &str) -> Result<tauri_plugin_updater::Updater, String> {
     use tauri_plugin_updater::UpdaterExt;
-    let latest = latest_release(wants_prereleases(app)).await?;
-    let endpoint: tauri::Url = updater_endpoint(&latest.tag_name)
+    let endpoint: tauri::Url = updater_endpoint(tag)
         .parse()
         .map_err(|e: url::ParseError| e.to_string())?;
-    let updater = app
-        .updater_builder()
+    app.updater_builder()
         .endpoints(vec![endpoint])
         .map_err(|e| e.to_string())?
+        .version_comparator(|current, release| {
+            app_update_wanted(&current.to_string(), &release.version.to_string())
+        })
         .build()
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| e.to_string())
+}
+
+/// Whether a release's app replaces the running one: the stack's ordering,
+/// nothing else.
+pub fn app_update_wanted(current: &str, release: &str) -> bool {
+    newer_than(release, current)
+}
+
+/// Is a newer app than this one attached to the newest release?
+pub async fn check_app_update(app: &AppHandle) -> Result<AppUpdate, String> {
+    let latest = latest_release(wants_prereleases(app)).await?;
+    let updater = updater(app, &latest.tag_name)?;
     match updater.check().await {
         Ok(Some(u)) => Ok(AppUpdate {
             available: true,
@@ -972,17 +1023,8 @@ pub async fn check_app_update(app: &AppHandle) -> Result<AppUpdate, String> {
 
 /// Download and install the newest app, then restart into it.
 pub async fn install_app_update(app: &AppHandle) -> Result<(), String> {
-    use tauri_plugin_updater::UpdaterExt;
     let latest = latest_release(wants_prereleases(app)).await?;
-    let endpoint: tauri::Url = updater_endpoint(&latest.tag_name)
-        .parse()
-        .map_err(|e: url::ParseError| e.to_string())?;
-    let updater = app
-        .updater_builder()
-        .endpoints(vec![endpoint])
-        .map_err(|e| e.to_string())?
-        .build()
-        .map_err(|e| e.to_string())?;
+    let updater = updater(app, &latest.tag_name)?;
     let Some(update) = updater.check().await.map_err(|e| e.to_string())? else {
         return Err("this app is already the newest".into());
     };

@@ -28,6 +28,11 @@ futures-util = "0.3"
 thiserror = "2"
 url = "2"
 
+[dev-dependencies]
+# Already in the tree through tauri; the tests show what its ordering
+# does to release candidates.
+semver = "1"
+
 [profile.release]
 codegen-units = 1
 lto = true
