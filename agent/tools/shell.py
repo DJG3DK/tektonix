@@ -76,9 +76,11 @@ GIT_IDENTITY_VARS = ("GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME"
 # MODEL_ROUTER_KEY, the Postgres DSN, SMTP_PASS and LANGSMITH_API_KEY --
 # reproduced live: a rewritten test script printed the signing key and the DSN
 # and the gate still returned all_ok. A shell command needs PATH to find its
-# binaries and HOME for per-user tool config (git, npm); nothing else is
-# load-bearing for git or docker (verified). Anything a specific caller
-# genuinely needs is passed explicitly via extra_env.
+# binaries and HOME for per-user tool config (git, npm), plus the locale, CI
+# and DEBIAN_FRONTEND set below, and git's identity, which is load-bearing in
+# the compose bundle (2026-09-29, see the loop). Nothing else from the host
+# environment. Anything a specific caller genuinely needs is passed
+# explicitly via extra_env.
 def _safe_base_env() -> dict:
     base = {
         "CI": "true",

@@ -16,7 +16,7 @@ reasoning for it is worth keeping next to the code, because it is not the
 obvious rule.
 
 Everything here is text in, text out -- no store, no backend, no IO. The
-reader (agent/deep_agent.py) and the migration that writes the section files
+reader (agent/project_memory.py) and the migration that writes the section files
 both drive these functions. That is what makes the one property this whole
 subsystem rests on -- the preamble plus every section body, joined in index
 order, IS the original file, byte for byte -- something a unit test can
@@ -32,7 +32,7 @@ from dataclasses import dataclass, replace
 
 # Agent-visible paths, mirroring /skills/_manifest.json + /skills/<name>/SKILL.md.
 # The store keys are these with the route prefix stripped, which is what
-# route_local_path (agent/deep_agent.py) is for -- app code that uses the full
+# route_local_path (agent/project_memory.py) is for -- app code that uses the full
 # path as a raw key writes somewhere the agent's own file tools can never read.
 SECTIONS_DIR = "/memories/sections/"
 SECTIONS_INDEX_PATH = SECTIONS_DIR + "_index.json"

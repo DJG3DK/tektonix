@@ -107,7 +107,7 @@ DEFAULT_PROVIDER_SORT = "throughput"
 # 2-3% of calls on some hosts (2026-09-24), seven-plus minutes each, while the
 # agent's real answers stayed under ~15k. A deployment's own `max_tokens` or
 # a caller's wins -- the agent sends 16k on its own seats since 2026-09-25
-# (agent/deep_agent.py SEAT_MAX_TOKENS), so this reaches only callers that
+# (agent/model_client.py SEAT_MAX_TOKENS), so this reaches only callers that
 # send no cap; embeddings carry no `messages` and are left alone.
 DEFAULT_MAX_OUTPUT_TOKENS = 32768
 

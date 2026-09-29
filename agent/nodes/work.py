@@ -488,7 +488,7 @@ async def work_node(state: AgentState, app_config: Config, checkpointer, pg_stor
             reference_repos=state.get("reference_repos") or [],
         )
 
-    # A thread: totalling a task reads and parses the whole ledger (up to 5MB).
+    # A thread: totalling a task reads and parses the whole ledger (up to 50MB).
     starting_cost = await asyncio.to_thread(_reconciled_cost, state)
     agent, tracker, last_failed_edit_ref = await _build(
         state.get("route", "general"), starting_cost, state.get("last_failed_edit_signature"))

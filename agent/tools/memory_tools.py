@@ -8,7 +8,7 @@ model reads what its prompt tells it to read, and "call read_memory_section
 with the slug" is an instruction the index can state in the same line as the
 slug, while "read /memories/sections/<slug>.md with read_file" asks it to
 know which of the two filesystems in this system that path lives on (see
-_FILESYSTEM_GUIDANCE in agent/deep_agent.py -- getting that wrong is an
+_FILESYSTEM_GUIDANCE in agent/deep_agent_prompts.py -- getting that wrong is an
 established failure here, not a theoretical one). It also gives the read a
 place to be counted, which is how anyone finds out whether the index works.
 

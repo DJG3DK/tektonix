@@ -37,7 +37,7 @@ ROUTING_LOG_PATH = Path(
     or (Path(__file__).resolve().parents[2] / "services" / "model-router" / "logs" / "routing.jsonl")
 )
 
-# routing.jsonl is appended forever and trimmed only past 5MB; a call we are
+# routing.jsonl is appended forever and trimmed only past 50MB; a call we are
 # waiting on is always within the last few hundred lines, so read the tail.
 _TAIL_BYTES = 512_000
 
@@ -96,7 +96,8 @@ class RouterLedger:
 
         Reads the WHOLE log rather than the tail: a task can run for hours and
         its early calls are long past the last 512KB. Bounded anyway, because
-        the router trims the file past 5MB -- and that trim is exactly why this
+        the router trims the file past 50MB (router/ledger.py MAX_BYTES) -- and
+        that trim is exactly why this
         is a floor rather than a truth. A caller compares it with its own
         checkpointed figure and keeps the larger (see _reconciled_cost in
         agent/nodes/work.py).

@@ -18,7 +18,8 @@ something that breaks a specific caller if it changes:
     billed cost in the ledger. Renaming it silently reverts every task to
     estimated spend.
   * `metadata.agent_task_id` / `agent_session_id` in the request body, put
-    there by deep_agent._call_metadata, recorded and NOT forwarded upstream.
+    there by agent/model_client.py's _call_metadata, recorded and NOT forwarded
+    upstream.
     Without them the ledger can price a call but never total a task.
   * Bearer auth against the same master key the proxy used.
 """

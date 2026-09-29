@@ -436,10 +436,11 @@ async def get_benchmarks(request: Request, window_days: int = 14,
     busier deployment wants it shorter so a comparison is not half stale.
     """
     auth.require_admin(user)
-    # Imported here, not at module scope: agent/deep_agent.py pulls in the
-    # whole agent build, and a route module that cannot be imported without
-    # it is a route module that cannot be tested without it.
-    from agent.deep_agent import episodes_namespace
+    # Imported here, not at module scope: agent/project_memory.py (where this
+    # lives; deep_agent only re-exports it) pulls in deepagents' backends and
+    # the store, and a route module that cannot be imported without them is a
+    # route module that cannot be tested without them.
+    from agent.project_memory import episodes_namespace
 
     # Clamped, not validated-and-rejected: the only callers are the dashboard
     # and somebody poking at the URL, and 400ing the second one buys nothing.
