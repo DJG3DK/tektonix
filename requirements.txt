@@ -85,7 +85,7 @@ uvicorn==0.52.3
 uvloop==0.22.1
 watchfiles==1.2.0
 wcmatch==11.0.1
-websockets==15.0.1
+websockets==17.1
 xxhash==4.0.1
 zstandard==0.25.0
 
