@@ -41,6 +41,7 @@
 const { execFile } = require('child_process');
 const fs = require('fs');
 const path = require('path');
+const { nodeModulesSource } = require('./node-modules-source');
 
 // Mirrors agent/tools/sandbox.py. Kept as literals with the source named
 // rather than read from Python, because a reviewer that cannot parse the

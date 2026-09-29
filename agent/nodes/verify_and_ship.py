@@ -1035,11 +1035,19 @@ async def _review_and_deploy(state: AgentState, repo: str, sha: str) -> dict:
         # rejection loops back.
         benchmark = bool((PROJECTS.get(repo) or {}).get("benchmark"))
         if review.get("escalated") and not benchmark:
-            reason = (
-                f"The independent review service escalated this after repeated non-converging "
-                f"rounds (its churn/consecutive-NEEDS_FIXES circuit breaker fired) -- a human "
-                f"should look rather than the agent nudging again.\n\n{detail}"
-            )
+            if _harness_failed(review):
+                # Not the code's doing: name the harness and say what to do.
+                reason = (
+                    f"The review harness could not run the review of this commit, so nothing was "
+                    f"learned about the code. Once the cause below is fixed, resume this task: the "
+                    f"review is asked for again as-is.\n\n{detail}"
+                )
+            else:
+                reason = (
+                    f"The independent review service escalated this after repeated non-converging "
+                    f"rounds (its churn/consecutive-NEEDS_FIXES circuit breaker fired) -- a human "
+                    f"should look rather than the agent nudging again.\n\n{detail}"
+                )
             return {
                 "committed_sha": sha,
                 "review_gate_result": review,

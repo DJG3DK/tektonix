@@ -4,6 +4,10 @@
 
 ### The review runs in the bundle the way it runs on a host
 
+(rc19: the dependency helper was used in one file without being imported,
+and every review of a project with configured node_modules directories
+failed with a ReferenceError; a harness escalation now says what to do.)
+
 An audit of the whole path from a passing check to a merged pull request,
 as it runs under Docker Desktop, found where each step could fail
 silently. In the bundle the reviewer now: borrows the agent's own Linux
