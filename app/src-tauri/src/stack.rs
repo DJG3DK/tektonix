@@ -261,7 +261,7 @@ pub fn set_env_line(content: &str, key: &str, value: &str) -> String {
             && !trimmed.starts_with('#')
         {
             if !done {
-                out.push(format!("{key}={value}"));
+                out.push(format!("{key}={}", env_literal(value)));
                 done = true;
             }
         } else {
@@ -269,7 +269,7 @@ pub fn set_env_line(content: &str, key: &str, value: &str) -> String {
         }
     }
     if !done {
-        out.push(format!("{key}={value}"));
+        out.push(format!("{key}={}", env_literal(value)));
     }
     let mut s = out.join("\n");
     s.push('\n');
@@ -286,9 +286,52 @@ pub fn get_env_value(content: &str, key: &str) -> Option<String> {
         if k.trim() != key {
             return None;
         }
-        let v = v.trim().trim_matches('"').trim_matches('\'').to_string();
-        Some(v)
+        Some(env_value(v.trim()))
     })
+}
+
+/// A value as compose reads it (env_literal writes it): single quotes are
+/// literal, double quotes unescape `\\`, `\"` and `\$`, bare is bare.
+fn env_value(raw: &str) -> String {
+    if raw.len() >= 2 && raw.starts_with('\'') && raw.ends_with('\'') {
+        return raw[1..raw.len() - 1].to_string();
+    }
+    if raw.len() >= 2 && raw.starts_with('"') && raw.ends_with('"') {
+        let mut out = String::new();
+        let mut chars = raw[1..raw.len() - 1].chars();
+        while let Some(c) = chars.next() {
+            match (c, chars.clone().next()) {
+                ('\\', Some(n @ ('\\' | '"' | '$'))) => {
+                    out.push(n);
+                    chars.next();
+                }
+                _ => out.push(c),
+            }
+        }
+        return out;
+    }
+    raw.to_string()
+}
+
+/// A value as compose must see it. Bare when nothing in it means anything
+/// to compose; else single-quoted, where everything is literal; else, when
+/// it holds a single quote, double-quoted with compose's escapes. Written
+/// bare, `Dan #2` lost `#2` to the comment rule and `$` was interpolated.
+pub fn env_literal(value: &str) -> String {
+    let plain = !value
+        .chars()
+        .any(|c| c.is_whitespace() || matches!(c, '#' | '$' | '"' | '\''));
+    if plain {
+        return value.to_string();
+    }
+    if !value.contains('\'') {
+        return format!("'{value}'");
+    }
+    let escaped = value
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('$', "\\$");
+    format!("\"{escaped}\"")
 }
 
 fn env_path(app: &AppHandle) -> Result<PathBuf, String> {
@@ -862,6 +905,54 @@ mod tests {
         assert_eq!(
             out, "K=new\nA=1\n",
             "every line of the key goes (install.ps1 does the same); compose would have taken the last"
+        );
+    }
+
+    #[test]
+    fn a_value_compose_would_misread_is_quoted_and_reads_back() {
+        assert_eq!(
+            env_literal("C:\\Users\\me\\code"),
+            "C:\\Users\\me\\code",
+            "a backslash alone stays bare, as every install so far wrote it"
+        );
+        assert_eq!(env_literal("Dan #2"), "'Dan #2'", "bare, #2 was a comment");
+        assert_eq!(
+            env_literal("pa$$word"),
+            "'pa$$word'",
+            "bare, $$ was interpolated"
+        );
+        assert_eq!(
+            env_literal("C:\\Users\\Dan Smith\\code"),
+            "'C:\\Users\\Dan Smith\\code'"
+        );
+        assert_eq!(
+            env_literal("O'Brien #1"),
+            "\"O'Brien #1\"",
+            "a single quote forces double quotes"
+        );
+        assert_eq!(
+            env_literal("say \"hi\" $1 \\ 'x'"),
+            "\"say \\\"hi\\\" \\$1 \\\\ 'x'\""
+        );
+        for value in [
+            "plain",
+            "Dan #2",
+            "pa$$word",
+            "O'Brien #1",
+            "say \"hi\" $1 \\ 'x'",
+            "C:\\Users\\Dan Smith\\code",
+        ] {
+            let content = set_env_line("A=1\n", "K", value);
+            assert_eq!(
+                get_env_value(&content, "K").as_deref(),
+                Some(value),
+                "{value} round-trips"
+            );
+        }
+        assert_eq!(
+            get_env_value("K='O''s'\n", "K").as_deref(),
+            Some("O''s"),
+            "single quotes are literal"
         );
     }
 
