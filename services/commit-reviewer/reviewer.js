@@ -70,6 +70,7 @@ const STATE_PATH = path.join(STATE_DIR, 'state.json');
 const HISTORY_PATH = path.join(STATE_DIR, 'history.jsonl');
 const POLL_MS = 120_000; // 2 min — commits aren't frequent enough to need faster
 const MAX_CONSECUTIVE_FIXES = 3; // this many NEEDS_FIXES in a row marks the record escalated
+const HARNESS_RETRY_MS = 30 * 60 * 1000; // a harness-failed verdict is retried on the poll after this long
 
 // MAX_CONSECUTIVE_FIXES only catches straight-line failure — it resets to 0
 // the instant a round comes back READY. Seen live on a monorepo project'
@@ -405,6 +406,11 @@ async function detectNewCommit(project, cfg, prev = loadState()[project], reques
   const prevForRef = branchRecord(prev, ref);
   if (prevForRef && prevForRef.lastReviewedSha === head && !harnessFailed(prevForRef)) return null;
   if (prevForRef && prevForRef.lastReviewedSha === head) {
+    // Asked for by name: now. On the poll: after a while, so a harness that
+    // is still broken is not re-run every tick (it was, every five minutes,
+    // the afternoon this was written).
+    const age = prevForRef.reviewedAt ? Date.now() - Date.parse(prevForRef.reviewedAt) : Infinity;
+    if (requested !== ref && !(age >= HARNESS_RETRY_MS)) return null;
     log(`[${project}] ${ref} at ${head.slice(0, 12)} was last blocked by the review harness itself, not by a finding -- reviewing it again`);
   }
 

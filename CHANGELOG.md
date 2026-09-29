@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### A workspace-internal package resolves inside the check container
+
+The reviewer linked a monorepo's internal package to the worktree by its
+host path, which does not exist inside the check container, so every app
+importing it failed typecheck with "cannot find module" in any review that
+borrowed dependencies instead of installing them. The link is relative
+now. A verdict the harness produced is retried on request at once and on
+the poll after half an hour, not every tick.
+
 ### An approved merge reads the verdict it already has
 
 The rule that makes a re-review wait for a verdict newer than the request

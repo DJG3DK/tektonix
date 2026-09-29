@@ -81,10 +81,13 @@ test('once reviewed at its tip, nothing else is picked up -- no ping-pong', asyn
 test('a verdict the harness produced does not count as a review: the tip is picked up again', async () => {
   const { root, cfg, newTip } = fixture();
   try {
-    const prev = { branch: TASK_NEW, lastReviewedSha: newTip, verdict: 'NEEDS_FIXES',
+    const prev = { branch: TASK_NEW, lastReviewedSha: newTip, verdict: 'NEEDS_FIXES', reviewedAt: new Date().toISOString(),
                    checkResults: [{ name: 'test', ok: false, infrastructure: true, output: 'SETUP: the agent did not answer' }] };
-    const unit = await detectNewCommit('p', cfg, prev);
-    assert.equal(unit?.sha, newTip, 'blocked by the harness, not by a finding: review again');
+    assert.equal(await detectNewCommit('p', cfg, prev), null, 'a fresh harness failure is not re-run on the poll');
+    const unit = await detectNewCommit('p', cfg, prev, TASK_NEW);
+    assert.equal(unit?.sha, newTip, 'blocked by the harness, not by a finding: review again when asked by name');
+    const stale = { ...prev, reviewedAt: new Date(Date.now() - 31 * 60 * 1000).toISOString() };
+    assert.equal((await detectNewCommit('p', cfg, stale))?.sha, newTip, 'and on the poll once it is half an hour old');
     const judged = { branch: TASK_NEW, lastReviewedSha: newTip, verdict: 'NEEDS_FIXES',
                      checkResults: [{ name: 'test', ok: false, output: '1 failing' }] };
     assert.equal(await detectNewCommit('p', cfg, judged), null, 'a real failing check is a verdict');

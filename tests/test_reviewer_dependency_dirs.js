@@ -330,3 +330,12 @@ test('in the bundle the reviewer does not bind-mount in its own container: the a
         if (saved[1] === undefined) delete process.env.AGENT_SANDBOX_URL; else process.env.AGENT_SANDBOX_URL = saved[1];
     }
 });
+
+
+test('a workspace-internal package is linked relative to the worktree, so it resolves at /workspace too', () => {
+    const { relativeLink } = require('../services/commit-reviewer/worktree.js');
+    const wt = '/home/agent/worktrees/proj-abc';
+    const link = relativeLink(`${wt}/apps/admin/node_modules/@scope/shared`, `${wt}/packages/shared`);
+    assert.equal(link, '../../../../packages/shared');
+    assert.equal(require('path').resolve('/workspace/apps/admin/node_modules/@scope', link), '/workspace/packages/shared');
+});

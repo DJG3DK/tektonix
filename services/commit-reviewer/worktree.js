@@ -15,6 +15,17 @@ const path = require('path');
 const { AGENT_HOME, log, run, git, runAgentCode } = require('./exec');
 const { nodeModulesSource } = require('./node-modules-source');
 
+/**
+ * A symlink target inside the worktree, written relative to the link. An
+ * absolute one names the worktree by its HOST path, and the check container
+ * mounts the worktree at /workspace: the link dangled there, and every app
+ * that imports a workspace-internal package failed typecheck with "cannot
+ * find module" in any review that borrowed dependencies (2026-09-29).
+ */
+function relativeLink(linkPath, target) {
+    return path.relative(path.dirname(linkPath), target) || '.';
+}
+
 /** In the bundle the agent runs every check in a container it starts, with
  * the mounts it is asked for; this container holds no docker socket and no
  * mount capability. Read per call so a test can set it. */
@@ -522,12 +533,12 @@ async function setupWorktree(project, cfg, sha, base, { depsChangedOverride = nu
               const fullName = `${entry}/${scopedEntry}`;
               const dest = path.join(targetNodeModules, fullName);
               const override = internalPackages.get(fullName);
-              fs.symlinkSync(override || path.join(scopeDir, scopedEntry), dest);
+              fs.symlinkSync(override ? relativeLink(dest, override) : path.join(scopeDir, scopedEntry), dest);
             }
           } else {
             const dest = path.join(targetNodeModules, entry);
             const override = internalPackages.get(entry);
-            fs.symlinkSync(override || path.join(liveNodeModules, entry), dest);
+            fs.symlinkSync(override ? relativeLink(dest, override) : path.join(liveNodeModules, entry), dest);
           }
         }
       } else {
@@ -716,7 +727,7 @@ async function sweepLeftoverWorktrees(root = WORKTREE_ROOT, projects = {}) {
 }
 
 module.exports = {
-  delegated, INSTALL_TIMEOUT_MS,
+  delegated, INSTALL_TIMEOUT_MS, relativeLink,
   REVIEW_SECRETS_ROOT, WORKTREE_ROOT, NM_BUILD_CACHES, detectNodeModulesDirs,
   materializeDependencyDirs, installChangedDependencies, packagesNeedingOwnInstall,
   liveInstallIsStale, setupWorktree, cleanupWorktree, sweepLeftoverWorktrees,
