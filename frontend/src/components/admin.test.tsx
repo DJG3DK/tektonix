@@ -53,6 +53,37 @@ describe("UsersPanel without the multi-user licence", () => {
   });
 });
 
+describe("UsersPanel errors", () => {
+  // Save, remove and the list itself used to swallow failures: the button
+  // came back and nothing was said (2026-09-29 audit, U8).
+  it("says when removing an account failed", async () => {
+    listUsers.mockResolvedValue([user({ id: 2, email: "b@x.test", role: "user", allowed_repos: ["webapp"] })]);
+    deleteUser.mockRejectedValue(new Error("cannot remove the last admin"));
+    vi.stubGlobal("confirm", () => true);
+    render(<UsersPanel repos={["webapp"]} canCreate />);
+    await screen.findByText("b@x.test");
+    await userEvent.click(screen.getByRole("button", { name: /remove/i }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(/cannot remove the last admin/);
+    vi.unstubAllGlobals();
+  });
+
+  it("says when saving access failed", async () => {
+    listUsers.mockResolvedValue([user({ id: 2, email: "b@x.test", role: "user", allowed_repos: [] })]);
+    updateUserAccess.mockRejectedValue(new Error("no such repo"));
+    render(<UsersPanel repos={["webapp"]} canCreate />);
+    await screen.findByText("b@x.test");
+    await userEvent.click(document.querySelector('.users-row input[type="checkbox"]') as HTMLInputElement);
+    await userEvent.click(screen.getByRole("button", { name: /save access/i }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(/no such repo/);
+  });
+
+  it("says when the list could not be loaded", async () => {
+    listUsers.mockRejectedValue(new Error("listUsers failed: 500"));
+    render(<UsersPanel repos={["webapp"]} canCreate />);
+    expect(await screen.findByRole("alert")).toHaveTextContent(/listUsers failed: 500/);
+  });
+});
+
 describe("UsersPanel", () => {
   it("lists the accounts that exist", async () => {
     listUsers.mockResolvedValue([user({ email: "a@x.test" }), user({ id: 2, email: "b@x.test" })]);

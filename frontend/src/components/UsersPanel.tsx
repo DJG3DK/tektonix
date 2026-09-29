@@ -88,6 +88,9 @@ function UserRow({ user, repos, onChanged }: { user: CurrentUser; repos: string[
   const [selectedRepos, setSelectedRepos] = useState<Set<string>>(new Set(user.allowed_repos ?? []));
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  // A failed save or delete used to be a button that went back to normal
+  // with nothing said (2026-09-29 audit, U8).
+  const [error, setError] = useState<string | null>(null);
   const changed = JSON.stringify([...selectedRepos].sort()) !== JSON.stringify([...(user.allowed_repos ?? [])].sort());
 
   function toggleRepo(repo: string) {
@@ -101,9 +104,12 @@ function UserRow({ user, repos, onChanged }: { user: CurrentUser; repos: string[
 
   async function handleSave() {
     setSaving(true);
+    setError(null);
     try {
       await updateUserAccess(user.id, Array.from(selectedRepos));
       onChanged();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "saving access failed");
     } finally {
       setSaving(false);
     }
@@ -112,9 +118,12 @@ function UserRow({ user, repos, onChanged }: { user: CurrentUser; repos: string[
   async function handleDelete() {
     if (!confirm(`Remove ${user.email}? They'll be logged out immediately.`)) return;
     setDeleting(true);
+    setError(null);
     try {
       await deleteUser(user.id);
       onChanged();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "removing the account failed");
     } finally {
       setDeleting(false);
     }
@@ -142,6 +151,7 @@ function UserRow({ user, repos, onChanged }: { user: CurrentUser; repos: string[
           </label>
         ))}
       </div>
+      {error && <div className="error-banner" role="alert">{error}</div>}
       <div className="users-row-actions">
         {changed && (
           <button className="btn btn-primary btn-small" disabled={saving} onClick={handleSave}>
@@ -159,16 +169,21 @@ function UserRow({ user, repos, onChanged }: { user: CurrentUser; repos: string[
 export function UsersPanel({ repos, canCreate }: Props) {
   const [users, setUsers] = useState<CurrentUser[]>([]);
   const [loading, setLoading] = useState(true);
+  const [listError, setListError] = useState<string | null>(null);
 
   async function refresh() {
     try {
       setUsers(await listUsers());
+      setListError(null);
+    } catch (err) {
+      setListError(err instanceof Error ? err.message : "could not load the accounts");
     } finally {
       setLoading(false);
     }
   }
 
   useEffect(() => {
+    // oxlint-disable-next-line react/set-state-in-effect -- the load it starts is async; state lands after the await, not in the effect
     refresh();
   }, []);
 
@@ -177,6 +192,7 @@ export function UsersPanel({ repos, canCreate }: Props) {
       <h1 className="users-title">Users</h1>
       <p className="users-sub">Control who can log in and which projects they can see and work on.</p>
 
+      {listError && <div className="error-banner" role="alert">{listError}</div>}
       {!loading && (
         <div className="users-list">
           {users.map((u) => (
