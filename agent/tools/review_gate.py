@@ -195,6 +195,17 @@ async def _read_state(project: str, branch: str | None = None) -> dict | None:
     return branch_verdict(await _read_project(project), branch)
 
 
+async def current_verdict(project: str, branch: str | None = None) -> dict | None | str:
+    """The reviewer's record for this branch as it stands now: a dict, None
+    when it holds none, or "unknown" when the service cannot be asked. The
+    task's own copy of a verdict can be stale: an operator clears a branch's
+    record to force a re-review, and the gate must notice that."""
+    try:
+        return await (_read_state(project, branch) if branch else _read_state(project))
+    except httpx.HTTPError:
+        return "unknown"
+
+
 async def _still_reviewing(project: str, expect_sha: str) -> str | None:
     """The step the reviewer is on for this sha, or None when it is not
     working on it (or cannot be asked)."""

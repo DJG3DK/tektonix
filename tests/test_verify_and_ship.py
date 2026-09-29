@@ -69,6 +69,15 @@ def autodetect_calls(monkeypatch):
     return calls
 
 
+@pytest.fixture(autouse=True)
+def _reviewer_still_holds_the_verdict(monkeypatch):
+    """The gate now asks the reviewer whether it still holds the task's
+    verdict; the existing tests were written when it did not ask."""
+    async def held(repo, branch=None):
+        return "unknown"
+    monkeypatch.setattr(vs, "current_verdict", held)
+
+
 def _state(**overrides):
     s = initial_state(task_id="t1", goal="do the thing", repo="test-repo", budget_usd=1.0)
     s.update(overrides)
@@ -1146,3 +1155,28 @@ async def test_a_second_harness_failure_on_the_same_sha_is_treated_like_any_stal
 
     assert result["stale_pending_review_streak"] == 1
     assert "pending_feedback" in result
+
+
+async def test_a_verdict_the_reviewer_no_longer_holds_is_asked_for_again(monkeypatch):
+    """An operator cleared the branch's record to force a re-review after
+    fixing the harness; the gate must not nudge about a verdict that is gone."""
+    monkeypatch.setattr(vs, "run_all_checks", _fake_checks(all_ok=True))
+    monkeypatch.setattr(vs, "git_diff", _fake_return(""))
+    monkeypatch.setattr(vs, "current_sha", _fake_return("abc123"))
+    asked = []
+
+    async def review(state, repo, sha):
+        asked.append(sha)
+        return {"committed_sha": None, "review_gate_result": {"lastReviewedSha": sha, "verdict": "READY"}}
+
+    async def gone(repo, branch=None):
+        return None
+
+    monkeypatch.setattr(vs, "_review_and_deploy", review)
+    monkeypatch.setattr(vs, "current_verdict", gone)
+    state = _state(committed_sha="abc123",
+                   review_gate_result={"lastReviewedSha": "abc123", "verdict": "NEEDS_FIXES", "summary": "old"})
+
+    result = await vs._verify_and_ship(state, config=None)
+
+    assert asked == ["abc123"] and "pending_feedback" not in result

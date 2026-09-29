@@ -250,6 +250,26 @@ function mountSpecs(cfg, worktreePath) {
         specs.push({ src, dst: path.posix.join('/workspace', rel) });
     }
 
+    // Generated code (a Prisma client) the worktree links to live's copy of
+    // (worktree.js, cfg.generated) when the schema did not change. The link
+    // is carried into the container and dangled there: every TypeScript
+    // check failed with "cannot find module generated/prisma/client", on the
+    // base commit too, and the reviewer called that pre-existing and passed
+    // the commit having checked nothing (2026-09-29). Mounted read-only at
+    // its own path, like node_modules, so the link resolves.
+    for (const g of cfg.generated || []) {
+        if (!g || !g.dir) continue;
+        const linked = path.join(worktreePath, g.dir);
+        let isLink = false;
+        try { isLink = fs.lstatSync(linked).isSymbolicLink(); } catch { /* regenerated in place, or absent */ }
+        if (!isLink) continue;
+        let target;
+        try { target = fs.realpathSync(linked); } catch { continue; }
+        if (!isInside(target, cfg.live) || seen.has(target)) continue;
+        seen.add(target);
+        specs.push({ src: target, dst: target });
+    }
+
     // The other half of the same problem, and the one that actually bit:
     // some worktrees SYMLINK node_modules to the live checkout's copy rather
     // than holding their own. A symlink is carried into the container

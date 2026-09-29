@@ -122,6 +122,11 @@ function PlanningRow({ s, selected, onSelect, onDelete, deleting }: {
   );
 }
 
+/** Waiting on the operator: an escalation to read, or a diff to approve. */
+function needsOperator(status: TaskMeta["status"]): boolean {
+  return status === "escalated" || status === "awaiting_merge" || status === "awaiting_approval";
+}
+
 function SectionHeader({
   label,
   count,
@@ -304,12 +309,27 @@ export function Sidebar({
       (!q || t.goal.toLowerCase().includes(q) || t.repo.toLowerCase().includes(q)));
   }, [tasks, buildingQuery, repoFilter]);
 
+  // Tasks waiting on the operator -- an escalation to read, a diff to
+  // approve -- get their own always-visible group too. Filed into a
+  // category they were as good as lost: the category is collapsed, the
+  // badge is small, and the one task that needs a decision looks like the
+  // finished ones around it. A task moves into a category only when it is
+  // over (2026-09-29).
+  const needsYouTasks = useMemo(() => {
+    const q = buildingQuery.trim().toLowerCase();
+    return tasks.filter((t) =>
+      needsOperator(t.status) &&
+      (!repoFilter || t.repo === repoFilter) &&
+      (!q || t.goal.toLowerCase().includes(q) || t.repo.toLowerCase().includes(q)));
+  }, [tasks, buildingQuery, repoFilter]);
+
   const byCategory = useMemo(() => {
     const q = buildingQuery.trim().toLowerCase();
     const groups: Record<string, TaskMeta[]> = {};
     for (const cat of CATEGORY_ORDER) groups[cat] = [];
     for (const t of tasks) {
       if (t.status === "running" || t.status === "queued") continue; // shown in the Running group instead, never both places
+      if (needsOperator(t.status)) continue;                          // shown in the Needs you group instead
       if (repoFilter && t.repo !== repoFilter) continue;
       if (q && !t.goal.toLowerCase().includes(q) && !t.repo.toLowerCase().includes(q)) continue;
       groups[categoryOf(t)].push(t);
@@ -329,7 +349,8 @@ export function Sidebar({
   const selectedTaskMeta =
     view === "task" && selectedTaskId ? tasks.find((t) => t.task_id === selectedTaskId) : undefined;
   const selectedCategory =
-    selectedTaskMeta && selectedTaskMeta.status !== "running" ? categoryOf(selectedTaskMeta) : null;
+    selectedTaskMeta && selectedTaskMeta.status !== "running" && !needsOperator(selectedTaskMeta.status)
+      ? categoryOf(selectedTaskMeta) : null;
 
   const planningSearching = planningQuery.trim().length > 0;
   const selectedPlanningCategory =
@@ -554,6 +575,27 @@ export function Sidebar({
                     </div>
                     <div className="sidebar-category-body">
                       {runningTasks.map((t) => (
+                        <TaskRow
+                          key={t.task_id}
+                          t={t}
+                          selected={t.task_id === selectedTaskId && view === "task"}
+                          onSelect={() => onSelect(t)}
+                          onDelete={(e) => handleDelete(e, t)}
+                          deleting={deletingId === t.task_id}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {needsYouTasks.length > 0 && (
+                  <div className="sidebar-category sidebar-running-group sidebar-needs-you-group">
+                    <div className="sidebar-category-head sidebar-running-head">
+                      <span className="sidebar-running-dot sidebar-needs-you-dot" />
+                      <span className="sidebar-category-label">Needs you</span>
+                      <span className="sidebar-section-count">{needsYouTasks.length}</span>
+                    </div>
+                    <div className="sidebar-category-body">
+                      {needsYouTasks.map((t) => (
                         <TaskRow
                           key={t.task_id}
                           t={t}

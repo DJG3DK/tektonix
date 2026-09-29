@@ -158,8 +158,21 @@ def _checked_rel_dir(rel_dir: str) -> str:
     return rel
 
 
+def _generated_dirs(project: str) -> list[str]:
+    """The project's generated-code directories from its review rule
+    (projects.json, review.generated[].dir): server-owned, never the
+    request's word for it."""
+    try:
+        from agent.config import _load_projects_config  # noqa: PLC0415
+        entry = ((_load_projects_config().get("projects") or {}).get(project) or {})
+        rules = (entry.get("review") or {}).get("generated") or []
+        return [str(g.get("dir")) for g in rules if isinstance(g, dict) and g.get("dir")]
+    except Exception:  # noqa: BLE001 -- no rule, no extra mount
+        return []
+
+
 def _checked_mounts(mounts: list[tuple[str, str]], live: str,
-                    template: str | None = None) -> list[tuple[str, str]]:
+                    template: str | None = None, generated: list[str] | None = None) -> list[tuple[str, str]]:
     """(real source, container target) for every extra mount, or refuse.
 
     Two shapes, the only two sandbox.js's mountArgs produces:
@@ -200,8 +213,9 @@ def _checked_mounts(mounts: list[tuple[str, str]], live: str,
             if os.path.realpath(os.path.join(live, rel)) != real:
                 raise RejectedRequest(f"mount target {dst!r} does not match its source")
         elif norm_dst == real:
-            if real != live_git and "node_modules" not in real.split(os.sep):
-                raise RejectedRequest(f"same-path mount {src!r} is neither live's .git nor node_modules")
+            generated_real = {os.path.realpath(os.path.join(live, g)) for g in (generated or [])}
+            if real != live_git and "node_modules" not in real.split(os.sep) and real not in generated_real:
+                raise RejectedRequest(f"same-path mount {src!r} is neither live's .git, node_modules nor generated code")
         else:
             raise RejectedRequest(f"mount target {dst!r} is not a location the reviewer uses")
         out.append((real, norm_dst))
@@ -245,7 +259,7 @@ def build_docker_argv(req: CheckRequest, container_name: str) -> tuple[list[str]
             raise RejectedRequest(f"env name {k!r} is not a plain identifier")
         env[k] = _no_nul(v, f"env {k}")
 
-    mounts = _checked_mounts(req.mounts or [], live, cfg.get("sandbox"))
+    mounts = _checked_mounts(req.mounts or [], live, cfg.get("sandbox"), _generated_dirs(req.project))
 
     argv = [
         "docker", "run", "--rm", "--name", container_name,

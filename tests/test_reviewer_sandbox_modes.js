@@ -357,3 +357,24 @@ test('a configured node_modules dir is mounted from the agent\'s template when l
         assert.ok(body.mounts.some((m) => m.src === nm && m.dst === nm), JSON.stringify(body.mounts));
     } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
+
+
+test('generated code the worktree links to live for is mounted into the check container', () => {
+    const s = freshSandbox('1', 'http://agent:8100');
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gen-'));
+    try {
+        const live = path.join(root, 'live'); const wt = path.join(root, 'wt');
+        fs.mkdirSync(path.join(live, '.git'), { recursive: true });
+        fs.mkdirSync(path.join(live, 'apps', 'api', 'generated', 'prisma'), { recursive: true });
+        fs.mkdirSync(path.join(wt, 'apps', 'api'), { recursive: true });
+        fs.symlinkSync(path.join(live, 'apps', 'api', 'generated'), path.join(wt, 'apps', 'api', 'generated'));
+        const cfg = { live, generated: [{ dir: 'apps/api/generated', schemaFile: 'apps/api/prisma/schema.prisma' }] };
+        const body = s.delegatedRequest(cfg, wt, '.', 'pnpm', ['typecheck'], 1000, {}, 'none');
+        const gen = fs.realpathSync(path.join(live, 'apps', 'api', 'generated'));
+        assert.ok(body.mounts.some((m) => m.src === gen && m.dst === gen), JSON.stringify(body.mounts));
+        // Regenerated in place (a real directory): nothing to mount.
+        fs.rmSync(path.join(wt, 'apps', 'api', 'generated')); fs.mkdirSync(path.join(wt, 'apps', 'api', 'generated'));
+        const again = s.delegatedRequest(cfg, wt, '.', 'pnpm', ['typecheck'], 1000, {}, 'none');
+        assert.ok(!again.mounts.some((m) => m.src === gen));
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});

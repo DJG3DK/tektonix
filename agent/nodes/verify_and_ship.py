@@ -68,6 +68,7 @@ from agent.tools.git import (
 from agent import check_timing, commit_subject
 from agent import runtime_settings as _rs
 from agent.tools.review_gate import (
+    current_verdict,
     merge_and_deploy,
     ship_as_pull_request,
     trigger_check,
@@ -698,6 +699,17 @@ async def _verify_and_ship_inner(state: AgentState, repo: str, repo_root: str,
                 return {**(await _review_and_deploy(state, repo, pending_sha)),
                         "harness_retry_sha": pending_sha, "stale_pending_review_streak": 0}
             if prior_review.get("lastReviewedSha") == pending_sha and prior_review.get("verdict") != "READY":
+                # The reviewer's record is the truth, not this task's copy of
+                # it: an operator clears a branch's record to force a review
+                # after fixing the harness, and the gate used to nudge the
+                # coder about a verdict the reviewer no longer held.
+                from agent.tools.git import task_branch_name as _tbn
+                held = await current_verdict(repo, _tbn(state["task_id"]))
+                if held != "unknown" and (held is None or held.get("lastReviewedSha") != pending_sha):
+                    logging.getLogger("tektonix").info(
+                        "verify_and_ship: the reviewer no longer holds a verdict for %s -- asking for review again",
+                        pending_sha[:12])
+                    return {**(await _review_and_deploy(state, repo, pending_sha)), "stale_pending_review_streak": 0}
                 streak = state.get("stale_pending_review_streak", 0) + 1
                 if streak > STALE_PENDING_REVIEW_LIMIT:
                     # Nudges exhausted. If the inner conversation history has

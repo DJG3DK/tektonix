@@ -41,3 +41,15 @@ test('mechanical failure is derived from non-pre-existing checks only', () => {
   const mechanicalFailed = checks.some((c) => !c.ok && !c.preexisting);
   assert.equal(mechanicalFailed, false);
 });
+
+
+test('every compared check failing on the base too is the environment, not a pre-existing red suite', () => {
+    const { applyBaseline } = require('../services/commit-reviewer/reviewer.js');
+    const all = [{ name: 'typecheck', ok: false, output: 'TS2307' }, { name: 'lint', ok: false, output: 'x' }, { name: 'secrets', ok: true }];
+    applyBaseline(all, { typecheck: false, lint: false });
+    assert.ok(all[0].infrastructure && all[1].infrastructure, 'both flagged as the harness');
+    assert.ok(!all[0].preexisting && /every check fails on the base/.test(all[0].output));
+    const some = [{ name: 'typecheck', ok: false, output: 'TS2307' }, { name: 'lint', ok: true }];
+    applyBaseline(some, { typecheck: false, lint: true });
+    assert.ok(some[0].preexisting && !some[0].infrastructure, 'one red check on both is genuinely pre-existing');
+});

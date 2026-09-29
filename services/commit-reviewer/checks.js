@@ -120,6 +120,20 @@ function applyBaseline(checkResults, baselineForBase) {
     if (c.infrastructure) continue;
     if (!c.ok && baselineForBase && baselineForBase[c.name] === false) c.preexisting = true;
   }
+  // When EVERY compared check fails on the base commit as well, the base is
+  // not "a project whose suite is red": it is a review environment that
+  // cannot run this project at all. Counting that as pre-existing passed a
+  // commit with nothing checked (2026-09-29: a dangling link to generated
+  // code failed typecheck, lint, tests and coverage on both commits alike).
+  const compared = checkResults.filter((c) => !c.infrastructure && baselineForBase && Object.hasOwn(baselineForBase, c.name));
+  if (compared.length >= 2 && compared.every((c) => !c.ok && c.preexisting)) {
+    for (const c of compared) {
+      c.preexisting = false;
+      c.infrastructure = true;
+      c.output = `SETUP: every check fails on the base commit as well, so the review environment cannot run `
+        + `this project; nothing is known about the code either way.\n${c.output || ''}`;
+    }
+  }
   return checkResults;
 }
 

@@ -579,3 +579,18 @@ def test_a_node_modules_mount_from_the_agent_s_workspace_template_is_accepted(tm
         _checked_mounts([(nm, nm)], str(live))                      # no template known: refused as before
     with pytest.raises(RejectedRequest):
         _checked_mounts([(str(template / "src"), str(template / "src"))], str(live), str(template))
+
+
+def test_a_same_path_mount_of_live_s_generated_code_is_accepted_only_from_the_project_s_rule(tmp_path):
+    from agent.review_sandbox import RejectedRequest, _checked_mounts
+    live = tmp_path / "live"
+    (live / ".git").mkdir(parents=True)
+    gen = live / "apps" / "api" / "generated"
+    gen.mkdir(parents=True)
+    (live / "apps" / "api" / "src").mkdir()
+    g = str(gen)
+    assert _checked_mounts([(g, g)], str(live), None, ["apps/api/generated"]) == [(os.path.realpath(g), g)]
+    with pytest.raises(RejectedRequest):
+        _checked_mounts([(g, g)], str(live), None, [])
+    with pytest.raises(RejectedRequest):
+        _checked_mounts([(str(live / "apps" / "api" / "src"),) * 2], str(live), None, ["apps/api/generated"])

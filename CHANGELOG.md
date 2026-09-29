@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+### Tasks that need you have their own group
+
+An escalated task, or one waiting for your look at the diff, was filed
+into its category the moment it stopped, collapsed out of sight beside
+the finished ones. The sidebar now keeps them in a "Needs you" group under
+Running until they are over; only a finished task goes into a category.
+
+### A review that checked nothing no longer passes
+
+The reviewer links a project's generated code (a Prisma client) to the
+live checkout's copy, and the check container never saw that copy, so
+every TypeScript check failed with "cannot find module" on the branch and
+on main alike; the reviewer called that pre-existing and the review model
+wrote it off as unrelated. Found on 2026-09-29 on a project reviewed that
+way since 2026-09-23. The generated directory is now mounted into the
+check container like node_modules; a baseline on which every compared
+check fails is treated as a review environment that cannot run the
+project, not as a red project; a harness escalation does not carry into
+the next real review; and the gate trusts the reviewer's current record
+over the task's copy, so clearing a branch's record does force a review.
+
 ### The review runs in the bundle the way it runs on a host
 
 (rc19: the dependency helper was used in one file without being imported,

@@ -632,7 +632,9 @@ async function reviewProject(project, cfg, routerKey, requested = null) {
     const consecutiveNeedsFixes = verdict === 'READY' ? 0
       : infraFailed ? (prevState?.consecutiveNeedsFixes || 0)
       : (prevState?.consecutiveNeedsFixes || 0) + 1;
-    const wasEscalated = Boolean(prevState?.escalated);
+    // An escalation the harness caused (a review that could not run) is not
+    // a judgement that carries over: the first real review starts clean.
+    const wasEscalated = Boolean(prevState?.escalated) && !harnessFailed(prevState);
     // Computed BEFORE appendHistory below writes this round's own entry —
     // otherwise a later round would double-count this one (once read back
     // from history, once from currentFindings).

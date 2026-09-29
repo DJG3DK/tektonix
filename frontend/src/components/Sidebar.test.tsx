@@ -113,6 +113,19 @@ describe("Sidebar — category expansion", () => {
     expect(() => categoryHead("Feature")).toThrow();
   });
 
+  it("keeps a task that needs the operator in the Needs you group, not in a category", () => {
+    const escalated = task({ task_id: "e1", goal: "read my escalation", category: "feature", status: "escalated" });
+    const merge = task({ task_id: "m1", goal: "approve my diff", category: "bug-fix", status: "awaiting_merge" });
+    const done = task({ task_id: "d1", goal: "already finished", category: "feature", status: "done" });
+    renderSidebar({ tasks: [escalated, merge, done] });
+    expect(screen.getByText("Needs you")).toBeInTheDocument();
+    expect(screen.getAllByText("read my escalation")).toHaveLength(1);
+    expect(screen.getAllByText("approve my diff")).toHaveLength(1);
+    // The finished one is in its (collapsed) category; the waiting ones are not.
+    expect(screen.queryByText("already finished")).not.toBeInTheDocument();
+    expect(() => categoryHead("Bug fix")).toThrow();
+  });
+
   it("still lists a running task inside a category once it finishes", async () => {
     const done = task({ goal: "now it is done", category: "feature", status: "done" });
     renderSidebar({ tasks: [done] });
