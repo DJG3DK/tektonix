@@ -47,6 +47,7 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from fastapi import Cookie, Depends, HTTPException, Request
 from psycopg_pool import AsyncConnectionPool
 
+from agent import features
 from agent.config import Config
 
 logger = logging.getLogger("tektonix")
@@ -60,10 +61,23 @@ SESSION_TTL_SECONDS = 7 * 24 * 3600
 # optional (the machine's own login is the boundary), and a session lasts
 # ninety days so the app stays signed in between launches.
 DESKTOP_SESSION_TTL_SECONDS = 90 * 24 * 3600
+_LOOPBACK_BINDS = frozenset({"", "127.0.0.1", "localhost", "::1"})
 
 
 def desktop_install() -> bool:
-    return os.environ.get("TEKTONIX_DESKTOP", "").strip() == "1"
+    """Whether the desktop rules apply: the flag the app writes, and the
+    premise behind it still true. The premise is that the machine's own
+    login is the boundary, which stops holding when the dashboard is bound
+    to anything but loopback (BIND_ADDRESS sits in the same .env, and the
+    docs invite changing it) or when accounts beyond the first are licensed
+    (a second admin is not the machine's owner). Either way the full
+    sign-in is back: forced 2FA for admins, seven-day sessions."""
+    if os.environ.get("TEKTONIX_DESKTOP", "").strip() != "1":
+        return False
+    bind = os.environ.get("BIND_ADDRESS", "").strip().strip("[]").lower()
+    if bind not in _LOOPBACK_BINDS:
+        return False
+    return not features.enabled(features.MULTI_USER)
 
 
 def session_ttl_seconds() -> int:

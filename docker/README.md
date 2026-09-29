@@ -90,7 +90,9 @@ Windows       PROJECTS_DIR=C:\Users\you\code
 **`BIND_ADDRESS`** defaults to `127.0.0.1`, so the dashboard is reachable only
 from the machine running it. That is the intended shape for a local install:
 no domain, no TLS, nothing exposed. Change it deliberately, and put something
-in front of it if you do.
+in front of it if you do. In the desktop app, changing it also ends the
+relaxed sign-in the app gets on its own machine: two-factor is required for
+the admin again, and sessions last seven days (SECURITY.md, "Signing in").
 
 ## Why the Docker socket is mounted
 

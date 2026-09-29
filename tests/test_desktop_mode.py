@@ -32,6 +32,27 @@ def test_a_desktop_install_makes_the_second_factor_optional_and_sessions_long(mo
     assert _user_public(ADMIN_NO_2FA)["require_totp_setup"] is False
 
 
+def test_the_desktop_rules_stop_where_their_premise_stops(monkeypatch):
+    """The waiver rests on the machine's own login being the boundary. Bound
+    to anything but loopback, or with accounts beyond the first licensed,
+    it is not, and the full sign-in is back (2026-09-29)."""
+    monkeypatch.setenv("TEKTONIX_DESKTOP", "1")
+    monkeypatch.delenv("TEKTONIX_FEATURES", raising=False)
+    for bind in ("", "127.0.0.1", "localhost", "::1", "[::1]"):
+        monkeypatch.setenv("BIND_ADDRESS", bind)
+        assert auth.desktop_install() is True, f"BIND_ADDRESS={bind!r} is this machine"
+    for bind in ("0.0.0.0", "192.168.1.20", "::"):
+        monkeypatch.setenv("BIND_ADDRESS", bind)
+        assert auth.desktop_install() is False, f"BIND_ADDRESS={bind!r} reaches the network"
+        assert auth.forced_screen_block(ADMIN_NO_2FA) == "2FA setup required before using this"
+        assert auth.session_ttl_seconds() == 7 * 24 * 3600
+    monkeypatch.setenv("BIND_ADDRESS", "127.0.0.1")
+    monkeypatch.setenv("TEKTONIX_FEATURES", "multi-user")
+    assert auth.desktop_install() is False, "a second account is not the machine's owner"
+    compose = yaml.safe_load((paths.REPO_ROOT / "docker-compose.yml").read_text())
+    assert compose["services"]["agent"]["environment"]["BIND_ADDRESS"] == "${BIND_ADDRESS:-127.0.0.1}", "the agent sees the bind it was given"
+
+
 def test_only_the_desktop_app_switches_it_on():
     compose = yaml.safe_load((paths.REPO_ROOT / "docker-compose.yml").read_text())
     assert compose["services"]["agent"]["environment"]["TEKTONIX_DESKTOP"] == "${TEKTONIX_DESKTOP:-}", "empty unless the app's .env sets it"

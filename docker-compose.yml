@@ -253,6 +253,9 @@ services:
       # explicit list here is what the container sees, so a switch missing
       # from it was a 403 no matter what the .env said (2026-09-29).
       TEKTONIX_FEATURES: ${TEKTONIX_FEATURES:-}
+      # The desktop rules hold only while the dashboard is bound to this
+      # machine alone; the agent checks the bind it was given (desktop_install).
+      BIND_ADDRESS: ${BIND_ADDRESS:-127.0.0.1}
     volumes:
       # Sibling containers, not nested. See docker/agent/Dockerfile.
       - /var/run/docker.sock:/var/run/docker.sock

@@ -291,6 +291,15 @@ Treat an alert link like the alert: it is for the person it was sent to.
   if they do not, their password alone opens every repository they can see.
   That is a reasonable default for a household box and a weak one the moment
   a second account belongs to someone outside it.
+- **The desktop app is the one exception, and only while its premise holds.**
+  The app writes `TEKTONIX_DESKTOP=1` into its own `.env`; with it, the
+  admin's second factor is optional and a session lasts ninety days, on the
+  premise that the machine's own login is the boundary. The agent checks
+  that premise rather than trusting the flag (`agent/auth.py`,
+  `desktop_install`): the dashboard must be bound to loopback
+  (`BIND_ADDRESS`), and no account beyond the first may be licensed
+  (`TEKTONIX_FEATURES=multi-user`). Change either and the full sign-in is
+  back for everyone.
 - **CSRF protection is the session cookie's `SameSite=strict`.** There are no
   CSRF tokens, because a strict cookie is never sent on a request another site
   starts. Loosening it — for an embed, an OAuth return, a subdomain — makes
