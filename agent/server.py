@@ -61,6 +61,7 @@ from agent import workspaces
 from agent.store_paging import all_items
 from agent import health as health_checks
 from agent import episode_vectors, history_index
+from agent import log_stream
 from agent import plan_progress
 from agent import planning_log
 from agent.middleware.budget_guard import BudgetExceededError
@@ -1369,14 +1370,22 @@ _planning_recorders = live_state.planning_recorders   # see agent/live_state.py
 
 
 def _publish_planning(session_id: str, event: dict) -> None:
+    # Same contract as task_runtime.publish: every entry carries a
+    # content-derived id and every content event a per-session seq, so the
+    # browser can open its socket before hydrating and merge the two without
+    # losing or doubling a line (agent/log_stream.py).
     if event.get("type") == "log_entry" and event.get("entry"):
-        _live_log_append(_live_planning_log, session_id, [event["entry"]])
+        event["entry"] = log_stream.stamp([event["entry"]])[0]
+        _live_log_append(_live_planning_log, session_id, [event["entry"]],
+                         on_evict=task_runtime.planning_event_seq.forget)
         recorder = _planning_recorders.get(session_id)
         if recorder is not None and recorder.add(event["entry"]):
             # Batched: a busy turn publishes several entries a second, and a
             # store write per entry would be write amplification for
             # telemetry. Backgrounded so the stream never waits on it.
             _spawn_background(recorder.flush(), f"planning_log_flush:{session_id}")
+    if event.get("type") != "ping":
+        event["seq"] = task_runtime.planning_event_seq.next(session_id)
     for q, _ws in _planning_subscribers.get(session_id, []):
         try:
             q.put_nowait(event)
@@ -1575,11 +1584,12 @@ async def _run_planning_turn_bg(session_id: str, repo: str, text: str, attachmen
         # clear several such calls comfortably; it exists purely so the
         # except Exception below always fires eventually instead of never.
         message_text = text + _attachments_note(attachments) if attachments else text
-        opening = {
+        opening = log_stream.stamp([{
             "kind": "user", "summary": text[:200], "detail": text[:4000],
             "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ"),
-        }
-        _live_log_append(_live_planning_log, session_id, [opening])
+        }])[0]
+        _live_log_append(_live_planning_log, session_id, [opening],
+                         on_evict=task_runtime.planning_event_seq.forget)
         # The durable transcript starts here, with the operator's own message:
         # a turn read back later is unintelligible without the thing that
         # started it.

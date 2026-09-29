@@ -834,7 +834,7 @@ export async function listPlanningSessions(): Promise<PlanningSessionMeta[]> {
 
 export async function getPlanningSession(
   sessionId: string,
-): Promise<{ meta: PlanningSessionMeta; log: PlanningLogEntry[]; running: boolean }> {
+): Promise<{ meta: PlanningSessionMeta; log: PlanningLogEntry[]; running: boolean; seq?: number }> {
   const res = await apiFetch(`${API_BASE}/planning/sessions/${sessionId}`);
   if (!res.ok) throw new Error(`getPlanningSession failed: ${res.status}`);
   return res.json();

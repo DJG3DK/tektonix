@@ -224,6 +224,9 @@ def flush_task_log_bg(rec: planning_log.Recorder) -> None:
 # Monotonic per-task event ids for the socket-first hydrate (log_stream.py).
 task_event_seq = log_stream.SeqCounter()
 live_planning_log: dict[str, list] = {}
+# The same, per planning session: the planning page hydrated and never
+# connected, and its reconnect merged by log LENGTH (2026-09-29 audit, U4).
+planning_event_seq = log_stream.SeqCounter()
 
 
 def live_log_append(book: dict, key: str, entries: list, on_evict=None) -> None:

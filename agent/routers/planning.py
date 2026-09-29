@@ -107,10 +107,14 @@ async def get_planning_session(request: Request, session_id: str, user: User = D
     # checkpoint's translation is stamped with the read's own time, so it is
     # matched by content and only fills what the other two lack (2026-09-26:
     # unioning it by id doubled every entry of every session).
-    recorded = _fuller_log(_live_planning_log.get(session_id),
-                           await planning_log.load(request.app.state.store, repo, session_id))
+    # The live buffer and the stream position are read together, before the
+    # await: `seq` says which events this snapshot already contains, so it
+    # must not name an event the copied buffer does not have.
+    live = list(_live_planning_log.get(session_id) or [])
+    seq = task_runtime.planning_event_seq.current(session_id)
+    recorded = _fuller_log(live, await planning_log.load(request.app.state.store, repo, session_id))
     log = log_stream.fill_gaps(recorded, translated)
-    return {"meta": meta, "log": log, "running": session_id in _running_planning_turns}
+    return {"meta": meta, "log": log, "running": session_id in _running_planning_turns, "seq": seq}
 
 @router.post("/api/planning/sessions/{session_id}/archive")
 async def archive_planning_session(request: Request, session_id: str, user: User = Depends(require_full_auth)):
@@ -156,6 +160,7 @@ async def delete_planning_session(request: Request, session_id: str, user: User 
         # In-process mirrors, or a later session reusing the id would inherit
         # this one's log.
         _live_planning_log.pop(session_id, None)
+        task_runtime.planning_event_seq.forget(session_id)
         _planning_recorders.pop(session_id, None)
         for _q, ws in _planning_subscribers.pop(session_id, []):
             try:

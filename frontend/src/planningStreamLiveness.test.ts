@@ -133,6 +133,81 @@ describe("planning socket liveness", () => {
   });
 });
 
+describe("a session opened while a turn is in flight", () => {
+  // The page hydrated and never connected, so a session opened mid-turn (a
+  // reload, a second tab, a deep link) showed the snapshot and then nothing
+  // until the watchdog noticed ~75s later (2026-09-29 audit, U4).
+  it("opens a socket at once, without waiting for the watchdog", async () => {
+    getPlanningSession.mockResolvedValue({ log: [], running: true, seq: 3, meta: { plan_markdown: null, cost_usd: 0 } });
+    const { usePlanningStream } = await import("./usePlanningStream");
+    const hook = renderHook(() => usePlanningStream("s1"));
+    await waitFor(() => expect(sockets.length).toBe(1));
+    expect(hook.result.current.running).toBe(true);
+    const ws = sockets[0];
+    act(() => ws.onmessage?.({ data: JSON.stringify({ type: "log_entry", seq: 4, entry: { id: "e4", kind: "agent", summary: "live", detail: "", timestamp: "t" } }) }));
+    await waitFor(() => expect(hook.result.current.log.map((e) => e.summary)).toEqual(["live"]));
+  });
+
+  it("an event published between the socket opening and the snapshot is not lost, and one the snapshot holds is not doubled", async () => {
+    // First call: the mount snapshot, which says a turn is running. Second
+    // call: the socket-first snapshot, held open so frames can arrive on the
+    // socket while it is in flight.
+    let settle: (v: unknown) => void = () => {};
+    const A = { id: "a", kind: "agent", summary: "A", detail: "", timestamp: "t" };
+    const B = { id: "b", kind: "agent", summary: "B", detail: "", timestamp: "t" };
+    const C = { id: "c", kind: "agent", summary: "C", detail: "", timestamp: "t" };
+    getPlanningSession
+      .mockResolvedValueOnce({ log: [A], running: true, seq: 1, meta: { plan_markdown: null, cost_usd: 0 } })
+      .mockImplementationOnce(() => new Promise((r) => (settle = r)));
+    const { usePlanningStream } = await import("./usePlanningStream");
+    const hook = renderHook(() => usePlanningStream("s1"));
+    await waitFor(() => expect(sockets.length).toBe(1));
+    const ws = sockets[0];
+    // B was published after the mount snapshot; the second snapshot has it.
+    // C was published after that snapshot was taken. Both arrive on the
+    // socket while the snapshot is in flight.
+    act(() => ws.onmessage?.({ data: JSON.stringify({ type: "log_entry", seq: 2, entry: B }) }));
+    act(() => ws.onmessage?.({ data: JSON.stringify({ type: "log_entry", seq: 3, entry: C }) }));
+    expect(hook.result.current.log.map((e) => e.summary)).toEqual(["A"]);
+    await act(async () => {
+      settle({ log: [A, B], running: true, seq: 2, meta: { plan_markdown: null, cost_usd: 0.1 } });
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(hook.result.current.log.map((e) => e.summary)).toEqual(["A", "B", "C"]));
+  });
+
+  it("a socket replaced by the next turn does not start a reconnect", async () => {
+    const hook = await startTurn();
+    const first = sockets[sockets.length - 1];
+    const before = getPlanningSession.mock.calls.length;
+    await act(async () => { await hook.result.current.sendMessage("again"); });
+    expect(first.closed).toBe(true);
+    expect(sockets.length).toBe(2);
+    // A reconnect re-hydrates; none was started for the superseded socket.
+    await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
+    expect(getPlanningSession.mock.calls.length).toBe(before);
+    expect(sockets.length).toBe(2);
+    expect(hook.result.current.running).toBe(true);
+  });
+
+  it("a reconnect merges by position, not by log length", async () => {
+    const hook = await startTurn();
+    const ws = sockets[sockets.length - 1];
+    const X = { id: "x", kind: "agent", summary: "X", detail: "", timestamp: "t" };
+    act(() => ws.onmessage?.({ data: JSON.stringify({ type: "log_entry", seq: 7, entry: X }) }));
+    // The turn ended while the socket was dead. The server's snapshot is
+    // SHORTER than what the page holds (its live buffer lost X to a restart)
+    // -- the old length rule threw it away; the id keeps it.
+    getPlanningSession.mockResolvedValue({
+      log: [], running: false, seq: 0, meta: { plan_markdown: null, cost_usd: 1.5 },
+    });
+    await act(async () => { await vi.advanceTimersByTimeAsync(80_000); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
+    await waitFor(() => expect(hook.result.current.running).toBe(false));
+    expect(hook.result.current.log.filter((e) => e.id === "x")).toHaveLength(1);
+  });
+});
+
 describe("a create_project proposal on the stream", () => {
   const proposal = { name: "my-app", description: "a store front", github: true };
 

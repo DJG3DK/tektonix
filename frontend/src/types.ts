@@ -434,6 +434,10 @@ export interface PlanningSessionMeta {
 }
 
 export interface PlanningLogEntry {
+  /** Content-derived, from the server (agent/log_stream.py): the same entry
+   *  arriving by snapshot and by socket is recognisably one entry. Absent on
+   *  the operator's own message until the server echoes it back. */
+  id?: string;
   kind: "agent" | "tool-result" | "user";
   summary: string;
   detail: string;
@@ -448,6 +452,9 @@ export interface PlanningStreamEvent {
    *  "error" (a turn that failed) and from "closed" (which always follows and
    *  is what actually clears the running flag). */
   type: "log_entry" | "turn_complete" | "error" | "stopped" | "closed" | "ping" | "cost";
+  /** Per-session position, on every content event (never on a ping). The
+   *  snapshot reports where it sits in the same numbering. */
+  seq?: number;
   entry?: PlanningLogEntry;
   plan_markdown?: string | null;
   cost_usd?: number;
