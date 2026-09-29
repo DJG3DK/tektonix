@@ -841,12 +841,16 @@ cat <<EOF
     ${B}services/model-router/venv/bin/uvicorn router.app:app --host 127.0.0.1 --port 4001${N}
     ${B}.venv/bin/uvicorn agent.server:app --host 127.0.0.1 --port 8100${N}
 
-  Or under pm2:
+  Or under pm2, with the two review services (the merge gate; /_review/
+  answers 502 without them):
 
     ${B}pm2 start ecosystem.config.js && pm2 start services/model-router/ecosystem.config.js${N}
+    ${B}pm2 start services/commit-reviewer/reviewer.js --name commit-reviewer${N}
+    ${B}pm2 start services/agent-review/server.js --name agent-review${N}
 
-  Then open ${B}http://127.0.0.1:8100${N}. The first admin password is printed
-  ONCE to the server log on first startup — capture it.
+  Then open ${B}http://127.0.0.1:8100${N}. The first admin password is stored
+  encrypted on first startup, never logged; show it once with
+    ${B}.venv/bin/python scripts/show_initial_password.py${N}
 
   Finally, add a project to work on: Settings → Projects in the dashboard, or
     ${B}.venv/bin/python scripts/add_project.py /path/to/your/repo${N}

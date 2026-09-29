@@ -82,6 +82,24 @@ def test_no_reverse_proxy_injects_the_review_secret():
     assert "rotate" in docs and "X-Review-Secret" in docs, "the docs tell an older install what to do"
 
 
+def test_the_install_docs_describe_the_first_password_and_the_services_as_they_are():
+    """The first admin password has been stored encrypted and shown by
+    scripts/show_initial_password.py since 2026-09-28; the docs and the
+    installer's closing message still told a new operator to watch the
+    server log for it, and named GATE_RP_ID / GATE_ORIGIN, which nothing
+    reads. The start instructions also left out the two review services,
+    so a by-the-book install had a Review tab answering 502."""
+    pages = {p: pathlib.Path(p).read_text() for p in ("INSTALL.md", "install.sh", ".env.example", "README.md")}
+    for name, text in pages.items():
+        assert "printed once" not in text.lower(), f"{name} still says the password is printed"
+        assert "GATE_RP_ID" not in text and "GATE_ORIGIN" not in text, name
+    for name in ("INSTALL.md", "install.sh"):
+        assert "show_initial_password.py" in pages[name], name
+        assert "services/commit-reviewer/reviewer.js --name commit-reviewer" in pages[name], name
+        assert "services/agent-review/server.js --name agent-review" in pages[name], name
+    assert pathlib.Path("scripts/show_initial_password.py").exists()
+
+
 def test_vision_falls_back_to_the_router_s_real_port():
     text = pathlib.Path("agent/tools/vision.py").read_text()
     assert "127.0.0.1:4001/v1" in text

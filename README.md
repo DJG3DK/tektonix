@@ -620,8 +620,8 @@ Username/password with TOTP 2FA (`agent/auth.py`): argon2id password hashing, RF
 one-time recovery codes, and a single opaque session cookie that's revocable server-side rather
 than a JWT. Per-user repo access is an explicit allow-list for a restricted account, or
 unrestricted for `role="admin"`. The first admin account is seeded automatically on first startup
-with a random password, printed once to the server log and required to be changed at first login
-(see `ADMIN_EMAIL` below).
+with a random password, stored encrypted and shown once by `scripts/show_initial_password.py`, and
+required to be changed at first login (see `ADMIN_EMAIL` below).
 
 ### Two operators, not one
 
@@ -783,7 +783,8 @@ cd services/agent-review && npm install && node server.js &
 node services/commit-reviewer/reviewer.js &          # zero npm dependencies
 ```
 
-The first admin login is printed once to the server log on first startup (see `ADMIN_EMAIL`).
+The first admin password is stored encrypted on first startup and shown once by
+`.venv/bin/python scripts/show_initial_password.py` (see `ADMIN_EMAIL`).
 
 </details>
 

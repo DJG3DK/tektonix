@@ -93,14 +93,23 @@ Or under pm2:
 ```bash
 pm2 start ecosystem.config.js
 pm2 start services/model-router/ecosystem.config.js
+# the review gate (section 7): without these two, /_review/ answers 502
+pm2 start services/commit-reviewer/reviewer.js --name commit-reviewer
+pm2 start services/agent-review/server.js --name agent-review
 pm2 save
 ```
 
 Open **http://127.0.0.1:8100**.
 
-> **The first admin password is printed once, to the server log, on first
-> startup.** Capture it. If you miss it, delete the row from the `agent_users`
-> table and restart to re-seed.
+> **The first admin password is stored encrypted on first startup, never
+> logged.** Show it once, then it is deleted:
+>
+> ```bash
+> .venv/bin/python scripts/show_initial_password.py
+> ```
+>
+> If it has already been shown and lost, delete the row from the
+> `agent_users` table and restart to re-seed.
 
 Admin accounts are required to set up TOTP 2FA on first login.
 
@@ -334,7 +343,6 @@ tektonix/
 │   ├── model-router/.env                │       │               │   600
 │   │     OPENROUTER_API_KEY           │       │               │
 │   │     MODEL_ROUTER_KEY ──────────┼───────┘               │
-│   │     GATE_RP_ID / GATE_ORIGIN     │   (the passkey gate)  │
 │   │                                  │                       │
 │   ├── shared/.env                    │                       │   600
 │   │     REVIEW_CONTROL_SECRET ───────┘  read by both Node services
@@ -397,7 +405,8 @@ saved per account, with a preview before you apply.
 
 Email is used for **password-reset codes** and, if you switch it on under Settings → GitHub,
 for the GitHub inbox's approve links. It is not used for task alerts (Telegram covers those), and
-not for the first admin password — that is printed once to the server log on first startup.
+not for the first admin password — that is stored encrypted on first startup and shown by
+`scripts/show_initial_password.py` (section 3).
 
 **Dependency:** [`aiosmtplib`](https://pypi.org/project/aiosmtplib/), pinned in
 `requirements.txt` and installed by `install.sh`. There is no system package to
@@ -517,6 +526,11 @@ the project's real checks, and nothing merges until it passes.
 node services/commit-reviewer/reviewer.js      # zero npm dependencies
 cd services/agent-review && npm install && node server.js
 ```
+
+Under pm2 (section 3 starts them this way): `pm2 start
+services/commit-reviewer/reviewer.js --name commit-reviewer` and `pm2 start
+services/agent-review/server.js --name agent-review`. The dashboard's Review
+tab proxies to them through `/_review/`, which answers 502 until they are up.
 
 Projects onboarded through the wizard are picked up automatically. See
 `services/commit-reviewer/README.md`.
