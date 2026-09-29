@@ -110,9 +110,9 @@ export function ApiKeysPanel() {
         <section key={g} className="settings-card akey-group">
           <h2>{GROUP_TITLES[g] ?? g}</h2>
           {keys.filter((k) => k.group === g).map((k) => (
-            <div key={k.key} className="akey-row">
+            <div key={k.id} className="akey-row">
               <div className="akey-head">
-                <label className="akey-label" htmlFor={`k-${k.key}`}>{k.label}</label>
+                <label className="akey-label" htmlFor={`k-${k.id}`}>{k.label}</label>
                 <span className={`akey-state ${k.is_set ? "is-set" : "is-unset"}`}>
                   {k.is_set ? "set" : "not set"}
                 </span>
@@ -121,24 +121,24 @@ export function ApiKeysPanel() {
               <p className="akey-help">{k.help}</p>
               <div className="akey-input-row">
                 <input
-                  id={`k-${k.key}`}
+                  id={`k-${k.id}`}
                   className="akey-input"
-                  type={k.secret && !reveal[k.key] ? "password" : "text"}
+                  type={k.secret && !reveal[k.id] ? "password" : "text"}
                   autoComplete="off"
                   spellCheck={false}
                   placeholder={k.is_set ? (readOnly ? k.display : `${k.display} — blank keeps it`) : "not set"}
-                  value={edits[k.key] ?? ""}
+                  value={edits[k.id] ?? ""}
                   disabled={readOnly}
-                  onChange={(e) => setEdits((p) => ({ ...p, [k.key]: e.target.value }))}
+                  onChange={(e) => setEdits((p) => ({ ...p, [k.id]: e.target.value }))}
                 />
                 {k.secret && (
                   <button
                     type="button"
                     className="btn btn--ghost btn--icon"
-                    title={reveal[k.key] ? "Hide what you typed" : "Show what you typed"}
-                    onClick={() => setReveal((p) => ({ ...p, [k.key]: !p[k.key] }))}
+                    title={reveal[k.id] ? "Hide what you typed" : "Show what you typed"}
+                    onClick={() => setReveal((p) => ({ ...p, [k.id]: !p[k.id] }))}
                   >
-                    <Icon name={reveal[k.key] ? "x" : "search"} size={15} />
+                    <Icon name={reveal[k.id] ? "x" : "search"} size={15} />
                   </button>
                 )}
               </div>

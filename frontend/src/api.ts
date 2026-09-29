@@ -704,6 +704,10 @@ export async function runJob(name: string): Promise<{ ok: boolean; started: stri
 }
 
 export interface EnvKey {
+  /** The row's identity when saving. Equals `key` unless the same variable
+   *  lives in two .env files (MODEL_ROUTER_KEY is in the router's and the
+   *  agent's); then each row has its own id. */
+  id: string;
   key: string;
   label: string;
   help: string;

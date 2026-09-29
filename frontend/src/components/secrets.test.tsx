@@ -39,6 +39,7 @@ const renderPanel = () =>
 
 const envKey = (over: Partial<EnvKey> = {}): EnvKey =>
   ({
+    id: over.key ?? "OPENROUTER_API_KEY",
     key: "OPENROUTER_API_KEY",
     label: "OpenRouter API key",
     help: "used for every model call",
@@ -106,6 +107,30 @@ describe("ApiKeysPanel — a secret's real value never reaches the browser", () 
     const sent = saveEnvConfig.mock.calls[0][0] as Record<string, string>;
     expect(Object.keys(sent)).toHaveLength(1);
     expect(Object.values(sent)[0]).toBe("new-secret");
+  });
+
+  it("saves a key that lives in two files under the row that was edited", async () => {
+    // MODEL_ROUTER_KEY is in the router's .env and the agent's. Keyed by
+    // name, the two rows were one input and one save entry, and the router's
+    // copy could never be written (2026-09-29). Rows are addressed by id.
+    getEnvConfig.mockResolvedValue({
+      keys: [
+        envKey({ id: "MODEL_ROUTER_KEY", key: "MODEL_ROUTER_KEY", label: "Router master key" }),
+        envKey({ id: "MODEL_ROUTER_KEY.agent", key: "MODEL_ROUTER_KEY", label: "Router key (agent side)" }),
+      ],
+    });
+    saveEnvConfig.mockResolvedValue({ updated: ["MODEL_ROUTER_KEY.agent"], restart_required: [] });
+    renderPanel();
+    const agentSide = (await screen.findByLabelText("Router key (agent side)")) as HTMLInputElement;
+    const master = screen.getByLabelText("Router master key") as HTMLInputElement;
+    expect(agentSide).not.toBe(master);
+
+    await userEvent.type(agentSide, "agent-value");
+    expect(master.value).toBe("");
+    await userEvent.click(screen.getByRole("button", { name: /save/i }));
+
+    await waitFor(() => expect(saveEnvConfig).toHaveBeenCalled());
+    expect(saveEnvConfig.mock.calls[0][0]).toEqual({ "MODEL_ROUTER_KEY.agent": "agent-value" });
   });
 
   it("offers a restart rather than performing one", async () => {

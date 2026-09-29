@@ -45,6 +45,16 @@ class ManagedKey:
     # in-flight model call, so it is their call when that happens.
     restarts: tuple[str, ...]
     secret: bool = True
+    # The row's identity on the wire. Defaults to the key name; only a key
+    # that appears in two files needs its own. MODEL_ROUTER_KEY is in both
+    # .envs, and a lookup keyed by name kept whichever row came last, so
+    # saving the "Router master key" wrote the agent's file and the router
+    # never saw the change (2026-09-29).
+    id: str = ""
+
+    @property
+    def row_id(self) -> str:
+        return self.id or self.key
 
 
 MANAGED_KEYS: tuple[ManagedKey, ...] = (
@@ -62,7 +72,7 @@ MANAGED_KEYS: tuple[ManagedKey, ...] = (
     ManagedKey(
         "MODEL_ROUTER_KEY", AGENT_ENV, "Router key (agent side)",
         "What the agent presents to the router. Must equal the master key above.",
-        "Models", ("tektonix",),
+        "Models", ("tektonix",), id="MODEL_ROUTER_KEY.agent",
     ),
     ManagedKey(
         "LANGSMITH_API_KEY", AGENT_ENV, "LangSmith API key",
@@ -110,7 +120,14 @@ MANAGED_KEYS: tuple[ManagedKey, ...] = (
     ),
 )
 
-_BY_KEY = {k.key: k for k in MANAGED_KEYS}
+def _rows_by_id() -> dict[str, ManagedKey]:
+    """Built from MANAGED_KEYS at call time, so a test that points the table
+    at temporary files cannot leave a cached lookup aimed at the real ones."""
+    rows = {k.row_id: k for k in MANAGED_KEYS}
+    if len(rows) != len(MANAGED_KEYS):
+        raise RuntimeError("MANAGED_KEYS has two rows with one id")
+    return rows
+
 
 # In the compose bundle none of these files exist: every value comes from the
 # .env beside docker-compose.yml on the host, interpolated by compose, and a
@@ -161,6 +178,9 @@ def list_keys() -> list[dict]:
     for mk in MANAGED_KEYS:
         raw = os.environ.get(mk.key, "") if compose else _read_env(mk.path).get(mk.key, "")
         out.append({
+            # `id` names the row when saving; `key` is the variable's name.
+            # They differ only for a key that lives in two files.
+            "id": mk.row_id,
             "key": mk.key,
             "label": mk.label,
             "help": mk.help,
@@ -245,12 +265,14 @@ class UnknownKeyError(Exception):
 
 
 def set_keys(updates: dict[str, str]) -> dict:
-    """Apply updates. Returns which services need restarting.
+    """Apply updates, keyed by row id (see ManagedKey.id). Returns which
+    services need restarting.
 
     Raises UnknownKeyError naming the key if anything outside the allow-list is
     passed — the name is safe to echo, the value never is.
     """
-    unknown = [k for k in updates if k not in _BY_KEY]
+    by_id = _rows_by_id()
+    unknown = [k for k in updates if k not in by_id]
     if unknown:
         raise UnknownKeyError(f"not editable here: {', '.join(sorted(unknown))}")
     if managed_by_compose():
@@ -265,8 +287,8 @@ def set_keys(updates: dict[str, str]) -> dict:
     by_file: dict[Path, dict[str, str]] = {}
     restarts: set[str] = set()
     for k, v in updates.items():
-        mk = _BY_KEY[k]
-        by_file.setdefault(mk.path, {})[k] = v
+        mk = by_id[k]
+        by_file.setdefault(mk.path, {})[mk.key] = v
         restarts.update(mk.restarts)
 
     for path, vals in by_file.items():

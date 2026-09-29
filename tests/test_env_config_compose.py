@@ -51,8 +51,7 @@ def test_on_a_host_install_the_files_are_still_the_source(monkeypatch, tmp_path)
     # The key table holds its paths; point every entry at the temp files.
     keys = tuple(dataclasses.replace(mk, path=env if mk.path == ec.ROUTER_ENV else tmp_path / "agent.env")
                  for mk in ec.MANAGED_KEYS)
-    monkeypatch.setattr(ec, "MANAGED_KEYS", keys)
-    monkeypatch.setattr(ec, "_BY_KEY", {k.key: k for k in keys})
+    monkeypatch.setattr(ec, "MANAGED_KEYS", keys)   # set_keys reads the table at call time
     rows = {r["key"]: r for r in ec.list_keys()}
     assert rows["OPENROUTER_API_KEY"]["display"].endswith("9999") and rows["OPENROUTER_API_KEY"]["file"] == str(env)
     assert ec.set_keys({"OPENROUTER_API_KEY": "sk-or-v1-written00"})["updated"] == ["OPENROUTER_API_KEY"]
