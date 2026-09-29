@@ -401,6 +401,23 @@ const STRIP_FALLBACK: &str = r#"
 })();
 "#;
 
+/// Where the window may go: the app's own pages and the console. Anything
+/// else (the login page's link to the project site, a link in a task's
+/// answer) opens in the system browser. Followed in the window, an outside
+/// page drew no title strip, and the frameless window could then neither
+/// be moved nor closed (2026-09-29).
+pub fn navigation_allowed(url: &tauri::Url) -> bool {
+    match url.scheme() {
+        "tauri" | "about" | "blob" | "data" => true,
+        "http" | "https" => {
+            let host = url.host_str().unwrap_or("");
+            host == "tauri.localhost"
+                || ((host == "localhost" || host == "127.0.0.1") && url.port() == Some(8100))
+        }
+        _ => false,
+    }
+}
+
 fn build_main_window(app: &AppHandle) -> tauri::Result<()> {
     tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::App("index.html".into()))
         .title("Tektonix")
@@ -408,6 +425,13 @@ fn build_main_window(app: &AppHandle) -> tauri::Result<()> {
         .min_inner_size(900.0, 600.0)
         .decorations(false)
         .initialization_script(STRIP_FALLBACK)
+        .on_navigation(|url| {
+            if navigation_allowed(url) {
+                return true;
+            }
+            let _ = tauri_plugin_opener::open_url(url.as_str(), None::<&str>);
+            false
+        })
         .build()?;
     Ok(())
 }
@@ -529,6 +553,35 @@ mod tests {
                 invoke_key: INVOKE_KEY.to_string(),
             },
         )
+    }
+
+    #[test]
+    fn the_window_stays_on_the_app_and_the_console() {
+        let url = |s: &str| tauri::Url::parse(s).unwrap();
+        for ok in [
+            "tauri://localhost/index.html",
+            "http://tauri.localhost/index.html",
+            "http://localhost:8100/",
+            "http://localhost:8100/tasks/1",
+            "http://127.0.0.1:8100/login",
+            "about:blank",
+        ] {
+            assert!(super::navigation_allowed(&url(ok)), "{ok}");
+        }
+        for out in [
+            "https://tektonix.io/",
+            "https://github.com/DJG3DK/tektonix",
+            "http://localhost:8000/",
+            "http://localhost/",
+            "http://localhost.evil.example:8100/",
+            "http://tauri.localhost.evil.example/",
+            "file:///C:/Windows/",
+        ] {
+            assert!(
+                !super::navigation_allowed(&url(out)),
+                "{out} belongs in the system browser"
+            );
+        }
     }
 
     #[test]
