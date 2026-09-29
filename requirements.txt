@@ -63,7 +63,7 @@ Pygments==2.21.0
 pypdf==6.16.1
 pytest==9.1.1
 pytest-asyncio==1.4.0
-pyee==13.0.1
+pyee==14.0.0
 PyOTP==2.10.0
 python-dotenv==1.2.3
 python-multipart==0.0.32
