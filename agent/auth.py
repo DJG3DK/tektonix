@@ -579,7 +579,13 @@ async def save_push_subscription(pool: AsyncConnectionPool, user_id: int, endpoi
             "INSERT INTO agent_push_subscriptions (endpoint, user_id, p256dh, auth, label) "
             "VALUES (%s, %s, %s, %s, %s) "
             "ON CONFLICT (endpoint) DO UPDATE SET user_id = EXCLUDED.user_id, "
-            "p256dh = EXCLUDED.p256dh, auth = EXCLUDED.auth, label = EXCLUDED.label",
+            "p256dh = EXCLUDED.p256dh, auth = EXCLUDED.auth, label = EXCLUDED.label "
+            # ...but only for the account that owns the row, or the browser
+            # that holds its secret. Any signed-in account could otherwise
+            # claim another's endpoint with fresh keys, and the victim's
+            # browser could no longer decrypt its own alerts (2026-09-29).
+            "WHERE agent_push_subscriptions.user_id = EXCLUDED.user_id "
+            "OR agent_push_subscriptions.auth = EXCLUDED.auth",
             (endpoint, user_id, p256dh, auth_key, label))
 
 

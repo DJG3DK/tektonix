@@ -126,5 +126,34 @@ async def test_a_push_endpoint_is_deleted_only_by_its_owner_or_its_browser(pool)
     assert await auth.count_push_subscriptions(pool, owner["id"]) == 0, "the owner may"
 
 
+async def test_a_push_endpoint_cannot_be_taken_over_by_another_account(pool):
+    """The upsert replaced user_id and the keys for any caller, so another
+    signed-in account could claim an endpoint and the victim's browser could
+    no longer decrypt its alerts (2026-09-29). The row moves only for its
+    owner, or for the browser that holds its secret."""
+    owner = await _user(pool, "owner@example.com")
+    other = await _user(pool, "other@example.com")
+    await auth.save_push_subscription(pool, owner["id"], "https://push.example/abc", "p256", "secret-auth")
+
+    await auth.save_push_subscription(pool, other["id"], "https://push.example/abc", "p256-x", "other-auth")
+    assert await auth.count_push_subscriptions(pool, owner["id"]) == 1, "another account took the endpoint"
+    assert await auth.count_push_subscriptions(pool, other["id"]) == 0
+
+    # The same browser, now signed into the other account: it presents the
+    # secret it holds, and the endpoint follows the sign-in (a shared device).
+    await auth.save_push_subscription(pool, other["id"], "https://push.example/abc", "p256", "secret-auth")
+    assert await auth.count_push_subscriptions(pool, other["id"]) == 1
+    assert await auth.count_push_subscriptions(pool, owner["id"]) == 0
+
+
+def test_the_push_upsert_is_conditioned_on_owner_or_secret():
+    """Runs without a database: the shape of the statement itself."""
+    import inspect
+    src = inspect.getsource(auth.save_push_subscription)
+    assert "ON CONFLICT (endpoint) DO UPDATE" in src
+    assert "WHERE agent_push_subscriptions.user_id = EXCLUDED.user_id" in src
+    assert "OR agent_push_subscriptions.auth = EXCLUDED.auth" in src
+
+
 def test_the_reset_code_is_compared_in_constant_time():
     assert "hmac.compare_digest" in inspect.getsource(auth.reset_password)
