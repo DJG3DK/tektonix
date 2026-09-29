@@ -44,6 +44,8 @@ import time
 from collections import defaultdict
 from contextlib import asynccontextmanager
 
+from urllib.parse import urlsplit
+
 import psycopg
 from fastapi import FastAPI, Form, Request
 from fastapi.responses import JSONResponse, RedirectResponse
@@ -85,6 +87,12 @@ PORT = int(os.environ.get("NEWSLETTER_PORT") or 8300)
 
 OK_URL = f"{SITE_URL}/subscribed/"
 FAIL_URL = f"{SITE_URL}/subscribe-failed/"
+_SITE_ORIGIN = "{0.scheme}://{0.netloc}".format(urlsplit(SITE_URL)).lower()
+
+# The form has one field people never see (site/src/LandingPage.tsx). A
+# submission that fills it came from something reading the markup, not the
+# page. Named like a real field on purpose: a bot skips one called "trap".
+HONEYPOT_FIELD = "website"
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS newsletter_subscribers (
@@ -167,6 +175,23 @@ def reset_subscribe_limiter() -> None:
     _subscribe_hits.clear()
 
 
+def _from_another_site(request: Request) -> bool:
+    """Whether the browser says this POST came from a page on another site.
+
+    Browsers send Origin on every form POST and Sec-Fetch-Site on every
+    request, so a header naming another site is a page somewhere else
+    posting to this form with an address that is not its owner's. A missing
+    header (an old browser, curl) is no evidence either way and passes: the
+    honeypot and the rate limit are what stand in front of those (2026-09-29
+    audit, S2).
+    """
+    origin = request.headers.get("origin", "").strip().rstrip("/").lower()
+    if origin and origin != "null" and origin != _SITE_ORIGIN:
+        return True
+    site = request.headers.get("sec-fetch-site", "").strip().lower()
+    return bool(site) and site not in ("same-origin", "same-site", "none")
+
+
 pool: AsyncConnectionPool | None = None
 
 
@@ -204,11 +229,20 @@ async def health():
 
 
 @app.post("/subscribe")
-async def subscribe(request: Request, name: str = Form(""), email: str = Form("")):
+async def subscribe(request: Request, name: str = Form(""), email: str = Form(""),
+                    website: str = Form("", alias=HONEYPOT_FIELD)):
     """Take one signup. Always answers with a redirect, never a bare status."""
     if not _subscribe_allowed(_client_ip(request)):
         logger.info("newsletter: refused a signup (rate limit)")
         return RedirectResponse(FAIL_URL, status_code=303)
+    if _from_another_site(request):
+        logger.info("newsletter: refused a signup (posted from another site)")
+        return RedirectResponse(FAIL_URL, status_code=303)
+    if website.strip():
+        # Told "success" and stored nowhere: a refusal is a signal to adapt
+        # to, and there is no person at the other end to mislead.
+        logger.info("newsletter: dropped a signup (honeypot filled)")
+        return RedirectResponse(OK_URL, status_code=303)
 
     name = " ".join(name.split())[:120]
     email = email.strip().lower()[:254]

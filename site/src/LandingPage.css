@@ -710,6 +710,15 @@
   border-radius: var(--radius-sm);
 }
 .lp-field input::placeholder { color: var(--text-faint); }
+/* The honeypot: present in the markup, absent from the page. Not
+   display:none, which some bots use to skip a field. */
+.lp-hp {
+  position: absolute;
+  left: -10000px;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+}
 .lp-field input:focus-visible {
   outline: none;
   border-color: var(--accent);

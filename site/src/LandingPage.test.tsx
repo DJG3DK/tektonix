@@ -38,6 +38,17 @@ describe("LandingPage", () => {
     expect(form.querySelector('input[name="email"][type="email"][required]')).toBeTruthy();
   });
 
+  it("carries a honeypot that a person never sees or tabs into", () => {
+    // site/server/newsletter.py drops a submission that fills it
+    // (2026-09-29 audit, S2).
+    const { container } = render(<LandingPage />);
+    const trap = container.querySelector('form.lp-news-form input[name="website"]') as HTMLInputElement;
+    expect(trap).toBeTruthy();
+    expect(trap.getAttribute("tabindex")).toBe("-1");
+    expect(trap.closest("[aria-hidden='true']")).toBeTruthy();
+    expect(trap.hasAttribute("required")).toBe(false);
+  });
+
   it("has no control that would need JavaScript to do anything", () => {
     // A submit button inside a form is HTML doing its own job. Anything else
     // -- type=button, an onClick -- would render fine and then do nothing,

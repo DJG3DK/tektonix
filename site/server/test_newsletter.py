@@ -215,6 +215,42 @@ def test_a_sixth_signup_from_one_ip_is_a_page_not_a_store(monkeypatch):
     assert "one-more@example.com" not in pool.store
 
 
+def test_a_post_from_another_site_is_refused(monkeypatch):
+    """A page elsewhere posting to this form is somebody signing up an
+    address that is not theirs. The browser says where a POST came from;
+    a header naming another site is refused, a missing one is not evidence
+    (2026-09-29 audit, S2)."""
+    pool = FakePool()
+    monkeypatch.setattr(newsletter, "pool", pool)
+    client = TestClient(newsletter.app)
+    for headers in ({"origin": "https://evil.example"},
+                    {"sec-fetch-site": "cross-site"},
+                    {"origin": newsletter.SITE_URL, "sec-fetch-site": "cross-site"}):
+        r = client.post("/subscribe", data={"name": "Ada", "email": "ada@example.com"},
+                        headers=headers, follow_redirects=False)
+        assert r.status_code == 303 and r.headers["location"] == newsletter.FAIL_URL, headers
+    assert pool.store == {}
+    newsletter.reset_subscribe_limiter()   # the refusals above count against the per-IP window
+    for headers in ({"origin": newsletter.SITE_URL, "sec-fetch-site": "same-origin"},
+                    {"origin": newsletter.SITE_URL.upper() + "/"},
+                    {}):
+        r = client.post("/subscribe", data={"name": "Ada", "email": "ada@example.com"},
+                        headers=headers, follow_redirects=False)
+        assert r.headers["location"] == newsletter.OK_URL, headers
+    assert "ada@example.com" in pool.store
+
+
+def test_a_filled_honeypot_is_dropped_but_told_success(monkeypatch):
+    """The field is hidden from people (site/src/LandingPage.tsx); something
+    that filled it read the markup. It is not stored, and it is not told so."""
+    pool = FakePool()
+    monkeypatch.setattr(newsletter, "pool", pool)
+    r = _post(TestClient(newsletter.app), name="Ada", email="ada@example.com",
+              **{newsletter.HONEYPOT_FIELD: "https://spam.example"})
+    assert r.status_code == 303 and r.headers["location"] == newsletter.OK_URL
+    assert pool.store == {}
+
+
 def test_x_real_ip_is_the_rate_limit_key(monkeypatch):
     """nginx sets X-Real-IP from $remote_addr and overwrites anything the
     client sent. Two people behind the same TestClient socket are not one

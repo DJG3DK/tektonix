@@ -445,6 +445,13 @@ cd tektonix && ./install.sh`}</code></pre>
                 />
               </label>
             </div>
+            {/* Honeypot: off-screen, out of the tab order, and never filled by a
+                person. The server drops a submission that has it (2026-09-29
+                audit, S2). The name is deliberately ordinary. */}
+            <label className="lp-hp" aria-hidden="true">
+              <span>Website</span>
+              <input type="text" name="website" tabIndex={-1} autoComplete="off" />
+            </label>
             <button className="lp-btn lp-btn-primary lp-news-submit" type="submit">
               Sign up for the newsletter
             </button>
