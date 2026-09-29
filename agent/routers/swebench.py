@@ -500,9 +500,14 @@ def _run_names(name: str) -> list[str]:
 
 def _remove_run_containers(run: str) -> None:
     """The harness's leftover containers for one run, removed in the
-    background: two argv calls, no shell."""
+    background: two argv calls, no shell.
+
+    The name filter is a regex matched anywhere in the name, so it is
+    anchored: the harness names its containers `sweb.eval.<task>.<run>`, and
+    an unanchored `.tektonix-x-s1` also matched every `tektonix-x-s10`
+    through `-s19` shard's containers (2026-09-29 audit, A11)."""
     try:
-        listed = subprocess.run(["docker", "ps", "-aq", "--filter", f"name=.{run}"],
+        listed = subprocess.run(["docker", "ps", "-aq", "--filter", f"name=\\.{re.escape(run)}$"],
                                 capture_output=True, text=True, timeout=60)
         ids = listed.stdout.split()
         if ids:

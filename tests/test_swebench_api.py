@@ -285,3 +285,23 @@ def test_starting_and_stopping_are_admin_only(client, monkeypatch):
     monkeypatch.setitem(srv.app.dependency_overrides, srv.require_full_auth, lambda: _user("user"))
     assert client.post("/api/swebench/run", json={"sample": 50}).status_code == 403
     assert client.post("/api/swebench/runs/live-run/stop").status_code == 403
+
+
+def test_the_container_cleanup_matches_one_run_s_containers_only(monkeypatch):
+    """docker's name filter is an unanchored regex: stopping shard s1 must not
+    remove s10's containers, and the `.` must not match any character."""
+    import re
+    calls = []
+
+    def fake_run(argv, **kw):
+        calls.append(argv)
+        return type("R", (), {"stdout": "abc123\n"})()
+    monkeypatch.setattr(sw.subprocess, "run", fake_run)
+    sw._remove_run_containers("tektonix-x-s1")
+    assert calls[0][:4] == ["docker", "ps", "-aq", "--filter"] and calls[1] == ["docker", "rm", "-f", "abc123"]
+    pattern = re.compile(calls[0][4].removeprefix("name="))
+    assert pattern.search("sweb.eval.django__django-1.tektonix-x-s1")
+    assert pattern.search("/sweb.eval.django__django-1.tektonix-x-s1")
+    for other in ("sweb.eval.django__django-1.tektonix-x-s10", "sweb.eval.django__django-1.tektonix-x-s1-old",
+                  "sweb.eval.django__django-1xtektonix-x-s1"):
+        assert not pattern.search(other), other
