@@ -320,55 +320,96 @@ async def _streamed(client, table, alias, body, call_id, task_id, session_id, ca
     first chunk goes out, commit to that deployment. The roles that stream here
     -- summarizer, cartographer, consolidator -- all have fallbacks configured
     precisely because their providers have thrown 429s before.
+
+    The first chunk is fetched BEFORE the response is built, so a chain that
+    fails entirely is the buffered path's 502 and not an empty 200 stream;
+    and every committed attempt is ledgered exactly once, in a finally, so a
+    client that hangs up mid-stream (the stall watchdog, a cancelled task)
+    still leaves the line for the tokens it spent (2026-09-29 audit, A8).
     """
     chain = table.chain(alias)
     started = time.monotonic()
+    attempt_no = 0
+    last_error = None
+    for name in chain:
+        dep = table.deployments[name]
+        for retry in range(RETRIES_PER_DEPLOYMENT + 1):
+            attempt_no += 1
+            usage = upstream.Usage()
+            t0 = time.monotonic()
+            extra = fastest.extra_body_for(client, OPENROUTER_KEY, dep.model, dep.extra_body)
+            agen = upstream.stream_once(client, OPENROUTER_KEY, body, dep.model,
+                                        extra, dep.timeout_s, usage)
+            try:
+                first = await agen.__anext__()
+            except StopAsyncIteration:
+                first = None                    # an empty but successful stream
+            except Exception as e:  # noqa: BLE001
+                status = getattr(getattr(e, "response", None), "status_code", None)
+                last_error = f"{type(e).__name__}: {str(e)[:300]}"
+                ledger.record(caller=caller, call_id=call_id, alias=alias, model=dep.model,
+                              duration_s=time.monotonic() - t0, task_id=task_id,
+                              session_id=session_id, attempt=attempt_no, error=True,
+                              error_detail=last_error)
+                transient = upstream.is_transient(status, str(e))
+                logger.warning("stream attempt %d on %s failed before first byte (%s): %s",
+                               attempt_no, name, "transient" if transient else "permanent", e)
+                if not transient:
+                    break               # move to the next deployment
+                if retry < RETRIES_PER_DEPLOYMENT:
+                    await asyncio.sleep(BACKOFF_S * (2 ** retry) * (0.5 + random.random()))
+                continue
+            # Committed to this deployment from here on.
+            return StreamingResponse(
+                _committed_body(agen, first, name, dep, usage, t0, started, attempt_no,
+                                caller=caller, call_id=call_id, alias=alias,
+                                task_id=task_id, session_id=session_id),
+                media_type="text/event-stream",
+                headers={CALL_ID_HEADER: call_id, "x-router-deployment": alias,
+                         "cache-control": "no-cache"})
+    logger.error("every deployment in %s failed before streaming", chain)
+    return JSONResponse({"error": {"message": last_error or "no deployment answered",
+                                   "type": "upstream_error", "chain": chain, "call_id": call_id}},
+                        status_code=502, headers={CALL_ID_HEADER: call_id})
 
-    async def body_iter():
-        attempt_no = 0
-        for name in chain:
-            dep = table.deployments[name]
-            for retry in range(RETRIES_PER_DEPLOYMENT + 1):
-                attempt_no += 1
-                usage = upstream.Usage()
-                emitted = False
-                t0 = time.monotonic()
-                try:
-                    extra = fastest.extra_body_for(client, OPENROUTER_KEY, dep.model, dep.extra_body)
-                    async for chunk in upstream.stream_once(client, OPENROUTER_KEY, body, dep.model,
-                                                            extra, dep.timeout_s, usage):
-                        emitted = True
-                        yield chunk
-                except Exception as e:  # noqa: BLE001
-                    status = getattr(getattr(e, "response", None), "status_code", None)
-                    ledger.record(caller=caller, call_id=call_id, alias=alias, model=dep.model,
-                                  duration_s=time.monotonic() - t0, task_id=task_id,
-                                  session_id=session_id, attempt=attempt_no, error=True,
-                                  error_detail=f"{type(e).__name__}: {str(e)[:300]}")
-                    if emitted:
-                        # Committed. Splicing a second completion onto a partial
-                        # one would be worse than the truncation.
-                        logger.error("stream failed mid-body on %s, cannot retry: %s", name, e)
-                        return
-                    transient = upstream.is_transient(status, str(e))
-                    logger.warning("stream attempt %d on %s failed before first byte (%s): %s",
-                                   attempt_no, name, "transient" if transient else "permanent", e)
-                    if not transient:
-                        break               # move to the next deployment
-                    if retry < RETRIES_PER_DEPLOYMENT:
-                        await asyncio.sleep(BACKOFF_S * (2 ** retry) * (0.5 + random.random()))
-                    continue
-                ledger.record(
-                    caller=caller,
-                    call_id=call_id, alias=alias, model=usage.model or dep.model,
-                    prompt_tokens=usage.prompt_tokens, completion_tokens=usage.completion_tokens,
-                    cached_tokens=usage.cached_tokens, cost=usage.cost,
-                    duration_s=time.monotonic() - started, task_id=task_id,
-                    session_id=session_id, provider=usage.provider, attempt=attempt_no,
-                )
-                return
-        logger.error("every deployment in %s failed before streaming", chain)
 
-    return StreamingResponse(body_iter(), media_type="text/event-stream",
-                             headers={CALL_ID_HEADER: call_id, "x-router-deployment": alias,
-                                      "cache-control": "no-cache"})
+async def _committed_body(agen, first, name, dep, usage, t0, started, attempt_no, *,
+                          caller, call_id, alias, task_id, session_id):
+    """The body of a stream whose first chunk has arrived. One ledger line
+    whatever happens: completed, failed mid-body, or closed by the client."""
+    outcome = "cancelled"
+    try:
+        if first is not None:
+            yield first
+        async for chunk in agen:
+            yield chunk
+        outcome = "done"
+    except Exception as e:  # noqa: BLE001
+        # Splicing a second completion onto a partial one would be worse
+        # than the truncation the client already sees.
+        outcome = f"{type(e).__name__}: {str(e)[:300]}"
+        logger.error("stream failed mid-body on %s, cannot retry: %s", name, e)
+    finally:
+        if outcome != "done":
+            try:
+                await agen.aclose()     # release the upstream connection
+            except BaseException as e:  # noqa: BLE001 -- the ledger line matters more
+                logger.debug("upstream stream close after %s: %s", outcome, e)
+        if outcome == "done":
+            ledger.record(
+                caller=caller,
+                call_id=call_id, alias=alias, model=usage.model or dep.model,
+                prompt_tokens=usage.prompt_tokens, completion_tokens=usage.completion_tokens,
+                cached_tokens=usage.cached_tokens, cost=usage.cost,
+                duration_s=time.monotonic() - started, task_id=task_id,
+                session_id=session_id, provider=usage.provider, attempt=attempt_no,
+            )
+        else:
+            # The usage so far, when the upstream reported any before the
+            # cut: the tokens were spent either way.
+            ledger.record(caller=caller, call_id=call_id, alias=alias, model=usage.model or dep.model,
+                          prompt_tokens=usage.prompt_tokens, completion_tokens=usage.completion_tokens,
+                          cached_tokens=usage.cached_tokens, cost=usage.cost,
+                          duration_s=time.monotonic() - t0, task_id=task_id,
+                          session_id=session_id, provider=usage.provider, attempt=attempt_no,
+                          error=True, error_detail=outcome)

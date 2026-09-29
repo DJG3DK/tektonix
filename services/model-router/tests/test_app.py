@@ -318,6 +318,47 @@ def test_a_streamed_call_is_ledgered_once(client, monkeypatch, tmp_path):
     assert len(rows) == 1 and rows[0]["task_id"] == "T9"
 
 
+def test_a_chain_that_fails_entirely_is_a_502_not_an_empty_stream(monkeypatch, client):
+    """2026-09-29 audit, A8: the client got 200 text/event-stream with an
+    empty body, and nothing keyed on it as a failure."""
+    class Boom(Exception):
+        pass
+    _stream_stub(monkeypatch, [Boom("400 bad request")])
+    r = _stream(client)
+    assert r.status_code == 502
+    assert r.json()["error"]["type"] == "upstream_error"
+    assert r.headers.get("x-router-call-id")
+
+
+def test_a_stream_the_client_abandons_is_still_ledgered(monkeypatch, client, tmp_path):
+    """The tokens were spent; a hang-up mid-stream used to leave no line."""
+    import asyncio
+    _stream_stub(monkeypatch, [["data: a\n", "data: b\n", "data: c\n"]])
+    table = app_module.registry.table  # the registry the client fixture loaded
+
+    async def abandon():
+        resp = await app_module._streamed(
+            None, table, "agent-coder", {"messages": []}, "call-x", "T-x", None, "test")
+        assert resp.status_code == 200
+        it = resp.body_iterator
+        await it.__anext__()          # the first chunk reached the client
+        await it.aclose()             # ...and then it hung up
+    asyncio.run(abandon())
+    rows = [json.loads(line) for line in (tmp_path / "ledger.jsonl").read_text().splitlines()]
+    assert len(rows) == 1
+    assert rows[0]["error"] is True and rows[0]["error_detail"] == "cancelled"
+    assert rows[0]["call_id"] == "call-x" and rows[0]["task_id"] == "T-x"
+
+
+def test_a_failure_midstream_is_ledgered_as_the_error(monkeypatch, client, tmp_path):
+    class Boom(Exception):
+        pass
+    _stream_stub(monkeypatch, [["data: partial\n", Boom("died")]])
+    _stream(client)
+    rows = [json.loads(line) for line in (tmp_path / "ledger.jsonl").read_text().splitlines()]
+    assert len(rows) == 1 and rows[0]["error"] is True and rows[0]["error_detail"].startswith("Boom")
+
+
 # ---------------------------------------------------------------------------
 # per-consumer keys (2026-09-16, replacing a single shared master key)
 # ---------------------------------------------------------------------------

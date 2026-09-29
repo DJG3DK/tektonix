@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+### A stream the client abandons is still on the ledger
+
+A task that hung up mid-stream, or a stall the watchdog cut, left no
+ledger line for the tokens it had spent, and a stream whose every
+deployment refused came back as an empty success. The line is written
+whatever ends the stream, and a total refusal is the same 502 the
+buffered path returns.
+
+### A used episode carries its real rank
+
+The recall log remembered only the first five results, so an episode
+used from rank six or worse was recorded as never offered, the opposite
+of what the rank is for. Every offered result is remembered per task,
+a second search no longer erases the first, and "never offered" is its
+own field.
+
 ### The merge lands the reviewed commit, not whatever the branch holds now
 
 The merge route fast-forwarded to the branch name and pushed the branch,

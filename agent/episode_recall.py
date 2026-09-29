@@ -31,6 +31,7 @@ import json
 import logging
 import os
 import time
+from collections import OrderedDict
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -291,32 +292,41 @@ _KEEP_FRACTION = 0.5
 TOP_N = 5
 
 
-# What the last search, and the last memory index, put in front of each
-# task, so a use can be recorded WITH ITS RANK. The rank is the number the
+# What the searches, and the memory index, put in front of each task, so
+# a use can be recorded WITH ITS RANK. The rank is the number the
 # re-ranker decision hangs on (docs/todo.md, hybrid retrieval): a used
 # episode at rank six or worse says ordering is the problem; one that was
 # never offered says the candidate pool is. Without it the log held the
 # answer's two halves in separate events and nobody joined them
-# (2026-09-29). Bounded: one entry per (task, repo), the newest wins.
-_LAST_REFS: dict[tuple[str | None, str], list[str]] = {}
-_LAST_OFFERED: dict[tuple[str | None, str], list[str]] = {}
-_LAST_LIMIT = 500
+# (2026-09-29). Every offered ref is kept, not the written head, so rank
+# seven is recorded as seven and not as "never offered"; an episode is
+# keyed by task and ref, not repo, so a cross-project offer is found; a
+# ref offered twice keeps the rank it was first seen at; and the table is
+# least-recently-used, so a long-lived task is not the first evicted
+# (2026-09-29 audit, A6).
+_OFFERS: OrderedDict[tuple, int] = OrderedDict()
+_OFFERS_LIMIT = 5000
 
 
-def _remember(table: dict, key: tuple, items: list[str]) -> None:
-    table[key] = list(items)
-    if len(table) > _LAST_LIMIT:
-        for stale in list(table)[: len(table) - _LAST_LIMIT]:
-            table.pop(stale, None)
+def _remember(kind: str, task_id: str | None, items: list[str], repo: str | None = None) -> None:
+    for n, item in enumerate(items, 1):
+        key = (kind, task_id, repo, item)
+        if key in _OFFERS:
+            _OFFERS.move_to_end(key)
+            continue
+        _OFFERS[key] = n
+    while len(_OFFERS) > _OFFERS_LIMIT:
+        _OFFERS.popitem(last=False)
 
 
-def _rank_of(table: dict, key: tuple, item: str) -> int | None:
-    """1-based position of `item` in what was last put in front of this
-    task, or None when it was never offered (or the offer is unknown)."""
-    items = table.get(key)
-    if not items or item not in items:
-        return None
-    return items.index(item) + 1
+def _rank_of(kind: str, task_id: str | None, item: str, repo: str | None = None) -> int | None:
+    """1-based position of `item` when it was first put in front of this
+    task, or None when it never was (or the offer is unknown)."""
+    key = (kind, task_id, repo, item)
+    rank = _OFFERS.get(key)
+    if rank is not None:
+        _OFFERS.move_to_end(key)
+    return rank
 
 
 def record_query(query: str, repo: str, refs: list[str], *, task_id: str | None = None,
@@ -324,7 +334,7 @@ def record_query(query: str, repo: str, refs: list[str], *, task_id: str | None 
                  path: Path | None = None) -> None:
     """One search happened, and these are the refs it put in front of the
     model. Never raises."""
-    _remember(_LAST_REFS, (task_id, repo), list(refs)[:TOP_N])
+    _remember("episode", task_id, list(refs))
     _append({
         "ts": time.time(),
         "event": "query",
@@ -348,13 +358,17 @@ def record_query(query: str, repo: str, refs: list[str], *, task_id: str | None 
 
 def record_use(ref: str, repo: str, *, task_id: str | None = None, path: Path | None = None) -> None:
     """An episode a search offered was actually read. Never raises."""
+    rank = _rank_of("episode", task_id, ref)
     _append({
         "ts": time.time(),
         "event": "use",
         "repo": repo,
         "task_id": task_id,
         "ref": ref,
-        "rank": _rank_of(_LAST_REFS, (task_id, repo), ref),
+        "rank": rank,
+        # Separate from a null rank on purpose: "offered, rank unknown"
+        # and "never offered" are different findings.
+        "offered": rank is not None,
     }, path)
 
 
@@ -371,7 +385,7 @@ def record_use(ref: str, repo: str, *, task_id: str | None = None, path: Path | 
 def record_sections_offered(repo: str, offered: list[str], *, always: list[str] | None = None,
                             task_id: str | None = None, path: Path | None = None) -> None:
     """A prompt was built carrying this project's memory index. Never raises."""
-    _remember(_LAST_OFFERED, (task_id, repo), list(offered))
+    _remember("section", task_id, list(offered), repo=repo)
     _append({
         "ts": time.time(),
         "event": "memory_offered",
@@ -388,13 +402,15 @@ def record_sections_offered(repo: str, offered: list[str], *, always: list[str] 
 def record_section_read(slug: str, repo: str, *, task_id: str | None = None,
                         path: Path | None = None) -> None:
     """A section the index advertised was actually read. Never raises."""
+    position = _rank_of("section", task_id, slug, repo=repo)
     _append({
         "ts": time.time(),
         "event": "memory_read",
         "repo": repo,
         "task_id": task_id,
         "section": slug,
-        "position": _rank_of(_LAST_OFFERED, (task_id, repo), slug),
+        "position": position,
+        "offered": position is not None,
     }, path)
 
 

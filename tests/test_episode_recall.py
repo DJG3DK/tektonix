@@ -8,6 +8,7 @@ again is a revert rather than a migration.
 """
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -156,3 +157,48 @@ def test_a_use_and_a_section_read_carry_the_rank_they_were_offered_at(tmp_path):
     assert [u["rank"] for u in uses] == [3, None, None]
     read = next(e for e in events if e["event"] == "memory_read")
     assert read["position"] == 3
+
+
+def test_rank_seven_is_recorded_as_seven(tmp_path):
+    """2026-09-29 audit, A6: only the written head of the results was
+    remembered, so a use at rank six or worse was logged as never offered,
+    the opposite of what the rank exists to tell apart."""
+    import json
+    from agent import episode_recall as er
+    log = tmp_path / "events.jsonl"
+    refs = [f"ep:{n}" for n in range(1, 11)]
+    er.record_query("q", "demo", refs, task_id="t7", path=log)
+    er.record_use("ep:7", "demo", task_id="t7", path=log)
+    er.record_use("ep:nope", "demo", task_id="t7", path=log)
+    query, seven, never = (json.loads(line) for line in log.read_text().splitlines())
+    assert len(query["refs"]) == er.TOP_N, "the written head is still short"
+    assert seven["rank"] == 7 and seven["offered"] is True
+    assert never["rank"] is None and never["offered"] is False
+
+
+def test_an_offer_survives_a_later_search_and_a_cross_repo_use(tmp_path, monkeypatch):
+    """Search one offered it, search two did not, the task read it after
+    search two: still rank 2. And an episode a cross-project search offered
+    is found however the use names its repo."""
+    import json
+    from agent import episode_recall as er
+    monkeypatch.setattr(er, "_OFFERS", er.OrderedDict())
+    log = tmp_path / "events.jsonl"
+    er.record_query("first", "demo", ["ep:a", "ep:b"], task_id="t1", path=log)
+    er.record_query("second", "demo", ["ep:c"], task_id="t1", path=log)
+    er.record_use("ep:b", "demo", task_id="t1", path=log)
+    er.record_use("ep:c", "other-repo", task_id="t1", path=log)
+    uses = [json.loads(line) for line in log.read_text().splitlines()][2:]
+    assert [u["rank"] for u in uses] == [2, 1]
+
+
+def test_the_offer_table_forgets_the_least_recently_used_entry(monkeypatch):
+    from agent import episode_recall as er
+    monkeypatch.setattr(er, "_OFFERS", er.OrderedDict())
+    monkeypatch.setattr(er, "_OFFERS_LIMIT", 3)
+    er.record_query("q", "demo", ["ep:old", "ep:mid", "ep:new"], task_id="t", path=Path("/dev/null"))
+    assert er._rank_of("episode", "t", "ep:old") == 1          # touched: now the newest
+    er.record_query("q", "demo", ["ep:extra"], task_id="t", path=Path("/dev/null"))
+    assert er._rank_of("episode", "t", "ep:mid") is None, "the untouched one went"
+    assert er._rank_of("episode", "t", "ep:old") == 1
+    assert er._rank_of("episode", "t", "ep:extra") == 1, "a second offer keeps its own first rank"
