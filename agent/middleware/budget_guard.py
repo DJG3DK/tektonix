@@ -51,10 +51,13 @@ to budget_usd, for a true aggregate of budget_usd * (1 + subagent_count),
 not budget_usd. `BudgetTracker` is the one shared mutable object every
 middleware instance for a given task invocation must wrap, so the ceiling is
 enforced against the real aggregate spend across the coordinator and every
-subagent call combined. Safe without locking because subagents in this
-system run synchronously (the coordinator blocks on each `task()`
-delegation) -- only one model call for the whole task is ever in flight at
-a time.
+subagent call combined. Safe without a lock because every update here is a
+synchronous step on the one event loop: nothing awaits between reading and
+writing the totals. It is NOT because calls are serial -- the coordinator
+can put several `task` calls in one message and LangGraph runs them
+concurrently, so parallel branches are in flight together (2026-09-29
+audit, A5). Each branch checks the ceiling before its own call, so an
+overshoot is bounded by one call per parallel branch, never unbounded.
 """
 
 import asyncio
