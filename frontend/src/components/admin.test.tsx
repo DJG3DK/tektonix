@@ -35,10 +35,28 @@ beforeEach(() => {
   listUsers.mockResolvedValue([]);
 });
 
+describe("UsersPanel without the multi-user licence", () => {
+  // Only creating accounts is licensed (agent/features.py). The accounts
+  // that exist keep working, so the page that disables or deletes them must
+  // stay reachable (2026-09-29 audit, U5).
+  it("still lists and manages the accounts that exist, and withholds only the create form", async () => {
+    listUsers.mockResolvedValue([user({ id: 2, email: "b@x.test", role: "user", allowed_repos: ["webapp"] })]);
+    deleteUser.mockResolvedValue(undefined);
+    vi.stubGlobal("confirm", () => true);
+    render(<UsersPanel repos={["webapp"]} canCreate={false} />);
+    expect(await screen.findByText("b@x.test")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /create user/i })).not.toBeInTheDocument();
+    expect(screen.getByTestId("users-create-unavailable")).toHaveTextContent(/licensed feature/i);
+    await userEvent.click(screen.getByRole("button", { name: /remove/i }));
+    expect(deleteUser).toHaveBeenCalledWith(2);
+    vi.unstubAllGlobals();
+  });
+});
+
 describe("UsersPanel", () => {
   it("lists the accounts that exist", async () => {
     listUsers.mockResolvedValue([user({ email: "a@x.test" }), user({ id: 2, email: "b@x.test" })]);
-    render(<UsersPanel repos={["webapp"]} />);
+    render(<UsersPanel repos={["webapp"]} canCreate />);
     expect(await screen.findByText("a@x.test")).toBeInTheDocument();
     expect(screen.getByText("b@x.test")).toBeInTheDocument();
   });
@@ -56,7 +74,7 @@ describe("UsersPanel", () => {
     // Least privilege runs both ways: an account scoped to no repo at all is
     // not a safe default, it is a broken one.
     createUser.mockResolvedValue(undefined);
-    render(<UsersPanel repos={["webapp"]} />);
+    render(<UsersPanel repos={["webapp"]} canCreate />);
     await waitFor(() => expect(listUsers).toHaveBeenCalled());
 
     await userEvent.type(document.querySelector('input[type="email"]') as HTMLInputElement, "new@x.test");
@@ -67,7 +85,7 @@ describe("UsersPanel", () => {
 
   it("creates a user scoped to the repos that were ticked", async () => {
     createUser.mockResolvedValue(undefined);
-    render(<UsersPanel repos={["webapp"]} />);
+    render(<UsersPanel repos={["webapp"]} canCreate />);
     await waitFor(() => expect(listUsers).toHaveBeenCalled());
 
     await fillNewUser();
@@ -82,7 +100,7 @@ describe("UsersPanel", () => {
     // new account is forced to set its own on first login, so re-displaying
     // it would leave a live credential sitting on screen for no benefit.
     createUser.mockResolvedValue(undefined);
-    render(<UsersPanel repos={["webapp"]} />);
+    render(<UsersPanel repos={["webapp"]} canCreate />);
     await waitFor(() => expect(listUsers).toHaveBeenCalled());
     await fillNewUser("new@x.test", "Passw0rdPassw0rd");
     await userEvent.click(screen.getByRole("button", { name: /create user/i }));
@@ -96,7 +114,7 @@ describe("UsersPanel", () => {
     // Leaving a password in a field after submit is a credential left lying
     // around in the DOM.
     createUser.mockResolvedValue(undefined);
-    render(<UsersPanel repos={["webapp"]} />);
+    render(<UsersPanel repos={["webapp"]} canCreate />);
     await waitFor(() => expect(listUsers).toHaveBeenCalled());
     await fillNewUser();
     await userEvent.click(screen.getByRole("button", { name: /create user/i }));
@@ -108,7 +126,7 @@ describe("UsersPanel", () => {
 
   it("reports a creation failure rather than a silent no-op", async () => {
     createUser.mockRejectedValue(new Error("email already exists"));
-    render(<UsersPanel repos={["webapp"]} />);
+    render(<UsersPanel repos={["webapp"]} canCreate />);
     await waitFor(() => expect(listUsers).toHaveBeenCalled());
     await fillNewUser("dupe@x.test");
     await userEvent.click(screen.getByRole("button", { name: /create user/i }));
@@ -117,7 +135,7 @@ describe("UsersPanel", () => {
 
   it("offers per-repo scoping so an account need not see everything", async () => {
     listUsers.mockResolvedValue([]);
-    render(<UsersPanel repos={["webapp", "storefront"]} />);
+    render(<UsersPanel repos={["webapp", "storefront"]} canCreate />);
     await waitFor(() => expect(listUsers).toHaveBeenCalled());
     expect(screen.getAllByText(/webapp/).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/storefront/).length).toBeGreaterThan(0);

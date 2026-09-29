@@ -5,6 +5,9 @@ import "./UsersPanel.css";
 
 interface Props {
   repos: string[];
+  /** Whether this deployment is licensed to add accounts (agent/features.py).
+   *  Managing the accounts that exist never depends on it. */
+  canCreate: boolean;
 }
 
 function NewUserForm({ repos, onCreated }: { repos: string[]; onCreated: () => void }) {
@@ -153,7 +156,7 @@ function UserRow({ user, repos, onChanged }: { user: CurrentUser; repos: string[
   );
 }
 
-export function UsersPanel({ repos }: Props) {
+export function UsersPanel({ repos, canCreate }: Props) {
   const [users, setUsers] = useState<CurrentUser[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -182,7 +185,17 @@ export function UsersPanel({ repos }: Props) {
         </div>
       )}
 
-      <NewUserForm repos={repos} onCreated={refresh} />
+      {canCreate ? (
+        <NewUserForm repos={repos} onCreated={refresh} />
+      ) : (
+        /* The route that mints accounts answers 403 here; a form that can
+           only ever fail is worse than a sentence. The accounts above are
+           unaffected: the switch is on making new ones, never on signing in. */
+        <p className="users-sub" data-testid="users-create-unavailable">
+          Adding accounts is a licensed feature this deployment does not have. The accounts
+          above keep working and can be managed here.
+        </p>
+      )}
     </div>
   );
 }

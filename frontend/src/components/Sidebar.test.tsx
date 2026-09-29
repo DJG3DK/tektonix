@@ -290,13 +290,21 @@ describe("a queued task", () => {
 });
 
 
-describe("Users is a licensed feature", () => {
-  it("is not offered in the public build, even to an admin", () => {
+describe("Users is for every admin", () => {
+  // The licence gates CREATING accounts, not managing the ones that exist.
+  // Hiding the whole page in the public build left an admin whose licence
+  // lapsed with no way to disable or delete an account (2026-09-29 audit,
+  // U5); the panel itself withholds the create form instead.
+  it("is offered in the public build too", () => {
     renderSidebar({ user: { ...user(), role: "admin", features: { multi_user: false } } });
-    expect(screen.queryByRole("button", { name: /^users$/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^users$/i })).toBeInTheDocument();
   });
-  it("is offered where the deployment has it", () => {
+  it("is offered where the deployment is licensed for more", () => {
     renderSidebar({ user: { ...user(), role: "admin", features: { multi_user: true } } });
     expect(screen.getByRole("button", { name: /^users$/i })).toBeInTheDocument();
+  });
+  it("is never offered to a restricted account", () => {
+    renderSidebar({ user: { ...user(), role: "user", features: { multi_user: true } } });
+    expect(screen.queryByRole("button", { name: /^users$/i })).not.toBeInTheDocument();
   });
 });

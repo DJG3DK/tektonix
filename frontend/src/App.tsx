@@ -348,7 +348,12 @@ function AuthenticatedApp({ user, onLogout, onUserChanged }: { user: CurrentUser
             <ModelConfigPanel />
           </div>
         )}
-        {view === "users" && user.role === "admin" && user.features?.multi_user && <UsersPanel repos={repos} />}
+        {/* Every admin gets the page: existing accounts keep working whether
+            or not the deployment is licensed for more, and this is the only
+            place to disable or delete one. The licence gates CREATING an
+            account (agent/features.py), so that is the one part the panel
+            withholds (2026-09-29 audit, U5). */}
+        {view === "users" && user.role === "admin" && <UsersPanel repos={repos} canCreate={Boolean(user.features?.multi_user)} />}
         {(view === "analytics" || view === "benchmarks" || view === "models" || view === "users") && user.role !== "admin" && (
           /* An admin URL opened by a restricted account (a shared link, a
              bookmark). The server is the boundary -- every API behind these
@@ -406,7 +411,7 @@ function AuthenticatedApp({ user, onLogout, onUserChanged }: { user: CurrentUser
         view={view}
         pane={mobilePane}
         isAdmin={user.role === "admin"}
-        canManageUsers={Boolean(user.features?.multi_user)}
+        canManageUsers={user.role === "admin"}
         onTasks={() => setMobilePane("list")}
         onNewPlan={() => { setSelectedPlanningSession(null); setView("planning"); setMobilePane("main"); }}
         onAnalytics={() => { setView("analytics"); setMobilePane("main"); }}

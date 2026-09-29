@@ -393,12 +393,12 @@ export function Sidebar({
               <Icon name="cpu" size={15} />
               <span>Models</span>
             </button>
-            {user.features?.multi_user && (
-              <button className={`analytics-nav-btn ${view === "users" ? "active" : ""}`} onClick={onUsers}>
-                <Icon name="users" size={15} />
-                <span>Users</span>
-              </button>
-            )}
+            {/* Not gated on the multi-user licence: the accounts that exist
+                are managed here whatever the licence says (App.tsx). */}
+            <button className={`analytics-nav-btn ${view === "users" ? "active" : ""}`} onClick={onUsers}>
+              <Icon name="users" size={15} />
+              <span>Users</span>
+            </button>
           </>
         )}
         <button className={`analytics-nav-btn ${view === "github" ? "active" : ""}`} onClick={onGitHub}>
