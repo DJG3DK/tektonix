@@ -121,12 +121,14 @@ class _Store:
 @pytest.fixture
 def worktree_world(world, monkeypatch):
     ws = world["roots"] / ".workspaces" / "shop"
-    subprocess.run(["git", "-C", world["old"], "commit", "-q", "--allow-empty", "-m", "start"], check=True)
+    # A fresh CI runner has no git identity; the commit must not depend on one.
+    ident = ["-c", "user.name=tektonix-tests", "-c", "user.email=tests@tektonix.invalid"]
+    subprocess.run(["git", *ident, "-C", world["old"], "commit", "-q", "--allow-empty", "-m", "start"], check=True)
     subprocess.run(["git", "-C", world["old"], "worktree", "add", "-q", str(ws), "-b", "agent-base"], check=True)
     entry = {"live": str(world["old"]), "sandbox": str(ws), "ship": "pr"}
     world["cfg"].write_text(json.dumps({"projects": {"shop": entry}}))
     agent_config.PROJECTS["shop"] = dict(entry)
-    subprocess.run(["git", "-C", world["new"], "commit", "-q", "--allow-empty", "-m", "start"], check=True)
+    subprocess.run(["git", *ident, "-C", world["new"], "commit", "-q", "--allow-empty", "-m", "start"], check=True)
     store = _Store()
     monkeypatch.setattr(srv.app.state, "store", store, raising=False)
     monkeypatch.setattr(provisioning, "sandbox_root", lambda: str(world["roots"] / ".workspaces"))

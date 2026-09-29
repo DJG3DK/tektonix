@@ -207,7 +207,8 @@ def test_dependabot_watches_every_manifest_in_the_tree():
     for entry in doc["updates"]:
         for d in entry.get("directories") or [entry["directory"]]:
             watched.add((entry["package-ecosystem"], d))
-    skip = {"node_modules", ".git", "evals", "logoloom", ".venv", "target"}
+    # .claude holds agent worktrees on a development box: whole checkouts.
+    skip = {"node_modules", ".git", ".claude", "evals", "logoloom", ".venv", "target"}
     expected: set[tuple[str, str]] = set()
     for p in REPO.rglob("*"):
         if any(part in skip for part in p.relative_to(REPO).parts):

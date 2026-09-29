@@ -25,6 +25,10 @@ def test_a_host_install_keeps_the_full_rules(monkeypatch):
 
 def test_a_desktop_install_makes_the_second_factor_optional_and_sessions_long(monkeypatch):
     monkeypatch.setenv("TEKTONIX_DESKTOP", "1")
+    # The premise the flag rests on, stated rather than inherited from the
+    # box's own .env (a reference deployment binds wide and licenses accounts).
+    monkeypatch.setenv("BIND_ADDRESS", "127.0.0.1")
+    monkeypatch.delenv("TEKTONIX_FEATURES", raising=False)
     assert auth.desktop_install() is True
     assert auth.forced_screen_block(ADMIN_NO_2FA) is None
     assert auth.forced_screen_block(ADMIN_FRESH) == "password change required before using this", "a generated password is still replaced first"
