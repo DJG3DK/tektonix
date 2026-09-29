@@ -1,6 +1,7 @@
 import os
 import hashlib
 import re
+import shlex
 import asyncio
 
 from agent.tools.shell import run_shell
@@ -229,7 +230,7 @@ async def sync_workspace_to_base(repo_root: str, base_ref: str = "main",
                     "reason": f"tree dirty and could not be stashed: {stash['output'][:200]}"}
         salvaged = whose
 
-    r = await _git(f"checkout --detach {base_ref}", repo_root, timeout=30)
+    r = await _git(f"checkout --detach {shlex.quote(base_ref)}", repo_root, timeout=30)
     if not r["ok"]:
         return {"ok": False, "synced": False, "reason": r["output"][:300]}
     if task_id:
@@ -288,7 +289,7 @@ async def ensure_task_branch(repo_root: str, task_id: str, base_ref: str = "main
     if dirty:
         cmd = f"checkout -B {branch}"
     else:
-        cmd = f"checkout -B {branch} {base_ref}"
+        cmd = f"checkout -B {branch} {shlex.quote(base_ref)}"
 
     r = await _git(cmd, repo_root, timeout=30)
     if not r["ok"] and not dirty:
@@ -402,7 +403,7 @@ async def git_commit(repo_root: str, message: str, files: list[str] | None = Non
 async def commits_ahead(repo_root: str, base_ref: str = "main") -> int:
     """How many commits HEAD has that `base_ref` does not. 0 when the branch
     has nothing of its own, or when the question cannot be answered."""
-    r = await _git(f"rev-list --count {base_ref}..HEAD", repo_root, timeout=15)
+    r = await _git(f"rev-list --count {shlex.quote(base_ref)}..HEAD", repo_root, timeout=15)
     if not r["ok"]:
         return 0
     try:
@@ -419,8 +420,8 @@ async def no_diff_evidence(repo_root: str, base_ref: str = "main") -> str:
     nothing to tell the two apart. Never raises."""
     parts: list[str] = []
     for label, cmd in (("branch", "rev-parse --abbrev-ref HEAD"), ("head", "rev-parse --short HEAD"),
-                       (base_ref, f"rev-parse --short {base_ref}"),
-                       ("ahead", f"rev-list --count {base_ref}..HEAD"),
+                       (base_ref, f"rev-parse --short {shlex.quote(base_ref)}"),
+                       ("ahead", f"rev-list --count {shlex.quote(base_ref)}..HEAD"),
                        ("status", "status --porcelain"), ("stash", "stash list")):
         try:
             r = await _git(cmd, repo_root, timeout=15)
@@ -489,14 +490,14 @@ async def rebase_onto_base(repo_root: str, base_ref: str = "main") -> dict:
                                   branch is exactly as it was and the caller can
                                   hand the file list to whoever can resolve it.
     """
-    base_tip = await _git(f"rev-parse {base_ref}", repo_root, timeout=15)
+    base_tip = await _git(f"rev-parse {shlex.quote(base_ref)}", repo_root, timeout=15)
     if not base_tip["ok"]:
         # No such ref. Not this function's problem to diagnose, and not a
         # reason to fail a task: the branch is fine where it is.
         return {"ok": True, "moved": False, "reason": f"{base_ref} does not resolve"}
     tip = base_tip["output"].strip()
 
-    mb = await _git(f"merge-base HEAD {base_ref}", repo_root, timeout=15)
+    mb = await _git(f"merge-base HEAD {shlex.quote(base_ref)}", repo_root, timeout=15)
     if not mb["ok"]:
         return {"ok": True, "moved": False, "reason": "no merge base"}
     fork = mb["output"].strip()
@@ -507,7 +508,7 @@ async def rebase_onto_base(repo_root: str, base_ref: str = "main") -> dict:
     before = await _git(f"diff {fork}..HEAD", repo_root, timeout=60)
     patch_before = _digest(before["output"] if before["ok"] else "")
 
-    r = await _git(f"rebase {base_ref}", repo_root, timeout=120)
+    r = await _git(f"rebase {shlex.quote(base_ref)}", repo_root, timeout=120)
     if not r["ok"]:
         # Collect the file list BEFORE aborting -- afterwards there is nothing
         # left to ask.
@@ -685,7 +686,7 @@ async def restore_task_workspace(repo_root: str, task_id: str, base_ref: str = "
     old = (await _git("rev-parse HEAD", repo_root, timeout=15))["output"].strip()
     backup = f"{branch}-pre-rebase-backup"
     await _git(f"branch -f {backup} {old}", repo_root, timeout=15)
-    r = await _git(f"checkout -B {branch} {base_ref}", repo_root, timeout=30)
+    r = await _git(f"checkout -B {branch} {shlex.quote(base_ref)}", repo_root, timeout=30)
     if not r["ok"]:
         return {**out, "ok": False, "reason": f"could not reset {branch} onto {base_ref}: {r['output'][:200]}"}
     return {**out, "restored": True, "reset_onto_base": True, "conflicts": rb["conflicts"],
@@ -719,12 +720,12 @@ async def fetch_base_from_origin(live_root: str, base_ref: str = "main") -> dict
     if not remotes["ok"] or "origin" not in remotes["output"].split():
         return {"ok": True, "fetched": False, "reason": "no origin remote"}
 
-    f = await _git(f"fetch --quiet origin {base_ref}", live_root, timeout=120)
+    f = await _git(f"fetch --quiet origin {shlex.quote(base_ref)}", live_root, timeout=120)
     if not f["ok"]:
         return {"ok": True, "fetched": False,
                 "reason": f"fetch failed: {f['output'][:200]}"}
 
-    local = await _git(f"rev-parse {base_ref}", live_root, timeout=15)
+    local = await _git(f"rev-parse {shlex.quote(base_ref)}", live_root, timeout=15)
     remote = await _git("rev-parse FETCH_HEAD", live_root, timeout=15)
     if not (local["ok"] and remote["ok"]):
         return {"ok": True, "fetched": True, "advanced": False, "reason": "could not compare"}
@@ -735,7 +736,7 @@ async def fetch_base_from_origin(live_root: str, base_ref: str = "main") -> dict
     # Only when the local branch is strictly behind. `--is-ancestor` answers
     # exactly that, and answers it about the commit graph rather than about
     # timestamps or counts.
-    anc = await _git(f"merge-base --is-ancestor {base_ref} FETCH_HEAD", live_root, timeout=15)
+    anc = await _git(f"merge-base --is-ancestor {shlex.quote(base_ref)} FETCH_HEAD", live_root, timeout=15)
     if not anc["ok"]:
         return {"ok": True, "fetched": True, "advanced": False,
                 "diverged": True,
@@ -748,7 +749,7 @@ async def fetch_base_from_origin(live_root: str, base_ref: str = "main") -> dict
     if head["ok"] and head["output"].strip() == base_ref:
         up = await _git("merge --ff-only FETCH_HEAD", live_root, timeout=60)
     else:
-        up = await _git(f"update-ref refs/heads/{base_ref} {remote_sha}", live_root, timeout=15)
+        up = await _git(f"update-ref refs/heads/{shlex.quote(base_ref)} {remote_sha}", live_root, timeout=15)
     if not up["ok"]:
         return {"ok": True, "fetched": True, "advanced": False,
                 "reason": f"could not fast-forward: {up['output'][:200]}"}

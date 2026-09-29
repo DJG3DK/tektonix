@@ -1,5 +1,7 @@
 import json
+import logging
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -180,10 +182,29 @@ _PROJECTS_CONFIG_PATH = Path(
 _PROJECTS_EXAMPLE_PATH = Path(__file__).resolve().parent.parent / "projects.example.json"
 
 
+# What `git check-ref-format --branch` accepts, near enough: no whitespace or
+# control characters, none of git's reserved punctuation, no "..", "@{" or a
+# leading "-". A project's base_branch reaches shell commands through
+# tools/git.py and the review gate, and only a hand-edited projects.json
+# sets it, so a bad value is dropped here (the callers fall back to main)
+# rather than trusted at thirteen call sites (2026-09-29).
+_BRANCH_RE = re.compile(r"^(?!-)(?!.*\.\.)(?!.*@\{)(?!.*/\.)(?!.*\.lock(/|$))[^\s~^:?*\[\\\x00-\x1f\x7f]+(?<![/.])$")
+
+
+def valid_branch_name(name: object) -> bool:
+    return isinstance(name, str) and 0 < len(name) <= 255 and bool(_BRANCH_RE.match(name))
+
+
 def _load_projects_config() -> dict:
     path = _PROJECTS_CONFIG_PATH if _PROJECTS_CONFIG_PATH.exists() else _PROJECTS_EXAMPLE_PATH
     with open(path) as f:
-        return json.load(f)
+        data = json.load(f)
+    for name, entry in (data.get("projects") or {}).items():
+        if isinstance(entry, dict) and "base_branch" in entry and not valid_branch_name(entry["base_branch"]):
+            logging.getLogger("tektonix").warning(
+                "projects.json: %s has a base_branch that is not a branch name; using main", name)
+            del entry["base_branch"]
+    return data
 
 
 _projects_config = _load_projects_config()
