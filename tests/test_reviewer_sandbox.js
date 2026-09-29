@@ -79,6 +79,73 @@ test('a symlink pointing outside the project is refused', () => {
     assert.ok(!mounts.some(m => m.startsWith(elsewhere)), `mounted ${elsewhere}`);
 });
 
+test('a committed link named node_modules cannot mount the live checkout itself', () => {
+    // 2026-09-29: "inside the live checkout" accepted the checkout, because a
+    // directory is inside itself. `node_modules -> <live>` became
+    // `-v <live>:<live>:ro`, and a check could read live's .env into its
+    // output, the review, and the agent's feedback. The receiving side in
+    // the bundle refused this already; a host install runs docker itself.
+    const { live, wt } = scratchProject();
+    fs.writeFileSync(path.join(live, '.env'), 'SECRET=1\n');
+    fs.symlinkSync(live, path.join(wt, 'node_modules'));
+    const specs = sandbox.mountSpecs({ live }, wt);
+    assert.deepStrictEqual(specs, [], `mounted: ${JSON.stringify(specs)}`);
+    assert.ok(!mountsOf(sandbox.mountArgs({ live }, wt)).some(m => m.startsWith(`${fs.realpathSync(live)}:`)));
+});
+
+test('a link into live that is not a node_modules tree is refused', () => {
+    // live/backend holds source and configuration; only a dependency tree
+    // is something a worktree may borrow through a link it wrote itself.
+    const { live, wt } = scratchProject();
+    fs.mkdirSync(path.join(live, 'backend'), { recursive: true });
+    fs.symlinkSync(path.join(live, 'backend'), path.join(wt, 'node_modules'));
+    assert.deepStrictEqual(sandbox.mountSpecs({ live }, wt), []);
+});
+
+test('a link to a nested node_modules inside live is the one shape that is mounted', () => {
+    const { live, wt } = scratchProject();
+    fs.mkdirSync(path.join(live, 'x', 'node_modules'), { recursive: true });
+    fs.symlinkSync(path.join(live, 'x', 'node_modules'), path.join(wt, 'node_modules'));
+    const specs = sandbox.mountSpecs({ live }, wt);
+    const nm = fs.realpathSync(path.join(live, 'x', 'node_modules'));
+    assert.deepStrictEqual(specs, [{ src: nm, dst: nm }]);
+});
+
+test('a generated-code link is mounted only when it points at live\'s copy of that directory', () => {
+    // The generated loop accepted anything inside live too, so a committed
+    // `generated -> <live>` (or `-> <live>/config`) mounted it read-only.
+    const { live, wt } = scratchProject();
+    fs.mkdirSync(path.join(live, 'generated', 'prisma'), { recursive: true });
+    fs.mkdirSync(path.join(live, 'config'), { recursive: true });
+    const cfg = { live, generated: [{ dir: 'generated', schemaFile: 'schema.prisma' }] };
+    for (const wrong of [live, path.join(live, 'config'), path.join(live, 'generated', 'prisma')]) {
+        fs.rmSync(path.join(wt, 'generated'), { force: true });
+        fs.symlinkSync(wrong, path.join(wt, 'generated'));
+        assert.deepStrictEqual(sandbox.mountSpecs(cfg, wt), [], `mounted ${wrong}`);
+    }
+    fs.rmSync(path.join(wt, 'generated'), { force: true });
+    fs.symlinkSync(path.join(live, 'generated'), path.join(wt, 'generated'));
+    const gen = fs.realpathSync(path.join(live, 'generated'));
+    assert.deepStrictEqual(sandbox.mountSpecs(cfg, wt), [{ src: gen, dst: gen }]);
+});
+
+test('a configured node_modules dir whose live copy resolves to a root is refused', () => {
+    // cfg.nodeModulesDirs mounts live/<rel>/node_modules by its real path.
+    // Were that a link to the checkout (or to the agent's template root),
+    // the root would be mounted whole.
+    const { root, live, wt } = scratchProject();
+    const tpl = path.join(root, 'tpl');
+    fs.mkdirSync(path.join(tpl, 'node_modules'), { recursive: true });
+    fs.mkdirSync(path.join(live, 'pkg'), { recursive: true });
+    fs.symlinkSync(tpl, path.join(live, 'pkg', 'node_modules'));
+    assert.deepStrictEqual(sandbox.mountSpecs({ live, sandbox: tpl, nodeModulesDirs: ['pkg'] }, wt), []);
+    // The same entry pointing at a real dependency tree in the template is fine.
+    fs.rmSync(path.join(live, 'pkg', 'node_modules'));
+    fs.symlinkSync(path.join(tpl, 'node_modules'), path.join(live, 'pkg', 'node_modules'));
+    const nm = fs.realpathSync(path.join(tpl, 'node_modules'));
+    assert.deepStrictEqual(sandbox.mountSpecs({ live, sandbox: tpl, nodeModulesDirs: ['pkg'] }, wt), [{ src: nm, dst: nm }]);
+});
+
 test('a real node_modules directory needs no mount of its own', () => {
     const { live, wt } = scratchProject();
     fs.mkdirSync(path.join(wt, 'node_modules'), { recursive: true });

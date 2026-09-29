@@ -310,13 +310,38 @@ async def ensure_task_branch(repo_root: str, task_id: str, base_ref: str = "main
 # .uploads/). These directories/suffixes are never legitimate commit content;
 # their presence in the pending set is a build/dep artifact that must be cleaned
 # (or gitignored) before committing, not silently shipped.
+#
+# Matched as path COMPONENTS, not substrings: the list used to hold
+# "node_modules/" and match it anywhere in the path, so a SYMLINK named
+# node_modules (no trailing slash in `git status`) passed, was committed, and
+# the review sandbox followed it to wherever the agent pointed it
+# (2026-09-29). A directory entry, a link or anything under one is refused;
+# a plain file that merely shares the name (a `bin/build` script) is not.
 _COMMIT_DENY_DIRS = (
-    "node_modules/", "dist/", "build/", ".next/", ".venv/", "venv/",
-    "__pycache__/", ".pytest_cache/", "coverage/", ".mypy_cache/",
-    "target/", ".turbo/", ".cache/",
+    "node_modules", "dist", "build", ".next", ".venv", "venv",
+    "__pycache__", ".pytest_cache", "coverage", ".mypy_cache",
+    "target", ".turbo", ".cache",
 )
 _COMMIT_DENY_SUFFIXES = (".pyc", ".log", ".tmp")
 _MAX_COMMIT_FILES = 500
+
+
+def _is_denied_artifact(repo_root: str, pth: str) -> bool:
+    if pth.endswith(_COMMIT_DENY_SUFFIXES):
+        return True
+    parts = [p for p in pth.split("/") if p]
+    if not parts:
+        return False
+    if any(p in _COMMIT_DENY_DIRS for p in parts[:-1]):
+        return True
+    if parts[-1] not in _COMMIT_DENY_DIRS:
+        return False
+    # The last component carries the name: an untracked directory lists as
+    # "name/", and a symlink lists bare, so ask the tree what it is.
+    if pth.endswith("/"):
+        return True
+    full = os.path.join(repo_root, pth)
+    return os.path.islink(full) or os.path.isdir(full)
 
 
 def _porcelain_paths(porcelain: str) -> list[str]:
@@ -337,12 +362,13 @@ async def git_commit(repo_root: str, message: str, files: list[str] | None = Non
         # audit M-12: guard the blanket `git add -A`. Inspect what would be
         # staged and refuse obvious artifacts / a runaway file count, so the
         # agent cleans up rather than committing junk into the live repo.
-        status = await _git("status --porcelain", repo_root, timeout=_TREE_TIMEOUT_S)
+        # Every untracked FILE, not a collapsed "apps/": a new directory hid
+        # whatever it held -- a node_modules, a link -- behind one line.
+        status = await _git("status --porcelain --untracked-files=all", repo_root,
+                            timeout=_TREE_TIMEOUT_S)
         if status["ok"]:
             pending = _porcelain_paths(status["output"])
-            denied = [pth for pth in pending
-                      if any(d in pth for d in _COMMIT_DENY_DIRS)
-                      or pth.endswith(_COMMIT_DENY_SUFFIXES)]
+            denied = [pth for pth in pending if _is_denied_artifact(repo_root, pth)]
             if denied:
                 sample = ", ".join(denied[:10])
                 return {"ok": False, "output": (

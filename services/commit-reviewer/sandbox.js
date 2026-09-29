@@ -204,6 +204,33 @@ function isInside(child, parent) {
     return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
 }
 
+/** A directory's real path, or its resolved path when it does not exist. */
+function realOrResolved(p) {
+    try { return fs.realpathSync(p); } catch { return path.resolve(p); }
+}
+
+/** Whether `node_modules` is one of the path's components, not a substring. */
+function hasNodeModulesSegment(p) {
+    return p.split(path.sep).includes('node_modules');
+}
+
+/**
+ * Whether a resolved symlink target may be mounted at its own path. The
+ * worktree is agent-writable, so every link in it is agent-chosen, and
+ * "inside the live checkout" was the whole test until 2026-09-29: a
+ * committed `node_modules -> <live>` passed it, because the live root is
+ * inside itself, and became `-v <live>:<live>:ro` -- the live .env readable
+ * from a check, its content flowing into the check output, the review and
+ * the agent's feedback. The bundle's receiving side (agent/review_sandbox.py
+ * _checked_mounts) refused that already; a host install runs docker itself
+ * and had no second check. Same rule here now: strictly inside one of the
+ * roots, never a root itself, and a node_modules component in the path.
+ */
+function mountableNodeModules(target, roots) {
+    if (!hasNodeModulesSegment(target)) return false;
+    return roots.some((root) => root && target !== root && isInside(target, root));
+}
+
 /** Relative paths of symlinked node_modules directories, up to three deep. */
 function nodeModulesLinks(root, depth = 0, rel = '') {
     if (depth > 3) return [];
@@ -242,6 +269,8 @@ function mountArgs(cfg, worktreePath) {
 function mountSpecs(cfg, worktreePath) {
     const specs = [];
     const seen = new Set();
+    const liveRoot = realOrResolved(cfg.live);
+    const templateRoot = cfg.sandbox ? realOrResolved(cfg.sandbox) : null;
 
     for (const rel of [...(cfg.dependencyDirs || []), ...(cfg.readOnlyMounts || [])]) {
         const src = path.join(cfg.live, rel);
@@ -265,7 +294,12 @@ function mountSpecs(cfg, worktreePath) {
         if (!isLink) continue;
         let target;
         try { target = fs.realpathSync(linked); } catch { continue; }
-        if (!isInside(target, cfg.live) || seen.has(target)) continue;
+        // Exactly live's copy of THIS generated directory: the link is
+        // agent-written, and "somewhere inside live" would accept the live
+        // root, or live's .env's directory, as generated code.
+        let expected;
+        try { expected = fs.realpathSync(path.join(cfg.live, g.dir)); } catch { continue; }
+        if (target !== expected || target === liveRoot || seen.has(target)) continue;
         seen.add(target);
         specs.push({ src: target, dst: target });
     }
@@ -293,8 +327,10 @@ function mountSpecs(cfg, worktreePath) {
             continue;
         }
         // Agent-writable worktree, so the link target is agent-controlled:
-        // only the project's own live checkout is an acceptable destination.
-        if (!isInside(target, cfg.live) || seen.has(target)) continue;
+        // only a node_modules tree inside the project's own live checkout is
+        // an acceptable destination -- never the checkout itself (see
+        // mountableNodeModules).
+        if (!mountableNodeModules(target, [liveRoot]) || seen.has(target)) continue;
         seen.add(target);
         specs.push({ src: target, dst: target });
     }
@@ -322,8 +358,7 @@ function mountSpecs(cfg, worktreePath) {
         } catch {
             continue;
         }
-        const inside = isInside(target, cfg.live) || (cfg.sandbox && isInside(target, cfg.sandbox));
-        if (!inside || seen.has(target)) continue;
+        if (!mountableNodeModules(target, [liveRoot, templateRoot]) || seen.has(target)) continue;
         seen.add(target);
         specs.push({ src: target, dst: target });
     }
@@ -588,5 +623,5 @@ function missingTool(output) {
 }
 
 module.exports = { describeFetchError, probe, delegatedProbe, resetProbe, runSandboxed, runDelegated, runDelegatedDatabaseCheck, delegatedRequest, dockerArgs, mountArgs,
-                   mountSpecs, nodeModulesLinks, isInside, missingTool, imageFor, STACKS, IMAGE, IN_CONTAINER,
+                   mountSpecs, nodeModulesLinks, isInside, mountableNodeModules, missingTool, imageFor, STACKS, IMAGE, IN_CONTAINER,
                    DELEGATE_URL };
