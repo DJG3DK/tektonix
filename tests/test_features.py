@@ -27,6 +27,18 @@ def test_the_public_build_refuses_to_create_an_account_and_says_why(monkeypatch)
     assert r.status_code == 403 and "licensed feature" in r.json()["detail"]
 
 
+def test_the_bundle_passes_the_switch_from_the_host_env_to_the_agent():
+    """The agent service lists its environment explicitly, so a variable
+    missing from the list never reaches the container: a licensed bundle
+    with TEKTONIX_FEATURES in its .env still got a 403 (2026-09-29)."""
+    import yaml
+    from agent import paths
+
+    compose = yaml.safe_load((paths.REPO_ROOT / "docker-compose.yml").read_text())
+    assert compose["services"]["agent"]["environment"]["TEKTONIX_FEATURES"] == "${TEKTONIX_FEATURES:-}", \
+        "empty unless the host's .env sets it"
+
+
 def test_the_dashboard_is_told_which_features_this_deployment_has(monkeypatch):
     from agent.routers.auth import _user_public
 

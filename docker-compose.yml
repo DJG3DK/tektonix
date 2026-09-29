@@ -210,6 +210,10 @@ services:
       # (agent/auth.py, desktop_install). Empty here and on every other
       # install, which keeps the full sign-in.
       TEKTONIX_DESKTOP: ${TEKTONIX_DESKTOP:-}
+      # Licensed features, from the host's .env (agent/features.py). The
+      # explicit list here is what the container sees, so a switch missing
+      # from it was a 403 no matter what the .env said (2026-09-29).
+      TEKTONIX_FEATURES: ${TEKTONIX_FEATURES:-}
     volumes:
       # Sibling containers, not nested. See docker/agent/Dockerfile.
       - /var/run/docker.sock:/var/run/docker.sock
