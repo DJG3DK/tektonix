@@ -1,0 +1,23 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "console",
+  "description": "The console (the agent's web page at :8100) shown in the same window: the window controls its title bar draws, and the switch back to the control panel. Nothing else; the page renders model-produced text.",
+  "windows": [
+    "main"
+  ],
+  "local": false,
+  "remote": {
+    "urls": [
+      "http://localhost:8100/*",
+      "http://127.0.0.1:8100/*"
+    ]
+  },
+  "permissions": [
+    "core:window:allow-start-dragging",
+    "core:window:allow-minimize",
+    "core:window:allow-toggle-maximize",
+    "core:window:allow-close",
+    "core:window:allow-is-maximized",
+    "allow-open-panel"
+  ]
+}

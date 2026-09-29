@@ -5,8 +5,8 @@ import "./TitleBar.css";
 /* Inside the desktop app the dashboard window is frameless, so this strip is
    its title bar: a drag handle and the three window controls. Outside the
    app (a browser tab) it renders nothing. The app injects window.__TAURI__
-   into this page through its capability (app/src-tauri/capabilities/
-   default.json). */
+   into this page; what the page may call is app/src-tauri/capabilities/
+   console.json: the window controls here, and open_panel. */
 type TauriWindow = {
   minimize: () => Promise<void>;
   toggleMaximize: () => Promise<void>;

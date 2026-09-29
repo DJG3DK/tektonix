@@ -78,6 +78,39 @@ def test_the_app_checks_the_agents_password_rules_before_spending_the_one_time_p
     assert "with_one_time_password(" in body, "a failure after the read hands the one-time password back"
 
 
+def _registered_commands() -> list[str]:
+    lib = (REPO / "app/src-tauri/src/lib.rs").read_text()
+    handler = re.search(r"invoke_handler\(tauri::generate_handler!\[(.*?)\]\)", lib, re.S)
+    return re.findall(r"\w+", handler.group(1))
+
+
+def test_the_console_origin_gets_window_controls_and_the_panel_switch_only():
+    """One capability used to cover the panel and the console page at :8100
+    alike, so model-rendered console text sat one CSP away from the updater,
+    the process plugin and the opener. And with no app manifest, nothing
+    could grant open_panel to the console: its "Control panel" button was
+    silently refused (2026-09-29). Now: build.rs lists every command, the
+    panel gets all of them, and the console gets exactly this list."""
+    caps = {p.stem: json.loads(p.read_text()) for p in (REPO / "app/src-tauri/capabilities").glob("*.json")}
+    assert set(caps) == {"panel", "console"}
+    console, panel = caps["console"], caps["panel"]
+    assert console["local"] is False
+    assert set(console["remote"]["urls"]) == {"http://localhost:8100/*", "http://127.0.0.1:8100/*"}, "the origins stay"
+    assert set(console["permissions"]) == {
+        "core:window:allow-start-dragging",
+        "core:window:allow-minimize",
+        "core:window:allow-toggle-maximize",
+        "core:window:allow-close",
+        "core:window:allow-is-maximized",
+        "allow-open-panel",
+    }
+    assert "remote" not in panel and panel.get("local", True) is True
+    commands = _registered_commands()
+    build = (REPO / "app/src-tauri/build.rs").read_text()
+    assert set(re.findall(r'"(\w+)"', build)) == set(commands), "build.rs's manifest is lib.rs's handler list"
+    assert {f"allow-{c.replace('_', '-')}" for c in commands} <= set(panel["permissions"]), "the panel keeps every command"
+
+
 def test_the_app_version_is_one_number_in_three_places():
     conf = json.loads((REPO / "app/src-tauri/tauri.conf.json").read_text())
     pkg = json.loads((REPO / "app/package.json").read_text())

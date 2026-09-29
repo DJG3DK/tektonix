@@ -458,3 +458,88 @@ pub fn run() {
         .run(tauri::generate_context!())
         .expect("error while running tektonix");
 }
+
+#[cfg(test)]
+mod tests {
+    use tauri::ipc::{CallbackFn, InvokeBody, InvokeResponseBody};
+    use tauri::test::{get_ipc_response, mock_builder, MockRuntime, INVOKE_KEY};
+    use tauri::webview::InvokeRequest;
+
+    // Stand-ins under the real commands' names. The ACL is resolved by name
+    // before anything is called, and the real commands take the Wry
+    // runtime's AppHandle, which the mock runtime cannot supply.
+    #[tauri::command(rename = "open_panel")]
+    fn fake_open_panel() -> &'static str {
+        "panel"
+    }
+    #[tauri::command(rename = "settings_save")]
+    fn fake_settings_save() -> &'static str {
+        "saved"
+    }
+    #[tauri::command(rename = "app_version")]
+    fn fake_app_version() -> &'static str {
+        "v0"
+    }
+
+    /// The app on the mock runtime with the real capabilities and ACL
+    /// (generate_context! carries them).
+    fn app() -> tauri::App<MockRuntime> {
+        mock_builder()
+            .invoke_handler(tauri::generate_handler![
+                fake_open_panel,
+                fake_settings_save,
+                fake_app_version
+            ])
+            .build(tauri::generate_context!())
+            .expect("the app builds on the mock runtime")
+    }
+
+    fn call(
+        webview: &tauri::WebviewWindow<MockRuntime>,
+        cmd: &str,
+        origin: &str,
+    ) -> Result<InvokeResponseBody, serde_json::Value> {
+        get_ipc_response(
+            webview,
+            InvokeRequest {
+                cmd: cmd.into(),
+                callback: CallbackFn(0),
+                error: CallbackFn(1),
+                url: origin.parse().unwrap(),
+                body: InvokeBody::default(),
+                headers: Default::default(),
+                invoke_key: INVOKE_KEY.to_string(),
+            },
+        )
+    }
+
+    #[test]
+    fn the_console_origin_reaches_the_panel_switch_and_nothing_else() {
+        let app = app();
+        let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .unwrap();
+        let console = "http://localhost:8100/tasks";
+        assert!(
+            call(&webview, "open_panel", console).is_ok(),
+            "2026-09-29: with no app manifest the console's Control panel button was refused"
+        );
+        for cmd in ["settings_save", "app_version", "plugin:process|exit"] {
+            let refused = call(&webview, cmd, console).expect_err(cmd);
+            assert!(
+                refused.to_string().contains("not allowed"),
+                "{cmd} from the console: {refused}"
+            );
+        }
+        let local = if cfg!(windows) {
+            "http://tauri.localhost/index.html"
+        } else {
+            "tauri://localhost/index.html"
+        };
+        assert!(
+            call(&webview, "app_version", local).is_ok(),
+            "the panel's own page keeps every command"
+        );
+        assert!(call(&webview, "open_panel", local).is_ok());
+    }
+}

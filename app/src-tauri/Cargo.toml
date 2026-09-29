@@ -32,6 +32,8 @@ url = "2"
 # Already in the tree through tauri; the tests show what its ordering
 # does to release candidates.
 semver = "1"
+# The mock runtime, for the capability tests in lib.rs.
+tauri = { version = "2", features = ["test"] }
 
 [profile.release]
 codegen-units = 1
