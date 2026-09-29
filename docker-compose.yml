@@ -376,7 +376,14 @@ networks:
   default:
   # No gateway: a container on this network alone cannot reach the internet,
   # the host, or any service that is not also on it.
+  #
+  # Named outright, because the agent attaches each check container to it by
+  # that name (REVIEW_CHECKS_NETWORK above). Left to compose, the name is
+  # <project>_checks, and an install kept on the pre-rename project name
+  # (COMPOSE_PROJECT_NAME=three-d-agent) got three-d-agent_checks: every
+  # database check failed to attach.
   checks:
+    name: tektonix_checks
     internal: true
 
 volumes:

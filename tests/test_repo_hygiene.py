@@ -499,7 +499,10 @@ def test_the_checks_network_holds_the_two_throwaway_services_and_nothing_that_ma
     that. Cursor's re-audit, 2026-09-27."""
     compose = yaml.safe_load((REPO / "docker-compose.yml").read_text())
     services = compose["services"]
-    assert compose["networks"]["checks"] == {"internal": True}
+    # Named outright: the agent attaches by this string, and compose's
+    # default (<project>_checks) broke under the legacy project name.
+    assert compose["networks"]["checks"] == {"name": "tektonix_checks", "internal": True}
+    assert services["agent"]["environment"]["REVIEW_CHECKS_NETWORK"] == "tektonix_checks"
     on_checks = {name for name, svc in services.items() if "checks" in (svc.get("networks") or [])}
     assert on_checks == {"checks-postgres", "checks-redis"}, on_checks
     for name in on_checks:
