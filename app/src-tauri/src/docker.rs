@@ -60,7 +60,7 @@ pub async fn start_and_wait(app: &AppHandle) -> Result<(), String> {
             &[
                 "-NoProfile",
                 "-Command",
-                &format!("Start-Process -FilePath '{}'", exe),
+                &format!("Start-Process -FilePath {}", ps_quote(exe)),
             ],
             None,
         )
@@ -94,6 +94,31 @@ pub async fn start_and_wait(app: &AppHandle) -> Result<(), String> {
 #[cfg(windows)]
 const DOCKER_INSTALLER_URL: &str =
     "https://desktop.docker.com/win/main/amd64/Docker%20Desktop%20Installer.exe";
+
+/// A PowerShell single-quoted literal: the one character that needs
+/// anything is the quote itself, doubled. A path holding an apostrophe
+/// (a user called O'Brien) ended the literal early.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn ps_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "''"))
+}
+
+/// The script that runs Docker's installer elevated. Before the elevation
+/// prompt it checks what was downloaded: a valid Authenticode signature,
+/// and Docker's own name on it; an installer that fails that is not run.
+/// The installer's exit code is the script's (`-PassThru`; `-Wait` alone
+/// threw it away, and a failed install read as done).
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn installer_script(path: &str) -> String {
+    let p = ps_quote(path);
+    format!(
+        "$sig = Get-AuthenticodeSignature -FilePath {p}; \
+         if ($sig.Status -ne 'Valid' -or $sig.SignerCertificate.Subject -notlike '*Docker Inc*') {{ \
+           [Console]::Error.WriteLine('the downloaded installer is not signed by Docker Inc (' + $sig.Status + '); not running it'); exit 3 }}; \
+         $p = Start-Process -FilePath {p} -ArgumentList 'install','--accept-license','--quiet' -Verb RunAs -PassThru -Wait; \
+         exit $p.ExitCode"
+    )
+}
 
 /// Install what is missing: WSL 2, then Docker Desktop. Each step elevates
 /// through Windows' own prompt. Returns a note on what the user must do
@@ -129,8 +154,7 @@ pub async fn install(app: &AppHandle) -> Result<String, String> {
             app,
             "Running the Docker Desktop installer (Windows will ask for permission)...",
         );
-        let ps = format!("Start-Process -FilePath '{}' -ArgumentList 'install','--accept-license','--quiet' -Verb RunAs -Wait",
-                         path.display());
+        let ps = installer_script(&path.display().to_string());
         proc::capture("powershell", &["-NoProfile", "-Command", &ps], None)
             .await
             .map_err(|e| format!("the Docker Desktop installer did not finish: {e}"))?;
@@ -181,4 +205,38 @@ async fn download(app: &AppHandle, url: &str, path: &std::path::Path) -> Result<
     }
     file.flush().await.map_err(|e| e.to_string())?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_path_with_an_apostrophe_survives_powershell() {
+        assert_eq!(
+            ps_quote("C:\\Users\\O'Brien\\Docker Desktop Installer.exe"),
+            "'C:\\Users\\O''Brien\\Docker Desktop Installer.exe'"
+        );
+        assert_eq!(ps_quote("plain"), "'plain'");
+    }
+
+    #[test]
+    fn the_installer_is_checked_before_elevation_and_its_exit_code_is_kept() {
+        let script = installer_script("C:\\Temp\\Docker Desktop Installer.exe");
+        let check = script
+            .find("Get-AuthenticodeSignature")
+            .expect("signature check");
+        let run = script.find("Start-Process").expect("the run");
+        assert!(check < run, "the check comes before the elevation prompt");
+        assert!(
+            script.contains("-notlike '*Docker Inc*'"),
+            "Docker's own name on the signature"
+        );
+        assert!(
+            script.contains("-PassThru -Wait"),
+            "-Wait alone threw the exit code away"
+        );
+        assert!(script.ends_with("exit $p.ExitCode"));
+        assert!(script.contains("-FilePath 'C:\\Temp\\Docker Desktop Installer.exe'"));
+    }
 }
