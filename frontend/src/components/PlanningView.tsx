@@ -401,6 +401,7 @@ export function PlanningView({ repos, isAdmin, githubReady, onProjectCreated, se
   const [text, setText] = useState("");
   const [planOpen, setPlanOpen] = useState(true);
   const [archiving, setArchiving] = useState(false);
+  const [newPlanError, setNewPlanError] = useState<string | null>(null);
   const [files, setFiles] = useState<File[]>([]);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
@@ -537,6 +538,7 @@ export function PlanningView({ repos, isAdmin, githubReady, onProjectCreated, se
   async function handleNewPlan() {
     if (!session) return;
     setArchiving(true);
+    setNewPlanError(null);
     try {
       // Closes out the current plan (still fully reachable, just out of the
       // sidebar's default active list) before starting the next one fresh
@@ -554,6 +556,11 @@ export function PlanningView({ repos, isAdmin, githubReady, onProjectCreated, se
         cost_usd: 0,
         archived: false,
       });
+    } catch (err) {
+      // The archive or the create failed; the button used to just come back
+      // with nothing said (2026-09-29 audit, U9). The session it archived, if
+      // it got that far, is still reachable from the sidebar's archived list.
+      setNewPlanError(err instanceof Error ? err.message : "could not start a new plan");
     } finally {
       setArchiving(false);
     }
@@ -611,6 +618,12 @@ export function PlanningView({ repos, isAdmin, githubReady, onProjectCreated, se
             <div className="planning-build-error" role="alert">
               {buildError}
               {onClearBuildError && <button type="button" onClick={onClearBuildError} aria-label="Dismiss error">×</button>}
+            </div>
+          )}
+          {newPlanError && (
+            <div className="planning-build-error" role="alert">
+              {newPlanError}
+              <button type="button" onClick={() => setNewPlanError(null)} aria-label="Dismiss error">×</button>
             </div>
           )}
           <button className="planning-new-plan-btn" disabled={archiving} onClick={handleNewPlan} title="Archive this plan and start a fresh one for the same project">

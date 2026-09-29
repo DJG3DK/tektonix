@@ -15,6 +15,7 @@ const createProject = vi.fn();
 const createPlanningSession = vi.fn();
 const decideNewProject = vi.fn();
 const getPlanningSession = vi.fn();
+const archivePlanningSession = vi.fn();
 vi.mock("../api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../api")>();
   return {
@@ -23,6 +24,7 @@ vi.mock("../api", async (importOriginal) => {
     createPlanningSession: (...a: unknown[]) => createPlanningSession(...a),
     decideNewProject: (...a: unknown[]) => decideNewProject(...a),
     getPlanningSession: (...a: unknown[]) => getPlanningSession(...a),
+    archivePlanningSession: (...a: unknown[]) => archivePlanningSession(...a),
   };
 });
 
@@ -66,6 +68,28 @@ beforeEach(() => {
   createPlanningSession.mockReset();
   decideNewProject.mockReset();
   getPlanningSession.mockReset();
+  archivePlanningSession.mockReset();
+});
+
+describe("PlanningView — New Plan", () => {
+  const open: PlanningSessionMeta = {
+    session_id: "s-open", repo: "webapp", created_at: 1, updated_at: 2, title: "a plan",
+    plan_markdown: "# plan", cost_usd: 0.1, archived: false,
+  } as PlanningSessionMeta;
+
+  it("says so when archiving or creating fails, rather than coming back silent", async () => {
+    // The button went back to "New Plan" with nothing said (2026-09-29
+    // audit, U9). Navigation itself is App's: onSessionCreated selects the
+    // new session and the selection-to-URL effect pushes /planning/<id>.
+    getPlanningSession.mockResolvedValue({ meta: open, log: [], running: false });
+    archivePlanningSession.mockRejectedValue(new Error("archive failed: 503"));
+    const props = renderPanel({ session: open });
+    await userEvent.click(await screen.findByRole("button", { name: /new plan/i }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(/archive failed: 503/);
+    expect(createPlanningSession).not.toHaveBeenCalled();
+    expect(props.onSessionCreated).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: /new plan/i })).toBeEnabled();
+  });
 });
 
 describe("PlanningView — the New project door", () => {
