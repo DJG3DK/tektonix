@@ -103,7 +103,8 @@ function describeFetchError(err) {
 function execp(cmd, args, opts = {}) {
     return new Promise((resolve) => {
         execFile(cmd, args, { maxBuffer: 20 * 1024 * 1024, ...opts }, (err, stdout, stderr) => {
-            resolve({ ok: !err, code: err ? (err.code ?? 1) : 0, out: (stdout || '') + (stderr || '') });
+            resolve({ ok: !err, code: err ? (err.code ?? 1) : 0, out: (stdout || '') + (stderr || ''),
+                      stderr: stderr || '' });
         });
     });
 }
@@ -472,7 +473,9 @@ function dockerArgs(cfg, worktreePath, relDir, cmd, args, extraEnv, network, sta
 async function runSandboxed(cfg, worktreePath, relDir, cmd, args, timeoutMs, extraEnv, network, stack) {
     const { docker, image } = dockerArgs(cfg, worktreePath, relDir, cmd, args, extraEnv, network, stack);
     const r = await execp('docker', docker, { timeout: timeoutMs || 300_000 });
-    return classify(r, image);
+    // Docker's own complaint goes to stderr before the command runs; the
+    // check's stdout is never where it is looked for.
+    return classify({ ...r, head: r.stderr }, image);
 }
 
 /**
@@ -599,7 +602,7 @@ async function runDelegatedDatabaseCheck(cfg, worktreePath, stack, { secret, fet
 }
 
 function classify(r, image) {
-    const missing = missingTool(r.out);
+    const missing = missingTool(r.head ?? r.out, r.code);
     if (missing) {
         // A toolchain the image does not carry is a SETUP problem, not a
         // failing check, and the difference decides who fixes it. Left as a
@@ -626,8 +629,18 @@ function classify(r, image) {
 // mislabelling a real failure as a setup problem hides a genuine break.
 const NOT_IN_IMAGE_RE = /exec: "([^"]+)": executable file not found in \$PATH/;
 
-function missingTool(output) {
-    const m = NOT_IN_IMAGE_RE.exec(output || '');
+// Where docker says it, and with what: a container whose entrypoint cannot
+// be found exits 127 (126 when it cannot be run), and the complaint is the
+// first thing on stderr, before anything of the check's own. A test that
+// PRINTS the same sentence and fails normally used to be filed as a setup
+// problem and escalated (2026-09-29); it is neither on the first lines of
+// docker's stderr nor at those exit codes.
+const HEAD_LINES = 3;
+
+function missingTool(head, code) {
+    if (code !== 126 && code !== 127) return null;
+    const first = String(head || '').split('\n').slice(0, HEAD_LINES).join('\n');
+    const m = NOT_IN_IMAGE_RE.exec(first);
     return m ? m[1] : null;
 }
 

@@ -26,11 +26,20 @@ const path = require('path');
 const sandbox = require('../services/commit-reviewer/sandbox');
 
 let passed = 0;
+// A test that has to wait on a process pushes its promise here; the file
+// exits non-zero if any of them rejects.
+const pendingAsync = [];
 function test(name, fn) {
     fn();
     passed++;
     console.log(`  ok  ${name}`);
 }
+process.on('beforeExit', () => {
+    if (!pendingAsync.length) return;
+    const waiting = pendingAsync.splice(0);
+    Promise.all(waiting).then(() => console.log(`  ok  ${waiting.length} async assertion(s)`))
+        .catch((err) => { console.error(`  FAIL ${err.stack}`); process.exitCode = 1; });
+});
 
 console.log('reviewer sandbox');
 
@@ -263,14 +272,50 @@ test('the map is the same one the Python side reads', () => {
                            Object.keys(onDisk.stacks).sort());
 });
 
-test('a missing toolchain is recognised from docker\'s own words', () => {
-    assert.equal(sandbox.missingTool(
-        'docker: Error response from daemon: ... exec: "go": executable file not found in $PATH'), 'go');
+test('a missing toolchain is recognised from docker\'s own words, where and how docker says them', () => {
+    const dockerSays = 'docker: Error response from daemon: ... exec: "go": executable file not found in $PATH';
+    assert.equal(sandbox.missingTool(dockerSays, 127), 'go');
+    assert.equal(sandbox.missingTool(`Unable to find image locally\n${dockerSays}`, 126), 'go');
     // And not from a program that merely prints something similar --
     // mislabelling a real failure as a setup problem hides a genuine break.
-    assert.equal(sandbox.missingTool('FAIL: expected "executable file not found in $PATH"'), null);
-    assert.equal(sandbox.missingTool('2 tests failed'), null);
-    assert.equal(sandbox.missingTool(''), null);
+    assert.equal(sandbox.missingTool('FAIL: expected "executable file not found in $PATH"', 1), null);
+    assert.equal(sandbox.missingTool('2 tests failed', 1), null);
+    assert.equal(sandbox.missingTool('', 127), null);
+    // 2026-09-29: a test suite that quoted docker's sentence in its output,
+    // failing normally, was filed as a setup problem and escalated. Docker's
+    // complaint comes at exit 126/127, on the first lines, before any of
+    // the check's own output; a check's own words come neither.
+    assert.equal(sandbox.missingTool(dockerSays, 1), null, 'a normal failure is the code\'s, whatever it printed');
+    assert.equal(sandbox.missingTool(`ran 40 tests\nFAIL: 1\nsee below\n${dockerSays}`, 127), null,
+        'a sentence deep in the output is the check\'s, not docker\'s');
+});
+
+test('the host run sniffs docker\'s stderr, never the check\'s stdout', () => {
+    // A fake docker on PATH: the sentence on stdout is the check's own words
+    // (a container ran and its program printed them); on stderr, before
+    // anything else, it is docker's.
+    const dockerSays = 'docker: Error response from daemon: exec: "go": executable file not found in $PATH: unknown';
+    const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'fakedocker-'));
+    const savedPath = process.env.PATH;
+    process.env.PATH = `${bin}:${savedPath}`;
+    const { live, wt } = scratchProject();
+    const run = async (script) => {
+        fs.writeFileSync(path.join(bin, 'docker'), `#!/bin/sh\n${script}\n`, { mode: 0o755 });
+        return sandbox.runSandboxed({ live }, wt, '.', 'go', ['test'], 5_000, {}, 'none');
+    };
+    pendingAsync.push((async () => {
+        try {
+            const printed = await run(`echo '${dockerSays}'; exit 127`);
+            assert.equal(printed.missingTool, undefined, `the check's stdout was taken for docker's: ${JSON.stringify(printed)}`);
+            assert.equal(printed.ok, false);
+            const docker = await run(`echo '${dockerSays}' >&2; exit 127`);
+            assert.equal(docker.missingTool, 'go');
+            assert.match(docker.output, /^SETUP: this check needs `go`/);
+        } finally {
+            process.env.PATH = savedPath;
+            fs.rmSync(bin, { recursive: true, force: true });
+        }
+    })());
 });
 
 // --- the hardening itself -------------------------------------------------
