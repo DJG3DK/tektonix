@@ -233,6 +233,56 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
+/// Runs on every page the window shows, the app's own and the console's.
+/// A frameless window is only usable through a strip drawn by the page it
+/// shows. The app's page and a current console draw one; an older console
+/// draws nothing, and the window could then neither be moved nor closed
+/// (2026-09-29). So: when the page has drawn no strip, draw one here.
+const STRIP_FALLBACK: &str = r#"
+(function () {
+  function ensure() {
+    if (document.querySelector('.titlebar, .top[data-tauri-drag-region]')) return;
+    var w = window.__TAURI__ && window.__TAURI__.window && window.__TAURI__.window.getCurrentWindow && window.__TAURI__.window.getCurrentWindow();
+    if (!w) return;
+    var bar = document.createElement('div');
+    bar.setAttribute('data-tauri-drag-region', '');
+    bar.style.cssText = 'position:fixed;top:0;left:0;right:0;height:30px;z-index:2147483647;display:flex;align-items:center;justify-content:space-between;padding-left:12px;background:#171b21;color:#e6e9ee;border-bottom:1px solid #2a313b;font:12px system-ui,sans-serif;user-select:none;-webkit-user-select:none;';
+    var name = document.createElement('span'); name.textContent = 'Tektonix'; name.setAttribute('data-tauri-drag-region', ''); name.style.fontWeight = '600';
+    var ctl = document.createElement('span'); ctl.style.cssText = 'display:flex;height:100%;';
+    function btn(label, title, fn, close) {
+      var b = document.createElement('button'); b.textContent = label; b.title = title;
+      b.style.cssText = 'width:40px;height:100%;border:0;background:transparent;color:inherit;font:inherit;cursor:pointer;';
+      b.onmouseenter = function () { b.style.background = close ? '#d9534f' : 'rgba(255,255,255,.08)'; };
+      b.onmouseleave = function () { b.style.background = 'transparent'; };
+      b.onclick = fn; return b;
+    }
+    var panel = btn('Control panel', 'Back to the control panel', function () { window.__TAURI__.core.invoke('open_panel'); });
+    panel.style.width = 'auto'; panel.style.padding = '0 10px'; panel.style.opacity = '.75';
+    ctl.appendChild(panel);
+    ctl.appendChild(btn('\u2500', 'Minimise', function () { w.minimize(); }));
+    ctl.appendChild(btn('\u25A1', 'Maximise', function () { w.toggleMaximize(); }));
+    ctl.appendChild(btn('\u2715', 'Close', function () { w.close(); }, true));
+    bar.appendChild(name); bar.appendChild(ctl);
+    document.documentElement.appendChild(bar);
+    document.documentElement.style.setProperty('--tektonix-strip', '30px');
+    document.body && (document.body.style.paddingTop = '30px');
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', function () { setTimeout(ensure, 300); });
+  else setTimeout(ensure, 300);
+})();
+"#;
+
+fn build_main_window(app: &AppHandle) -> tauri::Result<()> {
+    tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::App("index.html".into()))
+        .title("Tektonix")
+        .inner_size(1360.0, 860.0)
+        .min_inner_size(900.0, 600.0)
+        .decorations(false)
+        .initialization_script(STRIP_FALLBACK)
+        .build()?;
+    Ok(())
+}
+
 pub fn run() {
     tauri::Builder::default()
         // One running copy. A second launch (the installer's "run when
@@ -246,6 +296,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .manage(Arc::new(LogFollow(Mutex::new(None))))
         .setup(|app| {
+            build_main_window(app.handle())?;
             build_tray(app.handle())?;
             spawn_auto_updater(app.handle().clone());
             Ok(())

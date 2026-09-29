@@ -8,17 +8,7 @@
   },
   "app": {
     "withGlobalTauri": true,
-    "windows": [
-      {
-        "label": "main",
-        "title": "Tektonix",
-        "width": 1360,
-        "height": 860,
-        "minWidth": 900,
-        "minHeight": 600,
-        "decorations": false
-      }
-    ],
+    "windows": [],
     "security": {
       "csp": null
     },

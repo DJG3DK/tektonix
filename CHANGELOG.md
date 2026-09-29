@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### The window always has a title strip
+
+A frameless window is usable only through a strip drawn by the page it
+shows, and an older console drew none, so the window could be neither
+moved nor closed. The app now draws a fallback strip on any page that has
+not drawn one.
+
 ### The throwaway Redis reports healthy
 
 It had no health probe, so the container table said "running" where every
