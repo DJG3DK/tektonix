@@ -18,7 +18,8 @@ describe("TitleBar", () => {
 
   it("inside the app it is a drag handle with the three window controls", async () => {
     const win = { minimize: vi.fn(async () => {}), toggleMaximize: vi.fn(async () => {}), close: vi.fn(async () => {}) };
-    (window as unknown as { __TAURI__: unknown }).__TAURI__ = { window: { getCurrentWindow: () => win } };
+    const invoke = vi.fn(async () => undefined);
+    (window as unknown as { __TAURI__: unknown }).__TAURI__ = { window: { getCurrentWindow: () => win }, core: { invoke } };
     render(<TitleBar />);
     const bar = await screen.findByTestId("titlebar");
     expect(bar).toHaveAttribute("data-tauri-drag-region");
@@ -29,5 +30,7 @@ describe("TitleBar", () => {
     expect(win.minimize).toHaveBeenCalled();
     expect(win.toggleMaximize).toHaveBeenCalled();
     expect(win.close).toHaveBeenCalled();
+    screen.getByRole("button", { name: "Control panel" }).click();
+    expect(invoke).toHaveBeenCalledWith("open_panel");
   });
 });

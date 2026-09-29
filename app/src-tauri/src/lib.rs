@@ -10,7 +10,7 @@ mod stack;
 use std::sync::Arc;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
-use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::Mutex;
 
 struct LogFollow(Mutex<Option<proc::Streaming>>);
@@ -58,13 +58,19 @@ fn installed_version(app: AppHandle) -> Option<String> {
     stack::installed_version(&app)
 }
 
-/// First start: pull the release this app was built for, then up.
+/// First start: pull the release this app was built for, up, and set the
+/// password chosen on the form (nothing if the account already has one).
 #[tauri::command]
-async fn stack_install(app: AppHandle) -> Result<(), String> {
+async fn stack_install(app: AppHandle, password: Option<String>) -> Result<bool, String> {
     stack::prepare(&app)?;
     let tag = format!("v{}", app.package_info().version);
     stack::pull(&app, &tag).await?;
-    stack::up(&app).await
+    stack::up(&app).await?;
+    let email = stack::read_settings(&app)?.admin_email;
+    match password {
+        Some(p) => stack::set_first_password(&app, &email, &p).await,
+        None => Ok(false),
+    }
 }
 
 #[tauri::command]
@@ -162,40 +168,52 @@ async fn logs_stop(state: tauri::State<'_, Arc<LogFollow>>) -> Result<(), String
     Ok(())
 }
 
+/// One window, two pages. The console (the agent's own web page) and the
+/// control panel (this app's page) take turns in the main window: the
+/// console when the stack answers, the panel before that and whenever it
+/// is asked for. Navigating the window, rather than framing the console
+/// in the panel, keeps the console's sign-in cookie first-party.
 #[tauri::command]
-async fn open_dashboard(app: AppHandle) -> Result<(), String> {
-    show_dashboard(&app)
+async fn open_console(app: AppHandle) -> Result<(), String> {
+    show_console(&app)
 }
 
-fn show_dashboard(app: &AppHandle) -> Result<(), String> {
-    if let Some(w) = app.get_webview_window("dashboard") {
-        let _ = w.show();
-        let _ = w.set_focus();
-        return Ok(());
-    }
+#[tauri::command]
+async fn open_panel(app: AppHandle) -> Result<(), String> {
+    show_panel_page(&app)
+}
+
+fn show_console(app: &AppHandle) -> Result<(), String> {
+    let w = app.get_webview_window("main").ok_or("no window")?;
     let url: tauri::Url = stack::DASHBOARD.parse().map_err(|e: url::ParseError| e.to_string())?;
-    WebviewWindowBuilder::new(app, "dashboard", WebviewUrl::External(url))
-        .title("Tektonix")
-        .inner_size(1360.0, 860.0)
-        .min_inner_size(900.0, 600.0)
-        // Frameless; the dashboard draws its own title strip when it runs in
-        // this window (frontend/src/components/TitleBar.tsx) and gets the
-        // window controls through capabilities/dashboard.json.
-        .decorations(false)
-        .build()
-        .map_err(|e| e.to_string())?;
+    w.navigate(url).map_err(|e| e.to_string())?;
+    let _ = w.show();
+    let _ = w.set_focus();
+    Ok(())
+}
+
+fn show_panel_page(app: &AppHandle) -> Result<(), String> {
+    let w = app.get_webview_window("main").ok_or("no window")?;
+    let url: tauri::Url = "tauri://localhost/index.html".parse().map_err(|e: url::ParseError| e.to_string())?;
+    // On Windows the app's own pages are served from http://tauri.localhost.
+    let url = if cfg!(windows) { "http://tauri.localhost/index.html".parse().map_err(|e: url::ParseError| e.to_string())? } else { url };
+    w.navigate(url).map_err(|e| e.to_string())?;
+    let _ = w.show();
+    let _ = w.set_focus();
     Ok(())
 }
 
 fn show_panel(app: &AppHandle) {
-    if let Some(w) = app.get_webview_window("main") {
-        let _ = w.show();
-        let _ = w.set_focus();
+    if show_panel_page(app).is_err() {
+        if let Some(w) = app.get_webview_window("main") {
+            let _ = w.show();
+            let _ = w.set_focus();
+        }
     }
 }
 
 fn build_tray(app: &AppHandle) -> tauri::Result<()> {
-    let open = MenuItem::with_id(app, "open", "Open dashboard", true, None::<&str>)?;
+    let open = MenuItem::with_id(app, "open", "Open console", true, None::<&str>)?;
     let panel = MenuItem::with_id(app, "panel", "Control panel", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit (the stack keeps running)", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&open, &panel, &quit])?;
@@ -206,7 +224,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
         .menu(&menu)
         .show_menu_on_left_click(true)
         .on_menu_event(|app, event| match event.id.as_ref() {
-            "open" => { let _ = show_dashboard(app); }
+            "open" => { let _ = show_console(app); }
             "panel" => show_panel(app),
             "quit" => app.exit(0),
             _ => {}
@@ -248,7 +266,7 @@ pub fn run() {
             stack_install, stack_up, stack_down, stack_status, stack_password,
             stack_check_update, stack_update, prefs_get, prefs_set,
             app_update_check, app_update_install, auto_update_now,
-            logs_follow, logs_stop, open_dashboard,
+            logs_follow, logs_stop, open_console, open_panel,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tektonix");

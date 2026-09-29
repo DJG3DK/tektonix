@@ -11,6 +11,8 @@
   font-size: 12px;
 }
 .titlebar-name { font-weight: 600; letter-spacing: .02em; opacity: .85; }
+.titlebar-link { margin-left: auto; margin-right: 8px; border: 0; background: transparent; color: inherit; font: inherit; font-size: 12px; opacity: .7; cursor: pointer; }
+.titlebar-link:hover { opacity: 1; text-decoration: underline; }
 .titlebar-controls { display: flex; height: 100%; }
 .titlebar-btn { width: 40px; height: 100%; border: 0; background: transparent; color: inherit; font: inherit; font-size: 12px; cursor: pointer; opacity: .8; }
 .titlebar-btn:hover { background: rgba(255, 255, 255, .08); opacity: 1; }

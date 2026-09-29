@@ -122,7 +122,7 @@ def _user_public(user: User) -> dict:
         "id": user.id, "email": user.email, "role": user.role,
         "allowed_repos": user.allowed_repos, "totp_enabled": user.totp_enabled,
         "must_change_password": user.must_change_password,
-        "require_totp_setup": user.role == "admin" and not user.totp_enabled,
+        "require_totp_setup": user.role == "admin" and not user.totp_enabled and not auth.desktop_install(),
         "auto_approve_commands": user.auto_approve_commands,
         "auto_approve_repos": user.auto_approve_repos or [],
         "require_merge_review": user.require_merge_review,
@@ -145,7 +145,7 @@ def _set_session_cookie(response: Response, token: str) -> None:
     # change. The one unauthenticated acting POST, the approve link, has its
     # own Sec-Fetch-Site check (_approve_is_cross_site) for this reason.
     response.set_cookie(
-        SESSION_COOKIE_NAME, token, max_age=auth.SESSION_TTL_SECONDS,
+        SESSION_COOKIE_NAME, token, max_age=auth.session_ttl_seconds(),
         httponly=True, samesite="strict", secure=True, path="/",
     )
 

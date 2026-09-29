@@ -11,14 +11,24 @@ type TauriWindow = {
   toggleMaximize: () => Promise<void>;
   close: () => Promise<void>;
 };
+type Tauri = { window?: { getCurrentWindow?: () => TauriWindow }; core?: { invoke?: (cmd: string) => Promise<unknown> } };
+
+function tauri(): Tauri | undefined {
+  return (window as unknown as { __TAURI__?: Tauri }).__TAURI__;
+}
 
 function currentWindow(): TauriWindow | null {
-  const w = (window as unknown as { __TAURI__?: { window?: { getCurrentWindow?: () => TauriWindow } } }).__TAURI__;
   try {
-    return w?.window?.getCurrentWindow?.() ?? null;
+    return tauri()?.window?.getCurrentWindow?.() ?? null;
   } catch {
     return null;
   }
+}
+
+/* One window: the console and the app's control panel take turns in it.
+   This asks the app to show the panel. */
+function openPanel() {
+  void tauri()?.core?.invoke?.("open_panel");
 }
 
 export function insideDesktopApp(): boolean {
@@ -37,6 +47,7 @@ export function TitleBar() {
   return (
     <div className="titlebar" data-tauri-drag-region data-testid="titlebar">
       <span className="titlebar-name" data-tauri-drag-region>Tektonix</span>
+      <button type="button" className="titlebar-link" onClick={openPanel}>Control panel</button>
       <span className="titlebar-controls">
         <button type="button" className="titlebar-btn" aria-label="Minimise" onClick={() => void win.minimize()}>&#x2500;</button>
         <button type="button" className="titlebar-btn" aria-label="Maximise" onClick={() => void win.toggleMaximize()}>&#x25A1;</button>

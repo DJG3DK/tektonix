@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "The control panel window: the app's own commands, the updater, dialogs and opening folders.",
+  "description": "The one window: the app's own page, and the console at localhost:8100 shown in the same window. The console page gets the window controls and the two page switches.",
   "windows": [
     "main"
   ],
@@ -19,5 +19,11 @@
     "core:window:allow-toggle-maximize",
     "core:window:allow-close",
     "core:window:allow-is-maximized"
-  ]
+  ],
+  "remote": {
+    "urls": [
+      "http://localhost:8100/*",
+      "http://127.0.0.1:8100/*"
+    ]
+  }
 }

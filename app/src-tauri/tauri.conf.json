@@ -12,10 +12,10 @@
       {
         "label": "main",
         "title": "Tektonix",
-        "width": 960,
-        "height": 700,
-        "minWidth": 720,
-        "minHeight": 520,
+        "width": 1360,
+        "height": 860,
+        "minWidth": 900,
+        "minHeight": 600,
         "decorations": false
       }
     ],

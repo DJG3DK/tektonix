@@ -141,6 +141,12 @@ pub fn prepare(app: &AppHandle) -> Result<PathBuf, String> {
     if !env.exists() {
         std::fs::copy(dst.join(".env.example"), &env).map_err(|e| e.to_string())?;
     }
+    // This is the desktop app: the single-user sign-in rules (agent/auth.py,
+    // desktop_install). Only the app writes this line.
+    let content = std::fs::read_to_string(&env).unwrap_or_default();
+    if get_env_value(&content, "TEKTONIX_DESKTOP").as_deref() != Some("1") {
+        std::fs::write(&env, set_env_line(&content, "TEKTONIX_DESKTOP", "1")).map_err(|e| e.to_string())?;
+    }
     Ok(dst)
 }
 
@@ -555,4 +561,43 @@ pub async fn auto_update_pass(app: &AppHandle) -> Result<String, String> {
         install_app_update(app).await?;
     }
     Ok(if info.available { format!("updated the stack to {}", info.latest) } else { "up to date".into() })
+}
+
+
+/// The first account's password, chosen on the setup form instead of read
+/// out of a container. The agent seeds the account with a one-time
+/// password and requires a change before anything else; this does that
+/// change through the same two routes a person would use: sign in with
+/// the one-time password, then set the chosen one. Nothing is stored here.
+/// Ok(false) when there is no one-time password to use (the account
+/// already has its password), which is the normal case after the first
+/// start.
+pub async fn set_first_password(app: &AppHandle, email: &str, password: &str) -> Result<bool, String> {
+    if password.trim().is_empty() {
+        return Ok(false);
+    }
+    let one_time = match initial_password(app).await {
+        Ok(p) if !p.is_empty() => p,
+        _ => return Ok(false),
+    };
+    let client = reqwest::Client::builder()
+        .cookie_store(true)
+        .timeout(std::time::Duration::from_secs(20))
+        .build().map_err(|e| e.to_string())?;
+    let base = DASHBOARD;
+    let login = client.post(format!("{base}/api/auth/login"))
+        .json(&serde_json::json!({"email": email, "password": one_time}))
+        .send().await.map_err(|e| format!("sign-in failed: {e}"))?;
+    if !login.status().is_success() {
+        return Err(format!("the agent refused the first sign-in ({})", login.status()));
+    }
+    let change = client.post(format!("{base}/api/auth/change-password"))
+        .json(&serde_json::json!({"current_password": one_time, "new_password": password}))
+        .send().await.map_err(|e| format!("setting the password failed: {e}"))?;
+    if !change.status().is_success() {
+        let body = change.text().await.unwrap_or_default();
+        return Err(format!("the agent refused that password: {}", body.chars().take(200).collect::<String>()));
+    }
+    note(app, "Your password is set. Sign in to the console with it.");
+    Ok(true)
 }

@@ -202,6 +202,10 @@ services:
       # The Environment page shows what compose provided and says the host's
       # .env is where a value changes (agent/env_config.py).
       TEKTONIX_BUNDLE: "1"
+      # Set only by the desktop app, in its own .env: the single-user rules
+      # (agent/auth.py, desktop_install). Empty here and on every other
+      # install, which keeps the full sign-in.
+      TEKTONIX_DESKTOP: ${TEKTONIX_DESKTOP:-}
     volumes:
       # Sibling containers, not nested. See docker/agent/Dockerfile.
       - /var/run/docker.sock:/var/run/docker.sock

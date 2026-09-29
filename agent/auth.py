@@ -33,6 +33,7 @@ import base64
 import hashlib
 import hmac
 import logging
+import os
 import secrets
 import time
 from contextlib import asynccontextmanager
@@ -51,6 +52,21 @@ logger = logging.getLogger("tektonix")
 
 SESSION_COOKIE_NAME = "agent_session"
 SESSION_TTL_SECONDS = 7 * 24 * 3600
+# A desktop install: the single-user app on a machine with its own login.
+# Only the desktop app writes TEKTONIX_DESKTOP=1, into its own .env; a host
+# install and the plain compose bundle never set it and keep every rule
+# below as it is. In desktop mode the first account's second factor is
+# optional (the machine's own login is the boundary), and a session lasts
+# ninety days so the app stays signed in between launches.
+DESKTOP_SESSION_TTL_SECONDS = 90 * 24 * 3600
+
+
+def desktop_install() -> bool:
+    return os.environ.get("TEKTONIX_DESKTOP", "").strip() == "1"
+
+
+def session_ttl_seconds() -> int:
+    return DESKTOP_SESSION_TTL_SECONDS if desktop_install() else SESSION_TTL_SECONDS
 PENDING_2FA_TTL_SECONDS = 2 * 60
 RECOVERY_CODE_COUNT = 10
 # A numeric code emailed rather than a link, with a 30-minute expiry and a
@@ -665,7 +681,7 @@ async def create_session(pool: AsyncConnectionPool, user_id: int) -> str:
         # per-call values and stay as proper psycopg %s params.
         await conn.execute(
             f"INSERT INTO agent_sessions (token_hash, user_id, expires_at) "
-            f"VALUES (%s, %s, now() + interval '{SESSION_TTL_SECONDS} seconds')",
+            f"VALUES (%s, %s, now() + interval '{session_ttl_seconds()} seconds')",
             (_hash_token(token), user_id),
         )
     return token
@@ -963,7 +979,7 @@ def forced_screen_block(user: User) -> str | None:
     """
     if user.must_change_password:
         return "password change required before using this"
-    if user.role == "admin" and not user.totp_enabled:
+    if user.role == "admin" and not user.totp_enabled and not desktop_install():
         return "2FA setup required before using this"
     return None
 

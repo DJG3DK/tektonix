@@ -97,6 +97,7 @@ async function showSetup(cancellable) {
     $("setup-prereleases").checked = !!prefs.include_prereleases;
   } catch (e) { /* defaults stay */ }
   $("setup-cancel").classList.toggle("hidden", !cancellable);
+  $("setup-password-block").classList.toggle("hidden", cancellable);   // only the first setup sets it
   $("setup-error").classList.add("hidden");
 }
 $("setup-pick").onclick = async () => {
@@ -116,8 +117,15 @@ $("setup-form").onsubmit = async (ev) => {
     });
     await invoke("prefs_set", { autoUpdate: $("setup-auto-update").checked, includePrereleases: $("setup-prereleases").checked });
     void showAutoStatus();
+    const pw = $("setup-password").value;
+    if (pw && pw !== $("setup-password-2").value) throw new Error("the two passwords differ");
+    if (pw && pw.length < 12) throw new Error("the password needs at least 12 characters");
     await showStack();
-    if (!(await invoke("installed_version"))) await runStack("stack_install");
+    if (!(await invoke("installed_version"))) {
+      const set = await runStack("stack_install", { password: pw || null });
+      if (set) say("Password set. Open the console and sign in with it.");
+    }
+    $("setup-password").value = ""; $("setup-password-2").value = "";
   } catch (e) {
     $("setup-error").textContent = String(e);
     $("setup-error").classList.remove("hidden");
@@ -155,7 +163,7 @@ async function refreshStatus() {
   const agent = rows.find((r) => r.service === "agent");
   const running = agent && agent.state === "running";
   if (busy) return;
-  if (running) setState("running", agent.health === "healthy" || !agent.health ? "good" : "warn", "The dashboard is at http://localhost:8100. Close this window; the tray icon keeps it reachable.");
+  if (running) setState("running", agent.health === "healthy" || !agent.health ? "good" : "warn", "Open console shows it in this window; the tray icon brings this panel back.");
   else if (rows.length) setState("stopped", "warn", "The stack is installed and stopped.");
   else setState("not started", "warn", "Nothing is running yet.");
   $("btn-open").disabled = !running;
@@ -169,8 +177,9 @@ async function runStack(command, args) {
   busy = true;
   setState("working", "warn", "Docker's own progress is in the log below. The first start pulls about 3 GB.");
   for (const id of ["btn-start", "btn-stop", "btn-update-stack"]) $(id).disabled = true;
+  let result;
   try {
-    await invoke(command, args || {});
+    result = await invoke(command, args || {});
     say("Done.");
   } catch (e) {
     fail(e);
@@ -179,10 +188,11 @@ async function runStack(command, args) {
     busy = false;
     await refreshStatus();
   }
+  return result;
 }
 $("btn-start").onclick = () => runStack("stack_up");
 $("btn-stop").onclick = () => runStack("stack_down");
-$("btn-open").onclick = () => invoke("open_dashboard").catch(fail);
+$("btn-open").onclick = () => invoke("open_console").catch(fail);
 $("btn-settings").onclick = () => { void showSetup(true); };
 $("btn-folder").onclick = () => { if (settings && settings.projects_dir) opener.openPath(settings.projects_dir).catch(fail); };
 $("btn-password").onclick = async () => {

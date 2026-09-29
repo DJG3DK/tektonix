@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+### One window, and a desktop sign-in
+
+The app has one window: the console and the control panel take turns in
+it, from the panel's Open console, the tray, and a Control panel link on
+the console's title strip. Two windows meant two taskbar buttons and one
+that did nothing.
+
+On a desktop install the setup form asks for your password, set through
+the agent's own sign-in and change-password routes at the first start
+instead of a one-time password read out of a container. The first
+account's second factor is optional there, and a session lasts ninety
+days so the app stays signed in between launches. All of it is switched
+on by one line the desktop app writes into its own .env; a host install
+and the plain compose bundle keep the full sign-in unchanged, and a test
+runs the rules both ways.
+
 ### The bundle's commits carry an identity, for real this time
 
 The agent runs git through a shell helper whose minimal environment

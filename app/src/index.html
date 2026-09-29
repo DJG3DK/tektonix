@@ -68,7 +68,15 @@
         <label>
           <span>Sign-in email</span>
           <input id="setup-email" type="email" spellcheck="false" placeholder="admin@example.com" />
-          <small class="muted">The first account. Its one-time password is shown here after the first start.</small>
+          <small class="muted">The first account, yours.</small>
+        </label>
+        <label id="setup-password-block">
+          <span>Password</span>
+          <div class="row">
+            <input id="setup-password" type="password" autocomplete="new-password" placeholder="At least 12 characters" />
+            <input id="setup-password-2" type="password" autocomplete="new-password" placeholder="Again" />
+          </div>
+          <small class="muted">Set once, at the first start. A second factor is optional on this machine; it can be added later under Settings.</small>
         </label>
         <label class="check">
           <input id="setup-auto-update" type="checkbox" checked />
@@ -94,7 +102,7 @@
       </div>
       <p id="stack-text" class="lead"></p>
       <div class="row wrap">
-        <button id="btn-open" class="btn primary">Open dashboard</button>
+        <button id="btn-open" class="btn primary">Open console</button>
         <button id="btn-start" class="btn">Start</button>
         <button id="btn-stop" class="btn">Stop</button>
         <button id="btn-password" class="btn">Show first password</button>
