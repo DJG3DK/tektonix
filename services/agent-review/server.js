@@ -102,7 +102,7 @@ function run(cmd, args, cwd) {
 // GIT_SAFE): `merge --ff-only` brings agent-authored files into the live
 // tree, and a project with core.hooksPath=.husky would then run the agent's
 // own post-merge hook as this service.
-const GIT_SAFE = ['-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false'];
+const { GIT_SAFE, TASK_BRANCH_RE, branchRecord } = require('../shared/review-records');
 const git = (cwd, args) => run('git', [...GIT_SAFE, ...args], cwd);
 
 function projectOr404(req, res) {
@@ -130,24 +130,10 @@ async function readReviewState() {
 // NEEDS_FIXES) verdict indefinitely for work that's already shipped. The
 // review card just goes back to its idle "nothing pending" state until the
 // next commit lands and gets reviewed.
-// Per branch since 2026-09-23 (see branchRecord in commit-reviewer): a merge
+// Per branch since 2026-09-23 (branchRecord, services/shared/review-records): a merge
 // clears the merged branch's verdict and nobody else's. Other tasks of the
 // same project may be parked READY on their own branches, and wiping the
 // whole project sent every one of them back through a full re-review.
-const TASK_BRANCH_RE = /^agent\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-
-function branchRecord(projectState, branch) {
-    if (!projectState || !branch) return null;
-    const rec = projectState.branches && Object.hasOwn(projectState.branches, branch)
-        ? projectState.branches[branch] : null;
-    if (rec) return rec;
-    if (projectState.branch === branch && projectState.lastReviewedSha) {
-        const { branches, inProgress, ...legacy } = projectState;
-        return legacy;
-    }
-    return null;
-}
-
 // Under the same lock commit-reviewer writes with (shared/json-state): a
 // verdict it records mid-merge is kept, not overwritten by this stale copy.
 async function clearReviewState(project, branch = null) {

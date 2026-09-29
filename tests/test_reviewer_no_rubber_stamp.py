@@ -188,3 +188,15 @@ def test_one_definition_of_a_task_branch_name():
     for f in ("agent/nodes/verify_and_ship.py", "agent/evals/fixtures.py"):
         src = (paths.REPO_ROOT / f).read_text()
         assert not re.search(r'f"agent/\{', src), f"{f} still builds the name inline"
+
+
+def test_not_found_in_a_tests_own_output_is_the_agents_failure():
+    """2026-09-29 audit, R9: a test that printed `executable file not found`
+    and failed with exit 1 became a setup failure and an escalation. The
+    phrase counts only with the shell's own exit code, 126 or 127."""
+    printed = [{"name": "test", "ok": False, "code": 1, "output": "expected 'sh: 1: tool: not found' to be logged\nFAIL"}]
+    assert not _classify_then_baseline(printed, {})[0].get("infrastructure")
+    missing = [{"name": "lint", "ok": False, "code": 127, "output": "sh: 1: oxlint: not found"}]
+    assert _classify_then_baseline(missing, {})[0].get("infrastructure") is True
+    legacy = [{"name": "lint", "ok": False, "output": "sh: 1: oxlint: not found"}]   # no code recorded
+    assert _classify_then_baseline(legacy, {})[0].get("infrastructure") is True

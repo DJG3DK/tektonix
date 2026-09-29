@@ -76,7 +76,10 @@ async function main() {
 
   const src = fs.readFileSync(path.join(__dirname, '..', 'services', 'agent-review', 'server.js'), 'utf8');
   assert.match(src, /const git = \(cwd, args\) => run\('git', \[\.\.\.GIT_SAFE, \.\.\.args\], cwd\);/);
-  assert.match(src, /core\.hooksPath=\/dev\/null/);
+  // GIT_SAFE itself lives in services/shared/review-records.js (2026-09-29 audit, R12).
+  assert.match(src, /const \{ GIT_SAFE[^}]*\} = require\('\.\.\/shared\/review-records'\);/);
+  const shared = fs.readFileSync(path.join(__dirname, '..', 'services', 'shared', 'review-records.js'), 'utf8');
+  assert.match(shared, /core\.hooksPath=\/dev\/null/);
   assert.doesNotMatch(src, /run\('git', (?!\[\.\.\.GIT_SAFE)/, 'a git call in agent-review bypasses GIT_SAFE');
   console.log('ok - agent-review runs every git call with hooks off');
 }

@@ -45,7 +45,12 @@ function classifyInfrastructureFailures(checkResults) {
   for (const c of checkResults) {
     if (c.ok) continue;
     const out = c.output || '';
-    if (MISSING_TOOL_RE.test(out) || READ_ONLY_FS_RE.test(out)) c.infrastructure = true;
+    // "not found" is the shell's word only when the shell also exited 126
+    // or 127; a test that prints the phrase and fails with 1 is the agent's
+    // failure (2026-09-29 audit, R9). A row with no code (older callers,
+    // the host path) keeps the sniff.
+    const shellSaid = typeof c.code !== 'number' || c.code === 126 || c.code === 127;
+    if ((shellSaid && MISSING_TOOL_RE.test(out)) || READ_ONLY_FS_RE.test(out)) c.infrastructure = true;
   }
   return checkResults;
 }
@@ -77,7 +82,7 @@ async function runChecks(cfg, worktreePath) {
                                  check.stack || cfg.stack);
     log(`  ${check.name}: ${r.ok ? 'passed' : (r.infrastructure || r.missingTool ? 'could not run' : 'failed')} in ${Math.round((Date.now() - startedAt) / 1000)}s`);
     results.push({
-      name: check.name, ok: r.ok, output: r.output.slice(-4000),
+      name: check.name, ok: r.ok, output: r.output.slice(-4000), code: r.code,
       // Set by runAgentCode when the check could not be RUN -- a missing
       // toolchain or an uncontainable host. It is not the agent's problem
       // and must not be handed to it as one.
@@ -197,7 +202,7 @@ async function runBuildCheck(cfg, worktreePath) {
   // contained for the same reason the checks are.
   const build = await runAgentCode(cfg, worktreePath, bc.dir, bc.cmd, bc.args,
                                    300_000, bc.env, bc.network, bc.stack || cfg.stack);
-  results.push({ name: 'build', ok: build.ok, output: build.output.slice(-4000) });
+  results.push({ name: 'build', ok: build.ok, output: build.output.slice(-4000), code: build.code });
   if (!build.ok) return results; // assertions need the build to have actually produced output
 
   for (const a of bc.assertions) {
@@ -208,7 +213,7 @@ async function runBuildCheck(cfg, worktreePath) {
     }
     log(`  running ${a.name} (${a.cmd} ${a.args.join(' ')}) in ${a.dir}`);
     const r = await runAgentCode(cfg, worktreePath, a.dir, a.cmd, a.args, 60_000, undefined, a.network);
-    results.push({ name: a.name, ok: r.ok, output: r.output.slice(-4000) });
+    results.push({ name: a.name, ok: r.ok, output: r.output.slice(-4000), code: r.code });
   }
   return results;
 }
@@ -308,17 +313,17 @@ async function runDatabaseCheck(cfg, worktreePath) {
     // review. SECURITY.md says so plainly.
     log(`  running db-drift (pnpm db:drift) in ${dc.apiDir}`);
     const drift = await runSealed(dc.driftCmd.cmd, dc.driftCmd.args, apiDir, 120_000, env);
-    results.push({ name: 'db-drift', ok: drift.ok, output: drift.output.slice(-4000) });
+    results.push({ name: 'db-drift', ok: drift.ok, output: drift.output.slice(-4000), code: drift.code });
     if (!drift.ok) return results; // seed/e2e need a migrated, non-drifted schema
 
     log(`  running db-seed (pnpm db:seed) in ${dc.apiDir}`);
     const seed = await runSealed(dc.seedCmd.cmd, dc.seedCmd.args, apiDir, 60_000, env);
-    results.push({ name: 'db-seed', ok: seed.ok, output: seed.output.slice(-4000) });
+    results.push({ name: 'db-seed', ok: seed.ok, output: seed.output.slice(-4000), code: seed.code });
     if (!seed.ok) return results;
 
     log(`  running e2e (pnpm test:e2e) in ${dc.apiDir}`);
     const e2e = await runSealed(dc.e2eCmd.cmd, dc.e2eCmd.args, apiDir, 300_000, env);
-    results.push({ name: 'e2e', ok: e2e.ok, output: e2e.output.slice(-4000) });
+    results.push({ name: 'e2e', ok: e2e.ok, output: e2e.output.slice(-4000), code: e2e.code });
     return results;
   } finally {
     // Terminate any lingering connections before dropping — a leaked
