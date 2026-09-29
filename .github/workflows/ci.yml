@@ -281,11 +281,47 @@ jobs:
       - run: pip install -r requirements.txt
       - run: python3 scripts/verify_stack_checks.py
 
+  bundle-paths:
+    name: Bundle — did this push touch it?
+    # The two docker jobs below build images and run containers, which is
+    # too slow for every push and too important to leave to the Actions tab:
+    # while `bundle` was manual-only, three bundle regressions in a row
+    # reached main (a network name that broke under the legacy project name,
+    # a router URL without /v1, a backup script with no bundle path). They
+    # run on a push to main that touches what the bundle is built from, and
+    # on demand.
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.decide.outputs.run }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - id: decide
+        env:
+          EVENT: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          if [ "$EVENT" = workflow_dispatch ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          # A push whose starting point is unknown (a new branch, a force
+          # push) runs the jobs rather than guessing.
+          if ! git cat-file -e "${BEFORE}^{commit}" 2>/dev/null; then
+            echo "run=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          if git diff --quiet "$BEFORE" HEAD -- docker docker-compose.yml agent services requirements.txt .github/workflows/ci.yml; then
+            echo "run=false" >> "$GITHUB_OUTPUT"; echo "nothing the bundle is built from changed"
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+
   bundle:
-    name: Bundle — the stack actually starts (manual)
-    # Builds five images and runs them, so it is not on every push. Run it
-    # from the Actions tab after changing docker-compose.yml, a Dockerfile or
-    # the entrypoint.
+    name: Bundle — the stack actually starts
+    # Builds five images and runs them. On a push to main that touches what
+    # the bundle is built from (bundle-paths above), or from the Actions tab.
     #
     # This is the half `docker compose config` cannot see. Both bundle
     # regressions it exists to catch were found by hand: a healthcheck whose
@@ -293,7 +329,8 @@ jobs:
     # agent's entrypoint writes it. Neither is a YAML error, and both make
     # `up` hang rather than fail -- which is why every wait here has a
     # timeout and dumps logs on the way out.
-    if: github.event_name == 'workflow_dispatch'
+    needs: bundle-paths
+    if: needs.bundle-paths.outputs.run == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -329,11 +366,22 @@ jobs:
         # up --wait returns when healthchecks pass; a service that crashed
         # immediately afterwards (a missing env var read at first use rather
         # than at boot) still looks like success without this.
+        #
+        # A one-shot (restart: "no" -- the sandbox-image build) is meant to
+        # have exited, and must have exited 0. Comparing every declared
+        # service against the running ones counted it as a crash, so this
+        # step failed on every run and the job could never pass.
         run: |
-          docker compose ps
+          docker compose ps --all
+          docker compose config --format json > /tmp/config.json
+          jq -r '.services | to_entries[] | select(.value.restart != "no") | .key' /tmp/config.json | sort > /tmp/declared
           docker compose ps --status running --format '{{.Service}}' | sort > /tmp/running
-          docker compose config --services | sort > /tmp/declared
           diff /tmp/declared /tmp/running
+          for svc in $(jq -r '.services | to_entries[] | select(.value.restart == "no") | .key' /tmp/config.json); do
+            state=$(docker compose ps --all --format '{{.Service}} {{.State}} {{.ExitCode}}' | awk -v s="$svc" '$1 == s {print $2, $3}')
+            echo "$svc: ${state:-not found}"
+            [ "$state" = "exited 0" ] || { echo "one-shot $svc did not exit 0" >&2; exit 1; }
+          done
 
       - name: Logs, on failure
         if: failure()
@@ -342,6 +390,37 @@ jobs:
       - name: Down
         if: always()
         run: docker compose down -v
+
+  sandbox:
+    name: Sandbox — the docker-backed suites
+    # tests/test_review_db_check_e2e.py and tests/test_sandbox_gh.py need
+    # the sandbox image and a daemon, and skip without them -- which, with
+    # nothing here building the image, they always did. They run against a
+    # freshly built image on the same pushes as the bundle job, and a skip
+    # here is a failure: the image is built two steps up, so a skipped suite
+    # means the guard is wrong, not the machine.
+    needs: bundle-paths
+    if: needs.bundle-paths.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+      - run: pip install -r requirements.txt
+      - name: Build the sandbox image
+        run: docker build -t tektonix-sandbox:latest docker/agent-sandbox
+      - name: The docker-backed suites, none skipped
+        run: |
+          python -m pytest -q -rs tests/test_review_db_check_e2e.py tests/test_sandbox_gh.py 2>&1 | tee /tmp/pytest.out
+          if grep -q -i 'skipped' /tmp/pytest.out; then
+            echo "a docker-backed suite skipped although the image was just built" >&2; exit 1
+          fi
 
   app:
     name: Desktop app — fmt, clippy, tests
@@ -429,10 +508,24 @@ jobs:
         run: bash tests/test_deploy_poll.sh
       - name: Doctor runs on a tree with no configuration
         # It must report what is missing rather than crash -- that is exactly
-        # the state a new contributor's checkout is in.
+        # the state a new contributor's checkout is in. Exit 1 (something
+        # FAILED) is the expected answer on an unconfigured tree; a traceback
+        # or any other exit code is not.
+        #
+        # This used to be `| grep -qv Traceback`, which passes when ANY line
+        # lacks the word -- true of every traceback ever printed. The step
+        # could not fail.
         run: |
-          python3 scripts/doctor.py --quiet || true
-          python3 scripts/doctor.py --quiet 2>&1 | grep -qv 'Traceback'
+          rc=0
+          python3 scripts/doctor.py --quiet > /tmp/doctor.out 2>&1 || rc=$?
+          cat /tmp/doctor.out
+          if grep -q 'Traceback' /tmp/doctor.out; then
+            echo "doctor crashed on an unconfigured tree" >&2; exit 1
+          fi
+          case "$rc" in
+            0|1) ;;
+            *) echo "doctor exited $rc; 0 or 1 expected" >&2; exit 1 ;;
+          esac
 
       - name: Installer dry-run reaches the end
         # Exercises argument parsing, the prerequisite checks and the step
