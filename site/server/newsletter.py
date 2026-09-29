@@ -21,7 +21,11 @@ That shapes the whole interface:
 
 A duplicate signup is a SUCCESS. The person's intent was "put me on the list",
 they are on the list, and an error would send them away thinking it had not
-worked.
+worked. It is also a no-op: the row keeps its name, and an address that
+unsubscribed stays unsubscribed. There is no double opt-in, so a signup is
+not proof it came from the address's owner, and letting it re-subscribe or
+rename somebody who left would let anyone do that to anyone (2026-09-29
+audit, S1).
 
 On storing addresses
 --------------------
@@ -226,10 +230,12 @@ async def subscribe(request: Request, name: str = Form(""), email: str = Form(""
                 "INSERT INTO newsletter_subscribers (email, name, unsubscribe_token, source) "
                 "VALUES (%s, %s, %s, %s) "
                 # Already on the list is not a failure -- see the module
-                # docstring. Refresh the name in case they spelled it
-                # differently, and clear an earlier unsubscribe, because
-                # signing up again is a clear enough statement of intent.
-                "ON CONFLICT (email) DO UPDATE SET name = EXCLUDED.name, unsubscribed_at = NULL",
+                # docstring -- and it changes nothing: this used to refresh
+                # the name and clear unsubscribed_at, on the theory that
+                # signing up again was a statement of intent. Without a
+                # confirmation mail it is only a statement that somebody
+                # typed the address.
+                "ON CONFLICT (email) DO NOTHING",
                 (email, name, secrets.token_urlsafe(24), "landing-page"))
     except psycopg.Error:
         logger.exception("newsletter: could not store a signup")

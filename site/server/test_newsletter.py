@@ -42,6 +42,10 @@ class FakeConn:
             raise psycopg.OperationalError("no")
         if "INSERT" in sql:
             email, name, token, source = params
+            # Models the statement's own conflict rule: DO NOTHING leaves an
+            # existing row alone.
+            if email in self.store and "DO NOTHING" in sql:
+                return FakeCursor([])
             self.store[email] = {"name": name, "token": token, "source": source}
         if "count(*)" in sql:
             return FakeCursor([(len(self.store),)])
@@ -135,9 +139,11 @@ def test_no_database_at_all_is_a_page_not_a_crash(monkeypatch):
     assert r.headers["location"] == newsletter.FAIL_URL
 
 
-def test_the_insert_treats_a_repeat_as_an_update_not_a_failure(monkeypatch):
+def test_the_insert_treats_a_repeat_as_a_success_that_changes_nothing(monkeypatch):
     """Already on the list is what the person wanted. An error would send them
-    away believing it had not worked."""
+    away believing it had not worked. But it is a no-op: the upsert used to
+    overwrite the name and clear unsubscribed_at, and with no double opt-in
+    that let anyone re-subscribe or rename anyone (2026-09-29 audit, S1)."""
     captured = {}
 
     class Recording(FakePool):
@@ -152,11 +158,26 @@ def test_the_insert_treats_a_repeat_as_an_update_not_a_failure(monkeypatch):
 
             return C(outer.store)
 
-    monkeypatch.setattr(newsletter, "pool", Recording())
-    _post(TestClient(newsletter.app), name="Ada", email="ada@example.com")
-    assert "ON CONFLICT (email) DO UPDATE" in captured["sql"]
-    assert "unsubscribed_at = NULL" in captured["sql"], (
-        "signing up again should undo an earlier unsubscribe")
+    pool = Recording()
+    monkeypatch.setattr(newsletter, "pool", pool)
+    r = _post(TestClient(newsletter.app), name="Ada", email="ada@example.com")
+    assert r.headers["location"] == newsletter.OK_URL
+    assert "ON CONFLICT (email) DO NOTHING" in captured["sql"]
+    assert "DO UPDATE" not in captured["sql"] and "unsubscribed_at" not in captured["sql"]
+
+
+def test_an_unsubscribed_address_stays_unsubscribed_and_keeps_its_name(monkeypatch):
+    """The README's promise for unsubscribed_at: a later signup does not
+    silently re-add somebody who left. The old upsert broke it."""
+    pool = FakePool()
+    pool.store["ada@example.com"] = {"name": "Ada Lovelace", "token": "t" * 32, "source": "landing-page",
+                                     "unsubscribed_at": "2026-09-01T00:00:00Z"}
+    monkeypatch.setattr(newsletter, "pool", pool)
+    r = _post(TestClient(newsletter.app), name="Somebody Else", email="ada@example.com")
+    assert r.status_code == 303 and r.headers["location"] == newsletter.OK_URL, "still a success to the browser"
+    row = pool.store["ada@example.com"]
+    assert row["name"] == "Ada Lovelace"
+    assert row["unsubscribed_at"] == "2026-09-01T00:00:00Z"
 
 
 def test_an_address_never_reaches_the_log(monkeypatch, caplog):

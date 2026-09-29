@@ -22,7 +22,10 @@ JavaScript.** So the form is a plain HTML POST, which means
   `tektonix.io/newsletter/subscribe` here.
 
 A repeat signup is a **success**. The person meant "put me on the list", they
-are on the list, and an error would send them away thinking it had failed.
+are on the list, and an error would send them away thinking it had failed. It
+changes nothing, though: there is no double opt-in, so a signup is not proof
+it came from the address's owner, and it must not rename somebody or re-add
+somebody who unsubscribed.
 
 ## Running it
 
@@ -45,7 +48,7 @@ names — by default the one the agent already uses, because that is what
 
 | column | why |
 |---|---|
-| `email`, `name` | what the form collects. `email` is unique, so a repeat is an update |
+| `email`, `name` | what the form collects. `email` is unique, so a repeat is a no-op |
 | `unsubscribe_token` | every issue needs an unsubscribe link; minted now so the first send does not have to backfill one for everybody |
 | `confirmed_at` | null until there is a double opt-in, which needs a mail to confirm *with*. The column exists so adding it later is a write rather than a migration |
 | `unsubscribed_at` | set instead of deleting the row, so a later signup does not silently re-add somebody who left |
