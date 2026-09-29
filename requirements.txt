@@ -80,7 +80,7 @@ truststore==0.10.4
 typing-inspection==0.4.4
 typing_extensions==4.16.0
 urllib3==2.7.0
-uuid_utils==0.17.0
+uuid_utils==1.0.0
 uvicorn==0.52.3
 uvloop==0.22.1
 watchfiles==1.2.0
