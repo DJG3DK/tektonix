@@ -206,9 +206,15 @@ async def current_verdict(project: str, branch: str | None = None) -> dict | Non
         return "unknown"
 
 
-async def _still_reviewing(project: str, expect_sha: str) -> str | None:
-    """The step the reviewer is on for this sha, or None when it is not
-    working on it (or cannot be asked)."""
+async def _still_reviewing(project: str, expect_sha: str, branch: str | None = None) -> str | None:
+    """The step the reviewer is on for this sha, or where this branch stands
+    in its queue, or None when it is doing neither (or cannot be asked).
+
+    The queue counts: the reviewer reviews one branch of a project at a
+    time and writes the rest to `queued` in the order asked (2026-09-29,
+    ten approvals in a row: each merge moved the base, each waiting task
+    rebased and asked again, and a request behind two five-minute reviews
+    timed out as if nobody would ever run it)."""
     try:
         record = await _read_project(project)
     except httpx.HTTPError:
@@ -216,6 +222,12 @@ async def _still_reviewing(project: str, expect_sha: str) -> str | None:
     progress = (record or {}).get("inProgress") or {}
     if _reviewed_sha_is(progress.get("sha"), expect_sha):
         return str(progress.get("step") or "reviewing")
+    queued = (record or {}).get("queued") or []
+    if branch and isinstance(queued, list) and branch in queued:
+        ahead = queued.index(branch) + (1 if progress.get("sha") else 0)
+        if ahead == 0:
+            return "next in the reviewer's queue"
+        return f"queued behind {ahead} other review{'s' if ahead != 1 else ''}"
     return None
 
 
@@ -283,7 +295,7 @@ async def wait_for_review(project: str, expect_sha: str, timeout: int = 900, pol
         if state and _reviewed_sha_is(state.get("lastReviewedSha"), expect_sha) and _reviewed_after(state, after):
             return state
         if elapsed >= timeout:
-            step = await _still_reviewing(project, expect_sha) if elapsed < timeout * STILL_REVIEWING_FACTOR else None
+            step = await _still_reviewing(project, expect_sha, branch) if elapsed < timeout * STILL_REVIEWING_FACTOR else None
             if step is None:
                 raise TimeoutError(f"review service did not review {expect_sha[:12]} within {int(elapsed)}s")
             if elapsed - last_note >= 60:

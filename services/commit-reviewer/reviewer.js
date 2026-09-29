@@ -428,10 +428,31 @@ const inProgressProjects = new Set();
 // project, routine with several.
 const pendingReviews = new Map();
 
+// The queue is written to state.json as `queued` too, so the agent's gate
+// can see that its branch is waiting its turn and keep waiting, the way it
+// does for a review the service says is in progress. 2026-09-29: ten
+// approvals in a row on one project; each merge moved the base, each
+// waiting task rebased and asked for a fresh review, and a request behind
+// two or three five-minute reviews looked, to the gate, like a request
+// nobody would ever run.
+function persistQueue(project) {
+  const q = pendingReviews.get(project) || [];
+  updateState((state) => {
+    if (!state[project] || typeof state[project] !== 'object') {
+      if (!q.length) return false;
+      state[project] = {};
+    }
+    if (q.length) state[project].queued = [...q];
+    else delete state[project].queued;
+  });
+}
+
 function queueReview(project, branch) {
   const q = pendingReviews.get(project) || [];
   if (!q.includes(branch)) q.push(branch);
   pendingReviews.set(project, q);
+  persistQueue(project);
+  return q.indexOf(branch) + 1;
 }
 
 function runNextQueued(project, routerKey) {
@@ -439,6 +460,7 @@ function runNextQueued(project, routerKey) {
   if (!q || !q.length) return;
   const next = q.shift();
   if (!q.length) pendingReviews.delete(project);
+  persistQueue(project);
   const cfg = currentProjects()[project];
   if (!cfg) return;
   log(`[${project}] reviewing queued request for ${next}`);
@@ -827,9 +849,10 @@ function startControlServer(routerKey) {
     }
     if (inProgressProjects.has(project)) {
       // Queued, not dropped: it runs as soon as the current review ends.
-      if (requestedBranch && TASK_BRANCH_RE.test(requestedBranch)) queueReview(project, requestedBranch);
+      const position = requestedBranch && TASK_BRANCH_RE.test(requestedBranch)
+        ? queueReview(project, requestedBranch) : null;
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ ok: true, started: false, queued: Boolean(requestedBranch), reason: 'already reviewing' }));
+      res.end(JSON.stringify({ ok: true, started: false, queued: Boolean(requestedBranch), position, reason: 'already reviewing' }));
       return;
     }
     // Fire-and-forget: reviewProject can take minutes (real builds/tests/LLM
@@ -883,6 +906,12 @@ async function main() {
         delete state[project].inProgress;
         changed = true;
       }
+      // The queue lives in this process; what the file says was queued is
+      // gone with the last one, and the gates will ask again.
+      if (state[project] && typeof state[project] === 'object' && state[project].queued) {
+        delete state[project].queued;
+        changed = true;
+      }
     }
     return changed;
   });
@@ -908,7 +937,7 @@ module.exports = {
   detectNewCommit, reviewWithSonnet, buildAgentMessage, applyBaseline, TASK_BRANCH_RE,
   classifyInfrastructureFailures, packagesNeedingOwnInstall, baselineKey,
   detectNodeModulesDirs, NM_BUILD_CACHES,
-  branchRecord, withBranchRecord, harnessFailed, computeFileChurn, queueReview, pendingReviews, sweepLeftoverWorktrees,
+  branchRecord, withBranchRecord, harnessFailed, computeFileChurn, queueReview, runNextQueued, pendingReviews, sweepLeftoverWorktrees,
   liveInstallIsStale, readWorktreeFile, gatherReferencedFiles,
   extractAgentResponses, stripLeakedMarkup, REVIEW_RESPONSE_MARKER,
 };

@@ -136,3 +136,58 @@ def test_only_a_harness_failed_record_must_be_newer_than_the_request():
     # never reviews the same commit twice, so waiting for a newer one hangs.
     assert _reviewed_after({"reviewedAt": old, "verdict": "READY"}, 4_000_000_000.0)
     assert _reviewed_after({"reviewedAt": old, "verdict": "NEEDS_FIXES", "checkResults": [{"name": "lint", "ok": False}]}, 4_000_000_000.0)
+
+
+@pytest.mark.asyncio
+async def test_a_branch_queued_at_the_reviewer_extends_the_wait(monkeypatch):
+    """2026-09-29: ten approvals in a row on one project. The reviewer
+    reviews one branch at a time and queues the rest; a request behind two
+    five-minute reviews used to time out as if nobody would ever run it."""
+    from agent.tools import review_gate as rg
+    polls = {"n": 0}
+
+    async def fake_state(project, branch=None):
+        polls["n"] += 1
+        return {"lastReviewedSha": FULL if polls["n"] >= 6 else OTHER, "verdict": "READY"}
+
+    async def fake_project(project):
+        return {"inProgress": {"sha": OTHER, "step": "running checks"},
+                "queued": ["agent/someone-else", "agent/me"]}
+
+    monkeypatch.setattr(rg, "_read_state", fake_state)
+    monkeypatch.setattr(rg, "_read_project", fake_project)
+    state = await rg.wait_for_review("demo", FULL, timeout=0.02, poll_interval=0.01, branch="agent/me")
+    assert state["verdict"] == "READY" and polls["n"] >= 6
+
+
+@pytest.mark.asyncio
+async def test_a_queue_that_does_not_hold_this_branch_does_not_extend_the_wait(monkeypatch):
+    from agent.tools import review_gate as rg
+
+    async def fake_state(project, branch=None):
+        return {"lastReviewedSha": OTHER, "verdict": "READY"}
+
+    async def fake_project(project):
+        return {"inProgress": {"sha": OTHER, "step": "running checks"}, "queued": ["agent/someone-else"]}
+
+    monkeypatch.setattr(rg, "_read_state", fake_state)
+    monkeypatch.setattr(rg, "_read_project", fake_project)
+    with pytest.raises(TimeoutError):
+        await rg.wait_for_review("demo", FULL, timeout=0.02, poll_interval=0.01, branch="agent/me")
+
+
+def test_the_queue_position_is_said_in_the_step(monkeypatch):
+    import asyncio
+    from agent.tools import review_gate as rg
+
+    async def idle_project(project):
+        return {"queued": ["agent/a", "agent/b", "agent/me"]}
+    monkeypatch.setattr(rg, "_read_project", idle_project)
+    assert asyncio.run(rg._still_reviewing("demo", FULL, "agent/me")) == "queued behind 2 other reviews"
+    assert asyncio.run(rg._still_reviewing("demo", FULL, "agent/a")) == "next in the reviewer's queue"
+    assert asyncio.run(rg._still_reviewing("demo", FULL, "agent/zzz")) is None, "not queued at all"
+
+    async def busy_project(project):
+        return {"inProgress": {"sha": OTHER, "step": "running checks"}, "queued": ["agent/me"]}
+    monkeypatch.setattr(rg, "_read_project", busy_project)
+    assert asyncio.run(rg._still_reviewing("demo", FULL, "agent/me")) == "queued behind 1 other review"

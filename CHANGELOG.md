@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### A task queued at the reviewer keeps waiting
+
+Approving several diffs of one project in a row put every task but the
+first behind a rebase and a fresh review, and a request waiting behind
+other reviews looked to the gate like one nobody would run, so it timed
+out. The reviewer now writes its queue to its state, and the gate waits
+for a branch it finds there the way it waits for a review in progress.
+
 ### The 2026-09-29 audit, resolved
 
 One hundred and twenty-four findings from a full read of the repository
