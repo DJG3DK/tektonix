@@ -191,6 +191,12 @@ async def gate_on_actions(project: str, branch: str, sha: str, title: str, *, ti
     pr_url = pr.get("url", "")
 
     started = time.monotonic()
+    # A green read is trusted only when the next poll shows the same runs
+    # green again. Workflows register their runs one at a time, so the first
+    # poll after the push can find one finished workflow and none of the
+    # others yet, and "every run on this commit passed" was true of a set
+    # that was still growing (2026-09-29).
+    confirmed: list[str] | None = None
     async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
         while True:
             elapsed = time.monotonic() - started
@@ -210,8 +216,10 @@ async def gate_on_actions(project: str, branch: str, sha: str, title: str, *, ti
                         details.extend(await _failed_jobs(client, token, slug, run))
                     return {"ok": False, "reason": "failed", "failed": details, "pull_request": pr_url}
                 if state == "passed":
-                    return {"ok": True, "passed": sorted({r.get("name", "") for r in latest_runs(runs)}),
-                            "pull_request": pr_url}
+                    passed = sorted({r.get("name", "") for r in latest_runs(runs)})
+                    if confirmed == passed:
+                        return {"ok": True, "passed": passed, "pull_request": pr_url}
+                    confirmed = passed      # once more after poll_interval, then believe it
                 if state == "none" and elapsed >= start_grace:
                     return {"ok": True, "skipped": f"no GitHub Actions run started for {sha[:12]} "
                                                    f"within {start_grace}s", "pull_request": pr_url}

@@ -118,6 +118,28 @@ async def test_green_after_pending_passes_with_the_pull_request(monkeypatch):
     assert "ghp_SECRET" not in seen["pushes"][0], "the token never reaches the command line"
 
 
+async def test_a_green_read_is_believed_only_when_the_next_poll_shows_the_same_runs(monkeypatch):
+    """Workflows register their runs one at a time. The first poll after the
+    push could find one finished workflow and none of the others yet, and
+    "everything on this commit passed" was true of a set still growing
+    (2026-09-29). Green counts when two polls in a row agree on which runs."""
+    seen = _wire(monkeypatch, polls=[
+        [_run(1, "CI")],                                                   # Lint has not registered yet
+        [_run(1, "CI"), _run(2, "Lint", status="in_progress", conclusion=None)],
+        [_run(1, "CI"), _run(2, "Lint")],
+        [_run(1, "CI"), _run(2, "Lint")],
+    ])
+    ci = await _gate()
+    assert ci == {"ok": True, "passed": ["CI", "Lint"], "pull_request": "https://github.com/o/r/pull/3"}
+    assert seen["polls"] == 4, "one green read was enough to merge"
+
+
+async def test_a_late_red_run_still_fails_the_gate(monkeypatch):
+    _wire(monkeypatch, polls=[[_run(1, "CI")], [_run(1, "CI"), _run(2, "Lint", conclusion="failure")]])
+    ci = await _gate()
+    assert ci["ok"] is False and ci["reason"] == "failed"
+
+
 async def test_red_reports_the_failing_job_and_step(monkeypatch):
     jobs = [{"name": "Backend", "status": "completed", "conclusion": "failure",
              "html_url": "https://github.com/o/r/actions/runs/1/job/9",
