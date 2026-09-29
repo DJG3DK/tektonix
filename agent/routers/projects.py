@@ -102,9 +102,13 @@ async def _running_repos(app) -> set[str]:
         if repo:
             repos.add(repo)
     for session_id in list(live_state.running_planning_turns):
-        meta = await app.state.find_planning_meta(session_id)
-        if meta and meta.get("repo"):
-            repos.add(meta["repo"])
+        # find_planning_meta returns (repo, meta), the shape every planning
+        # route destructures. Reading it as a dict here raised AttributeError
+        # and turned every removal and move into a 500 while any planning
+        # turn was open (2026-09-29).
+        repo, _meta = await app.state.find_planning_meta(session_id)
+        if repo:
+            repos.add(repo)
     return repos
 
 

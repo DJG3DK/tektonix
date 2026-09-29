@@ -232,6 +232,7 @@ def test_an_invalid_project_name_is_refused_before_any_path_is_built(bad):
 import agent.server as srv  # noqa: E402
 from agent import config as agent_config  # noqa: E402
 from agent import history_index  # noqa: E402
+from agent import live_state  # noqa: E402
 from agent import paths  # noqa: E402
 from agent.routers import projects as projects_routes  # noqa: E402
 from agent.auth import User  # noqa: E402
@@ -336,6 +337,38 @@ def test_a_project_with_work_in_flight_is_refused(wired, monkeypatch):
     assert "in flight" in res.json()["detail"]
     assert "demo" in agent_config.PROJECTS
     assert wired["sandbox"].is_dir(), "the workspace was removed despite the refusal"
+
+
+def test_a_project_with_a_planning_turn_open_is_refused(wired, monkeypatch):
+    """The real _running_repos, not the stand-in the test above patches in.
+    find_planning_meta returns a (repo, meta) tuple; reading it as a dict
+    raised AttributeError and made every removal and move a 500 whenever
+    any planning turn was open, for every project (2026-09-29)."""
+    import asyncio
+
+    async def planning_meta(session_id):
+        return ("demo", {"repo": "demo", "id": session_id})
+
+    monkeypatch.setattr(srv.app.state, "find_planning_meta", planning_meta, raising=False)
+    monkeypatch.setitem(live_state.running_planning_turns, "sess-1", object())
+    assert asyncio.run(projects_routes._running_repos(srv.app)) == {"demo"}
+    res = TestClient(srv.app).request("DELETE", "/api/projects/demo", json={"memory": "archive"})
+    assert res.status_code == 409, res.text
+    assert "in flight" in res.json()["detail"]
+    assert "demo" in agent_config.PROJECTS
+
+
+def test_a_planning_turn_on_another_project_does_not_block_removal(wired, monkeypatch):
+    import asyncio
+
+    async def planning_meta(session_id):
+        return ("other", {"repo": "other"})
+
+    monkeypatch.setattr(srv.app.state, "find_planning_meta", planning_meta, raising=False)
+    monkeypatch.setitem(live_state.running_planning_turns, "sess-2", object())
+    assert asyncio.run(projects_routes._running_repos(srv.app)) == {"other"}
+    res = TestClient(srv.app).request("DELETE", "/api/projects/demo", json={"memory": "archive"})
+    assert res.status_code == 200, res.text
 
 
 def test_a_full_removal_archives_and_leaves_the_repository_alone(wired, archives, store):
