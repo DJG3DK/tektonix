@@ -492,18 +492,21 @@ def _expand_local_assignments(command: str) -> str:
     quote stays unreadable, and the delete still asks. 2026-09-29: the coder
     kept a scratch path in a variable and every cleanup asked for approval,
     five times in one task, with auto mode on."""
-    values: dict[str, str] = {}
-    for m in _ASSIGNMENT_RE.finditer(command):
-        name = m.group(1)
-        value = next((g for g in m.groups()[1:] if g is not None), None)
-        if value is not None:
-            values[name] = value
-    if not values:
+    # Left to right, so a reference sees only the assignments BEFORE it:
+    # `P=src; rm "$P"; P=/tmp/x` deletes src, whatever P becomes later.
+    # (2026-09-29 audit, A1: the first version let the last assignment win.)
+    assignments = [(m.start(), m.group(1), next((g for g in m.groups()[1:] if g is not None), None))
+                   for m in _ASSIGNMENT_RE.finditer(command)]
+    if not any(v is not None for _, _, v in assignments):
         return command
 
     def _sub(m: re.Match) -> str:
         name = m.group(1) or m.group(2)
-        return values.get(name, m.group(0))
+        value = None
+        for start, n, v in assignments:
+            if start < m.start() and n == name and v is not None:
+                value = v
+        return value if value is not None else m.group(0)
 
     return re.sub(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)", _sub, command)
 

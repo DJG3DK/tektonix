@@ -284,3 +284,13 @@ def test_a_delete_through_a_variable_assigned_in_the_same_command_is_read(tmp_pa
     # A variable the command never assigned, or one holding a substitution, stays unreadable.
     assert any(t.startswith("!") or "$" in t for t in _deletions_that_lose_work('rm -rf "$UNKNOWN"'))
     assert any("$" in t or t.startswith("!") for t in _deletions_that_lose_work('D=$(mktemp -d); rm -rf "$D"'))
+
+
+
+def test_an_assignment_after_the_delete_does_not_rewrite_its_target():
+    """2026-09-29 audit, A1: `P=src; rm -rf "$P"; P=/tmp/x` was read as a
+    delete of /tmp/x -- scratch -- and the delete of src went unasked."""
+    from agent.deep_agent import _deletions_that_lose_work
+    assert _deletions_that_lose_work('P=src; rm -rf "$P"; P=/tmp/x') == ["/workspace/src"]
+    assert _deletions_that_lose_work('P=/tmp/x; rm -rf "$P"; P=src') == []
+    assert _deletions_that_lose_work('P=src; P=/tmp/y; rm -rf "$P"') == [], "the assignment in force at the delete"
