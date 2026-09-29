@@ -598,3 +598,12 @@ are fixed. These did not, and are cheap to lose track of.
 - A lockfile the deploy's own install rewrote in live ("hasInstallScript", regenerated integrity fields) blocks the fast-forward merge of a dependency update with "your local changes would be overwritten". Seen 2026-09-29; fixed by hand with `git checkout -- package-lock.json` in the live checkout. The merge could discard such a lockfile itself when the incoming merge replaces it; an operator should decide whether they want an automated discard on the live checkout.
 - The router test suite warns, about one run in five, that `connect_tcp.<locals>.try_connect` was never awaited: the fastest-providers refresh starts a real connection from `extra_body_for` in tests that never awaited it. Stub the refresh in the test fixture, or refuse to start one when the client is None.
 - Reviews of one project run one at a time because each verdict is about a tree that live must still match at merge time. Parallel reviews per project would need the review split from the merge: review N branches against one base, merge them in turn, and re-run only the checks (not the model review) after each rebase; a review can then pass and still fail at merge, which the dashboard has to say plainly. Asked for on 2026-09-29; not started.
+
+## Left open by the 2026-09-29 audit
+
+- R3: a review of a foreign live install (the Windows bundle) runs `npm ci` in the sandbox on every review and every baseline, with no cache. A reviewer-owned install cache keyed by the lockfile hash, mounted read-only into the check container and accepted as a third mount root by the agent, would make it one install per lockfile change.
+- B15: the rebase recursion in verify_and_ship drops the outer execution log; the fix is `{**inner, "execution_log": [*logged, deploy_entry, *inner.get("execution_log", [])]}`.
+- A4: the empty-reply quiet retry runs on the coder seat for planner turns and pays twice; `_attempts()` should skip the quiet attempt when the request's model already has reasoning off, and planner turns should pick the planner's quiet seat.
+- B20: `review_gate.py` still interpolates `base` raw in two shell strings (the loader now refuses a non-branch value); quote them with `shlex.quote` like `tools/git.py`.
+- In the bundle `/app/keys` (deploy keys, keys/vapid.json) is not a volume and is lost when the container is recreated.
+- Cargo.toml `rust-version` is 1.80 while the code is written for newer clippy; bump when the toolchain is settled.

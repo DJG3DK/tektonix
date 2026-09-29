@@ -2,6 +2,51 @@
 
 ## Unreleased
 
+### The 2026-09-29 audit, resolved
+
+One hundred and twenty-four findings from a full read of the repository
+(docs/review-2026-09-29.md, section 13 has the row for each). The ones
+an operator will notice:
+
+- **Release pipeline.** Every action is pinned to a commit; a tag builds
+  only if it is a version, sits on main and CI passed on its commit;
+  images are pushed once, by digest, without a moving `latest`, and the
+  digest manifest is signed with the updater key so the desktop app pulls
+  exactly what was released. The signing key is read behind a `release`
+  environment. Operator: protect that environment with a required
+  reviewer and add a tag ruleset for `v*`.
+- **Desktop app.** The stack follows the app's own release and the app
+  updates first; the automatic pass never restarts a busy agent, holds a
+  lock against the panel, and pulls every image before retagging any.
+  The console window keeps only the window controls and the panel
+  switch; off-origin links open in the browser. Candidates rc1 to rc12
+  reinstall by hand once.
+- **Review gate.** The merge ships the reviewed commit itself; the
+  reviewer never borrows the agent's workspace tools and installs its own
+  in the sandbox, so a Windows install now runs an install per review; a
+  committed symlink can no longer reach the live checkout or its secrets;
+  each throwaway database is connectable by its owner alone; check output
+  is fenced in the reviewer prompt; the only check red on main too is
+  escalated instead of passed.
+- **Bundle.** One volume per secret, an unprivileged router, PUID/PGID
+  for the rest, a `backup.sh --bundle`, log caps on every service, and the
+  checks network keeps its name under any compose project name.
+- **Agent.** Auto mode asks about every delete it cannot read (wrappers,
+  `git reset --hard`, a `cd` inside a subshell, `mv` onto a tracked
+  file); a budget refusal survives an empty-reply retry; a stream the
+  client abandons is still on the ledger; a used episode carries its real
+  rank; the planning-cost carry and the live mirror take one lock; daily
+  jobs take a file lock shared with the cron wrappers.
+- **Dashboard.** Per-task state resets when you switch tasks, and a merge
+  decision names the commit it saw; a planning session opened mid-turn
+  connects at once; the desktop title bar sits above the sign-in; every
+  admin sees the Users page; notifications open what they are about.
+
+Left open, on the list in docs/todo.md: a warm install cache for
+reviews of a foreign live install, the rebase recursion's log merge,
+the planner's quiet retry seat, and the bundle's `keys/` directory not
+being a volume.
+
 ### A stream the client abandons is still on the ledger
 
 A task that hung up mid-stream, or a stall the watchdog cut, left no
