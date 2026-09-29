@@ -9,7 +9,7 @@
 # merge, and that is a separate endpoint from the merge itself. It reports
 # itself unavailable here rather than failing (server.js, IN_CONTAINER) -- so
 # the review gate works in the bundle and deploying stays the host install's.
-FROM node:24-slim
+FROM node:26-slim
 
 # git does the actual work: worktrees of the live repo, the fixed base..sha
 # range every review is measured over, and the --ff-only merge. ca-certificates

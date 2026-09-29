@@ -1,7 +1,7 @@
 # The model router. Every model call from every process resolves its `agent-*`
 # alias here, so it starts before the agent -- and the agent depends on it only
 # in the sense that its first call fails without it.
-FROM python:3.12-slim
+FROM python:3.14-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates \
     && rm -rf /var/lib/apt/lists/*

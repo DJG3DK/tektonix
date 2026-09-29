@@ -8,7 +8,7 @@
 # node:22-bookworm covers this system's Node-based projects and is
 # Debian-based so apt/git/ripgrep are straightforward. pnpm via corepack
 # (bundled with Node 22+) rather than a separate install step.
-FROM node:22-bookworm
+FROM node:26-bookworm
 
 RUN corepack enable && corepack prepare pnpm@10 --activate \
     && apt-get update \

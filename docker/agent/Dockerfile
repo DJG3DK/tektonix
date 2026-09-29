@@ -11,7 +11,7 @@
 #    AGENT_HOST_PATH_MAP is for (agent/tools/sandbox.py) and why compose sets
 #    it from the same variable it mounts the projects with.
 
-FROM node:24-slim AS frontend
+FROM node:26-slim AS frontend
 WORKDIR /build
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci --no-audit --no-fund
@@ -19,7 +19,7 @@ COPY frontend/ ./
 RUN npm run build
 
 
-FROM python:3.12-slim AS runtime
+FROM python:3.14-slim AS runtime
 
 # git: the agent's own worktree/commit operations run in this container.
 # ripgrep: the planner's repo search.
