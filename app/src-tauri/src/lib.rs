@@ -210,7 +210,12 @@ async fn logs_follow(
     service: String,
     state: tauri::State<'_, Arc<LogFollow>>,
 ) -> Result<(), String> {
-    logs_stop(state.clone()).await?;
+    // One follow at a time: the lock is held from stopping the old one to
+    // storing the new, so two quick clicks cannot leave an orphan.
+    let mut slot = state.0.lock().await;
+    if let Some(old) = slot.take() {
+        old.stop().await;
+    }
     let dir = stack::dir(&app)?;
     let f = dir.join("docker-compose.yml").display().to_string();
     let d = dir.display().to_string();
@@ -228,8 +233,20 @@ async fn logs_follow(
     ];
     let child = proc::spawn_streaming(&app, "logs", "docker", &args, Some(&dir))
         .map_err(|e| e.to_string())?;
-    *state.0.lock().await = Some(child);
+    *slot = Some(child);
     Ok(())
+}
+
+/// The app is going: the log follow goes with it. Quit from the tray, and
+/// the restart after an update, both come through here.
+fn stop_follow_on_exit(app: &AppHandle) {
+    if let Some(follow) = app.try_state::<Arc<LogFollow>>() {
+        if let Ok(mut slot) = follow.0.try_lock() {
+            if let Some(child) = slot.take() {
+                child.stop_now();
+            }
+        }
+    }
 }
 
 #[tauri::command]
@@ -497,8 +514,13 @@ pub fn run() {
             open_panel,
             open_projects_dir,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tektonix");
+        .build(tauri::generate_context!())
+        .expect("error while building tektonix")
+        .run(|app, event| {
+            if let tauri::RunEvent::Exit = event {
+                stop_follow_on_exit(app);
+            }
+        });
 }
 
 #[cfg(test)]

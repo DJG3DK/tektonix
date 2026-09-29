@@ -42,6 +42,11 @@ fn command(program: &str, args: &[&str], cwd: Option<&Path>) -> Command {
         cmd.current_dir(dir);
     }
     cmd.stdin(Stdio::null());
+    // A child outlives nothing here: a `docker compose logs -f` whose
+    // handle is dropped, or an app that exits mid-pull, takes the child
+    // with it. Until 2026-09-29 the log follow kept running after the
+    // app had gone.
+    cmd.kill_on_drop(true);
     #[cfg(windows)]
     {
         // No console window flashing up behind the app for every docker call.
@@ -94,16 +99,13 @@ pub async fn succeeds(program: &str, args: &[&str]) -> bool {
     capture(program, args, None).await.is_ok()
 }
 
-/// Run and stream every stdout and stderr line to the window under `label`,
-/// returning the exit code. The caller decides what a non-zero exit means.
-pub async fn stream(
-    app: &AppHandle,
-    label: &str,
+/// A child with both pipes taken, killed when its handle is dropped.
+pub fn spawn_piped(
     program: &str,
     args: &[&str],
     cwd: Option<&Path>,
-) -> Result<i32, ProcError> {
-    let mut child = command(program, args, cwd)
+) -> Result<tokio::process::Child, ProcError> {
+    command(program, args, cwd)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -113,7 +115,19 @@ pub async fn stream(
             } else {
                 ProcError::Io(e)
             }
-        })?;
+        })
+}
+
+/// Run and stream every stdout and stderr line to the window under `label`,
+/// returning the exit code. The caller decides what a non-zero exit means.
+pub async fn stream(
+    app: &AppHandle,
+    label: &str,
+    program: &str,
+    args: &[&str],
+    cwd: Option<&Path>,
+) -> Result<i32, ProcError> {
+    let mut child = spawn_piped(program, args, cwd)?;
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
     let (a, b) = (app.clone(), app.clone());
@@ -161,6 +175,11 @@ impl Streaming {
     pub async fn stop(mut self) {
         let _ = self.child.kill().await;
     }
+
+    /// Stop without waiting: for the app's exit, where nothing awaits.
+    pub fn stop_now(mut self) {
+        let _ = self.child.start_kill();
+    }
 }
 
 pub fn spawn_streaming(
@@ -170,17 +189,7 @@ pub fn spawn_streaming(
     args: &[&str],
     cwd: Option<&Path>,
 ) -> Result<Streaming, ProcError> {
-    let mut child = command(program, args, cwd)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| {
-            if missing(program, &e) {
-                ProcError::Missing(program.into())
-            } else {
-                ProcError::Io(e)
-            }
-        })?;
+    let mut child = spawn_piped(program, args, cwd)?;
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
     for (pipe, which) in [
@@ -229,5 +238,23 @@ mod tests {
         assert_eq!(tail("a\nb\nc\nd", 2), "c\nd");
         assert_eq!(tail("a", 5), "a");
         assert_eq!(tail("", 3), "");
+    }
+
+    /// Dropping the handle ends the child: what an exiting app relies on.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_dropped_child_does_not_run_on() {
+        let child = spawn_piped("sleep", &["30"], None).unwrap();
+        let pid = child.id().expect("running");
+        drop(child);
+        // The runtime reaps it; until then it is a zombie, not a sleeper.
+        for _ in 0..50 {
+            match std::fs::read_to_string(format!("/proc/{pid}/status")) {
+                Err(_) => return,
+                Ok(s) if s.lines().any(|l| l.starts_with("State:\tZ")) => return,
+                Ok(_) => tokio::time::sleep(std::time::Duration::from_millis(20)).await,
+            }
+        }
+        panic!("sleep {pid} is still running after its handle was dropped");
     }
 }
