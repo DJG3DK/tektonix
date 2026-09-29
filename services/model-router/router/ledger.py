@@ -42,6 +42,8 @@ MAX_BYTES = int(os.environ.get("MODEL_ROUTER_LEDGER_MAX_BYTES", 50_000_000))
 _KEEP_FRACTION = 0.5
 
 _lock = threading.Lock()
+# The trim in flight, if any. Under _lock.
+_trim_thread: threading.Thread | None = None
 
 
 def record(
@@ -101,23 +103,63 @@ def record(
             target.parent.mkdir(parents=True, exist_ok=True)
             with open(target, "a") as f:
                 f.write(json.dumps(entry) + "\n")
-            _trim(target)
+                f.flush()
+                size = os.fstat(f.fileno()).st_size
+            if size > MAX_BYTES:
+                _start_trim(target)
     except Exception as e:  # noqa: BLE001
         logger.debug("ledger write failed: %s", e)
 
 
-def _trim(path: Path) -> None:
+def _start_trim(path: Path) -> None:
+    """The trim runs on its own thread: `record` is called from the stream
+    generators on the event loop, and rewriting 50 MB there stalled every
+    stream in the process while it ran (2026-09-29 audit, A9). One trim at a
+    time; the caller holds _lock."""
+    global _trim_thread
+    if _trim_thread is not None and _trim_thread.is_alive():
+        return
+    _trim_thread = threading.Thread(target=_trim, args=(path,), name="ledger-trim", daemon=True)
+    _trim_thread.start()
+
+
+def _trim(path: Path, _after_snapshot=None) -> None:
     """Halve the file past the cap, keeping the newest lines.
 
     Size-trimmed rather than rotated because every reader globs one path, and
     losing the oldest lines costs a shorter window -- never correctness.
+
+    Atomic: the kept tail goes to a sibling file that replaces the ledger in
+    one rename, so a crash mid-write leaves the old file whole rather than a
+    truncated one. The lock is held only for the swap, and any line appended
+    while the tail was being copied is carried over first, so a call written
+    during the trim is not lost. `_after_snapshot` is a test seam for exactly
+    that window.
     """
+    tmp = path.with_name(path.name + ".trim")
     try:
-        if path.stat().st_size <= MAX_BYTES:
+        size = path.stat().st_size
+        if size <= MAX_BYTES:
             return
-        data = path.read_bytes()
-        keep = data[int(len(data) * (1 - _KEEP_FRACTION)):]
+        start = int(size * (1 - _KEEP_FRACTION))
+        with open(path, "rb") as f:
+            f.seek(start)
+            keep = f.read(size - start)
         keep = keep[keep.find(b"\n") + 1:] if b"\n" in keep else b""
-        path.write_bytes(keep)
+        with open(tmp, "wb") as t:
+            t.write(keep)
+        if _after_snapshot is not None:
+            _after_snapshot()
+        with _lock:
+            with open(path, "rb") as f:
+                f.seek(size)
+                late = f.read()                      # appended since the snapshot
+            with open(tmp, "ab") as t:
+                t.write(late)
+            os.replace(tmp, path)
     except Exception as e:  # noqa: BLE001
         logger.debug("ledger trim failed: %s", e)
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
