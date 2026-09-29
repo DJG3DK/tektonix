@@ -84,7 +84,11 @@ pub struct Prefs {
 
 impl Default for Prefs {
     fn default() -> Self {
-        Prefs { auto_update: true, include_prereleases: false, last_page: String::new() }
+        Prefs {
+            auto_update: true,
+            include_prereleases: false,
+            last_page: String::new(),
+        }
     }
 }
 
@@ -120,7 +124,8 @@ fn prefs_path(app: &AppHandle) -> Result<PathBuf, String> {
 }
 
 pub fn read_prefs(app: &AppHandle) -> Prefs {
-    prefs_path(app).ok()
+    prefs_path(app)
+        .ok()
         .and_then(|p| std::fs::read_to_string(p).ok())
         .and_then(|t| serde_json::from_str(&t).ok())
         .unwrap_or_default()
@@ -131,7 +136,11 @@ pub fn write_prefs(app: &AppHandle, prefs: &Prefs) -> Result<Prefs, String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
-    std::fs::write(&path, serde_json::to_string_pretty(prefs).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+    std::fs::write(
+        &path,
+        serde_json::to_string_pretty(prefs).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())?;
     Ok(prefs.clone())
 }
 
@@ -162,7 +171,13 @@ fn resources(app: &AppHandle) -> Result<PathBuf, String> {
 }
 
 fn note(app: &AppHandle, line: impl Into<String>) {
-    let _ = app.emit(proc::LOG_EVENT, proc::LogLine { stream: "app".into(), line: line.into() });
+    let _ = app.emit(
+        proc::LOG_EVENT,
+        proc::LogLine {
+            stream: "app".into(),
+            line: line.into(),
+        },
+    );
 }
 
 /// Copy the shipped stack files into the data directory. Every launch, so
@@ -174,7 +189,8 @@ pub fn prepare(app: &AppHandle) -> Result<PathBuf, String> {
         let from = src.join(rel);
         let to = dst.join(rel);
         if let Some(parent) = to.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| format!("could not create {}: {e}", parent.display()))?;
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("could not create {}: {e}", parent.display()))?;
         }
         std::fs::copy(&from, &to).map_err(|e| format!("could not copy {}: {e}", from.display()))?;
     }
@@ -194,7 +210,11 @@ pub fn prepare(app: &AppHandle) -> Result<PathBuf, String> {
     // A machine of its own: checks get half its cores and four gigabytes,
     // written once so the operator can change them in the file.
     if get_env_value(&content, "SANDBOX_CPUS").is_none() {
-        content = set_env_line(&content, "SANDBOX_CPUS", &sandbox_cpus(machine_cores()).to_string());
+        content = set_env_line(
+            &content,
+            "SANDBOX_CPUS",
+            &sandbox_cpus(machine_cores()).to_string(),
+        );
     }
     if get_env_value(&content, "SANDBOX_MEMORY").is_none() {
         content = set_env_line(&content, "SANDBOX_MEMORY", "4g");
@@ -204,7 +224,9 @@ pub fn prepare(app: &AppHandle) -> Result<PathBuf, String> {
 }
 
 fn machine_cores() -> usize {
-    std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4)
+    std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4)
 }
 
 /// Half the machine, never fewer than two, never more than eight.
@@ -221,7 +243,11 @@ pub fn set_env_line(content: &str, key: &str, value: &str) -> String {
     let mut done = false;
     for line in content.lines() {
         let trimmed = line.trim_start();
-        if !done && trimmed.starts_with(key) && trimmed[key.len()..].trim_start().starts_with('=') && !trimmed.starts_with('#') {
+        if !done
+            && trimmed.starts_with(key)
+            && trimmed[key.len()..].trim_start().starts_with('=')
+            && !trimmed.starts_with('#')
+        {
             out.push(format!("{key}={value}"));
             done = true;
         } else {
@@ -262,7 +288,8 @@ pub fn read_settings(app: &AppHandle) -> Result<Settings, String> {
         openrouter_api_key_set: !key.is_empty(),
         openrouter_key_hint: hint(&key),
         projects_dir: get_env_value(&content, "PROJECTS_DIR").unwrap_or_default(),
-        admin_email: get_env_value(&content, "ADMIN_EMAIL").unwrap_or_else(|| "admin@example.com".into()),
+        admin_email: get_env_value(&content, "ADMIN_EMAIL")
+            .unwrap_or_else(|| "admin@example.com".into()),
         git_name: get_env_value(&content, "GIT_USER_NAME").unwrap_or_default(),
         git_email: get_env_value(&content, "GIT_USER_EMAIL").unwrap_or_default(),
     })
@@ -271,8 +298,12 @@ pub fn read_settings(app: &AppHandle) -> Result<Settings, String> {
 /// This machine's own git identity, to prefill the form: most people who
 /// have git have set it once.
 pub async fn machine_git_identity() -> (String, String) {
-    let name = proc::capture("git", &["config", "--global", "user.name"], None).await.unwrap_or_default();
-    let email = proc::capture("git", &["config", "--global", "user.email"], None).await.unwrap_or_default();
+    let name = proc::capture("git", &["config", "--global", "user.name"], None)
+        .await
+        .unwrap_or_default();
+    let email = proc::capture("git", &["config", "--global", "user.email"], None)
+        .await
+        .unwrap_or_default();
     (name.trim().to_string(), email.trim().to_string())
 }
 
@@ -283,13 +314,26 @@ fn hint(secret: &str) -> String {
     format!("••••••••{}", &secret[secret.len() - 4..])
 }
 
-pub fn save_settings(app: &AppHandle, key: Option<String>, projects_dir: String, admin_email: String,
-                     git_name: String, git_email: String) -> Result<Settings, String> {
-    let projects_dir = projects_dir.trim().trim_matches('"').trim_end_matches(['\\', '/']).to_string();
+pub fn save_settings(
+    app: &AppHandle,
+    key: Option<String>,
+    projects_dir: String,
+    admin_email: String,
+    git_name: String,
+    git_email: String,
+) -> Result<Settings, String> {
+    let projects_dir = projects_dir
+        .trim()
+        .trim_matches('"')
+        .trim_end_matches(['\\', '/'])
+        .to_string();
     if projects_dir.is_empty() || !Path::new(&projects_dir).is_absolute() {
-        return Err("the projects folder must be a full path, for example C:\\Users\\you\\code".into());
+        return Err(
+            "the projects folder must be a full path, for example C:\\Users\\you\\code".into(),
+        );
     }
-    std::fs::create_dir_all(&projects_dir).map_err(|e| format!("could not create {projects_dir}: {e}"))?;
+    std::fs::create_dir_all(&projects_dir)
+        .map_err(|e| format!("could not create {projects_dir}: {e}"))?;
     let path = env_path(app)?;
     let mut content = std::fs::read_to_string(&path).unwrap_or_default();
     if let Some(k) = key.map(|k| k.trim().to_string()).filter(|k| !k.is_empty()) {
@@ -314,22 +358,43 @@ fn version_path(app: &AppHandle) -> Result<PathBuf, String> {
 
 pub fn installed_version(app: &AppHandle) -> Option<String> {
     let text = std::fs::read_to_string(version_path(app).ok()?).ok()?;
-    serde_json::from_str::<Version>(&text).ok().map(|v| v.tag).filter(|t| !t.is_empty())
+    serde_json::from_str::<Version>(&text)
+        .ok()
+        .map(|v| v.tag)
+        .filter(|t| !t.is_empty())
 }
 
 fn read_version(app: &AppHandle) -> Option<Version> {
     let text = std::fs::read_to_string(version_path(app).ok()?).ok()?;
-    serde_json::from_str::<Version>(&text).ok().filter(|v| !v.tag.is_empty())
+    serde_json::from_str::<Version>(&text)
+        .ok()
+        .filter(|v| !v.tag.is_empty())
 }
 
 fn write_version(app: &AppHandle, tag: &str, image_id: Option<String>) -> Result<(), String> {
-    let text = serde_json::to_string(&Version { tag: tag.into(), image_id }).map_err(|e| e.to_string())?;
+    let text = serde_json::to_string(&Version {
+        tag: tag.into(),
+        image_id,
+    })
+    .map_err(|e| e.to_string())?;
     std::fs::write(version_path(app)?, text).map_err(|e| e.to_string())
 }
 
 /// The id of the agent image the compose file runs, as Docker has it now.
 async fn local_agent_image_id() -> Option<String> {
-    let out = proc::capture("docker", &["image", "inspect", &local_name("agent"), "--format", "{{.Id}}"], None).await.ok()?;
+    let out = proc::capture(
+        "docker",
+        &[
+            "image",
+            "inspect",
+            &local_name("agent"),
+            "--format",
+            "{{.Id}}",
+        ],
+        None,
+    )
+    .await
+    .ok()?;
     let id = out.trim().to_string();
     (!id.is_empty()).then_some(id)
 }
@@ -345,7 +410,10 @@ fn record_is_proven(record: &Version, local_id: Option<&str>) -> bool {
 /// images, no such release existed, and the pull fell back to `latest`, so
 /// every release candidate ran the previous stable release's stack.
 pub fn release_tag(app: &AppHandle) -> String {
-    match option_env!("TEKTONIX_RELEASE_TAG").map(str::trim).filter(|t| !t.is_empty()) {
+    match option_env!("TEKTONIX_RELEASE_TAG")
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+    {
         Some(t) => t.to_string(),
         None => format!("v{}", app.package_info().version),
     }
@@ -355,12 +423,27 @@ pub fn release_tag(app: &AppHandle) -> String {
 /// the release it leads to. Anything unparseable sorts lowest.
 fn version_key(tag: &str) -> (u64, u64, u64, bool, u64) {
     let raw = tag.trim().trim_start_matches('v');
-    let (core, pre) = match raw.split_once('-') { Some((c, p)) => (c, Some(p)), None => (raw, None) };
+    let (core, pre) = match raw.split_once('-') {
+        Some((c, p)) => (c, Some(p)),
+        None => (raw, None),
+    };
     let mut nums = core.split('.').map(|n| n.parse::<u64>().unwrap_or(0));
-    let (maj, min, pat) = (nums.next().unwrap_or(0), nums.next().unwrap_or(0), nums.next().unwrap_or(0));
+    let (maj, min, pat) = (
+        nums.next().unwrap_or(0),
+        nums.next().unwrap_or(0),
+        nums.next().unwrap_or(0),
+    );
     match pre {
         None => (maj, min, pat, true, 0),
-        Some(p) => (maj, min, pat, false, p.trim_start_matches(|c: char| !c.is_ascii_digit()).parse().unwrap_or(0)),
+        Some(p) => (
+            maj,
+            min,
+            pat,
+            false,
+            p.trim_start_matches(|c: char| !c.is_ascii_digit())
+                .parse()
+                .unwrap_or(0),
+        ),
     }
 }
 
@@ -384,11 +467,15 @@ pub async fn pull(app: &AppHandle, tag: &str) -> Result<(), String> {
     for name in IMAGES {
         let remote = image_ref(name, tag);
         note(app, format!("Pulling {remote}"));
-        let code = proc::stream(app, "docker", "docker", &["pull", &remote], None).await.map_err(|e| e.to_string())?;
+        let code = proc::stream(app, "docker", "docker", &["pull", &remote], None)
+            .await
+            .map_err(|e| e.to_string())?;
         if code != 0 {
             return Err(format!("could not pull {remote} (exit {code}). Is this machine online, and is {tag} a published release?"));
         }
-        proc::capture("docker", &["tag", &remote, &local_name(name)], None).await.map_err(|e| e.to_string())?;
+        proc::capture("docker", &["tag", &remote, &local_name(name)], None)
+            .await
+            .map_err(|e| e.to_string())?;
     }
     write_version(app, tag, local_agent_image_id().await)?;
     Ok(())
@@ -403,7 +490,9 @@ pub async fn ensure_own_release(app: &AppHandle) -> Result<bool, String> {
     let wanted = release_tag(app);
     let record = read_version(app);
     let local = local_agent_image_id().await;
-    let proven = record.as_ref().is_some_and(|r| record_is_proven(r, local.as_deref()));
+    let proven = record
+        .as_ref()
+        .is_some_and(|r| record_is_proven(r, local.as_deref()));
     if let Some(r) = &record {
         if proven && !newer_than(&wanted, &r.tag) {
             return Ok(false);
@@ -412,21 +501,38 @@ pub async fn ensure_own_release(app: &AppHandle) -> Result<bool, String> {
     // A running task is not interrupted for this: the automatic pass
     // comes back to it once the agent is idle.
     if agent_busy().await == Some(true) {
-        note(app, format!("The agent is busy; the stack moves to {wanted} when it is idle."));
+        note(
+            app,
+            format!("The agent is busy; the stack moves to {wanted} when it is idle."),
+        );
         return Ok(false);
     }
-    note(app, match &record {
-        Some(r) if proven => format!("This app is {wanted}; the stack is {}. Pulling {wanted}.", r.tag),
-        Some(r) => format!("The stack record says {} but cannot be verified. Pulling {wanted}.", r.tag),
-        None => format!("Pulling the {wanted} stack."),
-    });
+    note(
+        app,
+        match &record {
+            Some(r) if proven => format!(
+                "This app is {wanted}; the stack is {}. Pulling {wanted}.",
+                r.tag
+            ),
+            Some(r) => format!(
+                "The stack record says {} but cannot be verified. Pulling {wanted}.",
+                r.tag
+            ),
+            None => format!("Pulling the {wanted} stack."),
+        },
+    );
     pull(app, &wanted).await?;
     Ok(true)
 }
 
 fn compose_args<'a>(dir: &'a Path, rest: &[&'a str]) -> Vec<String> {
-    let mut v = vec!["compose".to_string(), "--project-directory".into(), dir.display().to_string(),
-                     "-f".into(), dir.join("docker-compose.yml").display().to_string()];
+    let mut v = vec![
+        "compose".to_string(),
+        "--project-directory".into(),
+        dir.display().to_string(),
+        "-f".into(),
+        dir.join("docker-compose.yml").display().to_string(),
+    ];
     v.extend(rest.iter().map(|s| s.to_string()));
     v
 }
@@ -435,14 +541,18 @@ async fn compose_stream(app: &AppHandle, rest: &[&str]) -> Result<i32, String> {
     let dir = dir(app)?;
     let args = compose_args(&dir, rest);
     let refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-    proc::stream(app, "compose", "docker", &refs, Some(&dir)).await.map_err(|e| e.to_string())
+    proc::stream(app, "compose", "docker", &refs, Some(&dir))
+        .await
+        .map_err(|e| e.to_string())
 }
 
 async fn compose_capture(app: &AppHandle, rest: &[&str]) -> Result<String, String> {
     let dir = dir(app)?;
     let args = compose_args(&dir, rest);
     let refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-    proc::capture("docker", &refs, Some(&dir)).await.map_err(|e| e.to_string())
+    proc::capture("docker", &refs, Some(&dir))
+        .await
+        .map_err(|e| e.to_string())
 }
 
 /// `docker compose up -d --no-build`, then wait for the dashboard.
@@ -454,13 +564,18 @@ pub async fn up(app: &AppHandle) -> Result<(), String> {
     note(app, "Starting the stack...");
     let code = compose_stream(app, &["up", "-d", "--no-build", "--remove-orphans"]).await?;
     if code != 0 {
-        return Err(format!("docker compose up failed (exit {code}); the lines above are Docker's own"));
+        return Err(format!(
+            "docker compose up failed (exit {code}); the lines above are Docker's own"
+        ));
     }
     wait_healthy(app).await
 }
 
 async fn wait_healthy(app: &AppHandle) -> Result<(), String> {
-    let client = reqwest::Client::builder().timeout(std::time::Duration::from_secs(3)).build().map_err(|e| e.to_string())?;
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(3))
+        .build()
+        .map_err(|e| e.to_string())?;
     for i in 0..150 {
         if let Ok(r) = client.get(HEALTH).send().await {
             if r.status().is_success() {
@@ -487,7 +602,9 @@ pub async fn down(app: &AppHandle) -> Result<(), String> {
 }
 
 pub async fn status(app: &AppHandle) -> Result<Vec<Container>, String> {
-    let out = compose_capture(app, &["ps", "-a", "--format", "json"]).await.unwrap_or_default();
+    let out = compose_capture(app, &["ps", "-a", "--format", "json"])
+        .await
+        .unwrap_or_default();
     // compose prints one JSON object per line (older versions: an array).
     let mut rows = Vec::new();
     let mut objects: Vec<serde_json::Value> = Vec::new();
@@ -502,14 +619,28 @@ pub async fn status(app: &AppHandle) -> Result<Vec<Container>, String> {
     }
     for v in objects {
         let s = |k: &str| v.get(k).and_then(|x| x.as_str()).unwrap_or("").to_string();
-        rows.push(Container { name: s("Name"), service: s("Service"), state: s("State"), health: s("Health") });
+        rows.push(Container {
+            name: s("Name"),
+            service: s("Service"),
+            state: s("State"),
+            health: s("Health"),
+        });
     }
     Ok(rows)
 }
 
-
 pub async fn initial_password(app: &AppHandle) -> Result<String, String> {
-    let out = compose_capture(app, &["exec", "-T", "agent", "python", "scripts/show_initial_password.py"]).await?;
+    let out = compose_capture(
+        app,
+        &[
+            "exec",
+            "-T",
+            "agent",
+            "python",
+            "scripts/show_initial_password.py",
+        ],
+    )
+    .await?;
     Ok(out.trim().to_string())
 }
 
@@ -526,22 +657,42 @@ pub struct Release {
 }
 
 pub async fn latest_release(include_prereleases: bool) -> Result<Release, String> {
-    let client = reqwest::Client::builder().user_agent("tektonix-desktop").build().map_err(|e| e.to_string())?;
+    let client = reqwest::Client::builder()
+        .user_agent("tektonix-desktop")
+        .build()
+        .map_err(|e| e.to_string())?;
     if !include_prereleases {
         let url = format!("https://api.github.com/repos/{REPO}/releases/latest");
-        let r = client.get(&url).send().await.map_err(|e| format!("could not reach GitHub: {e}"))?;
+        let r = client
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("could not reach GitHub: {e}"))?;
         if !r.status().is_success() {
-            return Err(format!("GitHub answered {} for the latest release", r.status()));
+            return Err(format!(
+                "GitHub answered {} for the latest release",
+                r.status()
+            ));
         }
-        return r.json::<Release>().await.map_err(|e| format!("unexpected answer from GitHub: {e}"));
+        return r
+            .json::<Release>()
+            .await
+            .map_err(|e| format!("unexpected answer from GitHub: {e}"));
     }
     // Newest first; drafts never count, pre-releases do.
     let url = format!("https://api.github.com/repos/{REPO}/releases?per_page=10");
-    let r = client.get(&url).send().await.map_err(|e| format!("could not reach GitHub: {e}"))?;
+    let r = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("could not reach GitHub: {e}"))?;
     if !r.status().is_success() {
         return Err(format!("GitHub answered {} for the releases", r.status()));
     }
-    let all = r.json::<Vec<Release>>().await.map_err(|e| format!("unexpected answer from GitHub: {e}"))?;
+    let all = r
+        .json::<Vec<Release>>()
+        .await
+        .map_err(|e| format!("unexpected answer from GitHub: {e}"))?;
     newest_release(all).ok_or_else(|| "no releases yet".to_string())
 }
 
@@ -549,7 +700,9 @@ pub async fn latest_release(include_prereleases: bool) -> Result<Release, String
 /// not newest first: on 2026-09-29 it led with rc9 above rc14, and the app
 /// announced rc9 as the release that was out.
 pub fn newest_release(all: Vec<Release>) -> Option<Release> {
-    all.into_iter().filter(|rel| !rel.draft).max_by_key(|rel| version_key(&rel.tag_name))
+    all.into_iter()
+        .filter(|rel| !rel.draft)
+        .max_by_key(|rel| version_key(&rel.tag_name))
 }
 
 pub async fn check_update(app: &AppHandle) -> Result<UpdateInfo, String> {
@@ -557,10 +710,16 @@ pub async fn check_update(app: &AppHandle) -> Result<UpdateInfo, String> {
     let mine = release_tag(app);
     let record = read_version(app);
     let local = local_agent_image_id().await;
-    let proven = record.as_ref().is_some_and(|r| record_is_proven(r, local.as_deref()));
+    let proven = record
+        .as_ref()
+        .is_some_and(|r| record_is_proven(r, local.as_deref()));
     let installed = record.map(|r| r.tag).unwrap_or_default();
     // An app built ahead of GitHub's newest listing still wants its own.
-    let target = if newer_than(&mine, &latest.tag_name) { mine.clone() } else { latest.tag_name.clone() };
+    let target = if newer_than(&mine, &latest.tag_name) {
+        mine.clone()
+    } else {
+        latest.tag_name.clone()
+    };
     Ok(UpdateInfo {
         available: !proven || newer_than(&target, &installed),
         installed,
@@ -586,24 +745,40 @@ mod tests {
     fn set_env_line_replaces_in_place_or_appends() {
         let s = "A=1\n# PROJECTS_DIR=old\nPROJECTS_DIR=\nB=2\n";
         let out = set_env_line(s, "PROJECTS_DIR", "C:\\Users\\me\\code");
-        assert_eq!(out, "A=1\n# PROJECTS_DIR=old\nPROJECTS_DIR=C:\\Users\\me\\code\nB=2\n");
+        assert_eq!(
+            out,
+            "A=1\n# PROJECTS_DIR=old\nPROJECTS_DIR=C:\\Users\\me\\code\nB=2\n"
+        );
         let out = set_env_line("A=1", "NEW", "x");
         assert_eq!(out, "A=1\nNEW=x\n");
         let out = set_env_line("PROJECTS_DIR_OLD=1\n", "PROJECTS_DIR", "x");
-        assert_eq!(out, "PROJECTS_DIR_OLD=1\nPROJECTS_DIR=x\n", "a different key that starts the same is left alone");
+        assert_eq!(
+            out, "PROJECTS_DIR_OLD=1\nPROJECTS_DIR=x\n",
+            "a different key that starts the same is left alone"
+        );
     }
 
     #[test]
     fn get_env_value_skips_comments_and_strips_quotes() {
-        let s = "# OPENROUTER_API_KEY=nope\nOPENROUTER_API_KEY=\"sk-or-1234\"\nPROJECTS_DIR=C:\\code\n";
-        assert_eq!(get_env_value(s, "OPENROUTER_API_KEY").as_deref(), Some("sk-or-1234"));
-        assert_eq!(get_env_value(s, "PROJECTS_DIR").as_deref(), Some("C:\\code"));
+        let s =
+            "# OPENROUTER_API_KEY=nope\nOPENROUTER_API_KEY=\"sk-or-1234\"\nPROJECTS_DIR=C:\\code\n";
+        assert_eq!(
+            get_env_value(s, "OPENROUTER_API_KEY").as_deref(),
+            Some("sk-or-1234")
+        );
+        assert_eq!(
+            get_env_value(s, "PROJECTS_DIR").as_deref(),
+            Some("C:\\code")
+        );
         assert_eq!(get_env_value(s, "MISSING"), None);
     }
 
     #[test]
     fn image_names_follow_the_release_workflow_and_the_compose_file() {
-        assert_eq!(image_ref("agent", "v0.9.0"), "ghcr.io/djg3dk/tektonix-agent:v0.9.0");
+        assert_eq!(
+            image_ref("agent", "v0.9.0"),
+            "ghcr.io/djg3dk/tektonix-agent:v0.9.0"
+        );
         assert_eq!(local_name("reviewer"), "tektonix-reviewer:latest");
         assert_eq!(IMAGES, ["agent", "router", "reviewer", "sandbox"]);
     }
@@ -617,19 +792,45 @@ mod tests {
 
     #[test]
     fn the_newest_release_is_chosen_by_version_not_by_listing_order() {
-        let rel = |tag: &str, draft: bool| Release { tag_name: tag.into(), html_url: String::new(), body: String::new(), draft };
-        let all = vec![rel("v0.9.0-rc9", false), rel("v0.9.0-rc14", false), rel("v0.9.0-rc15", true), rel("v0.9.0-rc13", false)];
-        assert_eq!(newest_release(all).map(|r| r.tag_name).as_deref(), Some("v0.9.0-rc14"), "a draft never counts");
+        let rel = |tag: &str, draft: bool| Release {
+            tag_name: tag.into(),
+            html_url: String::new(),
+            body: String::new(),
+            draft,
+        };
+        let all = vec![
+            rel("v0.9.0-rc9", false),
+            rel("v0.9.0-rc14", false),
+            rel("v0.9.0-rc15", true),
+            rel("v0.9.0-rc13", false),
+        ];
+        assert_eq!(
+            newest_release(all).map(|r| r.tag_name).as_deref(),
+            Some("v0.9.0-rc14"),
+            "a draft never counts"
+        );
         assert!(newest_release(vec![]).is_none());
     }
 
     #[test]
     fn a_record_is_trusted_only_with_the_image_it_names() {
-        let legacy = Version { tag: "v0.9.0".into(), image_id: None };
-        assert!(!record_is_proven(&legacy, Some("sha256:abc")), "an early candidate's record names no image");
-        let mine = Version { tag: "v0.9.0-rc13".into(), image_id: Some("sha256:abc".into()) };
+        let legacy = Version {
+            tag: "v0.9.0".into(),
+            image_id: None,
+        };
+        assert!(
+            !record_is_proven(&legacy, Some("sha256:abc")),
+            "an early candidate's record names no image"
+        );
+        let mine = Version {
+            tag: "v0.9.0-rc13".into(),
+            image_id: Some("sha256:abc".into()),
+        };
         assert!(record_is_proven(&mine, Some("sha256:abc")));
-        assert!(!record_is_proven(&mine, Some("sha256:other")), "someone retagged the local image");
+        assert!(
+            !record_is_proven(&mine, Some("sha256:other")),
+            "someone retagged the local image"
+        );
         assert!(!record_is_proven(&mine, None), "no local image at all");
         let old: Version = serde_json::from_str(r#"{"tag":"latest"}"#).unwrap();
         assert_eq!(old.image_id, None, "the old record still parses");
@@ -640,15 +841,27 @@ mod tests {
         assert!(newer_than("v0.9.0-rc11", "v0.8.0"));
         assert!(newer_than("v0.9.0-rc12", "v0.9.0-rc11"));
         assert!(newer_than("v0.9.0", "v0.9.0-rc12"));
-        assert!(!newer_than("v0.8.0", "v0.9.0-rc11"), "a stable release older than the installed rc is not an update");
+        assert!(
+            !newer_than("v0.8.0", "v0.9.0-rc11"),
+            "a stable release older than the installed rc is not an update"
+        );
         assert!(!newer_than("v0.9.0-rc11", "v0.9.0-rc11"));
-        assert!(!newer_than("latest", "v0.9.0-rc11"), "the old fallback's record never wins");
-        assert!(newer_than("v0.9.0-rc11", "latest"), "and is replaced by any real release");
+        assert!(
+            !newer_than("latest", "v0.9.0-rc11"),
+            "the old fallback's record never wins"
+        );
+        assert!(
+            newer_than("v0.9.0-rc11", "latest"),
+            "and is replaced by any real release"
+        );
     }
 
     #[test]
     fn the_updater_manifest_lives_on_the_release_not_on_latest() {
-        assert_eq!(updater_endpoint("v0.9.0-rc6"), "https://github.com/DJG3DK/tektonix/releases/download/v0.9.0-rc6/latest.json");
+        assert_eq!(
+            updater_endpoint("v0.9.0-rc6"),
+            "https://github.com/DJG3DK/tektonix/releases/download/v0.9.0-rc6/latest.json"
+        );
     }
 
     #[test]
@@ -666,7 +879,6 @@ mod tests {
     }
 }
 
-
 /// Whether the agent has nothing in flight: the public health route's
 /// `busy` count. An agent too old to report it counts as busy, so an
 /// automatic update never pulls a running task's containers out from
@@ -674,7 +886,10 @@ mod tests {
 /// Whether the agent has a task in flight; None when it cannot be asked
 /// (the stack is down, or not yet up).
 pub async fn agent_busy() -> Option<bool> {
-    let client = reqwest::Client::builder().timeout(std::time::Duration::from_secs(5)).build().ok()?;
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .ok()?;
     let r = client.get(HEALTH).send().await.ok()?;
     let v = r.json::<serde_json::Value>().await.ok()?;
     v.get("busy").and_then(|b| b.as_u64()).map(|b| b > 0)
@@ -701,12 +916,26 @@ pub struct AppUpdate {
 pub async fn check_app_update(app: &AppHandle) -> Result<AppUpdate, String> {
     use tauri_plugin_updater::UpdaterExt;
     let latest = latest_release(wants_prereleases(app)).await?;
-    let endpoint: tauri::Url = updater_endpoint(&latest.tag_name).parse().map_err(|e: url::ParseError| e.to_string())?;
-    let updater = app.updater_builder().endpoints(vec![endpoint]).map_err(|e| e.to_string())?
-        .build().map_err(|e| e.to_string())?;
+    let endpoint: tauri::Url = updater_endpoint(&latest.tag_name)
+        .parse()
+        .map_err(|e: url::ParseError| e.to_string())?;
+    let updater = app
+        .updater_builder()
+        .endpoints(vec![endpoint])
+        .map_err(|e| e.to_string())?
+        .build()
+        .map_err(|e| e.to_string())?;
     match updater.check().await {
-        Ok(Some(u)) => Ok(AppUpdate { available: true, version: u.version.clone(), tag: latest.tag_name }),
-        Ok(None) => Ok(AppUpdate { available: false, version: String::new(), tag: latest.tag_name }),
+        Ok(Some(u)) => Ok(AppUpdate {
+            available: true,
+            version: u.version.clone(),
+            tag: latest.tag_name,
+        }),
+        Ok(None) => Ok(AppUpdate {
+            available: false,
+            version: String::new(),
+            tag: latest.tag_name,
+        }),
         Err(e) => Err(format!("could not check the app's own update: {e}")),
     }
 }
@@ -715,14 +944,23 @@ pub async fn check_app_update(app: &AppHandle) -> Result<AppUpdate, String> {
 pub async fn install_app_update(app: &AppHandle) -> Result<(), String> {
     use tauri_plugin_updater::UpdaterExt;
     let latest = latest_release(wants_prereleases(app)).await?;
-    let endpoint: tauri::Url = updater_endpoint(&latest.tag_name).parse().map_err(|e: url::ParseError| e.to_string())?;
-    let updater = app.updater_builder().endpoints(vec![endpoint]).map_err(|e| e.to_string())?
-        .build().map_err(|e| e.to_string())?;
+    let endpoint: tauri::Url = updater_endpoint(&latest.tag_name)
+        .parse()
+        .map_err(|e: url::ParseError| e.to_string())?;
+    let updater = app
+        .updater_builder()
+        .endpoints(vec![endpoint])
+        .map_err(|e| e.to_string())?
+        .build()
+        .map_err(|e| e.to_string())?;
     let Some(update) = updater.check().await.map_err(|e| e.to_string())? else {
         return Err("this app is already the newest".into());
     };
     note(app, format!("Downloading app {}...", update.version));
-    update.download_and_install(|_, _| {}, || {}).await.map_err(|e| format!("app update failed: {e}"))?;
+    update
+        .download_and_install(|_, _| {}, || {})
+        .await
+        .map_err(|e| format!("app update failed: {e}"))?;
     note(app, "App updated; restarting.");
     app.restart();
 }
@@ -744,9 +982,15 @@ pub async fn auto_update_pass(app: &AppHandle) -> Result<String, String> {
     let info = check_update(app).await?;
     if info.available {
         if !agent_idle().await {
-            return Ok(format!("{} is out, waiting for the agent to be idle", info.latest));
+            return Ok(format!(
+                "{} is out, waiting for the agent to be idle",
+                info.latest
+            ));
         }
-        note(app, format!("Updating the stack to {} (the agent is idle)", info.latest));
+        note(
+            app,
+            format!("Updating the stack to {} (the agent is idle)", info.latest),
+        );
         update_to(app, &info.latest).await?;
     }
     // The app replaces itself only when nothing is going on: no task in
@@ -755,17 +999,29 @@ pub async fn auto_update_pass(app: &AppHandle) -> Result<String, String> {
     let mine = check_app_update(app).await?;
     if mine.available {
         if !agent_idle().await {
-            return Ok(format!("app {} is out; it installs when the agent is idle, or from the panel", mine.version));
+            return Ok(format!(
+                "app {} is out; it installs when the agent is idle, or from the panel",
+                mine.version
+            ));
         }
         if window_in_use(app) {
-            return Ok(format!("app {} is out; it installs when this window is not in use, or from the panel", mine.version));
+            return Ok(format!(
+                "app {} is out; it installs when this window is not in use, or from the panel",
+                mine.version
+            ));
         }
-        note(app, format!("A newer app ({}) is out; installing it", mine.version));
+        note(
+            app,
+            format!("A newer app ({}) is out; installing it", mine.version),
+        );
         install_app_update(app).await?;
     }
-    Ok(if info.available { format!("updated the stack to {}", info.latest) } else { "up to date".into() })
+    Ok(if info.available {
+        format!("updated the stack to {}", info.latest)
+    } else {
+        "up to date".into()
+    })
 }
-
 
 /// The first account's password, chosen on the setup form instead of read
 /// out of a container. The agent seeds the account with a one-time
@@ -775,7 +1031,11 @@ pub async fn auto_update_pass(app: &AppHandle) -> Result<String, String> {
 /// Ok(false) when there is no one-time password to use (the account
 /// already has its password), which is the normal case after the first
 /// start.
-pub async fn set_first_password(app: &AppHandle, email: &str, password: &str) -> Result<bool, String> {
+pub async fn set_first_password(
+    app: &AppHandle,
+    email: &str,
+    password: &str,
+) -> Result<bool, String> {
     if password.trim().is_empty() {
         return Ok(false);
     }
@@ -786,20 +1046,33 @@ pub async fn set_first_password(app: &AppHandle, email: &str, password: &str) ->
     let client = reqwest::Client::builder()
         .cookie_store(true)
         .timeout(std::time::Duration::from_secs(20))
-        .build().map_err(|e| e.to_string())?;
+        .build()
+        .map_err(|e| e.to_string())?;
     let base = DASHBOARD;
-    let login = client.post(format!("{base}/api/auth/login"))
+    let login = client
+        .post(format!("{base}/api/auth/login"))
         .json(&serde_json::json!({"email": email, "password": one_time}))
-        .send().await.map_err(|e| format!("sign-in failed: {e}"))?;
+        .send()
+        .await
+        .map_err(|e| format!("sign-in failed: {e}"))?;
     if !login.status().is_success() {
-        return Err(format!("the agent refused the first sign-in ({})", login.status()));
+        return Err(format!(
+            "the agent refused the first sign-in ({})",
+            login.status()
+        ));
     }
-    let change = client.post(format!("{base}/api/auth/change-password"))
+    let change = client
+        .post(format!("{base}/api/auth/change-password"))
         .json(&serde_json::json!({"current_password": one_time, "new_password": password}))
-        .send().await.map_err(|e| format!("setting the password failed: {e}"))?;
+        .send()
+        .await
+        .map_err(|e| format!("setting the password failed: {e}"))?;
     if !change.status().is_success() {
         let body = change.text().await.unwrap_or_default();
-        return Err(format!("the agent refused that password: {}", body.chars().take(200).collect::<String>()));
+        return Err(format!(
+            "the agent refused that password: {}",
+            body.chars().take(200).collect::<String>()
+        ));
     }
     note(app, "Your password is set. Sign in to the console with it.");
     Ok(true)

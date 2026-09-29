@@ -17,7 +17,11 @@ pub enum ProcError {
     #[error("{0} is not installed or not on PATH")]
     Missing(String),
     #[error("{program} failed (exit {code}): {tail}")]
-    Failed { program: String, code: i32, tail: String },
+    Failed {
+        program: String,
+        code: i32,
+        tail: String,
+    },
     #[error("{0}")]
     Io(#[from] std::io::Error),
 }
@@ -53,17 +57,31 @@ fn missing(program: &str, e: &std::io::Error) -> bool {
 }
 
 /// Run and capture. Ok(stdout) on exit 0, Err with the last lines otherwise.
-pub async fn capture(program: &str, args: &[&str], cwd: Option<&Path>) -> Result<String, ProcError> {
+pub async fn capture(
+    program: &str,
+    args: &[&str],
+    cwd: Option<&Path>,
+) -> Result<String, ProcError> {
     let out = command(program, args, cwd)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output()
         .await
-        .map_err(|e| if missing(program, &e) { ProcError::Missing(program.into()) } else { ProcError::Io(e) })?;
+        .map_err(|e| {
+            if missing(program, &e) {
+                ProcError::Missing(program.into())
+            } else {
+                ProcError::Io(e)
+            }
+        })?;
     if out.status.success() {
         return Ok(String::from_utf8_lossy(&out.stdout).into_owned());
     }
-    let text = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
     Err(ProcError::Failed {
         program: program.into(),
         code: out.status.code().unwrap_or(-1),
@@ -78,12 +96,24 @@ pub async fn succeeds(program: &str, args: &[&str]) -> bool {
 
 /// Run and stream every stdout and stderr line to the window under `label`,
 /// returning the exit code. The caller decides what a non-zero exit means.
-pub async fn stream(app: &AppHandle, label: &str, program: &str, args: &[&str], cwd: Option<&Path>) -> Result<i32, ProcError> {
+pub async fn stream(
+    app: &AppHandle,
+    label: &str,
+    program: &str,
+    args: &[&str],
+    cwd: Option<&Path>,
+) -> Result<i32, ProcError> {
     let mut child = command(program, args, cwd)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|e| if missing(program, &e) { ProcError::Missing(program.into()) } else { ProcError::Io(e) })?;
+        .map_err(|e| {
+            if missing(program, &e) {
+                ProcError::Missing(program.into())
+            } else {
+                ProcError::Io(e)
+            }
+        })?;
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
     let (a, b) = (app.clone(), app.clone());
@@ -92,7 +122,13 @@ pub async fn stream(app: &AppHandle, label: &str, program: &str, args: &[&str], 
         if let Some(out) = stdout {
             let mut lines = BufReader::new(out).lines();
             while let Ok(Some(line)) = lines.next_line().await {
-                let _ = a.emit(LOG_EVENT, LogLine { stream: la.clone(), line });
+                let _ = a.emit(
+                    LOG_EVENT,
+                    LogLine {
+                        stream: la.clone(),
+                        line,
+                    },
+                );
             }
         }
     });
@@ -100,7 +136,13 @@ pub async fn stream(app: &AppHandle, label: &str, program: &str, args: &[&str], 
         if let Some(err) = stderr {
             let mut lines = BufReader::new(err).lines();
             while let Ok(Some(line)) = lines.next_line().await {
-                let _ = b.emit(LOG_EVENT, LogLine { stream: lb.clone(), line });
+                let _ = b.emit(
+                    LOG_EVENT,
+                    LogLine {
+                        stream: lb.clone(),
+                        line,
+                    },
+                );
             }
         }
     });
@@ -121,16 +163,36 @@ impl Streaming {
     }
 }
 
-pub fn spawn_streaming(app: &AppHandle, label: &str, program: &str, args: &[&str], cwd: Option<&Path>) -> Result<Streaming, ProcError> {
+pub fn spawn_streaming(
+    app: &AppHandle,
+    label: &str,
+    program: &str,
+    args: &[&str],
+    cwd: Option<&Path>,
+) -> Result<Streaming, ProcError> {
     let mut child = command(program, args, cwd)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|e| if missing(program, &e) { ProcError::Missing(program.into()) } else { ProcError::Io(e) })?;
+        .map_err(|e| {
+            if missing(program, &e) {
+                ProcError::Missing(program.into())
+            } else {
+                ProcError::Io(e)
+            }
+        })?;
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
-    for (pipe, which) in [(stdout.map(|s| Box::new(s) as Box<dyn tokio::io::AsyncRead + Unpin + Send>), "out"),
-                          (stderr.map(|s| Box::new(s) as Box<dyn tokio::io::AsyncRead + Unpin + Send>), "err")] {
+    for (pipe, which) in [
+        (
+            stdout.map(|s| Box::new(s) as Box<dyn tokio::io::AsyncRead + Unpin + Send>),
+            "out",
+        ),
+        (
+            stderr.map(|s| Box::new(s) as Box<dyn tokio::io::AsyncRead + Unpin + Send>),
+            "err",
+        ),
+    ] {
         let _ = which;
         if let Some(pipe) = pipe {
             let a = app.clone();
@@ -138,7 +200,13 @@ pub fn spawn_streaming(app: &AppHandle, label: &str, program: &str, args: &[&str
             tokio::spawn(async move {
                 let mut lines = BufReader::new(pipe).lines();
                 while let Ok(Some(line)) = lines.next_line().await {
-                    let _ = a.emit(LOG_EVENT, LogLine { stream: l.clone(), line });
+                    let _ = a.emit(
+                        LOG_EVENT,
+                        LogLine {
+                            stream: l.clone(),
+                            line,
+                        },
+                    );
                 }
             });
         }

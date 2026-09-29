@@ -343,6 +343,63 @@ jobs:
         if: always()
         run: docker compose down -v
 
+  app:
+    name: Desktop app — fmt, clippy, tests
+    # The Rust backend of the desktop app (app/src-tauri) and the panel's
+    # JavaScript. Until 2026-09-29 nothing here checked either: every Rust
+    # change was checked by hand in this same container, and a broken one
+    # would first fail inside the release build, fifteen minutes in. The
+    # cfg!(windows) branches are type-checked by app-windows below; a
+    # Windows target cannot be checked from Linux (ring's build script
+    # wants a Windows C toolchain). No installer is built in CI; the tag
+    # build does that.
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    container: ivangabriele/tauri:debian-bookworm-20
+    defaults:
+      run:
+        working-directory: app/src-tauri
+    steps:
+      - uses: actions/checkout@v7
+      - name: Cargo cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            /usr/local/cargo/registry
+            app/src-tauri/target
+          key: app-cargo-${{ runner.os }}-${{ hashFiles('app/src-tauri/Cargo.lock') }}
+          restore-keys: app-cargo-${{ runner.os }}-
+      - run: rustup component add rustfmt clippy
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test
+      - name: Panel JavaScript parses
+        working-directory: app
+        run: node --check src/main.js
+
+  app-windows:
+    name: Desktop app — Windows type-check
+    # `cargo check` on a Windows runner: the cfg!(windows) branches compile
+    # and the dependency tree resolves for the target the installer is built
+    # for, in minutes rather than the release build's quarter hour. No
+    # bundling, no installer.
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: app/src-tauri
+    steps:
+      - uses: actions/checkout@v7
+      - name: Cargo cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            app/src-tauri/target
+          key: app-cargo-windows-${{ hashFiles('app/src-tauri/Cargo.lock') }}
+          restore-keys: app-cargo-windows-
+      - run: cargo check
+
   shell:
     name: Shell — installer and cron scripts
     runs-on: ubuntu-latest

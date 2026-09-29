@@ -37,8 +37,14 @@ fn settings_get(app: AppHandle) -> Result<stack::Settings, String> {
 }
 
 #[tauri::command]
-fn settings_save(app: AppHandle, key: Option<String>, projects_dir: String, admin_email: String,
-                 git_name: String, git_email: String) -> Result<stack::Settings, String> {
+fn settings_save(
+    app: AppHandle,
+    key: Option<String>,
+    projects_dir: String,
+    admin_email: String,
+    git_name: String,
+    git_email: String,
+) -> Result<stack::Settings, String> {
     stack::prepare(&app)?;
     stack::save_settings(&app, key, projects_dir, admin_email, git_name, git_email)
 }
@@ -110,7 +116,11 @@ fn prefs_get(app: AppHandle) -> stack::Prefs {
 }
 
 #[tauri::command]
-fn prefs_set(app: AppHandle, auto_update: bool, include_prereleases: bool) -> Result<stack::Prefs, String> {
+fn prefs_set(
+    app: AppHandle,
+    auto_update: bool,
+    include_prereleases: bool,
+) -> Result<stack::Prefs, String> {
     let mut prefs = stack::read_prefs(&app);
     prefs.auto_update = auto_update;
     prefs.include_prereleases = include_prereleases;
@@ -144,8 +154,24 @@ fn spawn_auto_updater(app: AppHandle) {
         tokio::time::sleep(std::time::Duration::from_secs(120)).await;
         loop {
             match stack::auto_update_pass(&app).await {
-                Ok(what) => { let _ = app.emit(proc::LOG_EVENT, proc::LogLine { stream: "app".into(), line: format!("Update check: {what}.") }); }
-                Err(e) => { let _ = app.emit(proc::LOG_EVENT, proc::LogLine { stream: "app".into(), line: format!("Update check failed: {e}") }); }
+                Ok(what) => {
+                    let _ = app.emit(
+                        proc::LOG_EVENT,
+                        proc::LogLine {
+                            stream: "app".into(),
+                            line: format!("Update check: {what}."),
+                        },
+                    );
+                }
+                Err(e) => {
+                    let _ = app.emit(
+                        proc::LOG_EVENT,
+                        proc::LogLine {
+                            stream: "app".into(),
+                            line: format!("Update check failed: {e}"),
+                        },
+                    );
+                }
             }
             tokio::time::sleep(std::time::Duration::from_secs(6 * 3600)).await;
         }
@@ -153,13 +179,29 @@ fn spawn_auto_updater(app: AppHandle) {
 }
 
 #[tauri::command]
-async fn logs_follow(app: AppHandle, service: String, state: tauri::State<'_, Arc<LogFollow>>) -> Result<(), String> {
+async fn logs_follow(
+    app: AppHandle,
+    service: String,
+    state: tauri::State<'_, Arc<LogFollow>>,
+) -> Result<(), String> {
     logs_stop(state.clone()).await?;
     let dir = stack::dir(&app)?;
     let f = dir.join("docker-compose.yml").display().to_string();
     let d = dir.display().to_string();
-    let args = ["compose", "--project-directory", d.as_str(), "-f", f.as_str(), "logs", "-f", "--tail", "200", service.as_str()];
-    let child = proc::spawn_streaming(&app, "logs", "docker", &args, Some(&dir)).map_err(|e| e.to_string())?;
+    let args = [
+        "compose",
+        "--project-directory",
+        d.as_str(),
+        "-f",
+        f.as_str(),
+        "logs",
+        "-f",
+        "--tail",
+        "200",
+        service.as_str(),
+    ];
+    let child = proc::spawn_streaming(&app, "logs", "docker", &args, Some(&dir))
+        .map_err(|e| e.to_string())?;
     *state.0.lock().await = Some(child);
     Ok(())
 }
@@ -189,7 +231,9 @@ async fn open_panel(app: AppHandle) -> Result<(), String> {
 
 fn show_console(app: &AppHandle) -> Result<(), String> {
     let w = app.get_webview_window("main").ok_or("no window")?;
-    let url: tauri::Url = stack::DASHBOARD.parse().map_err(|e: url::ParseError| e.to_string())?;
+    let url: tauri::Url = stack::DASHBOARD
+        .parse()
+        .map_err(|e: url::ParseError| e.to_string())?;
     w.navigate(url).map_err(|e| e.to_string())?;
     let _ = w.show();
     let _ = w.set_focus();
@@ -199,9 +243,17 @@ fn show_console(app: &AppHandle) -> Result<(), String> {
 
 fn show_panel_page(app: &AppHandle) -> Result<(), String> {
     let w = app.get_webview_window("main").ok_or("no window")?;
-    let url: tauri::Url = "tauri://localhost/index.html".parse().map_err(|e: url::ParseError| e.to_string())?;
+    let url: tauri::Url = "tauri://localhost/index.html"
+        .parse()
+        .map_err(|e: url::ParseError| e.to_string())?;
     // On Windows the app's own pages are served from http://tauri.localhost.
-    let url = if cfg!(windows) { "http://tauri.localhost/index.html".parse().map_err(|e: url::ParseError| e.to_string())? } else { url };
+    let url = if cfg!(windows) {
+        "http://tauri.localhost/index.html"
+            .parse()
+            .map_err(|e: url::ParseError| e.to_string())?
+    } else {
+        url
+    };
     w.navigate(url).map_err(|e| e.to_string())?;
     let _ = w.show();
     let _ = w.set_focus();
@@ -243,16 +295,27 @@ fn restore_last_page(app: AppHandle) {
 fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     let open = MenuItem::with_id(app, "open", "Open console", true, None::<&str>)?;
     let panel = MenuItem::with_id(app, "panel", "Control panel", true, None::<&str>)?;
-    let quit = MenuItem::with_id(app, "quit", "Quit (the stack keeps running)", true, None::<&str>)?;
+    let quit = MenuItem::with_id(
+        app,
+        "quit",
+        "Quit (the stack keeps running)",
+        true,
+        None::<&str>,
+    )?;
     let menu = Menu::with_items(app, &[&open, &panel, &quit])?;
-    let icon = app.default_window_icon().cloned().expect("the bundle has an icon");
+    let icon = app
+        .default_window_icon()
+        .cloned()
+        .expect("the bundle has an icon");
     TrayIconBuilder::with_id("tektonix")
         .icon(icon)
         .tooltip("Tektonix")
         .menu(&menu)
         .show_menu_on_left_click(true)
         .on_menu_event(|app, event| match event.id.as_ref() {
-            "open" => { let _ = show_console(app); }
+            "open" => {
+                let _ = show_console(app);
+            }
             "panel" => show_panel(app),
             "quit" => app.exit(0),
             _ => {}
@@ -318,7 +381,9 @@ pub fn run() {
         // the tray) brings the running window forward, on whatever page it
         // shows, instead of starting another app with a dead taskbar button
         // of its own (2026-09-29).
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| focus_window(app)))
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            focus_window(app)
+        }))
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_dialog::init())
@@ -342,12 +407,31 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
-            docker_state, docker_start, docker_install,
-            settings_get, settings_save, machine_git_identity, stack_dir, installed_version,
-            stack_install, stack_up, stack_down, stack_status, stack_password,
-            stack_check_update, stack_update, prefs_get, prefs_set, app_version,
-            app_update_check, app_update_install, auto_update_now,
-            logs_follow, logs_stop, open_console, open_panel,
+            docker_state,
+            docker_start,
+            docker_install,
+            settings_get,
+            settings_save,
+            machine_git_identity,
+            stack_dir,
+            installed_version,
+            stack_install,
+            stack_up,
+            stack_down,
+            stack_status,
+            stack_password,
+            stack_check_update,
+            stack_update,
+            prefs_get,
+            prefs_set,
+            app_version,
+            app_update_check,
+            app_update_install,
+            auto_update_now,
+            logs_follow,
+            logs_stop,
+            open_console,
+            open_panel,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tektonix");
