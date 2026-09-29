@@ -76,6 +76,9 @@ def test_the_node_copies_agree_with_python_on_the_same_table():
 
 
 def test_verify_and_ship_has_no_copy_of_its_own():
-    assert vs._harness_failed is review_gate.harness_failed
+    # By origin, not identity: another test reloads review_gate, and a
+    # reloaded module's function is a new object with the same home.
+    assert (vs._harness_failed.__module__, vs._harness_failed.__qualname__) == \
+        (review_gate.harness_failed.__module__, review_gate.harness_failed.__qualname__)
     src = (ROOT / "agent" / "nodes" / "verify_and_ship.py").read_text()
     assert "def _harness_failed" not in src
