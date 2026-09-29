@@ -25,11 +25,12 @@ so a commit that arrived after the verdict would have shipped under it.
 It now merges and pushes the reviewed commit itself, and a branch that
 moved past it is refused.
 
-### A single red check is not "the environment"
+### The only check red on main too verifies nothing
 
-The reviewer treated one check that was already failing before the
-change as an all-red environment and passed it. One check is compared as
-itself; the environment rule needs two or more, or nothing green at all.
+A project with one configured check, red on the base commit as well, was
+passed as pre-existing: a review that checked nothing. It is escalated
+now, in its own words. A failure main already has still counts as
+pre-existing while another check verified the commit.
 
 ### The database check streams too
 
