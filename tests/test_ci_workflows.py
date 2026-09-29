@@ -113,6 +113,86 @@ def test_the_doctor_step_passes_on_findings_and_fails_on_a_traceback(tmp_path):
     assert _run_doctor_step(tmp_path / "d", odd_exit) != 0
 
 
+# ---------------------------------------------------------------------------
+# The release workflow: pinned actions, a gated build, a validated tag
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("workflow", [RELEASE, CI])
+def test_every_action_is_pinned_to_a_commit_with_its_release_beside_it(workflow):
+    """release.yml holds the updater's signing key, and auto-update is on
+    by default: whoever could move a tag like `v7` on an action used there
+    could sign an update for every desktop install. A commit cannot be
+    moved. ci.yml is pinned the same way so the two never drift apart."""
+    uses = re.findall(r"^\s*-?\s*uses:\s*(\S+)(.*)$", workflow.read_text(), re.M)
+    assert uses, workflow
+    for ref, rest in uses:
+        assert re.fullmatch(r"[\w.-]+/[\w.-]+@[0-9a-f]{40}", ref), f"{workflow.name}: {ref} is not pinned to a commit"
+        assert re.search(r"#\s*v\d", rest), f"{workflow.name}: {ref} has no release comment for Dependabot"
+
+
+def test_the_signing_job_holds_no_registry_permission_and_names_the_protected_environment():
+    wf = yaml.safe_load(RELEASE.read_text())
+    assert wf["permissions"] == {"contents": "read"}
+    assert wf["jobs"]["images"]["permissions"]["packages"] == "write"
+    app = wf["jobs"]["app-windows"]
+    assert "packages" not in (app.get("permissions") or {})
+    assert app["environment"] == "release"
+
+
+def _gate_script() -> str:
+    return _step(_jobs(RELEASE)["gate"], "CI passed")["run"]
+
+
+def _run_gate(tmp_path: pathlib.Path, tag: str, *, on_main: bool = True, green: int = 1) -> subprocess.CompletedProcess:
+    """The gate step with git and gh stubbed: git says whether the tag's
+    commit is on main, gh says how many green CI runs the commit has."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(parents=True)
+    git = bin_dir / "git"
+    git.write_text(
+        "#!/usr/bin/env bash\n"
+        'case "$1" in\n'
+        '  rev-parse) echo 0123456789abcdef0123456789abcdef01234567 ;;\n'
+        '  fetch) ;;\n'
+        f'  merge-base) exit {0 if on_main else 1} ;;\n'
+        '  *) echo "unexpected git $*" >&2; exit 99 ;;\n'
+        "esac\n")
+    gh = bin_dir / "gh"
+    gh.write_text(f"#!/usr/bin/env bash\necho {green}\n")
+    for f in (git, gh):
+        f.chmod(f.stat().st_mode | stat.S_IEXEC)
+    env = {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}", "TAG": tag,
+           "GH_TOKEN": "x", "GITHUB_REPOSITORY": "o/r"}
+    return subprocess.run(["bash", "-eo", "pipefail", "-c", _gate_script()], env=env, cwd=REPO,
+                          capture_output=True, text=True)
+
+
+@pytest.mark.parametrize("tag", ["v1.2.3", "v0.9.0-rc13", "v10.0.0-beta.2"])
+def test_the_gate_passes_a_version_tag_on_main_with_a_green_run(tmp_path, tag):
+    proc = _run_gate(tmp_path, tag)
+    assert proc.returncode == 0, proc.stderr
+
+
+@pytest.mark.parametrize("tag", ["v1.2", "1.2.3", "v1.2.3;rm -rf /", "v1.2.3 x", "vlatest", "v1.2.3-", "main"])
+def test_the_gate_refuses_a_tag_that_is_not_a_version(tmp_path, tag):
+    """The tag used to go straight into a sed on Cargo.toml."""
+    proc = _run_gate(tmp_path, tag)
+    assert proc.returncode != 0 and "not a version tag" in proc.stderr, tag
+
+
+def test_the_gate_refuses_a_tag_off_main_or_without_a_green_ci_run(tmp_path):
+    off_main = _run_gate(tmp_path / "a", "v1.2.3", on_main=False)
+    assert off_main.returncode != 0 and "not on main" in off_main.stderr
+    red = _run_gate(tmp_path / "b", "v1.2.3", green=0)
+    assert red.returncode != 0 and "no successful CI run" in red.stderr
+
+
+def test_nothing_builds_or_signs_before_the_gate():
+    jobs = _jobs(RELEASE)
+    assert jobs["images"]["needs"] == "gate"
+    assert jobs["app-windows"]["needs"] == "images"
+
+
 def test_the_real_doctor_survives_the_step_on_this_tree(tmp_path):
     """The step against the real script: whatever this checkout is missing,
     the answer is findings, never a traceback."""

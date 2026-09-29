@@ -5,6 +5,16 @@ name: Release
 # pulls the release instead. Each image is pushed as :vX.Y.Z and :latest.
 # The desktop app tags the pulled image with the local name compose uses
 # (tektonix-<service>:latest) and starts the stack with --no-build.
+#
+# Every action here is pinned to a commit, with the release it is in the
+# comment beside it; Dependabot's github-actions entry moves the pins.
+# This workflow holds the updater's signing key, and auto-update is on by
+# default in the app: whoever could move a tag like `v7` on an action used
+# here could sign an update for every desktop install. A commit cannot be
+# moved. The signing secrets belong in a `release` Environment with a
+# required reviewer (Settings -> Environments), and the `v*` tags behind a
+# ruleset; the job below names the environment so that protection applies
+# once it exists.
 
 on:
   push:
@@ -17,12 +27,54 @@ on:
 
 permissions:
   contents: read
-  packages: write
 
 jobs:
+  gate:
+    name: Gate — a version tag, on main, with a green CI run
+    # Any `v*` tag used to build and push images and :latest, and a
+    # dispatched tag input went straight into `sed` on Cargo.toml. The tag
+    # has to name a semantic version, its commit has to be on main, and CI
+    # has to have passed on that commit. A tag pushed the moment main was
+    # updated may find CI still running: dispatch the workflow again once
+    # it is green.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+          fetch-depth: 0
+      - name: The tag names a version, sits on main, and CI passed on its commit
+        env:
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          v="${TAG#v}"
+          if [ "$v" = "$TAG" ] || ! printf '%s' "$v" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$'; then
+            echo "not a version tag (vX.Y.Z or vX.Y.Z-rcN): $TAG" >&2; exit 1
+          fi
+          sha=$(git rev-parse "refs/tags/$TAG^{commit}")
+          git fetch -q origin main
+          if ! git merge-base --is-ancestor "$sha" origin/main; then
+            echo "$TAG ($sha) is not on main" >&2; exit 1
+          fi
+          green=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$sha&status=completed&per_page=10" \
+                    --jq '[.workflow_runs[] | select(.conclusion == "success")] | length')
+          if [ "${green:-0}" -lt 1 ]; then
+            echo "no successful CI run for $sha; wait for CI on main, then dispatch this workflow with tag=$TAG" >&2; exit 1
+          fi
+          echo "$TAG = $sha, on main, CI green"
+
   images:
     name: Images — ${{ matrix.image }}
+    needs: gate
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
     strategy:
       fail-fast: false
       matrix:
@@ -40,12 +92,12 @@ jobs:
             dockerfile: docker/agent-sandbox/Dockerfile
             context: docker/agent-sandbox
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.inputs.tag || github.ref }}
-      - uses: docker/setup-qemu-action@v4
-      - uses: docker/setup-buildx-action@v4
-      - uses: docker/login-action@v4
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -54,7 +106,7 @@ jobs:
         run: echo "tag=${TAG#refs/tags/}" >> "$GITHUB_OUTPUT"
         env:
           TAG: ${{ github.event.inputs.tag || github.ref }}
-      - uses: docker/build-push-action@v7
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: ${{ matrix.context }}
           file: ${{ matrix.dockerfile }}
@@ -75,17 +127,23 @@ jobs:
     name: Desktop app — Windows installer
     runs-on: windows-latest
     needs: images
+    # The signing key is read here and nowhere else. Protect this
+    # environment with a required reviewer and the secrets are handed out
+    # only after a person has looked at the run.
+    environment: release
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.inputs.tag || github.ref }}
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 20
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: swatinem/rust-cache@v2
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # v1
+        with:
+          toolchain: stable
+      - uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: app/src-tauri
       # A tag whose release is already published (a release made by hand,
@@ -109,7 +167,9 @@ jobs:
         if: steps.existing.outputs.published != 'true'
       # The installer, the updater manifest and the app's own version carry
       # the tag: Tektonix_0.9.0-rc13_x64-setup.exe, not a file named 0.9.0
-      # for every candidate. Build-time only; nothing is committed.
+      # for every candidate. Build-time only; nothing is committed. The tag
+      # was checked against vX.Y.Z[-suffix] by the gate job, so what goes
+      # into the sed is a version and nothing else.
       - name: Version the app after the tag
         if: steps.existing.outputs.published != 'true'
         shell: bash
@@ -126,7 +186,7 @@ jobs:
       # the GitHub release for this tag (creating the release if the tag has
       # none yet). The app's own updater reads latest.json from
       # releases/latest/download.
-      - uses: tauri-apps/tauri-action@v1
+      - uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
         if: steps.existing.outputs.published != 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

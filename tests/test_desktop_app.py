@@ -23,7 +23,11 @@ def test_the_release_workflow_publishes_every_image_the_compose_file_names():
     compose = yaml.safe_load((REPO / "docker-compose.yml").read_text())
     named = {svc.get("image") for svc in compose["services"].values() if "build" in svc}
     assert named == {f"tektonix-{n}:latest" for n in IMAGES}
-    assert wf["permissions"]["packages"] == "write"
+    # packages: write belongs to the job that pushes, not to the workflow:
+    # the installer job holds the updater's signing key and needs no
+    # registry access.
+    assert "packages" not in wf["permissions"]
+    assert wf["jobs"]["images"]["permissions"]["packages"] == "write"
     assert "app-windows" in wf["jobs"] and wf["jobs"]["app-windows"]["needs"] == "images"
 
 
