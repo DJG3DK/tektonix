@@ -27,6 +27,15 @@ def repo(tmp_path):
     return tmp_path
 
 
+async def test_gits_error_text_is_not_returned_as_a_diff(tmp_path):
+    """"fatal: not a git repository" came back as the diff, so a broken
+    workspace read as a change to review (2026-09-29)."""
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    assert await git_diff(str(plain)) == ""
+    assert await git_diff(str(plain), staged=True) == ""
+
+
 async def test_staged_edits_and_new_files_are_a_diff(repo):
     (repo / "app.py").write_text("v2\n")
     (repo / "new.py").write_text("added\n")

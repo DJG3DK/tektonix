@@ -3,8 +3,11 @@ import hashlib
 import re
 import shlex
 import asyncio
+import logging
 
 from agent.tools.shell import run_shell
+
+logger = logging.getLogger("tektonix")
 
 
 # Every git command this module runs executes ON THE HOST, with cwd set to a
@@ -119,6 +122,11 @@ async def git_diff(repo_root: str, staged: bool = False) -> str:
     await _git("add -A -N", repo_root, timeout=_TREE_TIMEOUT_S)
     cmd = "diff --staged" if staged else "diff HEAD"
     r = await _git(cmd, repo_root, timeout=_TREE_TIMEOUT_S)
+    if not r["ok"]:
+        # git's error text is not a diff. Handed back as one, "fatal: not a
+        # git repository" read as a change to review (2026-09-29).
+        logger.warning("git_diff failed in %s: %s", repo_root, r["output"][:200])
+        return ""
     return r["output"]
 
 
