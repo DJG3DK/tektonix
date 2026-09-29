@@ -81,6 +81,15 @@ def _safe_base_env() -> dict:
         "LANG": os.environ.get("LANG", "C.UTF-8"),
         "LC_ALL": os.environ.get("LC_ALL", "C.UTF-8"),
     }
+    # Git's identity is not a secret and every commit and rebase this helper
+    # runs needs it. On a host install the home directory's git config filled
+    # the gap; in the compose bundle there is none, and the scrub above ate
+    # the identity compose had set: "Please tell me who you are" at the final
+    # commit, twice, on the first Windows install (2026-09-29).
+    for key in ("GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL"):
+        value = os.environ.get(key, "").strip()
+        if value:
+            base[key] = value
     return base
 
 

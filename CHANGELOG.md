@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### The bundle's commits carry an identity, for real this time
+
+The agent runs git through a shell helper whose minimal environment
+drops everything but a few names, so agent-authored commands cannot see
+secrets. That scrub also dropped the git identity the compose file sets;
+a host install never noticed because the home directory's git config
+filled the gap. The four identity variables pass the scrub now, and a
+test commits with no git config anywhere to prove it.
+
 ### One running copy of the app
 
 A second launch, from the installer's "run when finished" plus the Start
