@@ -111,6 +111,15 @@ def test_the_console_origin_gets_window_controls_and_the_panel_switch_only():
     assert {f"allow-{c.replace('_', '-')}" for c in commands} <= set(panel["permissions"]), "the panel keeps every command"
 
 
+def test_the_app_has_one_tray_icon():
+    """app.trayIcon in the config made Tauri build a tray of its own, with
+    no menu and no handler, beside the one lib.rs builds (2026-09-29)."""
+    conf = json.loads((REPO / "app/src-tauri/tauri.conf.json").read_text())
+    assert "trayIcon" not in conf["app"]
+    lib = (REPO / "app/src-tauri/src/lib.rs").read_text()
+    assert lib.count("TrayIconBuilder::with_id(") == 1
+
+
 def test_the_app_version_is_one_number_in_three_places():
     conf = json.loads((REPO / "app/src-tauri/tauri.conf.json").read_text())
     pkg = json.loads((REPO / "app/package.json").read_text())
