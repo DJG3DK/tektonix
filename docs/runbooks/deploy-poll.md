@@ -25,3 +25,11 @@ What happened is in `data/auto-deploy.log` (or `logs/`) under the project:
 one line per deploy with the commit range, or the reason it stopped. When
 nothing changed it prints nothing there. `tests/test_deploy_poll.sh` runs
 the script against a real git pair with pm2 and npm stubbed.
+
+"Deployed" means built and restarted. The commit the running app was built
+from is kept beside the log (`auto-deploy.sha`), and a tick compares origin
+with that, not with the checkout: after a failed install, build or restart
+the checkout is already ahead, and the next tick retries the deploy rather
+than reporting "up to date" while production runs the old build. A build
+that keeps failing is retried every tick, with the reason in the log each
+time; fix it, or stop the cron line.

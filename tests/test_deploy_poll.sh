@@ -66,6 +66,31 @@ echo 'local edit' > "$T/live/src.txt"
 ( cd "$T/work" && echo 'v5' > src.txt && git commit -qam five && git push -q origin main )
 out="$("$SCRIPT" 2>&1)"; rc=$?
 check "an operator's uncommitted edit on a file main changed is refused" '[[ $rc == 1 && "$out" == *"commit or discard"* ]]'
+( cd "$T/live" && git checkout -q -- src.txt )
+
+# A build that fails leaves the checkout ahead of the running app. The next
+# run must retry the deploy, not report "up to date" because HEAD == origin.
+( cd "$T/work" && echo 'v6' > src.txt && git commit -qam six && git push -q origin main )
+printf '#!/bin/sh\nif [ -e "%s/fail-once" ]; then rm "%s/fail-once"; echo "boom"; exit 1; fi\necho "build $*" >> "%s/calls"\n' "$T" "$T" "$T" > "$T/build.sh"
+chmod +x "$T/build.sh"
+touch "$T/fail-once"; : > "$T/calls"
+out="$(BUILD_CMD="$T/build.sh" "$SCRIPT" 2>&1)"; rc=$?
+check "a failing build stops the deploy and says it will be retried" '[[ $rc == 1 && "$out" == *"build failed"* && "$out" == *"retried"* ]]'
+check "nothing was restarted onto the failed build" '! grep -q "^pm2 restart" "$T/calls"'
+check "the pull itself happened" '[[ "$(cat "$T/live/src.txt")" == v6 ]]'
+out="$(BUILD_CMD="$T/build.sh" "$SCRIPT" 2>&1)"; rc=$?
+check "the next run retries the deploy instead of saying up to date" '[[ $rc == 0 && "$out" == *"retrying the deploy"* && "$out" != *"up to date"* ]]'
+check "the retried build ran and the apps were restarted" 'grep -q "^build" "$T/calls" && grep -q "^pm2 restart" "$T/calls"'
+out="$(BUILD_CMD="$T/build.sh" "$SCRIPT" 2>&1)"; rc=$?
+check "and after the retry succeeds it is up to date" '[[ $rc == 0 && "$out" == *"up to date"* ]]'
+
+# A tracked path with a space in it is one path, dirty or changed.
+( cd "$T/work" && mkdir -p docs && echo 'n1' > "docs/my notes.txt" && git add -A && git commit -qm seven && git push -q origin main )
+BUILD_CMD="$T/build.sh" "$SCRIPT" >/dev/null 2>&1
+echo 'local' > "$T/live/docs/my notes.txt"
+( cd "$T/work" && echo 'n2' > "docs/my notes.txt" && git commit -qam eight && git push -q origin main )
+out="$(BUILD_CMD="$T/build.sh" "$SCRIPT" 2>&1)"; rc=$?
+check "a dirty path with a space that main changed is refused by name" '[[ $rc == 1 && "$out" == *"docs/my notes.txt has local edits"* ]]'
 
 echo "$pass passed, $fail failed"
 [[ $fail == 0 ]]
