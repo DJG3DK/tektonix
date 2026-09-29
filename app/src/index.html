@@ -80,11 +80,12 @@
         </label>
         <label class="check">
           <input id="setup-auto-update" type="checkbox" checked />
-          <span>Update automatically: check on start and every six hours, and update when the agent is idle</span>
+          <span>Update this app automatically: check on start and every six hours, and update when nothing is running. The stack follows the app's release either way.</span>
         </label>
         <label class="check">
           <input id="setup-prereleases" type="checkbox" />
           <span>Include pre-releases (release candidates)</span>
+          <small id="setup-prereleases-note" class="muted"></small>
         </label>
         <div class="row">
           <button type="submit" class="btn primary" id="setup-save">Save and start</button>

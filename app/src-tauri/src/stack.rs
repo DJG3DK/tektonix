@@ -117,7 +117,32 @@ pub fn remember_page(app: &AppHandle, page: &str) {
 /// unticked, an rc app compared itself to the last stable release and said
 /// it was up to date, forever.
 pub fn wants_prereleases(app: &AppHandle) -> bool {
-    read_prefs(app).include_prereleases || release_tag(app).contains('-')
+    prefs_view(&read_prefs(app), &release_tag(app)).include_prereleases
+}
+
+/// The preferences as the panel shows them. A release-candidate app has
+/// pre-releases on whatever the box says, and the box now says so instead
+/// of showing unticked beside a candidate update.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct PrefsView {
+    pub auto_update: bool,
+    pub include_prereleases: bool,
+    pub prereleases_forced: bool,
+    pub last_page: String,
+}
+
+pub fn prefs_view(prefs: &Prefs, app_tag: &str) -> PrefsView {
+    let forced = app_tag.contains('-');
+    PrefsView {
+        auto_update: prefs.auto_update,
+        include_prereleases: prefs.include_prereleases || forced,
+        prereleases_forced: forced,
+        last_page: prefs.last_page.clone(),
+    }
+}
+
+pub fn read_prefs_view(app: &AppHandle) -> PrefsView {
+    prefs_view(&read_prefs(app), &release_tag(app))
 }
 
 /// Whether someone is using the window right now: it is shown and has the
@@ -1194,6 +1219,27 @@ mod tests {
         assert!(p.auto_update && !p.include_prereleases);
         let back: Prefs = serde_json::from_str(&serde_json::to_string(&p).unwrap()).unwrap();
         assert!(back.auto_update);
+    }
+
+    #[test]
+    fn a_candidate_app_shows_prereleases_as_on_and_forced() {
+        let p = Prefs::default();
+        let rc = prefs_view(&p, "v0.9.0-rc17");
+        assert!(
+            rc.include_prereleases && rc.prereleases_forced,
+            "the box was unticked next to an rc update"
+        );
+        let stable = prefs_view(&p, "v0.9.0");
+        assert!(!stable.include_prereleases && !stable.prereleases_forced);
+        let chosen = Prefs {
+            include_prereleases: true,
+            ..Prefs::default()
+        };
+        let v = prefs_view(&chosen, "v0.9.0");
+        assert!(
+            v.include_prereleases && !v.prereleases_forced,
+            "the operator's own choice is not forced"
+        );
     }
 
     #[test]

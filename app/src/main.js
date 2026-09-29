@@ -106,6 +106,8 @@ async function showSetup(cancellable) {
     const prefs = await invoke("prefs_get");
     $("setup-auto-update").checked = !!prefs.auto_update;
     $("setup-prereleases").checked = !!prefs.include_prereleases;
+    $("setup-prereleases").disabled = !!prefs.prereleases_forced;
+    $("setup-prereleases-note").textContent = prefs.prereleases_forced ? FORCED_NOTE : "";
   } catch (e) { /* defaults stay */ }
   $("setup-cancel").classList.toggle("hidden", !cancellable);
   $("setup-password-block").classList.toggle("hidden", cancellable);   // only the first setup sets it
@@ -132,10 +134,12 @@ $("setup-form").onsubmit = async (ev) => {
     });
     await invoke("prefs_set", { autoUpdate: $("setup-auto-update").checked, includePrereleases: $("setup-prereleases").checked });
     void showAutoStatus();
+    if (lastRunning) say("Saved. The stack is running on its old settings; they apply when it restarts (Stop, then Start).");
     await showStack();
     if (!(await invoke("installed_version"))) {
       const set = await runStack("stack_install", { password: pw || null });
       if (set) say("Password set. Open the console and sign in with it.");
+      else if (pw && set === false) say("The account already has a password (an earlier install's data is still here), so the one typed here was not used. Sign in with the earlier one, or Show first password if it was never shown.");
     }
     $("setup-password").value = ""; $("setup-password-2").value = "";
   } catch (e) {
@@ -148,6 +152,8 @@ $("setup-form").onsubmit = async (ev) => {
 
 // ── Stack ────────────────────────────────────────────────────────────────────
 let busy = false;
+let lastRunning = false;   // what the last status poll saw; Settings says so when a restart is needed
+const FORCED_NOTE = "This app is a release candidate, so pre-releases are always included.";
 async function showStack() {
   show("page-stack");
   await refreshStatus();
@@ -174,6 +180,7 @@ async function refreshStatus() {
   }
   const agent = rows.find((r) => r.service === "agent");
   const running = agent && agent.state === "running";
+  lastRunning = !!running;
   if (busy) return;
   if (running) setState("running", agent.health === "healthy" || !agent.health ? "good" : "warn", "Open console shows it in this window; the tray icon brings this panel back.");
   else if (rows.length) setState("stopped", "warn", "The stack is installed and stopped.");
@@ -223,9 +230,11 @@ async function showAutoStatus() {
   try {
     const prefs = await invoke("prefs_get");
     $("pre-inline").checked = !!prefs.include_prereleases;
+    $("pre-inline").disabled = !!prefs.prereleases_forced;
+    $("pre-inline").parentElement.title = prefs.prereleases_forced ? FORCED_NOTE : "";
     $("update-auto").textContent = prefs.auto_update
-      ? `Automatic: on start and every six hours, when the agent is idle${prefs.include_prereleases ? ", pre-releases included" : ""}.`
-      : "Automatic updates are off (Settings).";
+      ? `Automatic: on start and every six hours, when the agent is idle${prefs.include_prereleases ? ", pre-releases included" : ""}. The stack follows this app's release.`
+      : "Automatic updates are off (Settings). The stack still follows this app's release.";
   } catch (e) { /* fine */ }
 }
 async function showVersions(info) {

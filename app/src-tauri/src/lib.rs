@@ -126,20 +126,25 @@ async fn stack_update(
 }
 
 #[tauri::command]
-fn prefs_get(app: AppHandle) -> stack::Prefs {
-    stack::read_prefs(&app)
+fn prefs_get(app: AppHandle) -> stack::PrefsView {
+    stack::read_prefs_view(&app)
 }
 
+/// A candidate app keeps the operator's own pre-release choice untouched:
+/// the box is shown ticked and disabled, and that is not a choice.
 #[tauri::command]
 fn prefs_set(
     app: AppHandle,
     auto_update: bool,
     include_prereleases: bool,
-) -> Result<stack::Prefs, String> {
+) -> Result<stack::PrefsView, String> {
     let mut prefs = stack::read_prefs(&app);
     prefs.auto_update = auto_update;
-    prefs.include_prereleases = include_prereleases;
-    stack::write_prefs(&app, &prefs)
+    if !stack::read_prefs_view(&app).prereleases_forced {
+        prefs.include_prereleases = include_prereleases;
+    }
+    stack::write_prefs(&app, &prefs)?;
+    Ok(stack::read_prefs_view(&app))
 }
 
 #[tauri::command]
