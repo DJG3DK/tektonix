@@ -248,19 +248,22 @@ pub fn sandbox_cpus(cores: usize) -> usize {
 // ── .env ─────────────────────────────────────────────────────────────────────
 
 /// Replace `KEY=` in place, or append it. A commented-out line is left as
-/// documentation. Same rules as install.ps1's Set-EnvLine.
+/// documentation. Same rules as install.ps1's Set-EnvLine, which replaces
+/// every line of the key: compose takes the last one, so a duplicate left
+/// behind would shadow the value written.
 pub fn set_env_line(content: &str, key: &str, value: &str) -> String {
     let mut out = Vec::new();
     let mut done = false;
     for line in content.lines() {
         let trimmed = line.trim_start();
-        if !done
-            && trimmed.starts_with(key)
+        if trimmed.starts_with(key)
             && trimmed[key.len()..].trim_start().starts_with('=')
             && !trimmed.starts_with('#')
         {
-            out.push(format!("{key}={value}"));
-            done = true;
+            if !done {
+                out.push(format!("{key}={value}"));
+                done = true;
+            }
         } else {
             out.push(line.to_string());
         }
@@ -331,6 +334,20 @@ fn hint(secret: &str) -> String {
     format!("••••••••{tail}")
 }
 
+/// A path as typed for the projects folder: the quotes a person pastes
+/// along with it stripped, and the trailing separator trimmed, since
+/// compose joins onto the value. Not on a drive root: `D:\` minus its
+/// separator is `D:`, the current directory on that drive. install.ps1's
+/// Format-ProjectsDir keeps three characters or fewer as they are.
+pub fn normalize_projects_dir(raw: &str) -> String {
+    let v = raw.trim().trim_matches(['"', '\'']).trim();
+    if v.chars().count() > 3 {
+        v.trim_end_matches(['\\', '/']).to_string()
+    } else {
+        v.to_string()
+    }
+}
+
 pub fn save_settings(
     app: &AppHandle,
     key: Option<String>,
@@ -339,11 +356,7 @@ pub fn save_settings(
     git_name: String,
     git_email: String,
 ) -> Result<Settings, String> {
-    let projects_dir = projects_dir
-        .trim()
-        .trim_matches('"')
-        .trim_end_matches(['\\', '/'])
-        .to_string();
+    let projects_dir = normalize_projects_dir(&projects_dir);
     if projects_dir.is_empty() || !Path::new(&projects_dir).is_absolute() {
         return Err(
             "the projects folder must be a full path, for example C:\\Users\\you\\code".into(),
@@ -845,6 +858,31 @@ mod tests {
             out, "PROJECTS_DIR_OLD=1\nPROJECTS_DIR=x\n",
             "a different key that starts the same is left alone"
         );
+        let out = set_env_line("K=old\nA=1\nK=older\n", "K", "new");
+        assert_eq!(
+            out, "K=new\nA=1\n",
+            "every line of the key goes (install.ps1 does the same); compose would have taken the last"
+        );
+    }
+
+    #[test]
+    fn a_projects_dir_is_normalised_like_install_ps1_does_it() {
+        // install.ps1's Format-ProjectsDir cases, tests/test_install_ps1.ps1.
+        assert_eq!(
+            normalize_projects_dir("\"C:\\Users\\you\\code\""),
+            "C:\\Users\\you\\code"
+        );
+        assert_eq!(
+            normalize_projects_dir("C:\\Users\\you\\code\\"),
+            "C:\\Users\\you\\code"
+        );
+        assert_eq!(normalize_projects_dir("/home/you/code/"), "/home/you/code");
+        assert_eq!(
+            normalize_projects_dir("C:\\"),
+            "C:\\",
+            "a drive root keeps its separator; C: alone is that drive's current directory"
+        );
+        assert_eq!(normalize_projects_dir("  'D:\\' "), "D:\\");
     }
 
     #[test]
