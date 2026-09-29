@@ -119,6 +119,114 @@ def test_a_job_runs_one_at_a_time(data_dir, monkeypatch):
     assert rec["ok"] is True and jobs.status("consolidation")["running"] is False
 
 
+def _hold_lock(job):
+    """What a cron wrapper does: `flock -n` on data/<job>.lock for its run."""
+    import fcntl
+    fd = open(jobs.lock_path(job), "w")
+    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    return fd
+
+
+def test_a_job_held_by_another_process_is_skipped_with_the_reason(data_dir, monkeypatch):
+    """The cron wrapper stamps its marker only when it finishes, so while it
+    ran the agent saw the job as due and started a second run on the same
+    store (2026-09-29). Both now take one flock on data/<job>.lock."""
+    calls = _fake_jobs(monkeypatch, {})
+    held = _hold_lock(jobs.JOBS["consolidation"])
+    try:
+        assert asyncio.run(jobs.run_due(SimpleNamespace())) == ["cartography"]
+        assert calls == ["cartography"]
+        assert "another process" in jobs.status("consolidation")["waiting"]
+        assert "consolidation.lock" in jobs.status("consolidation")["waiting"]
+        with pytest.raises(jobs.JobBusy, match="another process"):
+            asyncio.run(jobs.run_job("consolidation", SimpleNamespace(), trigger="manual"))
+        with pytest.raises(jobs.JobBusy, match="another process"):
+            jobs.start_job("consolidation", SimpleNamespace(), trigger="manual")
+    finally:
+        held.close()
+    assert asyncio.run(jobs.run_due(SimpleNamespace())) == ["consolidation"], "released, it runs"
+
+
+def test_the_agents_own_run_holds_the_file_lock_for_its_length(data_dir, monkeypatch):
+    import fcntl
+    gate = asyncio.Event()
+    seen = {}
+
+    async def slow(state):
+        fd = open(jobs.lock_path(jobs.JOBS["consolidation"]), "w")
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            seen["cron_could_start"] = True
+        except OSError:
+            seen["cron_could_start"] = False
+        fd.close()
+        await gate.wait()
+        return {"shop": {}}
+
+    monkeypatch.setattr(jobs, "JOBS", {"consolidation": jobs.Job("consolidation", "Memory consolidation",
+                                                                  "last_consolidation.json", "consolidation.log", slow)})
+
+    async def go():
+        t = asyncio.create_task(jobs.run_job("consolidation", SimpleNamespace(), trigger="manual"))
+        await asyncio.sleep(0.02)
+        gate.set()
+        return await t
+
+    asyncio.run(go())
+    assert seen["cron_could_start"] is False, "a cron wrapper could have started during the agent's run"
+
+
+def test_a_failed_run_keeps_the_last_good_stamp_and_is_retried_within_the_hour(data_dir, monkeypatch):
+    """A failed run stamped ran_at, so a transient failure waited a full day."""
+    good = datetime.now(UTC) - timedelta(hours=20)
+    (data_dir / "last_consolidation.json").write_text(json.dumps({"ran_at": _stamp(good), "ok": True}))
+    _fake_jobs(monkeypatch, {"consolidation": RuntimeError("router down")})
+    # Make it due now: the good run was 20h ago, so pretend 25h.
+    monkeypatch.setattr(jobs, "INTERVAL", timedelta(hours=19))
+    assert asyncio.run(jobs.run_due(SimpleNamespace())) == ["consolidation", "cartography"]
+    rec = json.loads((data_dir / "last_consolidation.json").read_text())
+    assert rec["ok"] is False and rec["ran_at"] == _stamp(good), "the failure advanced ran_at"
+    assert rec["failed_at"]
+    st = jobs.status("consolidation")
+    assert st["failed_at"] == rec["failed_at"] and st["due"] is False
+    due = datetime.fromisoformat(st["due_at"].replace("Z", "+00:00"))
+    assert timedelta(minutes=55) < due - datetime.now(UTC) <= jobs.FAILURE_RETRY, "retry is an hour away, not a day"
+
+
+def test_the_marker_is_written_atomically(data_dir, monkeypatch):
+    calls = _fake_jobs(monkeypatch, {})
+    asyncio.run(jobs.run_job("cartography", SimpleNamespace(), trigger="manual"))
+    assert calls == ["cartography"]
+    assert [p.name for p in data_dir.iterdir() if p.name.endswith(".tmp")] == [], "a temp file was left behind"
+    assert json.loads((data_dir / "last_cartography.json").read_text())["ok"] is True
+
+
+def test_two_starts_in_one_loop_turn_are_one_run(data_dir, monkeypatch):
+    """The route checked .locked() and then spawned; a double click got two
+    202s and the second run raised JobBusy in the background."""
+    calls = _fake_jobs(monkeypatch, {})
+
+    async def go():
+        jobs.start_job("consolidation", SimpleNamespace(), trigger="click 1")
+        with pytest.raises(jobs.JobBusy):
+            jobs.start_job("consolidation", SimpleNamespace(), trigger="click 2")
+        for _ in range(50):
+            await asyncio.sleep(0.01)
+            if (data_dir / "last_consolidation.json").exists():
+                break
+
+    asyncio.run(go())
+    assert calls == ["consolidation"]
+    assert json.loads((data_dir / "last_consolidation.json").read_text())["trigger"] == "click 1"
+
+
+def test_the_cron_wrappers_take_the_same_lock():
+    for script, job in (("consolidation-cron.sh", "consolidation"), ("cartographer-cron.sh", "cartography")):
+        text = (paths.REPO_ROOT / "scripts" / script).read_text()
+        assert f'data/{job}.lock' in text and "flock -n" in text, f"{script} does not take data/{job}.lock"
+        assert text.index("flock -n") < text.index("run_"), f"{script} takes the lock after starting the run"
+
+
 def test_the_dashboard_can_read_and_run_a_job(data_dir, monkeypatch):
     import agent.server as srv
     from agent.auth import User

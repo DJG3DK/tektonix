@@ -13,6 +13,17 @@ LOG="${AGENT_LOG_DIR:-$AGENT_HOME/data}/consolidation.log"
 MARK="$AGENT_HOME/data/last_consolidation.json"
 
 cd "$AGENT_HOME" || exit 1
+
+# One run at a time, across this wrapper AND the agent's in-process schedule
+# (agent/jobs.py takes the same flock): the marker below is stamped only when
+# a run finishes, so while one ran the agent saw the job as still due and
+# started a second on the same store (2026-09-29).
+mkdir -p "$AGENT_HOME/data"
+exec 9>"$AGENT_HOME/data/consolidation.lock"
+if ! flock -n 9; then
+    echo "[consolidation] already running (data/consolidation.lock is held); skipping" >&2
+    exit 0
+fi
 START=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 { echo "=== $START ==="; .venv/bin/python scripts/run_consolidation.py; } >> "$LOG" 2>&1
 RC=$?

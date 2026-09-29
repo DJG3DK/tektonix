@@ -9,6 +9,15 @@ LOG="${AGENT_LOG_DIR:-$AGENT_HOME/data}/cartographer.log"
 MARK="$AGENT_HOME/data/last_cartography.json"
 
 cd "$AGENT_HOME" || exit 1
+
+# One run at a time, across this wrapper AND the agent's in-process schedule
+# (agent/jobs.py takes the same flock; see consolidation-cron.sh).
+mkdir -p "$AGENT_HOME/data"
+exec 9>"$AGENT_HOME/data/cartography.lock"
+if ! flock -n 9; then
+    echo "[cartographer] already running (data/cartography.lock is held); skipping" >&2
+    exit 0
+fi
 START=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 { echo "=== $START ==="; .venv/bin/python scripts/run_cartographer.py; } >> "$LOG" 2>&1
 RC=$?

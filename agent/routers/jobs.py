@@ -24,10 +24,11 @@ async def run_job_now(name: str, request: Request, user: User = Depends(require_
     auth.require_admin(user)
     if name not in jobs.JOBS:
         raise HTTPException(404, "no such job")
-    if jobs._lock(name).locked():
-        raise HTTPException(409, f"{jobs.JOBS[name].title} is already running")
+    # start_job claims the slot before returning, so a second click in the
+    # same loop turn is a 409 here rather than a JobBusy in the background.
+    try:
+        jobs.start_job(name, request.app.state, trigger=f"manual by {user.email}")
+    except jobs.JobBusy as e:
+        raise HTTPException(409, str(e))
     await audit.record(audit_store(request), actor=user.email, action="jobs.run", target=name)
-    from agent import live_state
-
-    live_state.spawn_background(jobs.run_job(name, request.app.state, trigger=f"manual by {user.email}"), f"job:{name}")
     return {"ok": True, "started": name}

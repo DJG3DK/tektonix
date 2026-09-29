@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import logging
 import time
 from dataclasses import dataclass
@@ -32,6 +33,10 @@ from agent import live_state, paths
 logger = logging.getLogger("tektonix.jobs")
 
 INTERVAL = timedelta(hours=24)
+# A failed run does not advance ran_at (a transient failure waited the full
+# day); it is retried after this instead of on the next tick, so a job that
+# is broken for good does not spend on a model every ten minutes.
+FAILURE_RETRY = timedelta(hours=1)
 SETTLE_S = 120          # after startup, before the first check
 CHECK_EVERY_S = 600     # between checks
 BUSY_RETRY_S = 600      # a due job waits this long when a task is in flight
@@ -96,7 +101,15 @@ JOBS: dict[str, Job] = {
                        "cartographer.log", _cartograph),
 }
 
+# The in-process lock keeps one run per job inside this process; the file
+# lock beside it (lock_path) is what the host cron wrappers take too
+# (scripts/consolidation-cron.sh, cartographer-cron.sh), so the schedule
+# here and a cron still installed from before the jobs moved in-process
+# cannot run the same job on the same store at once. The cron stamps its
+# marker only when it finishes, so while it ran the job looked due here
+# and a second run started (2026-09-29).
 _locks: dict[str, asyncio.Lock] = {}
+_claimed: set[str] = set()               # start_job took the slot; run_job has not reached the lock yet
 _running: dict[str, float] = {}          # name -> started (monotonic)
 _waiting: dict[str, str] = {}            # name -> why the last due check did not run it
 
@@ -106,6 +119,34 @@ def _lock(name: str) -> asyncio.Lock:
     if lock is None:
         lock = _locks[name] = asyncio.Lock()
     return lock
+
+
+def lock_path(job: Job) -> Path:
+    return paths.DATA_DIR / f"{job.name}.lock"
+
+
+def _try_flock(job: Job) -> int | None:
+    """The cross-process claim: an fd holding the file lock, or None when
+    another process (a cron wrapper, another agent) holds it. flock, so a
+    dead holder releases it (see agent/file_lock.py on why not a pid file)."""
+    import fcntl  # noqa: PLC0415 -- posix only
+    path = lock_path(job)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o644)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        os.close(fd)
+        return None
+    return fd
+
+
+def held_elsewhere(job: Job) -> bool:
+    fd = _try_flock(job)
+    if fd is None:
+        return True
+    os.close(fd)        # closing releases the flock
+    return False
 
 
 def marker_path(job: Job) -> Path:
@@ -129,10 +170,14 @@ def _parse(ts: str | None) -> datetime | None:
 
 
 def due_at(job: Job) -> datetime | None:
-    """When the job is next due: a day after its last run, or None for
-    "now" when it has never run."""
-    ran = _parse(read_marker(job).get("ran_at"))
-    return ran + INTERVAL if ran else None
+    """When the job is next due: a day after its last successful run, an
+    hour after its last failure, whichever is later; None for "now" when
+    it has never run."""
+    rec = read_marker(job)
+    ran = _parse(rec.get("ran_at"))
+    failed = _parse(rec.get("failed_at"))
+    candidates = [t for t in (ran + INTERVAL if ran else None, failed + FAILURE_RETRY if failed else None) if t]
+    return max(candidates) if candidates else None
 
 
 def is_due(job: Job, now: datetime | None = None) -> bool:
@@ -146,9 +191,13 @@ def quiet() -> bool:
 
 
 def _write_marker(job: Job, record: dict) -> None:
+    """Temp file and rename: the dashboard and the cron wrappers read this
+    file, and a crash mid-write left a half-written one (2026-09-29)."""
     path = marker_path(job)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(record) + "\n")
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    tmp.write_text(json.dumps(record) + "\n")
+    os.replace(tmp, path)
 
 
 def _append_log(job: Job, started: str, lines: list[str]) -> None:
@@ -161,36 +210,60 @@ def _append_log(job: Job, started: str, lines: list[str]) -> None:
         logger.warning("jobs: could not append to %s: %s", job.log, e)
 
 
-async def run_job(name: str, state, *, trigger: str) -> dict:
+async def run_job(name: str, state, *, trigger: str, claimed: bool = False) -> dict:
     """Run one job now, under its lock, and write its marker. Returns the
-    marker record. Raises JobBusy when it is already running."""
+    marker record. Raises JobBusy when it is already running here or in
+    another process. `claimed` is start_job's: the slot was taken before
+    this coroutine was scheduled."""
     job = JOBS[name]
     lock = _lock(name)
-    if lock.locked():
+    if lock.locked() or (name in _claimed and not claimed):
         raise JobBusy(f"{job.title} is already running")
     async with lock:
+        _claimed.discard(name)
+        fd = _try_flock(job)      # LOCK_NB: an instant syscall, no thread hop
+        if fd is None:
+            _waiting[name] = f"running in another process (data/{lock_path(job).name} is held)"
+            raise JobBusy(f"{job.title} is already running in another process")
         started = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
         _running[name] = time.monotonic()
         _waiting.pop(name, None)
-        record: dict = {"ran_at": started, "trigger": trigger}
+        # A failure keeps the last good ran_at, so the retry is FAILURE_RETRY
+        # away rather than a day (2026-09-29).
+        record: dict = {"ran_at": read_marker(job).get("ran_at"), "trigger": trigger}
         lines: list[str] = []
         try:
             summary = await job.run(state)
-            record.update(ok=True, exit_code=0, summary=summary)
+            record.update(ran_at=started, ok=True, exit_code=0, summary=summary)
             lines += [f"{repo}: {s}" for repo, s in summary.items()]
         except JobFailed as e:
-            record.update(ok=False, exit_code=1, summary=e.summary, error=str(e)[:600])
+            record.update(failed_at=started, ok=False, exit_code=1, summary=e.summary, error=str(e)[:600])
             lines += [f"{repo}: {s}" for repo, s in e.summary.items()] + [f"FAILED: {e}"]
             logger.error("jobs: %s failed: %s", name, e)
         except Exception as e:  # noqa: BLE001 -- the marker must say it failed, whatever it was
-            record.update(ok=False, exit_code=1, error=f"{type(e).__name__}: {str(e)[:500]}")
+            record.update(failed_at=started, ok=False, exit_code=1, error=f"{type(e).__name__}: {str(e)[:500]}")
             lines.append(f"FAILED: {type(e).__name__}: {e}")
             logger.exception("jobs: %s crashed", name)
         finally:
             record["duration_s"] = round(time.monotonic() - _running.pop(name), 1)
+            os.close(fd)        # releases the flock
         _write_marker(job, record)
         _append_log(job, started, lines)
         return record
+
+
+def start_job(name: str, state, *, trigger: str) -> None:
+    """Claim the job's slot NOW and run it in the background. The dashboard
+    route checked `.locked()` and then spawned, so two clicks in one loop
+    turn both got 202 and the second run raised JobBusy where nobody saw
+    it (2026-09-29). Raises JobBusy synchronously instead."""
+    job = JOBS[name]
+    if _lock(name).locked() or name in _claimed:
+        raise JobBusy(f"{job.title} is already running")
+    if held_elsewhere(job):
+        raise JobBusy(f"{job.title} is already running in another process")
+    _claimed.add(name)
+    live_state.spawn_background(run_job(name, state, trigger=trigger, claimed=True), f"job:{name}")
 
 
 class JobBusy(Exception):
@@ -203,7 +276,8 @@ def status(name: str) -> dict:
     when = due_at(job)
     return {
         "name": name, "title": job.title,
-        "ran_at": rec.get("ran_at"), "ok": rec.get("ok"), "exit_code": rec.get("exit_code"),
+        "ran_at": rec.get("ran_at"), "failed_at": rec.get("failed_at"),
+        "ok": rec.get("ok"), "exit_code": rec.get("exit_code"),
         "trigger": rec.get("trigger"), "error": rec.get("error"), "duration_s": rec.get("duration_s"),
         "due_at": when.strftime("%Y-%m-%dT%H:%M:%SZ") if when else None,
         "due": is_due(job),
@@ -217,12 +291,18 @@ async def run_due(state) -> list[str]:
     names run."""
     ran = []
     for name, job in JOBS.items():
-        if not is_due(job) or _lock(name).locked():
+        if not is_due(job) or _lock(name).locked() or name in _claimed:
             continue
         if not quiet():
             _waiting[name] = "due, waiting for the agent to be idle"
             continue
-        await run_job(name, state, trigger="scheduled")
+        if held_elsewhere(job):
+            _waiting[name] = f"due, running in another process (data/{lock_path(job).name} is held)"
+            continue
+        try:
+            await run_job(name, state, trigger="scheduled")
+        except JobBusy:
+            continue        # taken between the check and the lock; the reason is in _waiting
         ran.append(name)
     return ran
 
