@@ -126,7 +126,7 @@ jobs:
       # the GitHub release for this tag (creating the release if the tag has
       # none yet). The app's own updater reads latest.json from
       # releases/latest/download.
-      - uses: tauri-apps/tauri-action@v0
+      - uses: tauri-apps/tauri-action@v1
         if: steps.existing.outputs.published != 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
