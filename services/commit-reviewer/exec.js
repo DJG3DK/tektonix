@@ -76,12 +76,10 @@ function runSealed(cmd, args, cwd, timeoutMs = 300_000, extraEnv) {
     });
   });
 }
-// On every git call, as in agent/tools/git.py: the tree git runs in is
-// agent-authored. A project using husky has core.hooksPath=.husky in its
-// config, and .husky/* is tracked content an agent commit changes -- so a
-// hook would run agent code as this service. fsmonitor is the same shape:
-// config that names a program git runs on status/diff.
-const GIT_SAFE = ['-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false'];
+// On every git call, with hooks and fsmonitor off: the tree git runs in is
+// agent-authored. The flags are GIT_SAFE in services/shared/review-records.js,
+// the one copy agent-review's git runs with too.
+const { GIT_SAFE } = require('../shared/review-records');
 const git = (cwd, args) => run('git', [...GIT_SAFE, ...args], cwd);
 
 // Where agent-authored code runs. Everything below that executes something
@@ -107,15 +105,12 @@ async function runAgentCode(cfg, worktreePath, relDir, cmd, args, timeoutMs, ext
     return sandbox.runDelegated(cfg, worktreePath, relDir, cmd, args, timeoutMs,
                                 extraEnv, network, stack, { secret: REVIEW_CONTROL_SECRET });
   }
-  if (mode.mode === 'unavailable') {
-    // Flagged as infrastructure at the source. Everything downstream that
-    // decides whose problem a failure is reads `.infrastructure`; deriving
-    // it by matching the message text again would be a second place for the
-    // two to disagree, and the disagreement costs an agent several rounds
-    // debugging an environment it cannot see.
-    const r = await unavailable(mode);
-    return { ...r, infrastructure: true };
-  }
+  // `unavailable`, and any answer this function does not know, refuse the
+  // same way. Flagged as infrastructure at the source: everything downstream
+  // that decides whose problem a failure is reads `.infrastructure`, and
+  // deriving it by matching the message text again would be a second place
+  // for the two to disagree, which costs an agent several rounds debugging
+  // an environment it cannot see.
   return { ...(await unavailable(mode)), infrastructure: true };
 }
 

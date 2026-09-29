@@ -69,6 +69,7 @@ from agent import check_timing, commit_subject
 from agent import runtime_settings as _rs
 from agent.tools.review_gate import (
     current_verdict,
+    harness_failed as _harness_failed,
     merge_and_deploy,
     ship_as_pull_request,
     trigger_check,
@@ -312,13 +313,6 @@ def _merged_summary(deployed: dict) -> str:
     restart = deployed.get("restart") or {}
     deployed_something = restart.get("built") or restart.get("restarted")
     return "merged, deployed and pushed to GitHub" if deployed_something else "merged and pushed to GitHub"
-
-
-def _harness_failed(review: dict) -> bool:
-    """True when the verdict blocked only because a check could not run:
-    the reviewer marks such a check `infrastructure` (reviewer.js)."""
-    checks = review.get("checkResults") or []
-    return any(isinstance(c, dict) and c.get("infrastructure") and not c.get("ok") for c in checks)
 
 
 def _done_no_changes(state: AgentState, evidence: str = "") -> dict:

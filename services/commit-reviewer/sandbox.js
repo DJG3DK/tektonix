@@ -42,6 +42,7 @@ const { execFile } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const { nodeModulesSource } = require('./node-modules-source');
+const { projectOfWorktree } = require('../shared/review-records');
 
 // Mirrors agent/tools/sandbox.py. Kept as literals with the source named
 // rather than read from Python, because a reviewer that cannot parse the
@@ -499,10 +500,8 @@ function delegatedRequest(cfg, worktreePath, relDir, cmd, args, timeoutMs, extra
     const env = { LANG: 'C.UTF-8', CI: 'true', DEBIAN_FRONTEND: 'noninteractive', ...(extraEnv || {}) };
     delete env.PATH;
     delete env.HOME;
-    const base = path.basename(worktreePath);
-    const m = /^(.+)-[0-9a-f]{7,40}$/.exec(base);
     return {
-        project: cfg.name || (m ? m[1] : base),
+        project: cfg.name || projectOfWorktree(path.basename(worktreePath)),
         worktree: worktreePath,
         relDir: relDir || '.',
         cmd,
@@ -580,10 +579,8 @@ async function runDelegatedDatabaseCheck(cfg, worktreePath, stack, { secret, fet
               + 'They were not run, and nothing about the code under review is known either way.',
     }];
     if (!secret) return setup('REVIEW_CONTROL_SECRET is not configured, so the agent would refuse the request');
-    const base = path.basename(worktreePath);
-    const m = /^(.+)-[0-9a-f]{7,40}$/.exec(base);
     const body = {
-        project: cfg.name || (m ? m[1] : base),
+        project: cfg.name || projectOfWorktree(path.basename(worktreePath)),
         worktree: worktreePath,
         stack: stack || null,
         mounts: mountSpecs(cfg, worktreePath),

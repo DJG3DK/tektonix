@@ -189,32 +189,11 @@ function updateState(mutate) {
 // overwrote the first's and the first lost its round history and its READY.
 const MAX_BRANCH_RECORDS = 40;
 
-/**
- * A verdict that blocked only because a check could not RUN (a fault in the
- * harness: sandbox unreachable, image missing) says nothing about the
- * commit. Such a record does not make the commit "already reviewed": the
- * next request reviews it again, which is the only way a fixed harness ever
- * gets to judge it. 2026-09-29: a reviewer whose sandbox call timed out
- * left a record the gate then refused to re-ask about, forever.
- */
-function harnessFailed(record) {
-  const checks = (record && Array.isArray(record.checkResults)) ? record.checkResults : [];
-  return record && record.verdict !== 'READY' && checks.some((c) => c && c.infrastructure && !c.ok);
-}
-
-function branchRecord(projectState, branch) {
-  if (!projectState || !branch) return null;
-  const rec = projectState.branches && Object.hasOwn(projectState.branches, branch)
-    ? projectState.branches[branch] : null;
-  if (rec) return rec;
-  // Written before per-branch records existed: the top-level record is this
-  // branch's only when it names it.
-  if (projectState.branch === branch && projectState.lastReviewedSha) {
-    const { branches, inProgress, ...legacy } = projectState;
-    return legacy;
-  }
-  return null;
-}
+// What a record means -- harnessFailed (a verdict that blocked only because
+// a check could not run) and branchRecord (one branch's record, per branch
+// since 2026-09-23) -- is defined once, in services/shared/review-records.js,
+// with the agent's Python gate as its mirror. Both stay exported from here.
+const { harnessFailed, branchRecord, TASK_BRANCH_RE } = require('../shared/review-records');
 
 function withBranchRecord(projectState, branch, record) {
   const branches = { ...((projectState && projectState.branches) || {}), [branch]: record };
@@ -320,8 +299,8 @@ function getOpenRouterKey() {
 // previous round had not reviewed. Forty reviews of webapp in a day, each
 // one overwriting the project's single review record, and the merge gate
 // refused the real task's READY as "stale" because `branch` had just been
-// clobbered by the backup branch's in-progress review.
-const TASK_BRANCH_RE = /^agent\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+// clobbered by the backup branch's in-progress review. The regex is
+// TASK_BRANCH_RE, shared with agent-review (services/shared/review-records.js).
 const ignoredRefs = new Set();
 
 // The worktree that has `branch` checked out, from live's own worktree list.
