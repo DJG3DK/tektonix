@@ -2,6 +2,58 @@
 
 ## Unreleased
 
+## v0.9.0 — a Windows app that updates itself, a review gate you can trust, and a release you approve
+
+The first full release since v0.8.0. Three things changed shape.
+
+**The desktop app.** Tektonix installs on Windows as one app with its own
+window and a desktop sign-in. It runs the release it came from, proven by
+image id; it updates itself and the stack when the agent is idle, never
+while a task runs and never by taking the window from you; and it pulls
+each image by a digest the release signed. rc1 to rc12 testers reinstall
+once by hand, because those builds ordered release candidates as text.
+
+**The review and merge path.** The gate merges the exact commit that was
+reviewed; a review that checked nothing, or whose only check was already
+red on main, is escalated instead of passed; a harness failure is asked
+again instead of handed to the coder; a long suite keeps the connection
+alive; a task queued behind other reviews keeps waiting; an approval
+carries over a rebase that changed nothing but the parent; and main moves
+only on a green GitHub Actions run. Tasks that need you sit in their own
+sidebar group until they are done.
+
+**Releases and the box.** A release builds only from a version tag on main
+with green CI, pushes its images once by digest, and waits at the
+installer for your approval on the `release` environment. The 2026-09-29
+audit's 124 findings are resolved on main (docs/review-2026-09-29.md), the
+code scanning backlog is at zero, and the LangChain family is current.
+
+### Upgrading from v0.8.0
+
+- **Host installs:** pull, then `pip install -r requirements.txt` and
+  `.venv/bin/playwright install chromium` (the Playwright upgrade wants a
+  newer browser; web search in planning fails with "Executable doesn't
+  exist" until it is installed), rebuild the dashboard, and restart the
+  agent, both review services and the router.
+- **If your nginx vhost has a `location /_review/` block,** delete it,
+  reload nginx and rotate `REVIEW_CONTROL_SECRET` in both `.env` and
+  `services/shared/.env`. Restart with the new value exported
+  (`set -a; . ./.env; set +a; pm2 restart … --update-env`): pm2 keeps a
+  process's old environment otherwise. `scripts/doctor.py` checks both.
+- **Bundle:** `docker compose pull && docker compose up -d`. Secrets move to
+  one volume each on first start and are carried over from the old shared
+  volume; `init-secrets.sh --rotate` rotates the database password.
+- **Forks that publish releases:** protect a `release` environment with a
+  required reviewer and a `v*` tag policy, and add the updater signing key
+  as `TAURI_SIGNING_PRIVATE_KEY`.
+
+### A failed chain tells the caller the status, not the exception text
+
+When every deployment in a chain failed, the router's 502 carried the last
+exception's text to the caller. It names the upstream status and points at
+the router ledger now; the full error stays there under the call id. This
+closed the last open code scanning alert.
+
 ### One task per package, and an approval that survives a rebase
 
 The GitHub inbox made one task per Dependabot alert, so eleven undici
