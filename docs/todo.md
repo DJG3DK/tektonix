@@ -607,3 +607,5 @@ are fixed. These did not, and are cheap to lose track of.
 - B20: `review_gate.py` still interpolates `base` raw in two shell strings (the loader now refuses a non-branch value); quote them with `shlex.quote` like `tools/git.py`.
 - In the bundle `/app/keys` (deploy keys, keys/vapid.json) is not a volume and is lost when the container is recreated.
 - Cargo.toml `rust-version` is 1.80 while the code is written for newer clippy; bump when the toolchain is settled.
+- The GitHub inbox makes one task per Dependabot alert: eleven undici advisories became eleven tasks on 2026-09-29, one merge closed all eleven, and the other ten rebased and re-reviewed for nothing. Group alerts by package and manifest into one task ("bump X to at least V, closes #a-#z"), and have a task re-check its alert before shipping and stop with "already fixed on main" when another merge closed it.
+- An approval is tied to the commit the operator saw, so a rebase onto a moved base asks for a second look even when the patch is unchanged. Carry the approval across a rebase whose `git patch-id` matches the approved commit's.
