@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### One task per package, and an approval that survives a rebase
+
+The GitHub inbox made one task per Dependabot alert, so eleven undici
+advisories on one lockfile became eleven tasks; one merge closed all
+eleven and the other ten rebased, re-reviewed and merged a change that
+fixed nothing. The inbox now makes one task per package and manifest,
+naming every alert and the version that clears them all, and a task whose
+alerts another change has closed concludes with "already fixed on main"
+instead of taking the merge slot.
+
+An approval used to be asked again after every merge that landed ahead
+of a task, because a rebase makes a new commit. When the rebase changed
+nothing but the parent, the approval now carries over; the reviewer still
+judges the new commit.
+
 ### A task queued at the reviewer keeps waiting
 
 Approving several diffs of one project in a row put every task but the

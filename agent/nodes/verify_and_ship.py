@@ -440,6 +440,13 @@ async def _verify_and_ship(state: AgentState, config: Config, store: BaseStore |
         return _escalate(f"hit max_iterations ({state['max_iterations']}) without completing")
 
     repo = state["repo"]
+    # A task made for Dependabot alerts that another change has closed since
+    # has nothing to ship: it concludes here rather than taking the merge
+    # slot, and again once it holds the slot, because the merges ahead of it
+    # in that queue are exactly what closes them (2026-09-29, ten of eleven).
+    done = await _already_fixed(state, config)
+    if done:
+        return done
     # One task at a time per project from here to the end of the node: the
     # checks, the commit, the review and the merge. Tasks code in parallel
     # (parallel_tasks_per_project), but the reviewer reviews one branch of a
@@ -447,7 +454,28 @@ async def _verify_and_ship(state: AgentState, config: Config, store: BaseStore |
     # onto, so this is where they take turns. Uncontended -- a no-op -- with
     # the default of one task per project.
     async with _ship_gate(repo, config):
+        done = await _already_fixed(state, config)
+        if done:
+            return done
         return await _verify_and_ship_gated(state, config, store, repo)
+
+
+async def _already_fixed(state: AgentState, config: Config | None) -> dict | None:
+    from agent import inbox_alerts
+    note = await inbox_alerts.already_fixed(state["repo"], state.get("goal") or "", config)
+    if not note:
+        return None
+    return {
+        "committed_sha": None, "pending_merge_approval": None, "merge_approved_sha": None,
+        "review_gate_result": state.get("review_gate_result") or {},
+        "stale_pending_review_streak": 0,
+        "execution_log": [{
+            "node": "verify_and_ship", "step_id": None,
+            "summary": "already fixed on main -- concluding without a merge",
+            "detail": note, "cost_usd": 0.0,
+            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        }],
+    }
 
 
 @asynccontextmanager
@@ -1262,9 +1290,22 @@ async def _review_and_deploy(state: AgentState, repo: str, sha: str) -> dict:
         same = " The patch is unchanged; this is the same work on a newer base." \
             if rb.get("patch_identical") else ""
         print(f"[verify] {repo}: live moved, rebased {sha[:12]} -> {new_sha[:12]}.{same}")
+        carried = []
+        if rb.get("patch_identical") and state.get("merge_approved_sha") == sha:
+            # The operator approved this exact patch; a rebase that changed
+            # nothing but the parent is the same work, and asking again for
+            # every merge that lands ahead of it made ten approvals into
+            # twenty (2026-09-29). The reviewer still judges the new commit.
+            state = {**state, "merge_approved_sha": new_sha}
+            carried = [{
+                "node": "verify_and_ship", "step_id": None,
+                "summary": f"your approval of {sha[:12]} carries over to {new_sha[:12]}: the patch is unchanged",
+                "detail": "", "cost_usd": 0.0, "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            }]
+        inner = await _review_and_deploy(state, repo, new_sha)
         return {
-            **await _review_and_deploy(state, repo, new_sha),
-            "execution_log": [*logged, deploy_entry],
+            **inner,
+            "execution_log": [*logged, deploy_entry, *carried, *inner.get("execution_log", [])],
         }
 
     if not deployed["ok"]:

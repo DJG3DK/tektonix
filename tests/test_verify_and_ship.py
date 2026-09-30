@@ -1205,3 +1205,106 @@ async def test_a_verdict_that_differs_from_the_task_s_copy_is_taken_from_the_rev
     result = await vs._verify_and_ship(state, config=None)
 
     assert asked == ["abc123"] and "pending_feedback" not in result
+
+
+# ---------------------------------------------------------------------------
+# 2026-09-29: ten approvals in a row on one project
+# ---------------------------------------------------------------------------
+
+
+def _moved_base(monkeypatch, patch_identical):
+    """The first ship finds live moved; the rebase is clean; the second
+    round ships as a pull request. Returns the list of ship calls."""
+    ships = []
+
+    async def ship(repo, branch, sha, title):
+        ships.append(sha)
+        if len(ships) == 1:
+            return {"ok": False, "reason": "diverged"}
+        return {"ok": True, "shipped": "pull_request", "pull_request": "https://gh/pr/1"}
+
+    async def trigger(repo, branch=None):
+        return {}
+
+    async def verdict(repo, sha, timeout=0, poll_interval=0, branch=None, after=None):
+        return {"verdict": "READY", "lastReviewedSha": sha, "summary": "fine"}
+
+    async def rebase(repo_root, base_ref="main"):
+        return {"rebased": True, "patch_identical": patch_identical}
+
+    async def head(repo_root):
+        return "newsha000000000000000000000000000000000000"
+
+    async def no_checks(repo):
+        return None
+
+    import agent.workspaces as ws
+    monkeypatch.setattr(ws, "workspace_for", lambda repo, task_id: "/nowhere")
+    monkeypatch.setattr(vs, "ship_as_pull_request", ship)
+    monkeypatch.setattr(vs, "trigger_check", trigger)
+    monkeypatch.setattr(vs, "wait_for_review", verdict)
+    monkeypatch.setattr(vs, "rebase_onto_base", rebase)
+    monkeypatch.setattr(vs, "current_sha", head)
+    monkeypatch.setattr(vs, "autodetect_checks_if_none", no_checks)
+    monkeypatch.setitem(vs.PROJECTS, "test-repo", {"ship": "pr", "live": "/nowhere"})
+    return ships
+
+
+OLD = "oldsha00000000000000000000000000000000000000"
+
+
+async def test_an_approval_carries_over_an_identical_rebase(monkeypatch):
+    """The operator approved this exact patch; a rebase that changed only
+    the parent is the same work, so the second round does not park again."""
+    ships = _moved_base(monkeypatch, patch_identical=True)
+    state = _state(require_merge_review=True, committed_sha=OLD, merge_approved_sha=OLD)
+    result = await vs._review_and_deploy(state, "test-repo", OLD)
+    assert ships == [OLD, "newsha000000000000000000000000000000000000"], "shipped on the second round"
+    assert result.get("pending_merge_approval") is None and result["committed_sha"] is None
+    summaries = [e["summary"] for e in result["execution_log"]]
+    assert any("carries over to newsha000000" in s for s in summaries)
+    assert summaries.count("review service verdict: READY") == 2, "the inner round's log is kept (audit B15)"
+
+
+async def test_a_rebase_that_changed_the_patch_asks_the_operator_again(monkeypatch):
+    ships = _moved_base(monkeypatch, patch_identical=False)
+    state = _state(require_merge_review=True, committed_sha=OLD, merge_approved_sha=OLD)
+    result = await vs._review_and_deploy(state, "test-repo", OLD)
+    assert ships == [OLD]
+    assert result["pending_merge_approval"]["sha"] == "newsha000000000000000000000000000000000000"
+    assert not any("carries over" in e["summary"] for e in result["execution_log"])
+
+
+async def test_a_task_whose_alerts_are_already_closed_concludes_without_the_merge_slot(monkeypatch):
+    """One merge closed eleven undici alerts; the other ten tasks rebased,
+    re-reviewed and merged nothing. Now they conclude before the slot."""
+    from agent import inbox_alerts
+
+    async def closed(repo, goal, config):
+        return "Dependabot alerts #6, #9 on o/proj are no longer open: nothing left to ship."
+
+    async def never(*a, **k):
+        raise AssertionError("the ship gate must not be entered")
+
+    monkeypatch.setattr(inbox_alerts, "already_fixed", closed)
+    monkeypatch.setattr(vs, "_verify_and_ship_gated", never)
+    state = _state(goal="Fix Dependabot security alerts #6 and #9: [HIGH] undici: 2 open alerts")
+    result = await vs._verify_and_ship(state, config=None)
+    assert result["committed_sha"] is None and result["merge_approved_sha"] is None
+    assert result["execution_log"][0]["summary"] == "already fixed on main -- concluding without a merge"
+    assert "#6, #9" in result["execution_log"][0]["detail"]
+    assert not result.get("escalated") and not result.get("pending_merge_approval")
+
+
+async def test_a_task_whose_alerts_are_open_goes_on_to_the_slot(monkeypatch):
+    from agent import inbox_alerts
+
+    async def still_open(repo, goal, config):
+        return None
+
+    async def gated(state, config, store, repo):
+        return {"reached": True}
+
+    monkeypatch.setattr(inbox_alerts, "already_fixed", still_open)
+    monkeypatch.setattr(vs, "_verify_and_ship_gated", gated)
+    assert await vs._verify_and_ship(_state(), config=None) == {"reached": True}

@@ -218,20 +218,7 @@ async def discover(client: GitHubClient, repo: str, slug: str, proj: dict) -> li
 
     if policies["security_alerts"] != "off":
         try:
-            for a in await client.dependabot_alerts(slug):
-                adv = a.get("security_advisory") or {}
-                dep = (a.get("dependency") or {}).get("package") or {}
-                vuln = a.get("security_vulnerability") or {}
-                sev = (adv.get("severity") or "?").upper()
-                pkg = dep.get("name") or "?"
-                items.append(Item(
-                    key=f"alert:{a['number']}", kind="security_alerts", repo=repo, number=a["number"],
-                    title=f"[{sev}] {pkg}: {adv.get('summary') or 'security alert'}",
-                    url=a.get("html_url") or "", fingerprint=f"{a.get('state')}:{adv.get('ghsa_id')}",
-                    summary=f"{pkg} {vuln.get('vulnerable_version_range') or ''} -> patched in "
-                            f"{(vuln.get('first_patched_version') or {}).get('identifier') or '?'} "
-                            f"({(a.get('dependency') or {}).get('manifest_path') or '?'})",
-                ))
+            items.extend(security_alert_items(await client.dependabot_alerts(slug), repo, slug))
         except Exception as e:  # noqa: BLE001
             logger.warning("github inbox: %s security_alerts failed: %s", repo, e)
 
@@ -263,6 +250,75 @@ _MAX_LOCATIONS_IN_SUMMARY = 12
 def _alert_severity(alert: dict) -> str:
     rule = alert.get("rule") or {}
     return str(rule.get("security_severity_level") or rule.get("severity") or "unknown").lower()
+
+
+def _version_key(v: str) -> tuple:
+    try:
+        from packaging.version import Version  # noqa: PLC0415 -- optional in the CLI install
+        return (0, Version(v))
+    except Exception:  # noqa: BLE001 -- a version nobody can parse sorts last, as text
+        return (1, v)
+
+
+def security_alert_items(alerts: list[dict], repo: str, slug: str) -> list[Item]:
+    """One item per package and manifest, not per alert. Eleven undici
+    advisories on one lockfile are one bump (to the highest first-patched
+    version among them), and on 2026-09-29 they became eleven tasks: one
+    merge closed all eleven and the other ten rebased, re-reviewed and
+    merged a lockfile change that fixed nothing. A package with a single
+    alert keeps the item it always had (`alert:<n>`, the alert's own number
+    and page). A group is keyed by package and manifest, carries every
+    alert number in its summary, and its fingerprint covers each alert's
+    number and state, so a partial fix re-decides it and a full fix
+    resolves it."""
+    groups: dict[tuple[str, str], list[dict]] = {}
+    for a in alerts:
+        if a.get("state") not in (None, "open"):
+            continue
+        dep = a.get("dependency") or {}
+        pkg = (dep.get("package") or {}).get("name") or "?"
+        groups.setdefault((pkg, dep.get("manifest_path") or "?"), []).append(a)
+    items: list[Item] = []
+    for (pkg, manifest), group in groups.items():
+        group.sort(key=lambda a: int(a.get("number") or 0))
+        if len(group) == 1:
+            a = group[0]
+            adv = a.get("security_advisory") or {}
+            vuln = a.get("security_vulnerability") or {}
+            sev = (adv.get("severity") or "?").upper()
+            items.append(Item(
+                key=f"alert:{a['number']}", kind="security_alerts", repo=repo, number=a["number"],
+                title=f"[{sev}] {pkg}: {adv.get('summary') or 'security alert'}",
+                url=a.get("html_url") or "", fingerprint=f"{a.get('state')}:{adv.get('ghsa_id')}",
+                summary=f"{pkg} {vuln.get('vulnerable_version_range') or ''} -> patched in "
+                        f"{(vuln.get('first_patched_version') or {}).get('identifier') or '?'} ({manifest})",
+            ))
+            continue
+        sev = min((((a.get("security_advisory") or {}).get("severity") or "low").lower() for a in group),
+                  key=lambda x: _SEVERITY_RANK.get(x, 9))
+        patched = [((a.get("security_vulnerability") or {}).get("first_patched_version") or {}).get("identifier")
+                   for a in group]
+        patched = [v for v in patched if v]
+        target = max(patched, key=_version_key) if patched else "?"
+        lines = [f"{pkg} in {manifest}: bump to at least {target} (the highest first-patched version among "
+                 f"these {len(group)} open alerts)"]
+        for a in group:
+            adv = a.get("security_advisory") or {}
+            vuln = a.get("security_vulnerability") or {}
+            lines.append(f"#{a.get('number')} [{(adv.get('severity') or '?').upper()}] "
+                         f"{adv.get('summary') or 'security alert'}: {vuln.get('vulnerable_version_range') or ''} "
+                         f"-> patched in {(vuln.get('first_patched_version') or {}).get('identifier') or '?'}")
+        fp = hashlib.sha1("|".join(f"{a.get('number')}:{a.get('state')}:"
+                                   f"{(a.get('security_advisory') or {}).get('ghsa_id')}" for a in group).encode()
+                          ).hexdigest()[:12]
+        safe = re.sub(r"[^A-Za-z0-9._@-]", "-", f"{pkg}@{manifest}".replace("/", "."))
+        items.append(Item(
+            key=f"alerts:{safe}", kind="security_alerts", repo=repo, number=None,
+            title=f"[{sev.upper()}] {pkg}: {len(group)} open alerts in {manifest}, patched in {target}",
+            url=f"https://github.com/{slug}/security/dependabot?q=is%3Aopen+package%3A{pkg}",
+            fingerprint=fp, summary="\n".join(lines),
+        ))
+    return items
 
 
 def code_scanning_items(alerts: list[dict], repo: str, slug: str) -> list[Item]:
@@ -626,7 +682,7 @@ _GOAL_TEMPLATES = {
         "Do not touch unrelated files.\n\nPR: {url}\n{summary}"
     ),
     "security_alerts": (
-        "Fix Dependabot security alert #{number}: {title}.\n\n"
+        "Fix Dependabot security {alerts}: {title}.\n\n"
         "{summary}\n\nUpgrade the affected package to a patched version in every manifest that pins "
         "it, regenerate the lockfile with the package manager, install, and run the full test suite "
         "and build. If the direct dependency must move to a new major to clear the alert, make the "
@@ -662,10 +718,27 @@ _GOAL_TEMPLATES = {
 }
 
 
+def alert_numbers(item: dict) -> list[int]:
+    """The Dependabot alert numbers an item stands for: its own, or every
+    `#n` its summary lists for a grouped item."""
+    if item.get("number"):
+        return [int(item["number"])]
+    return [int(n) for n in re.findall(r"(?m)^#(\d+) ", item.get("summary") or "")]
+
+
+def alert_reference(item: dict) -> str:
+    """'alert #9', or 'alerts #6, #8 and #9' for a grouped item."""
+    nums = alert_numbers(item)
+    if len(nums) <= 1:
+        return f"alert #{nums[0]}" if nums else "alerts"
+    return "alerts " + ", ".join(f"#{n}" for n in nums[:-1]) + f" and #{nums[-1]}"
+
+
 def build_goal(item: Item | dict, pr_text: str | None = None, repo_root: str | None = None) -> str:
     d = item.to_dict() if isinstance(item, Item) else dict(item)
     goal = _GOAL_TEMPLATES[d["kind"]].format(
-        number=d.get("number"), title=d.get("title"), url=d.get("url"), summary=d.get("summary") or "")
+        number=d.get("number"), title=d.get("title"), url=d.get("url"), summary=d.get("summary") or "",
+        alerts=alert_reference(d))
     # The code itself, for a finding that named lines. Appended rather than
     # formatted in, so a template that never mentions it is unaffected and a
     # repo that cannot be read produces exactly the goal it produced before.

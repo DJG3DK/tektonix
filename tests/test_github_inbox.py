@@ -736,3 +736,47 @@ def test_other_kinds_are_untouched(repo):
     item = {"kind": "security_alerts", "repo": "proj", "number": 7,
             "title": "t", "url": "u", "summary": "#5 src/a.js:3 — not a code-scanning item"}
     assert gi.build_goal(item) == gi.build_goal(item, repo_root=str(repo))
+
+
+def _dep_alert(n, pkg, manifest, sev, rng, patched, state="open"):
+    return {"number": n, "state": state, "html_url": f"https://github.com/o/proj/security/dependabot/{n}",
+            "security_advisory": {"severity": sev, "summary": f"{pkg} bug {n}", "ghsa_id": f"GHSA-{n}"},
+            "dependency": {"package": {"name": pkg}, "manifest_path": manifest},
+            "security_vulnerability": {"vulnerable_version_range": rng, "first_patched_version": {"identifier": patched}}}
+
+
+async def test_security_alerts_group_by_package_and_manifest():
+    """2026-09-29: eleven undici advisories on one lockfile became eleven
+    tasks; one merge closed all eleven and the other ten rebased and
+    re-reviewed for nothing. One package in one manifest is one item."""
+    gh = FakeGitHub(alerts=[
+        _dep_alert(6, "undici", "frontend/package-lock.json", "medium", "< 8.10.2", "8.10.2"),
+        _dep_alert(9, "undici", "frontend/package-lock.json", "high", ">= 8.10.0, < 8.11.2", "8.11.2"),
+        _dep_alert(7, "multer", "apps/api/package.json", "high", "< 2.0", "2.0.0"),
+        _dep_alert(8, "undici", "package-lock.json", "low", "< 8.10.2", "8.10.2"),          # another manifest
+        _dep_alert(5, "undici", "frontend/package-lock.json", "low", "< 8.1", "8.1.0", state="fixed"),  # closed: ignored
+    ])
+    items = await gi.discover(gh, "proj", "o/proj", _proj(security_alerts="propose"))
+    by = {i.key: i for i in items}
+    assert sorted(by) == ["alert:7", "alert:8", "alerts:undici@frontend.package-lock.json"]
+    group = by["alerts:undici@frontend.package-lock.json"]
+    assert group.number is None and group.kind == "security_alerts"
+    assert group.title == "[HIGH] undici: 2 open alerts in frontend/package-lock.json, patched in 8.11.2"
+    assert group.summary.splitlines()[0].startswith("undici in frontend/package-lock.json: bump to at least 8.11.2")
+    assert "#6 [MEDIUM] undici bug 6" in group.summary and "#9 [HIGH] undici bug 9" in group.summary
+    assert "/" not in group.key.split(":", 1)[1], "the key is one URL path segment"
+    assert gi.alert_numbers(group.to_dict()) == [6, 9]
+    assert gi.alert_reference(group.to_dict()) == "alerts #6 and #9"
+    # A lone alert keeps the item it always had.
+    assert by["alert:7"].number == 7 and by["alert:7"].title.startswith("[HIGH] multer")
+    assert gi.alert_reference(by["alert:7"].to_dict()) == "alert #7"
+    goal = gi.build_goal(group)
+    assert goal.startswith("Fix Dependabot security alerts #6 and #9: [HIGH] undici: 2 open alerts")
+    assert "bump to at least 8.11.2" in goal and "https://github.com/o/proj/security/dependabot" in goal
+    assert gi.build_goal(by["alert:7"]).startswith("Fix Dependabot security alert #7: [HIGH] multer")
+    # Closing one of the two changes the fingerprint and the group becomes the lone alert's own item.
+    before = group.fingerprint
+    gh.alerts = [a for a in gh.alerts if a["number"] != 6]
+    after = {i.key: i for i in await gi.discover(gh, "proj", "o/proj", _proj(security_alerts="propose"))}
+    assert "alerts:undici@frontend.package-lock.json" not in after and after["alert:9"].number == 9
+    assert after["alert:9"].fingerprint != before
