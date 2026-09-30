@@ -150,7 +150,7 @@ const CONTROLS = [
   },
   {
     title: "The agent can't push to git",
-    body: "Its shell has no SSH key, no git credentials and no token. A push has nothing to log in with. Merges happen through the gate, on the host, with a deploy key per repository.",
+    body: "Its shell has no SSH key, no git credentials and no token, so a push from there has nothing to log in with. Only the gate pushes, after review, using a fine-grained GitHub token you create for just the repositories it should touch, handed to that one push and never to the agent.",
   },
   {
     title: "Work can come straight from GitHub",
