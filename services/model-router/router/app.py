@@ -301,7 +301,7 @@ async def _buffered(client, table, alias, body, send, call_id, task_id, session_
                 # fallback while the caller is waiting.
                 await asyncio.sleep(BACKOFF_S * (2 ** retry) * (0.5 + random.random()))
 
-    detail = last.error if last else "no deployment answered"
+    detail = _public_failure(getattr(last, "status", None) if last else None, bool(last))
     return JSONResponse({"error": {"message": detail, "type": "upstream_error",
                                    "chain": chain, "call_id": call_id}},
                         status_code=502, headers={CALL_ID_HEADER: call_id})
@@ -332,6 +332,7 @@ async def _streamed(client, table, alias, body, call_id, task_id, session_id, ca
     started = time.monotonic()
     attempt_no = 0
     last_error = None
+    last_status = None
     for name in chain:
         dep = table.deployments[name]
         for retry in range(RETRIES_PER_DEPLOYMENT + 1):
@@ -348,6 +349,7 @@ async def _streamed(client, table, alias, body, call_id, task_id, session_id, ca
             except Exception as e:  # noqa: BLE001
                 status = getattr(getattr(e, "response", None), "status_code", None)
                 last_error = f"{type(e).__name__}: {str(e)[:300]}"
+                last_status = status
                 ledger.record(caller=caller, call_id=call_id, alias=alias, model=dep.model,
                               duration_s=time.monotonic() - t0, task_id=task_id,
                               session_id=session_id, attempt=attempt_no, error=True,
@@ -369,9 +371,21 @@ async def _streamed(client, table, alias, body, call_id, task_id, session_id, ca
                 headers={CALL_ID_HEADER: call_id, "x-router-deployment": alias,
                          "cache-control": "no-cache"})
     logger.error("every deployment in %s failed before streaming", chain)
-    return JSONResponse({"error": {"message": last_error or "no deployment answered",
+    return JSONResponse({"error": {"message": _public_failure(last_status, last_error is not None),
                                    "type": "upstream_error", "chain": chain, "call_id": call_id}},
                         status_code=502, headers={CALL_ID_HEADER: call_id})
+
+
+def _public_failure(status: int | None, attempted: bool) -> str:
+    """What a caller is told when the whole chain failed: the upstream status
+    and where to look, never the exception text. The full error stays in the
+    ledger and the log under the call id (code scanning, py/stack-trace-
+    exposure, 2026-09-30)."""
+    if not attempted:
+        return "no deployment answered"
+    if status:
+        return f"every deployment failed; the last upstream answered {status} (details in the router ledger)"
+    return "every deployment failed before answering (details in the router ledger)"
 
 
 async def _committed_body(agen, first, name, dep, usage, t0, started, attempt_no, *,

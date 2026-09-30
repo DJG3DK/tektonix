@@ -359,6 +359,19 @@ def test_a_failure_midstream_is_ledgered_as_the_error(monkeypatch, client, tmp_p
     assert len(rows) == 1 and rows[0]["error"] is True and rows[0]["error_detail"].startswith("Boom")
 
 
+def test_a_total_failure_does_not_hand_the_exception_text_to_the_caller(monkeypatch, client):
+    """Code scanning py/stack-trace-exposure: the 502 names the upstream
+    status and the ledger, never the exception text, which stays in the
+    ledger under the call id."""
+    class Boom(Exception):
+        pass
+    _stream_stub(monkeypatch, [Boom("400 secret-looking internal detail at /opt/x.py line 9")])
+    r = _stream(client)
+    assert r.status_code == 502
+    msg = r.json()["error"]["message"]
+    assert "secret-looking" not in msg and "Boom" not in msg and "router ledger" in msg
+
+
 # ---------------------------------------------------------------------------
 # per-consumer keys (2026-09-16, replacing a single shared master key)
 # ---------------------------------------------------------------------------
