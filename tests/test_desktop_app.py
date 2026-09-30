@@ -230,3 +230,18 @@ def test_the_published_installer_is_verified_from_outside_windows():
     assert "verify_windows_installer.sh --release" in job["steps"][-1]["run"]
     script = (REPO / "scripts/verify_windows_installer.sh").read_text()
     assert "ROOT_SHA256=\"53:67:F2:0C" in script and "-TSA-CAfile" in script
+
+
+
+def test_the_installer_carries_the_tektonix_branding():
+    """The NSIS defaults (a blue sidebar with a computer, a globe in the
+    title bar) until 2026-09-30. Tauri takes a 164x314 sidebar, a 150x57
+    header and an .ico; NSIS reads only 24-bit BMPs for the two images."""
+    from PIL import Image
+    conf = json.loads((REPO / "app/src-tauri/tauri.conf.json").read_text())
+    nsis = conf["bundle"]["windows"]["nsis"]
+    base = REPO / "app/src-tauri"
+    assert (base / nsis["installerIcon"]).is_file()
+    for key, size in (("sidebarImage", (164, 314)), ("headerImage", (150, 57))):
+        with Image.open(base / nsis[key]) as im:
+            assert im.format == "BMP" and im.size == size and im.mode == "RGB", key

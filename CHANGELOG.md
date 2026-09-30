@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### The Windows installer looks like Tektonix
+
+The setup wizard showed the NSIS defaults: a blue sidebar with a computer
+on it and a generic globe in the title bar. It carries the Tektonix icon,
+a sidebar with the logo on the welcome and finish pages, and the mark in the
+header of the pages between.
+
 ### Web search works again, and a failed page is not an invitation to guess
 
 The planning agent scraped Bing with a headless browser, and from a

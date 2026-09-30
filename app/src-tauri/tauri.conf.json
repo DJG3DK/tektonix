@@ -37,7 +37,10 @@
         "installMode": "currentUser",
         "languages": [
           "English"
-        ]
+        ],
+        "installerIcon": "icons/icon.ico",
+        "headerImage": "icons/installer/header.bmp",
+        "sidebarImage": "icons/installer/sidebar.bmp"
       }
     },
     "createUpdaterArtifacts": true
