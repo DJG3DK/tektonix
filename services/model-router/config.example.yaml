@@ -383,6 +383,21 @@ model_list:
     model_info:
       input_cost_per_token: 0.00000002
 
+  # Web search for the planning agent, the coder's research tools and any
+  # other caller of agent/tools/web_search.py. OpenRouter's web plugin runs
+  # the search and returns cited results; the model here only has to answer
+  # with the list, so the cheapest reliable one is enough. Scraping Bing from
+  # a datacenter address returned empty pages (2026-09-30), which is why this
+  # exists. Not an agent-* name: it is not a chat seat.
+  - model_name: web-search
+    params:
+      model: openrouter/openai/gpt-4.1-nano
+      api_key: os.environ/OPENROUTER_API_KEY
+      timeout: 45
+    model_info:
+      input_cost_per_token: 0.0000001
+      output_cost_per_token: 0.0000004
+
 router_settings:
   # Tried in order when the pinned model refuses (a permanent failure, or a
   # transient one past the retry budget) -- see router/app.py. Each target

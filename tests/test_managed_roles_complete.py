@@ -78,7 +78,9 @@ _FALLBACK_TARGETS = {"deepseek-v4-pro", "claude-haiku-4.5", "gpt-4o-mini"}
 # resolves it for episode recall, and naming it agent-embedder would have put a
 # model with no chat, tool or structured-output behaviour into the Models
 # page's seat picker.
-_NON_SEAT_ALIASES = {"embedder"}
+# Aliases the product calls itself that are not chat seats: episode recall's
+# embeddings, and the web search behind planning and the coder's research.
+_NON_SEAT_ALIASES = {"embedder", "web-search"}
 
 
 def test_the_example_does_not_ship_another_product_s_aliases():

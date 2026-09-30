@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### Web search works again, and a failed page is not an invitation to guess
+
+The planning agent scraped Bing with a headless browser, and from a
+datacenter address Bing answered with empty pages: "no results" for
+"simplewebauthn". A planning turn then invented twenty documentation URLs on
+one site, nearly all "Page Not Found". Search now goes through the router's
+new `web-search` alias (OpenRouter's web plugin, about $0.007 a search, on the
+ledger), with DuckDuckGo as a fallback and a plain "search is unavailable, do
+not guess addresses" when both fail. `browse_page` lists the real links on
+the page it loaded, and a per-turn guard closes a site after three missing
+pages and browsing after fifteen pages in all.
+
 ## v0.9.1 — the Windows installer is signed
 
 ### Windows names the publisher

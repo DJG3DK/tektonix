@@ -28,11 +28,10 @@ this will need updating. Swapping in a paid search API (Tavily/Brave/Bing
 API) later is a drop-in replacement for just this one function.
 """
 
-import base64
 import os
 import subprocess
 from contextlib import asynccontextmanager
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import urlparse
 
 from langchain_core.tools import tool
 
@@ -117,68 +116,13 @@ async def _browser_page(viewport=None, allow_origin: str | None = None):
             await browser.close()
 
 
-def _decode_bing_redirect(href: str) -> str:
-    """Bing wraps every result link in a bing.com/ck/a tracking redirect --
-    the real target URL is base64 (urlsafe, unpadded) in the `u` query
-    param, prefixed with a literal "a1". Falls back to the raw href
-    (still a working link, just via Bing's redirect) if the shape ever
-    changes -- never worth failing the whole search over one bad link."""
-    try:
-        u = parse_qs(urlparse(href).query).get("u", [""])[0]
-        if u.startswith("a1"):
-            b64 = u[2:].replace("-", "+").replace("_", "/")
-            b64 += "=" * (-len(b64) % 4)
-            # validate=True: plain b64decode silently ignores characters
-            # outside the base64 alphabet by default (not an error) --
-            # garbage input would otherwise decode to a garbage-but-
-            # "successful" string instead of raising, defeating the
-            # except-fallback below. (urlsafe_b64decode itself has no
-            # validate param -- -/_ are translated to +// manually instead.)
-            # Strict utf-8 decoding for the same reason: a genuine decode
-            # failure should fall back to href, not silently return mangled
-            # text dressed up as a URL.
-            return base64.b64decode(b64, validate=True).decode("utf-8")
-    except Exception:
-        pass
-    return href
-
-
 async def _run_web_search(query: str, num_results: int) -> str:
-    from urllib.parse import quote_plus
-
-    from playwright.async_api import TimeoutError as PlaywrightTimeoutError
-
-    async with _browser_page() as page:
-        try:
-            await page.goto(
-                # audit M-29: encode the query. Unencoded, a `&` split it into a
-                # second URL param and a `#` dropped everything after it, so Bing
-                # silently answered a truncated query ("react & vue" -> "react").
-                f"https://www.bing.com/search?q={quote_plus(query)}",
-                wait_until="networkidle",
-                timeout=_NAV_TIMEOUT_MS,
-            )
-        except (TimeoutError, PlaywrightTimeoutError):
-            # audit M-28: Playwright raises its OWN TimeoutError, which is NOT a
-            # subclass of asyncio.TimeoutError -- the old handler was a dead
-            # branch and networkidle on a Bing page times out routinely. A
-            # partial render is still usable, so fall through to what landed.
-            pass
-        items = await page.locator("#b_results > li.b_algo").all()
-        if not items:
-            return f"No results found for {query!r}."
-        lines = []
-        for i, item in enumerate(items[:num_results], start=1):
-            link = item.locator("h2 a").first
-            if await link.count() == 0:
-                continue
-            title = (await link.inner_text()).strip() or "(untitled)"
-            href = await link.get_attribute("href") or ""
-            url = _decode_bing_redirect(href)
-            snippet_el = item.locator(".b_caption p, .b_snippet, .b_lineclamp2, .b_lineclamp3, .b_lineclamp4")
-            snippet = (await snippet_el.first.inner_text()).strip() if await snippet_el.count() else ""
-            lines.append(f"{i}. {title}\n   {url}\n   {snippet}".rstrip())
-        return "\n\n".join(lines) if lines else f"No results found for {query!r}."
+    """The search the planning agent (and anything importing this) runs.
+    agent/tools/web_search.py: the router's web-search alias, DuckDuckGo as a
+    fallback, and an explicit "unavailable" instead of a false "no results".
+    Bing scraping from this box returned empty pages (2026-09-30)."""
+    from agent.tools.web_search import web_search  # noqa: PLC0415
+    return await web_search(query, num_results)
 
 
 def make_browse_page_tool():
@@ -188,7 +132,10 @@ def make_browse_page_tool():
     frontend work was the one that could not look at a page -- it could
     describe an image somebody handed it and had no way to produce one.
     """
+    from agent.tools.browse_guard import BrowseGuard  # noqa: PLC0415
     from agent.tools.tool_errors import tool_errors_to_text  # noqa: PLC0415
+
+    guard = BrowseGuard()
 
     @tool
     @tool_errors_to_text
@@ -203,7 +150,12 @@ def make_browse_page_tool():
         """
         if not (url.startswith("http://") or url.startswith("https://")):
             return f"ERROR: {url!r} is not a valid http(s) URL"
-        return await _run_browse_page(url, screenshot, question)
+        refusal = guard.check(url)
+        if refusal:
+            return refusal
+        result = await _run_browse_page(url, screenshot, question)
+        guard.record(url, result)
+        return result
 
     return browse_page
 
@@ -269,7 +221,18 @@ async def _run_browse_page(url: str, want_screenshot: bool, question: str,
         if len(text) > _PAGE_TEXT_CAP:
             text = text[:_PAGE_TEXT_CAP] + f"\n... [truncated, {len(text) - _PAGE_TEXT_CAP} more chars]"
 
+        status = response.status if response is not None else None
         parts = [f"# {title or url}", f"URL: {page.url}", "", text or "(no visible text extracted)"]
+        if status and status >= 400:
+            # First, so the browse guard and the model both read the page
+            # as the error it is before any of its text.
+            parts.insert(0, f"ERROR: HTTP {status} -- this page does not exist or refused the request.")
+        links = await _page_links(page)
+        if links:
+            # The real addresses on the page, so the next page is one the site
+            # links to rather than one the model imagines (2026-09-30: twenty
+            # invented docs paths, nearly all "Page Not Found").
+            parts.append("\n## Links on this page\n" + "\n".join(links))
 
         if want_screenshot:
             png_bytes = await page.screenshot(type="png")
@@ -287,6 +250,40 @@ async def _run_browse_page(url: str, want_screenshot: bool, question: str,
                 parts.append(f"\n## Visual description (screenshot)\nERROR: vision call failed: {e}")
 
         return "\n".join(parts)
+
+
+_LINKS_MAX = 40
+_LINKS_CHARS = 2_500
+
+
+async def _page_links(page) -> list[str]:
+    """Up to _LINKS_MAX distinct http(s) links on the page, same site first,
+    as "text -> url". Never raises: a page that will not give its links still
+    gives its text."""
+    try:
+        raw = await page.eval_on_selector_all(
+            "a[href]", "els => els.map(e => [(e.innerText || e.getAttribute('aria-label') || '').trim(), e.href])")
+    except Exception:  # noqa: BLE001
+        return []
+    here = (urlparse(page.url).hostname or "").lower()
+    seen: set[str] = set()
+    same, other = [], []
+    for label, href in raw or []:
+        if not isinstance(href, str) or not href.startswith(("http://", "https://")):
+            continue
+        href = href.split("#", 1)[0]
+        if href in seen or href.rstrip("/") == page.url.split("#", 1)[0].rstrip("/"):
+            continue
+        seen.add(href)
+        line = f"- {' '.join(str(label).split())[:80] or '(link)'} -> {href}"
+        (same if (urlparse(href).hostname or "").lower() == here else other).append(line)
+    out, size = [], 0
+    for line in same + other:
+        if len(out) >= _LINKS_MAX or size + len(line) > _LINKS_CHARS:
+            break
+        out.append(line)
+        size += len(line) + 1
+    return out
 
 
 _OWN_SPACE_PREFIXES = ("/skills/", "/memories/", "/org-memory/", "/episodes/")
@@ -513,6 +510,9 @@ def make_planning_tools(
     # after it -- and, worse, got clobbered (see run_planning_turn's caller).
     plan_ref: dict = {"markdown": existing_plan, "brief": existing_brief}
     skills_manifest = skills_manifest or {}
+    # One per turn: this toolset is rebuilt for every planning turn.
+    from agent.tools.browse_guard import BrowseGuard  # noqa: PLC0415
+    browse_guard = BrowseGuard()
 
     @tool
     @tool_errors_to_text
@@ -538,10 +538,15 @@ def make_planning_tools(
         either the text reading or the visual description to something specific."""
         if not (url.startswith("http://") or url.startswith("https://")):
             return f"ERROR: {url!r} is not a valid http(s) URL"
+        refusal = browse_guard.check(url)
+        if refusal:
+            return refusal
         try:
-            return await _run_browse_page(url, screenshot, question)
+            result = await _run_browse_page(url, screenshot, question)
         except Exception as e:  # noqa: BLE001
-            return f"ERROR: browse_page failed: {e}"
+            result = f"ERROR: browse_page failed: {e}"
+        browse_guard.record(url, result)
+        return result
 
     @tool
     @tool_errors_to_text

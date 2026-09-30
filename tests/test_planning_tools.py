@@ -6,7 +6,7 @@ covered here; the tools themselves (including real cross-project reads) were
 verified live against the real router/browser/repos during development.
 """
 
-from agent.tools.planning_tools import _decode_bing_redirect, make_planning_tools
+from agent.tools.planning_tools import make_planning_tools
 
 
 def _write(tmp_path, rel_path: str, content: str = "") -> None:
@@ -20,26 +20,6 @@ def _tools(monkeypatch, projects: dict):
     tools, plan_ref = make_planning_tools()
     by_name = {t.name: t for t in tools}
     return by_name, plan_ref
-
-
-# ---------------------------------------------------------------------------
-# _decode_bing_redirect
-# ---------------------------------------------------------------------------
-
-
-def test_decodes_a_real_bing_redirect_url():
-    href = "https://www.bing.com/ck/a?!&&p=abc&u=a1aHR0cHM6Ly9yZWFjdC5kZXYv&ntb=1"
-    assert _decode_bing_redirect(href) == "https://react.dev/"
-
-
-def test_falls_back_to_raw_href_when_shape_is_unrecognized():
-    href = "https://example.com/not-a-bing-redirect"
-    assert _decode_bing_redirect(href) == href
-
-
-def test_falls_back_to_raw_href_on_malformed_u_param():
-    href = "https://www.bing.com/ck/a?u=a1%%%not-valid-base64%%%"
-    assert _decode_bing_redirect(href) == href
 
 
 # ---------------------------------------------------------------------------
