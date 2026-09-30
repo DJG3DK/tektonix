@@ -46,6 +46,7 @@ from contextlib import asynccontextmanager
 
 from urllib.parse import urlsplit
 
+import httpx
 import psycopg
 from fastapi import FastAPI, Form, Request
 from fastapi.responses import JSONResponse, RedirectResponse
@@ -226,6 +227,49 @@ async def health():
     except Exception as e:  # noqa: BLE001
         return JSONResponse({"ok": False, "detail": type(e).__name__}, status_code=503)
     return {"ok": True, "service": "newsletter"}
+
+
+# The Windows download. The installer's file name carries its version, so a
+# link on a static page would go stale with the next release; this asks
+# GitHub which full release is latest and sends the browser to that
+# release's installer. Cached so a busy day costs GitHub one call in ten
+# minutes, and it falls back to the release page rather than failing.
+RELEASES_API = "https://api.github.com/repos/DJG3DK/tektonix/releases/latest"
+RELEASES_PAGE = "https://github.com/DJG3DK/tektonix/releases/latest"
+_WINDOWS_ASSET = re.compile(r"^Tektonix_[0-9A-Za-z.\-]+_x64-setup\.exe$")
+_DOWNLOAD_TTL_S = 600
+_download_cache: dict[str, tuple[float, str]] = {}
+
+
+async def _latest_windows_installer() -> str | None:
+    now = time.monotonic()
+    hit = _download_cache.get("windows")
+    if hit and now - hit[0] < _DOWNLOAD_TTL_S:
+        return hit[1]
+    try:
+        async with httpx.AsyncClient(timeout=8, headers={"Accept": "application/vnd.github+json"}) as client:
+            r = await client.get(RELEASES_API)
+            r.raise_for_status()
+            release = r.json()
+    except Exception as e:  # noqa: BLE001 -- the release page is a fine answer too
+        logger.warning("download: could not read the latest release: %s", type(e).__name__)
+        return None
+    for asset in release.get("assets") or []:
+        url = asset.get("browser_download_url") or ""
+        if _WINDOWS_ASSET.match(asset.get("name") or "") and url.startswith("https://github.com/DJG3DK/tektonix/releases/download/"):
+            _download_cache["windows"] = (now, url)
+            return url
+    return None
+
+
+def reset_download_cache() -> None:
+    _download_cache.clear()
+
+
+@app.get("/download/windows")
+async def download_windows():
+    url = await _latest_windows_installer()
+    return RedirectResponse(url or RELEASES_PAGE, status_code=302)
 
 
 @app.post("/subscribe")

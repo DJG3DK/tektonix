@@ -319,3 +319,64 @@ def test_a_sweep_never_drops_an_address_still_inside_its_window():
     _sweep(now + _SUBSCRIBE_WINDOW_S + 1)
     assert _subscribe_allowed("198.51.100.7", now=now + _SUBSCRIBE_WINDOW_S + 1) is True
     reset_subscribe_limiter()
+
+
+class _FakeGitHub:
+    def __init__(self, release=None, fail=False):
+        self.release, self.fail, self.calls = release, fail, 0
+
+    def __call__(self, *a, **k):
+        return self
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *a):
+        return False
+
+    async def get(self, url):
+        self.calls += 1
+        if self.fail:
+            raise RuntimeError("github down")
+        release = self.release
+
+        class _R:
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return release
+        return _R()
+
+
+def test_the_windows_download_follows_the_latest_full_release(monkeypatch):
+    """The installer's name carries its version; the page links here instead
+    and this sends the browser to whatever release is latest now."""
+    newsletter.reset_download_cache()
+    fake = _FakeGitHub({"assets": [
+        {"name": "latest.json", "browser_download_url": "https://github.com/DJG3DK/tektonix/releases/download/v0.9.0/latest.json"},
+        {"name": "Tektonix_0.9.0_x64-setup.exe", "browser_download_url": "https://github.com/DJG3DK/tektonix/releases/download/v0.9.0/Tektonix_0.9.0_x64-setup.exe"},
+        {"name": "Tektonix_0.9.0_x64-setup.exe.sig", "browser_download_url": "https://github.com/DJG3DK/tektonix/releases/download/v0.9.0/Tektonix_0.9.0_x64-setup.exe.sig"},
+    ]})
+    monkeypatch.setattr(newsletter.httpx, "AsyncClient", fake)
+    with TestClient(newsletter.app) as c:
+        r = c.get("/download/windows", follow_redirects=False)
+        assert r.status_code == 302
+        assert r.headers["location"].endswith("/v0.9.0/Tektonix_0.9.0_x64-setup.exe")
+        c.get("/download/windows", follow_redirects=False)
+    assert fake.calls == 1, "cached"
+
+
+def test_the_windows_download_falls_back_to_the_release_page(monkeypatch):
+    newsletter.reset_download_cache()
+    monkeypatch.setattr(newsletter.httpx, "AsyncClient", _FakeGitHub(fail=True))
+    with TestClient(newsletter.app) as c:
+        r = c.get("/download/windows", follow_redirects=False)
+    assert r.status_code == 302 and r.headers["location"] == newsletter.RELEASES_PAGE
+    newsletter.reset_download_cache()
+    other = _FakeGitHub({"assets": [{"name": "Tektonix_0.9.0_x64-setup.exe",
+                                     "browser_download_url": "https://evil.example/x.exe"}]})
+    monkeypatch.setattr(newsletter.httpx, "AsyncClient", other)
+    with TestClient(newsletter.app) as c:
+        r = c.get("/download/windows", follow_redirects=False)
+    assert r.headers["location"] == newsletter.RELEASES_PAGE, "only this repository's release URLs"

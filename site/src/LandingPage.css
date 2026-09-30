@@ -751,3 +751,22 @@
   .lp-news-fields { grid-template-columns: 1fr; }
   .lp-news-submit { width: 100%; }
 }
+
+/* ── 0.9: numbered install steps and a left-aligned button inside a card ── */
+.lp-steps {
+  margin: 0;
+  padding-left: 1.3em;
+  color: var(--text-dim);
+  font-size: var(--fs-base);
+  line-height: 1.7;
+}
+.lp-steps code {
+  padding: 1px 5px;
+  border-radius: var(--radius-xs);
+  background: var(--surface-sunken);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: .9em;
+}
+.lp-close .lp-cta.lp-cta-left { justify-content: flex-start; margin: 0; }
+.lp-install .lp-kicker { align-self: flex-start; }

@@ -154,3 +154,23 @@ describe("LandingPage", () => {
     expect(container.querySelectorAll('img[loading="lazy"]').length).toBeGreaterThan(0);
   });
 });
+
+
+describe("LandingPage — 0.9 install paths", () => {
+  it("offers the Windows installer through this site's own redirect, never a versioned file", () => {
+    render(<LandingPage />);
+    const buttons = screen.getAllByRole("link", { name: /download for windows/i });
+    expect(buttons.length).toBeGreaterThan(0);
+    buttons.forEach((a) => expect(a).toHaveAttribute("href", "/download/windows"));
+  });
+
+  it("covers Windows and Linux, and is honest that there is no Mac build", () => {
+    render(<LandingPage />);
+    const text = document.body.textContent ?? "";
+    expect(text).toMatch(/the windows app/i);
+    expect(text).toMatch(/linux, on the host/i);
+    expect(text).toMatch(/linux, as a bundle/i);
+    expect(text).toMatch(/mac:\s*not yet/i);
+    expect(text).not.toMatch(/macos as it does on linux/i);
+  });
+});

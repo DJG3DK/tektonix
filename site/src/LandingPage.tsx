@@ -46,33 +46,37 @@ const PIPELINE = [
   { label: "Build", note: "sandboxed" },
   { label: "Verify", note: "real test suite" },
   { label: "Review gate", note: "2nd model", gate: true },
-  { label: "Ship", note: "merge + deploy" },
+  { label: "Ship", note: "on green CI" },
 ];
+
+// Same host as this page; site/server answers with the latest full
+// release's installer, so the link never names a version that goes stale.
+const WINDOWS_DOWNLOAD = "/download/windows";
 
 const STAGES = [
   {
     kicker: "work",
-    title: "It builds in a sandbox that can only see one repo",
-    body: `The agent drives its own tool-calling loop against a Docker checkout with just the
-      target repository mounted, so a shell command cannot reach your other projects or host
-      secrets. It can delegate to two subagents: an investigator with no write or shell tools at
-      all, and a test-writer that has to run the checks itself before it may report done.`,
+    title: "It builds in a box that can only see one repo",
+    body: `The agent works inside a throwaway Docker container with just the one repository
+      mounted. A bad shell command can't wander into your other projects or your secrets. When
+      it needs help it hands off to two helpers: one that can only read and investigate, and one
+      that writes tests and has to actually run them before it's allowed to say it's done.`,
   },
   {
     kicker: "verify_and_ship",
-    title: "Its own “done” carries no authority",
-    body: `The gate always re-runs your project's real typecheck, lint and test suite itself —
-      the same commands you would run. Only a pass with a real diff becomes a commit, and only on
-      the task's own branch. If the agent's todo list still has open items, the commit is held and
-      the task is sent back to finish, with the remaining work named.`,
+    title: "Saying “done” doesn't count",
+    body: `I don't trust the agent's word, so the gate re-runs your project's real typecheck,
+      lint and tests itself, the same commands you'd run. Only a pass with an actual diff becomes a
+      commit, on the task's own branch. If the agent left items on its todo list, the commit is held
+      and the task goes back to finish them.`,
   },
   {
     kicker: "review",
-    title: "A second model reviews the branch before a merge is possible",
-    body: `The review unit is the branch plus its merge-base, fixed at the fork point rather than
-      whatever the sandbox HEAD is now — comparing two moving HEADs produced inverted diffs,
-      where a branch's additions read as deletions. READY merges and deploys. NEEDS_FIXES loops
-      back to work carrying the findings.`,
+    title: "A second model reviews it, then you do",
+    body: `A different model reviews the branch against the exact point it forked from, runs
+      the checks again in its own sandbox, and says READY or NEEDS_FIXES with findings. Then it
+      waits for your look. What merges is the exact commit that was reviewed, and main only
+      moves when GitHub Actions is green on it too.`,
   },
 ];
 
@@ -80,62 +84,89 @@ const FEATURES = [
   {
     img: shotLedger,
     alt: "Analytics — per-role model usage with call counts, tokens, latency, cost and cache rate",
-    title: "Where the tokens actually went",
-    body: `Every role's real usage, read from the router's own per-call ledger: calls, tokens,
-      average latency, what it cost, and how much of it was served from cache. An expensive
-      role is something you can see here rather than infer from the bill at the end of the
-      month.`,
+    title: "See where the money actually went",
+    body: `Every role's real usage, straight from the router's own per-call ledger: calls,
+      tokens, latency, cost, and how much came from cache. If a role is burning money, you see it
+      here instead of finding out from the bill.`,
   },
   {
     img: shotReviewer,
     alt: "The commit reviewer's role, showing how many probed models meet its requirements",
-    title: "Models are probed, not assumed",
+    title: "Models get tested before you pin them",
     body: `The reviewer needs strict tool calling and a forced response shape, and most models
-      do not have both. Each role lists the ones that actually passed its probes — 134 of 253
-      on the last run — so you find out here rather than four minutes into a task.`,
+      can't do both. Each role only lists the models that actually passed its probes, so you find
+      out on this page, not four minutes into a task.`,
   },
   {
     img: shotSupport,
     alt: "Support roles — classifier, summarizer, vision and cartographer, each with capability badges",
-    title: "The support roles are separate on purpose",
-    body: `Classifier, summarizer, vision and cartographer do not need what the coder needs, and
-      paying coder prices for them is waste. Each says plainly what it requires — structured
-      output only, plain completion, a large context window — and each is pinned on its own.`,
+    title: "Cheap jobs get cheap models",
+    body: `Classifying a task or summarising a log doesn't need the model that writes your code,
+      and paying coder prices for it is just waste. Every support role is pinned on its own and
+      says what it actually needs.`,
   },
   {
     img: shotUsers,
     alt: "Users — per-project access control and adding a user",
-    title: "People get the projects they need, not all of them",
-    body: `An account is scoped to named projects, and everything follows that scope: the task
-      list, planning sessions, analytics. Admins see everything; a teammate added for one
-      repository cannot start work against another.`,
+    title: "People see the projects they need",
+    body: `An account is scoped to the projects you give it, and everything follows that: tasks,
+      planning, analytics. You see everything; someone you add for one repo can't start work on
+      another.`,
+  },
+];
+
+// What landed in 0.9. Short on purpose: the changelog has the long version.
+const NEW_IN_09 = [
+  {
+    title: "A real Windows app",
+    body: "One installer. It sets up WSL and Docker if you don't have them, asks for your keys in a window, pulls the release and signs you in.",
+  },
+  {
+    title: "It keeps itself updated",
+    body: "The app and the stack update on their own, but only when the agent is idle, and never by grabbing your window mid-task.",
+  },
+  {
+    title: "Signed releases",
+    body: "Every release builds from a tag on a green main, pushes its images once by digest, and signs the list the app pulls from. I approve each one before it ships.",
+  },
+  {
+    title: "A tougher review gate",
+    body: "A review that checked nothing doesn't pass anymore. A task waiting behind other reviews keeps waiting instead of timing out, and one approval covers a rebase that didn't change anything.",
+  },
+  {
+    title: "Less busywork from GitHub",
+    body: "Dependabot alerts on the same package become one task, not eleven, and a task whose alert another fix already closed just says so and stops.",
+  },
+  {
+    title: "A “Needs you” list",
+    body: "Anything escalated or waiting on your merge approval sits in its own group at the top of the sidebar until it's done.",
   },
 ];
 
 const CONTROLS = [
   {
-    title: "A budget ceiling per task",
-    body: "Checked after every model call, on the coordinator and on every subagent, so a runaway loop costs a known maximum.",
+    title: "A budget cap on every task",
+    body: "Checked after every model call, on the main agent and every helper, so a loop that goes sideways costs a number you picked, not whatever it wants.",
   },
   {
-    title: "The agent cannot git push",
-    body: "Its shell runs in a throwaway container with no SSH key, no git credentials and no token, so a push has nothing to authenticate with — it fails at the remote, force or not. Merges happen through the gate, on the host, and each project pushes with its own deploy key, scoped to one repository.",
+    title: "The agent can't push to git",
+    body: "Its shell has no SSH key, no git credentials and no token. A push has nothing to log in with. Merges happen through the gate, on the host, with a deploy key per repository.",
   },
   {
-    title: "Work can arrive from GitHub, not only the composer",
-    body: "The inbox polls Dependabot PRs, security and code-scanning alerts, review comments and failing checks. Propose sends an approve link; Auto starts the task. Every one still runs the review gate and keeps your merge approval.",
+    title: "Work can come straight from GitHub",
+    body: "The inbox picks up Dependabot PRs, security and code-scanning alerts, review comments and failing checks. Propose sends you an approve link; Auto just starts it. Either way it goes through the review gate and waits for your merge approval.",
   },
   {
-    title: "Approvals arrive inline",
-    body: "When it hits a gated action, or calls ask_user to ask you something rather than guess, the request appears in the task stream and your answer goes back into the same paused thread.",
+    title: "It asks instead of guessing",
+    body: "When it hits something gated, or it's genuinely unsure, the question shows up in the task stream, and your answer goes right back into the paused run.",
   },
   {
-    title: "The server decides what runs, and where",
-    body: "A project can only be onboarded from inside AGENT_PROJECT_ROOTS, judged after symlinks resolve, and its worktree location and name are derived rather than taken from the request. The commands the gate runs are matched against what the server itself proposed, so a client cannot introduce a new one for the review or deploy service to execute.",
+    title: "The server decides what runs",
+    body: "Projects can only come from folders you allowed, checked after symlinks resolve. The commands the gate runs are the ones the server proposed, so nobody can slip a new one in through a request.",
   },
   {
-    title: "No task is a dead end",
-    body: "Escalated, stopped, out of budget, or orphaned by a backend restart — the full graph state lives in the checkpointer, so resuming continues the same thread instead of starting over.",
+    title: "Nothing is a dead end",
+    body: "Escalated, stopped, out of budget or cut off by a restart, the whole state is saved, so resume picks up the same run instead of starting over.",
   },
 ];
 
@@ -150,8 +181,9 @@ export function LandingPage() {
           </a>
           <nav className="lp-nav-links">
             <a href="#how">How it works</a>
-            <a href="#console">Console</a>
+            <a href="#new">What's new</a>
             <a href="#controls">Controls</a>
+            <a href="#install">Install</a>
           </nav>
           <div className="lp-nav-actions">
             <a className="lp-ghost" href={REPO} target="_blank" rel="noopener noreferrer">
@@ -167,26 +199,30 @@ export function LandingPage() {
 
       <main id="top">
         <section className="lp-hero">
-          <p className="lp-eyebrow">Self-hosted &middot; LangGraph &middot; deepagents &middot; FastAPI + React &middot; any model, via OpenRouter</p>
+          <p className="lp-eyebrow">Self-hosted &middot; Windows app &middot; LangGraph &middot; any model, via OpenRouter</p>
           <h1>
             An autonomous coding agent
             <br />
             that has to prove its work.
           </h1>
           <p className="lp-lede">
-            Give it a plain-English goal against a repository you have onboarded. It plans the
-            work, writes the code, runs that project&rsquo;s <em>real</em> test suite, and ships
-            it &mdash; with an independent review gate that must pass before anything merges.
-            Self-hosted on your own machine, against your own repositories, driving whichever
-            models you pin through OpenRouter.
+            I built Tektonix because I wanted an agent I could actually leave alone on my own
+            repos. You give it a goal in plain English. It plans, writes the code, runs your
+            project&rsquo;s <em>real</em> test suite, and then a second model reviews it before
+            anything gets near main. It runs on your own machine, with whatever models you pick
+            through OpenRouter.
           </p>
           <div className="lp-cta">
-            <a className="lp-btn lp-btn-primary" href={REPO} target="_blank" rel="noopener noreferrer">
+            <a className="lp-btn lp-btn-primary" href={WINDOWS_DOWNLOAD}>
+              <DownloadMark />
+              Download for Windows
+            </a>
+            <a className="lp-btn lp-btn-quiet" href="#install">
+              Linux, or from source
+            </a>
+            <a className="lp-btn lp-btn-quiet" href={REPO} target="_blank" rel="noopener noreferrer">
               <GitHubMark />
               View the source
-            </a>
-            <a className="lp-btn lp-btn-quiet" href="#how">
-              How a task runs
             </a>
           </div>
 
@@ -209,10 +245,10 @@ export function LandingPage() {
         </section>
 
         <section id="how" className="lp-section">
-          <h2 className="lp-h2">How a build task runs</h2>
+          <h2 className="lp-h2">How a task runs</h2>
           <p className="lp-sub">
-            Two nodes and a loop. Work produces a change; the gate decides whether it earns a
-            merge, and is allowed to send it back.
+            It&rsquo;s a loop. The agent does the work, the gate decides whether that work earns
+            a merge, and the gate is allowed to send it back as many times as it takes.
           </p>
           <div className="lp-stages">
             {STAGES.map((s) => (
@@ -224,16 +260,16 @@ export function LandingPage() {
             ))}
           </div>
           <p className="lp-pullquote">
-            &ldquo;The agent&rsquo;s own <em>done</em> carries no authority.&rdquo;
+            &ldquo;The agent saying <em>done</em> doesn&rsquo;t mean it&rsquo;s done.&rdquo;
           </p>
         </section>
 
         <section id="console" className="lp-section">
           <h2 className="lp-h2">The console</h2>
           <p className="lp-sub">
-            One React app, served by the backend itself. Live task and planning output arrives over
-            WebSockets, with a REST snapshot on every reconnect &mdash; so a page opened mid-task
-            shows real history instead of starting blank.
+            Everything happens in one dashboard. You watch tasks and planning live, and if you open
+            it halfway through a task you see what already happened instead of a blank page. It
+            installs on your phone too.
           </p>
           <figure className="lp-lead">
             <div className="lp-shot">
@@ -246,12 +282,10 @@ export function LandingPage() {
               />
             </div>
             <figcaption>
-              Planning sessions and build tasks share one sidebar, grouped by the same category
-              the classifier assigns and filterable per repo. Spend, outcomes and average fix
-              cycles sit up front — the review gate&rsquo;s own cost counted separately, because
-              the agent&rsquo;s budget and the gate&rsquo;s are different things. Remaining credit
-              sits at the bottom and turns red under 15%, so running dry is something you see
-              coming.
+              Planning sessions and tasks share one sidebar, grouped by kind, filterable by repo,
+              with anything waiting on you pinned at the top. Spend, outcomes and fix cycles are
+              up front, and the review gate&rsquo;s cost is counted separately from the
+              agent&rsquo;s. Your remaining credit turns red under 15%, so you see it coming.
             </figcaption>
           </figure>
           <div className="lp-features">
@@ -272,21 +306,36 @@ export function LandingPage() {
           </div>
         </section>
 
+        <section id="new" className="lp-section">
+          <h2 className="lp-h2">New in 0.9</h2>
+          <p className="lp-sub">
+            The biggest release so far. Most of it came from actually running it every day on my
+            own projects and fixing whatever got in my way.
+          </p>
+          <div className="lp-controls">
+            {NEW_IN_09.map((c) => (
+              <article key={c.title} className="lp-control">
+                <h3>{c.title}</h3>
+                <p>{c.body}</p>
+              </article>
+            ))}
+          </div>
+        </section>
+
         <section className="lp-section lp-planning">
           <div className="lp-planning-copy">
             <h2 className="lp-h2">Planning Chat</h2>
             <p className="lp-sub">
-              A separate agent for research, design and scoping something before it gets built. No
-              write or shell access to the real repo &mdash; research tools, a headless browser,
-              read-only reads of your other projects, and a plan it can hand straight to the build
-              pipeline.
+              Before something gets built, you can talk it through. Planning is its own agent
+              with web search, a real browser and read-only access to your projects, but no way to
+              change anything. When the plan is right, one click hands it to the build pipeline,
+              and what planning cost is carried onto the task.
             </p>
             <p className="lp-sub">
-              Three seats, chosen automatically: an everyday model, a harder one a turn
-              escalates into, and a frontend seat that sits ahead of that ladder so a UI
-              plan is written by the model that will build it. Difficulty is classified
-              fresh every turn, then sticky upward within a session &mdash; a short
-              follow-up cannot quietly downgrade the model mid-plan.
+              It picks the model per turn: an everyday one, a stronger one when the question gets
+              hard, and a frontend seat for UI work so the plan is written by the model that will
+              build it. Once a session steps up, a short follow-up won&rsquo;t quietly drop it back
+              down.
             </p>
             <figure className="lp-shot lp-planning-shot">
               <div className="lp-chrome" aria-hidden="true">
@@ -302,25 +351,25 @@ export function LandingPage() {
           </div>
           <ul className="lp-facts">
             <li>
-              <strong>Memory that compounds</strong>
-              <span>Completed tasks consolidate into per-project memory; a cartographer keeps a structural map of each codebase current.</span>
+              <strong>Memory that builds up</strong>
+              <span>Finished tasks turn into per-project memory, and past work is found by meaning as well as keywords. A cartographer keeps a map of each codebase current.</span>
             </li>
             <li>
-              <strong>A per-turn dollar ceiling</strong>
-              <span>Planning used to run uncapped. It was the one agent with no budget, and the one that once spent $7 on a single 157-call turn.</span>
+              <strong>A dollar cap per turn</strong>
+              <span>Planning used to run uncapped. Then it spent $7 on a single 157-call turn. It has a cap now.</span>
             </li>
             <li>
-              <strong>Codebase-map first</strong>
-              <span>The map is read before any directory walking. One read replaces a dozen exploratory listings.</span>
+              <strong>Map first, then look around</strong>
+              <span>It reads the codebase map before it starts listing folders. One read instead of a dozen.</span>
             </li>
           </ul>
         </section>
 
         <section id="controls" className="lp-section">
-          <h2 className="lp-h2">What the model cannot override</h2>
+          <h2 className="lp-h2">What the model can&rsquo;t get around</h2>
           <p className="lp-sub">
-            This runs a model that writes and executes code against your repositories. The controls
-            are the product, not an afterthought.
+            This thing writes and runs code against your repos. The guardrails aren&rsquo;t an
+            afterthought, they&rsquo;re most of the work.
           </p>
           <div className="lp-controls">
             {CONTROLS.map((c) => (
@@ -332,41 +381,45 @@ export function LandingPage() {
           </div>
         </section>
 
-        <section className="lp-section lp-close">
+        <section id="install" className="lp-section lp-close">
           <h2 className="lp-h2">Run it yourself</h2>
           <p className="lp-sub">
-            Two ways in. Both end at the same console, and both are safe to re-run &mdash; which
-            is also the upgrade path.
+            Windows gets an app. On Linux you run it straight on the host or as a Docker bundle.
+            Every path ends at the same dashboard, and running the installer again is how you
+            upgrade.
           </p>
           <div className="lp-installs">
             <article className="lp-install">
-              <code className="lp-kicker">docker compose</code>
-              <h3>The bundle</h3>
+              <code className="lp-kicker">windows 10 / 11</code>
+              <h3>The Windows app</h3>
               <p>
-                Agent, database, router and the review gate as one stack &mdash; a task&apos;s
-                branch is reviewed by a second model, and only a pass merges. Nothing to install
-                but Docker itself, and it runs the same on Windows and macOS as it does on Linux.
-                Deploying your app after a merge stays with the host install.
+                Download the installer and run it. If you don&rsquo;t have WSL 2 and Docker
+                Desktop, it installs them for you (Windows will ask permission, and may want a
+                restart). Then it asks for your OpenRouter key and where your projects live, pulls
+                the release, and opens the dashboard. From then on it updates itself.
               </p>
-              <pre><code>{`cp docker/.env.example .env
-docker compose up -d`}</code></pre>
-              {/* The -ExecutionPolicy is part of the command, not a footnote.
-                  Windows client editions default to Restricted, so the bare
-                  path fails on a machine nobody has changed. Applying it to
-                  one process leaves the machine's own setting alone. */}
-              <p>On Windows, double-click <code>Install Tektonix.bat</code>, or run:</p>
-              <pre><code>{`powershell -ExecutionPolicy Bypass -File .\\install.ps1`}</code></pre>
-              <p className="lp-reqs">Docker &middot; an OpenRouter API key</p>
+              <ol className="lp-steps">
+                <li>Download the installer and run it</li>
+                <li>Let it set up Docker if it asks</li>
+                <li>Enter your OpenRouter key and projects folder</li>
+                <li>Pick your password and sign in</li>
+              </ol>
+              <div className="lp-cta lp-cta-left">
+                <a className="lp-btn lp-btn-primary" href={WINDOWS_DOWNLOAD}>
+                  <DownloadMark />
+                  Download for Windows
+                </a>
+              </div>
+              <p className="lp-reqs">Windows 10 or 11, 64-bit &middot; an OpenRouter API key</p>
             </article>
             <article className="lp-install">
               <code className="lp-kicker">./install.sh</code>
-              <h3>On the host</h3>
+              <h3>Linux, on the host</h3>
               <p>
-                Takes a fresh clone to a running agent &mdash; prerequisites, secrets, database,
-                sandbox image and dashboard. Ask it three questions and it derives the rest.
-                <code>--dry-run</code> prints every action without performing one;
-                <code>--yes</code> reads its answers from the environment for an unattended
-                build.
+                This is how I run it. The installer takes a fresh clone to a running agent:
+                prerequisites, secrets, database, sandbox image and dashboard. It asks three
+                questions and figures out the rest. <code>--dry-run</code> shows everything it
+                would do without doing it.
               </p>
               <pre><code>{`git clone ${REPO}.git
 cd tektonix && ./install.sh`}</code></pre>
@@ -375,30 +428,34 @@ cd tektonix && ./install.sh`}</code></pre>
                 PostgreSQL 14+ &middot; an OpenRouter API key
               </p>
             </article>
+            <article className="lp-install">
+              <code className="lp-kicker">docker compose</code>
+              <h3>Linux, as a bundle</h3>
+              <p>
+                Agent, database, router and the review gate as one stack, if you&rsquo;d rather
+                only install Docker. Put your OpenRouter key and projects folder in <code>.env</code>,
+                start it, and open <code>localhost:8100</code>. The one thing it can&rsquo;t do is
+                restart your own app after a merge; that needs the host install.
+              </p>
+              <pre><code>{`git clone ${REPO}.git && cd tektonix
+cp docker/.env.example .env
+docker compose up -d`}</code></pre>
+              <p className="lp-reqs">Docker &middot; an OpenRouter API key</p>
+            </article>
           </div>
           <p className="lp-sub lp-install-note">
-            A domain is optional either way &mdash; the agent binds to localhost, and an SSH
-            tunnel reaches it without nginx or a certificate. Give the installer a domain and it
-            will set up both.
+            <strong>Mac:</strong> not yet. It&rsquo;s on the list, and the newsletter is where
+            I&rsquo;ll say when it&rsquo;s ready. You don&rsquo;t need a domain for any of this
+            either: the agent listens on localhost, and an SSH tunnel is enough to reach it from
+            somewhere else.
           </p>
-          {/* The section is called "Run it yourself", so the primary action is
-              the thing that lets you: one archive, both install paths, every
-              operating system. The source stays beside it, quieter, because
-              reading it first is a reasonable thing to want and a licence like
-              this one invites it.
-
-              /releases/latest rather than a versioned asset URL: the direct
-              download link has to name the file, the file names its version,
-              and this page would then quietly offer an old one from the next
-              release onwards. */}
           <div className="lp-cta">
             <a
-              className="lp-btn lp-btn-primary"
+              className="lp-btn lp-btn-quiet"
               href={`${REPO}/releases/latest`}
               target="_blank"
               rel="noopener noreferrer"
             >
-              <DownloadMark />
               Download the latest release
             </a>
             <a className="lp-btn lp-btn-quiet" href={REPO} target="_blank" rel="noopener noreferrer">
@@ -413,12 +470,12 @@ cd tektonix && ./install.sh`}</code></pre>
             redirect the server answers with, which is what keeps this page
             static. site/server/newsletter.py is the other end. */}
         <section className="lp-section lp-news" id="newsletter">
-          <h2 className="lp-h2">What changed, and what is coming</h2>
+          <h2 className="lp-h2">What changed, and what&rsquo;s next</h2>
           <p className="lp-sub">
-            Every release ships with a changelog that says what moved and, more usefully, why
-            it had to. The newsletter is that changelog, plus what is being built next and
-            what turned out to be a bad idea. No cadence promised beyond &ldquo;when there is
-            something worth reading&rdquo;, and nothing else is ever sent to this list.
+            Every release comes with a changelog that says what changed and why. The newsletter
+            is that, plus what I&rsquo;m building next and what turned out to be a bad idea. I
+            only send it when there&rsquo;s something worth reading, and I never send anything
+            else to this list.
           </p>
           <form className="lp-news-form" method="post" action={SUBSCRIBE_URL}>
             <div className="lp-news-fields">
@@ -456,8 +513,8 @@ cd tektonix && ./install.sh`}</code></pre>
               Sign up for the newsletter
             </button>
             <p className="lp-news-fine">
-              Your name and address, stored to send you the newsletter and nothing else. Never
-              sold, never shared.
+              I keep your name and email to send you the newsletter, nothing else. Never sold,
+              never shared.
             </p>
           </form>
         </section>
@@ -469,7 +526,7 @@ cd tektonix && ./install.sh`}</code></pre>
         </div>
         <p>
           Source available under PolyForm Noncommercial 1.0.0 &mdash; free for any noncommercial
-          use. Built and maintained by{" "}
+          use. Built and maintained by me, Danny,{" "}
           <a href={`mailto:${OWNER_EMAIL}`}>{OWNER_EMAIL}</a>.
         </p>
         <a href={REPO} target="_blank" rel="noopener noreferrer">
