@@ -119,6 +119,15 @@ def _ddg_target(href: str) -> str:
     return href
 
 
+def _is_ddg_ad(url: str) -> bool:
+    """DuckDuckGo's sponsored results point at duckduckgo.com/y.js. Judged on
+    the parsed host and path, not a substring: "duckduckgo.com/y.js" inside
+    some other site's URL is that site's page, not an ad."""
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower()
+    return (host == "duckduckgo.com" or host.endswith(".duckduckgo.com")) and parsed.path == "/y.js"
+
+
 _DDG_RESULT = re.compile(
     r'class="result__a"[^>]*href="(?P<href>[^"]+)"[^>]*>(?P<title>.*?)</a>'
     r'(?:.*?class="result__snippet"[^>]*>(?P<snippet>.*?)</a>)?', re.S)
@@ -128,7 +137,7 @@ def parse_ddg(page: str, limit: int) -> list[Result]:
     out: list[Result] = []
     for m in _DDG_RESULT.finditer(page):
         url = _ddg_target(m.group("href"))
-        if not url.startswith(("http://", "https://")) or "duckduckgo.com/y.js" in url:
+        if not url.startswith(("http://", "https://")) or _is_ddg_ad(url):
             continue
         strip = lambda s: html.unescape(re.sub(r"<[^>]+>", "", s or "")).strip()  # noqa: E731
         out.append(Result(strip(m.group("title")), url, strip(m.group("snippet"))))

@@ -133,3 +133,14 @@ def test_the_router_config_has_the_web_search_alias():
     from agent import paths
     cfg = yaml.safe_load((paths.REPO_ROOT / "services/model-router/config.example.yaml").read_text())
     assert "web-search" in [m["model_name"] for m in cfg["model_list"]]
+
+
+
+def test_duckduckgo_ads_are_dropped_by_host_and_path_not_by_substring():
+    """Code scanning #85: a substring test would also drop any other site
+    whose URL happened to contain the text."""
+    assert ws._is_ddg_ad("https://duckduckgo.com/y.js?ad_provider=x")
+    assert ws._is_ddg_ad("https://links.duckduckgo.com/y.js?u3=x")
+    assert not ws._is_ddg_ad("https://example.com/duckduckgo.com/y.js")
+    assert not ws._is_ddg_ad("https://duckduckgo.com.evil.example/y.js")
+    assert not ws._is_ddg_ad("https://simplewebauthn.dev/")
