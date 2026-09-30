@@ -206,11 +206,12 @@ export function LandingPage() {
             that has to prove its work.
           </h1>
           <p className="lp-lede">
-            I built Tektonix because I wanted an agent I could actually leave alone on my own
-            repos. You give it a goal in plain English. It plans, writes the code, runs your
-            project&rsquo;s <em>real</em> test suite, and then a second model reviews it before
-            anything gets near main. It runs on your own machine, with whatever models you pick
-            through OpenRouter.
+            Tektonix was created out of a need for a truly autonomous AI developer you can trust
+            with your repositories. Simply provide a goal in plain English, and the agent
+            independently plans the solution, writes the code, and executes your project&rsquo;s
+            local test suite. To ensure absolute production safety, a secondary model reviews the
+            code before it ever reaches the main branch. Tektonix runs locally on your own machine,
+            giving you full control to plug in any model via OpenRouter.
           </p>
           <div className="lp-cta">
             <a className="lp-btn lp-btn-primary" href={WINDOWS_DOWNLOAD}>
