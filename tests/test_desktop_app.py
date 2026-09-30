@@ -197,3 +197,23 @@ def test_the_app_version_is_one_number_in_three_places():
     cargo = (REPO / "app/src-tauri/Cargo.toml").read_text()
     m = re.search(r'^version = "([^"]+)"', cargo, re.M)
     assert conf["version"] == pkg["version"] == m.group(1)
+
+
+
+def test_code_signing_happens_inside_the_build_and_is_verified():
+    """Authenticode through Azure Artifact Signing (2026-09-30). The sign
+    command goes into the Tauri config before the build, so the updater
+    signature is taken over the signed bytes; a configured signing that
+    yields an unsigned installer fails the release."""
+    wf = yaml.safe_load((REPO / ".github/workflows/release.yml").read_text())
+    steps = wf["jobs"]["app-windows"]["steps"]
+    names = [s.get("name") or s.get("uses", "") for s in steps]
+    sign = names.index("Code signing, when configured")
+    build = next(i for i, n in enumerate(names) if n.startswith("tauri-apps/tauri-action"))
+    verify = names.index("The installer is signed by the expected publisher")
+    assert sign < build < verify
+    assert "signCommand" in steps[sign]["run"] and "trusted-signing-cli" in steps[sign]["run"]
+    assert steps[verify]["if"] == "steps.codesign.outputs.enabled == 'true'"
+    assert "Get-AuthenticodeSignature" in steps[verify]["run"]
+    env = steps[build]["env"]
+    assert {"AZURE_CLIENT_ID", "AZURE_CLIENT_SECRET", "AZURE_TENANT_ID"} <= set(env)

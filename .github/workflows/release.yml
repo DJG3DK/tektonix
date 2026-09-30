@@ -199,6 +199,34 @@ jobs:
           node -e 'const fs=require("fs");for (const f of ["src-tauri/tauri.conf.json","package.json"]){const j=JSON.parse(fs.readFileSync(f,"utf8"));j.version=process.argv[1];fs.writeFileSync(f,JSON.stringify(j,null,2)+"\n")}' "$v"
           sed -i "0,/^version = \".*\"/s//version = \"$v\"/" src-tauri/Cargo.toml
           echo "app version $v"
+      # Windows code signing (Authenticode) through Azure Artifact Signing,
+      # so Windows names the publisher instead of "Unknown publisher". On
+      # when the three AZURE_* secrets and the three ARTIFACT_SIGNING_*
+      # variables are set; Tauri then signs the app and the installer while
+      # it builds them, before the updater signature is taken over the
+      # installer's final bytes. Signing after the build would change the
+      # bytes and break every app's update check.
+      - name: Code signing, when configured
+        id: codesign
+        shell: bash
+        working-directory: app
+        env:
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          SIGN_ENDPOINT: ${{ vars.ARTIFACT_SIGNING_ENDPOINT }}
+          SIGN_ACCOUNT: ${{ vars.ARTIFACT_SIGNING_ACCOUNT }}
+          SIGN_PROFILE: ${{ vars.ARTIFACT_SIGNING_PROFILE }}
+        run: |
+          if [ -z "$AZURE_CLIENT_ID" ] || [ -z "$SIGN_ENDPOINT" ] || [ -z "$SIGN_ACCOUNT" ] || [ -z "$SIGN_PROFILE" ]; then
+            echo "::warning::code signing is not configured; the installer will be unsigned"
+            echo "enabled=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          for v in "$SIGN_ENDPOINT" "$SIGN_ACCOUNT" "$SIGN_PROFILE"; do
+            printf '%s' "$v" | grep -Eq '^[A-Za-z0-9:/._-]+$' || { echo "a signing variable holds unexpected characters" >&2; exit 1; }
+          done
+          cargo install trusted-signing-cli --locked
+          # shellcheck disable=SC2016 # a JavaScript template literal, expanded by node
+          node -e 'const fs=require("fs");const f="src-tauri/tauri.conf.json";const j=JSON.parse(fs.readFileSync(f,"utf8"));j.bundle=j.bundle||{};j.bundle.windows=j.bundle.windows||{};j.bundle.windows.signCommand=`trusted-signing-cli -e ${process.argv[1]} -a ${process.argv[2]} -c ${process.argv[3]} -d Tektonix %1`;fs.writeFileSync(f,JSON.stringify(j,null,2)+"\n")' "$SIGN_ENDPOINT" "$SIGN_ACCOUNT" "$SIGN_PROFILE"
+          echo "enabled=true" >> "$GITHUB_OUTPUT"
       # Builds the NSIS installer, signs the updater artifact with the key in
       # the secrets, and attaches the installer, its .sig and latest.json to
       # the GitHub release for this tag (creating the release if the tag has
@@ -210,6 +238,10 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # Read by trusted-signing-cli when code signing is configured.
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
           # Baked into the binary (stack.rs release_tag): the app pulls the
           # images of the release it came from, rc or not.
           TEKTONIX_RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
@@ -227,6 +259,18 @@ jobs:
           prerelease: ${{ contains(github.event.inputs.tag || github.ref_name, '-') }}
           includeUpdaterJson: true
           updaterJsonPreferNsis: true
+      # A configured signing that produced an unsigned installer is a failed
+      # release, not a warning: the draft is never published.
+      - name: The installer is signed by the expected publisher
+        if: steps.codesign.outputs.enabled == 'true'
+        shell: pwsh
+        working-directory: app/src-tauri/target/release/bundle/nsis
+        run: |
+          $exe = Get-ChildItem -Filter '*_x64-setup.exe' | Select-Object -First 1
+          if (-not $exe) { throw "no installer was built" }
+          $sig = Get-AuthenticodeSignature -FilePath $exe.FullName
+          Write-Host "$($exe.Name): $($sig.Status) -- $($sig.SignerCertificate.Subject)"
+          if ($sig.Status -ne 'Valid') { throw "the installer is not validly signed: $($sig.StatusMessage)" }
       # The image manifest: the digest each image was pushed as, signed with
       # the same key as the installer, on the same release. The app verifies
       # it with its embedded public key before pulling (update.rs
