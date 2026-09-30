@@ -780,3 +780,21 @@ async def test_security_alerts_group_by_package_and_manifest():
     after = {i.key: i for i in await gi.discover(gh, "proj", "o/proj", _proj(security_alerts="propose"))}
     assert "alerts:undici@frontend.package-lock.json" not in after and after["alert:9"].number == 9
     assert after["alert:9"].fingerprint != before
+
+
+
+@pytest.mark.asyncio
+async def test_tektonix_never_offers_its_own_pull_requests_back_to_itself():
+    """2026-09-30, with authors set to "anyone": every task's own PR came back
+    as a new inbox task, which opened another PR for the next poll."""
+    own = {**_pr(43, "operator"), "head": {"ref": "agent/b426d85c-132b-4ed6-95ba-286c24b94617", "sha": "a" * 40},
+           "title": "Land the dependency update proposed in GitHub pull request #42"}
+    backup = {**_pr(44, "operator"), "head": {"ref": "agent/b426d85c-132b-4ed6-95ba-286c24b94617-pre-rebase-backup", "sha": "b" * 40}}
+    person = {**_pr(45, "operator"), "head": {"ref": "agent/add-dark-mode", "sha": "c" * 40}}
+    bot = _pr(46, "dependabot[bot]")
+    gh = FakeGitHub(prs=[own, backup, person, bot])
+    for authors in ("anyone", "bots", "dependabot"):
+        keys = {i.key for i in await gi.discover(gh, "proj", "o/proj", _proj(dependabot_prs="propose") | {"authors": authors})}
+        assert "pr:43" not in keys and "pr:44" not in keys, authors
+    keys = {i.key for i in await gi.discover(gh, "proj", "o/proj", _proj(dependabot_prs="propose") | {"authors": "anyone"})}
+    assert keys == {"pr:45", "pr:46"}, "a person's own branch named agent/... is still theirs"

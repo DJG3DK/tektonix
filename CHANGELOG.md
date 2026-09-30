@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### The inbox never offers Tektonix its own pull requests
+
+With the inbox's PR authors set to "anyone", every pull request a task
+opened came back as a new inbox item, and approving it opened another pull
+request for the next poll ("Land the dependency update proposed in pull
+request #42 (Land ... #37 ...)"). A pull request on a Tektonix task branch
+is skipped whatever the author setting; the items already in an inbox
+resolve on the next poll.
+
 ### GitHub tools take the repository as it appears in a link
 
 Every GitHub inbox task's first pull-request call failed: the goal carries

@@ -152,6 +152,20 @@ class Item:
         return asdict(self)
 
 
+# A Tektonix task branch: agent/<task uuid> (agent/tools/git.py
+# task_branch_name), and the pre-rebase backups beside it.
+_OWN_BRANCH = re.compile(r"^agent/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?:-|$)")
+
+
+def _opened_by_tektonix(pr: dict) -> bool:
+    """A pull request Tektonix opened for one of its own tasks. Never an inbox
+    item, whatever the author setting: with "anyone", the inbox offered each
+    task's own PR back as a new task, which opened another PR for the next
+    poll to offer ("Land the dependency update proposed in pull request #42
+    (Land ... #37 ...)", 2026-09-30)."""
+    return bool(_OWN_BRANCH.match(str((pr.get("head") or {}).get("ref") or "")))
+
+
 def _author_allowed(login: str | None, policy: str) -> bool:
     login = login or ""
     if policy == "anyone":
@@ -179,7 +193,7 @@ async def discover(client: GitHubClient, repo: str, slug: str, proj: dict) -> li
         try:
             for pr in await _prs():
                 login = (pr.get("user") or {}).get("login")
-                if not _author_allowed(login, proj.get("authors", "dependabot")):
+                if _opened_by_tektonix(pr) or not _author_allowed(login, proj.get("authors", "dependabot")):
                     continue
                 head = (pr.get("head") or {}).get("sha") or ""
                 items.append(Item(
