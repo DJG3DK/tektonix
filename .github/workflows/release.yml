@@ -169,6 +169,8 @@ jobs:
     environment: release
     permissions:
       contents: write
+    outputs:
+      signed: ${{ steps.codesign.outputs.enabled }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -314,3 +316,26 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.event.inputs.tag || github.ref_name }}
         run: gh release edit "$TAG" --draft=false --repo "$GITHUB_REPOSITORY"
+
+  # The installer as a user downloads it, verified from outside Windows: the
+  # chain to Microsoft's code-signing root (pinned in the script), the
+  # timestamp, and the publisher's name when ARTIFACT_SIGNING_PUBLISHER is
+  # set. The job above already asked Windows before publishing; this asks
+  # again of the file GitHub is actually serving.
+  verify-published:
+    name: The published installer verifies from outside
+    runs-on: ubuntu-latest
+    needs: app-windows
+    if: needs.app-windows.outputs.signed == 'true'
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq osslsigncode
+      - name: Verify the release's installer
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+          PUBLISHER: ${{ vars.ARTIFACT_SIGNING_PUBLISHER }}
+        run: scripts/verify_windows_installer.sh --release "$TAG" "$PUBLISHER"

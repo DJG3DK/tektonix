@@ -217,3 +217,16 @@ def test_code_signing_happens_inside_the_build_and_is_verified():
     assert "Get-AuthenticodeSignature" in steps[verify]["run"]
     env = steps[build]["env"]
     assert {"AZURE_CLIENT_ID", "AZURE_CLIENT_SECRET", "AZURE_TENANT_ID"} <= set(env)
+
+
+
+def test_the_published_installer_is_verified_from_outside_windows():
+    """The file GitHub serves is checked after publishing, against the
+    Microsoft root pinned in scripts/verify_windows_installer.sh."""
+    wf = yaml.safe_load((REPO / ".github/workflows/release.yml").read_text())
+    app, job = wf["jobs"]["app-windows"], wf["jobs"]["verify-published"]
+    assert app["outputs"]["signed"] == "${{ steps.codesign.outputs.enabled }}"
+    assert job["needs"] == "app-windows" and "signed == 'true'" in job["if"]
+    assert "verify_windows_installer.sh --release" in job["steps"][-1]["run"]
+    script = (REPO / "scripts/verify_windows_installer.sh").read_text()
+    assert "ROOT_SHA256=\"53:67:F2:0C" in script and "-TSA-CAfile" in script
