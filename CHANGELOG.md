@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+## v0.9.1 — the Windows installer is signed
+
+### Windows names the publisher
+
+The installer, the app inside it and its uninstaller are signed with an
+Authenticode certificate issued to the author through Azure Artifact
+Signing, and timestamped, so Windows shows a verified publisher instead of
+"Unknown publisher". SmartScreen may still ask once or twice while the
+certificate builds reputation. The signing runs inside the build, before the
+updater signature is taken, and a release whose installer comes out
+unsigned fails instead of publishing.
+
 ## v0.9.0 — a Windows app that updates itself, a review gate you can trust, and a release you approve
 
 The first full release since v0.8.0. Three things changed shape.
