@@ -130,8 +130,8 @@ const NEW_IN_09 = [
     body: "Every release builds from a tag on a green main, pushes its images once by digest, and signs the list the app pulls from. I approve each one before it ships.",
   },
   {
-    title: "A tougher review gate",
-    body: "A review that checked nothing doesn't pass anymore. A task waiting behind other reviews keeps waiting instead of timing out, and one approval covers a rebase that didn't change anything.",
+    title: "Catching problems before they become problems",
+    body: "The review gate got tougher. If a review didn't actually check the code, it doesn't pass. A task waiting its turn behind other reviews keeps its place instead of timing out, and your approval carries through a rebase that changed nothing.",
   },
   {
     title: "Less busywork from GitHub",
