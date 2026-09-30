@@ -88,6 +88,42 @@ def resolve_slug(repo: str) -> str | None:
     return slug
 
 
+_SLUG_ARG = re.compile(
+    r"^(?:https?://(?:www\.)?github\.com/)?([A-Za-z0-9](?:[A-Za-z0-9-]{0,38}))/([A-Za-z0-9._-]{1,100}?)(?:\.git)?/?$")
+
+
+def project_for(name: str, allowed_repos: list[str] | None = None) -> tuple[str | None, str | None]:
+    """(project, None), or (None, the message a model reads).
+
+    `name` is a project's own name here, or its GitHub owner/repo (or the
+    repository's URL), which is what a model copies out of a pull request
+    link in its goal. The owner/repo is matched against each project's own
+    origin remote, case-insensitively as GitHub does, so it works for any
+    install without a list of names anywhere. Access is the caller's, as
+    before: a repository the user cannot see is refused in either form, and
+    the list of valid names names only what they can see. Two visible
+    projects on one repository is ambiguous and says so.
+    """
+    visible = sorted(p for p in PROJECTS if allowed_repos is None or p in allowed_repos)
+    listing = ", ".join(repr(p) for p in visible) or "none"
+    name = (name or "").strip()
+    if name in PROJECTS:
+        if name in visible:
+            return name, None
+        return None, f"unknown or inaccessible repo {name!r}. Projects you can use: {listing}."
+    m = _SLUG_ARG.match(name)
+    if m:
+        wanted = f"{m.group(1)}/{m.group(2)}".lower()
+        hits = [p for p in visible if (resolve_slug(p) or "").lower() == wanted]
+        if len(hits) == 1:
+            return hits[0], None
+        if len(hits) > 1:
+            return None, (f"{name!r} is the repository of more than one project: "
+                          f"{', '.join(repr(h) for h in hits)}. Pass the project name instead.")
+    return None, (f"unknown or inaccessible repo {name!r}. Pass a project name (projects you can use: "
+                  f"{listing}), or the GitHub owner/repo of one of them.")
+
+
 def _headers(token: str, accept: str = "application/vnd.github+json") -> dict:
     return {"Authorization": f"Bearer {token}", "Accept": accept, "X-GitHub-Api-Version": "2022-11-28"}
 
@@ -188,9 +224,14 @@ def make_github_tools(token: TokenSource, allowed_repos: list[str] | None = None
         return []
     resolve_token = token if callable(token) else (lambda _repo: token)
 
+    def _project(repo: str) -> str:
+        project, problem = project_for(repo, allowed_repos)
+        if problem:
+            raise ValueError(problem)
+        return project
+
     def _slug_for(repo: str) -> str:
-        if repo not in PROJECTS or (allowed_repos is not None and repo not in allowed_repos):
-            raise ValueError(f"unknown or inaccessible repo {repo!r}")
+        repo = _project(repo)
         slug = resolve_slug(repo)
         if not slug:
             raise ValueError(f"{repo!r} has no GitHub origin remote, so it has no pull requests here")
@@ -211,8 +252,10 @@ def make_github_tools(token: TokenSource, allowed_repos: list[str] | None = None
         no diff), "diff", "comments", "checks", or "all". Use this whenever a
         request names a PR ("fix the audit issues on PR 12"): the findings you
         must address are in the review comments, and the diff is the code they
-        refer to."""
+        refer to.
+        `repo` is the project's name, or its GitHub owner/repo as it appears in a link."""
         try:
+            repo = _project(repo)
             slug = _slug_for(repo)
             data = fetch_pull_request(_token_for(repo), slug, int(number))
         except (ValueError, LookupError, PermissionError) as e:
@@ -227,8 +270,10 @@ def make_github_tools(token: TokenSource, allowed_repos: list[str] | None = None
     def github_pull_requests(repo: str, state: str = "open") -> str:
         """List a project's GitHub pull requests: number, state, title, author
         and branches. `state` is "open" (default), "closed" or "all". Use it
-        to find the PR a request refers to by title when no number was given."""
+        to find the PR a request refers to by title when no number was given.
+        `repo` is the project's name, or its GitHub owner/repo as it appears in a link."""
         try:
+            repo = _project(repo)
             slug = _slug_for(repo)
             state = state if state in ("open", "closed", "all") else "open"
             prs = _get(_token_for(repo), f"/repos/{slug}/pulls", params={"state": state, "per_page": 50, "sort": "updated", "direction": "desc"})
@@ -304,7 +349,8 @@ def make_github_inbox_tool(store, allowed_repos: list[str] | None = None):
     @tool
     @tool_errors_to_text
     async def github_inbox_items(repo: str, state: str = "open") -> str:
-        """List the project's GitHub inbox: code scanning (CodeQL) alerts
+        """`repo` is the project's name, or its GitHub owner/repo as it appears in a link.
+        List the project's GitHub inbox: code scanning (CodeQL) alerts
         grouped one item per rule (every file:line and message), the
         Dependabot pull requests, Dependabot security alerts (package,
         vulnerable range, patched version, manifest), reviews requesting
@@ -315,8 +361,10 @@ def make_github_inbox_tool(store, allowed_repos: list[str] | None = None):
         "the alerts in the inbox" or "fix what GitHub flagged": it is the
         exact list, so the plan can name every item instead of guessing
         from the lockfile."""
-        if repo not in PROJECTS or (allowed_repos is not None and repo not in allowed_repos):
-            return f"ERROR: unknown or inaccessible repo {repo!r}"
+        project, problem = project_for(repo, allowed_repos)
+        if problem:
+            return f"ERROR: {problem}"
+        repo = project
         items = list((await github_inbox.list_items(store, repo)).values())
         open_states = ("proposed", "seen", "snoozed", "task_created")
         if state == "open":

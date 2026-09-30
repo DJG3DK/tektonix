@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### GitHub tools take the repository as it appears in a link
+
+Every GitHub inbox task's first pull-request call failed: the goal carries
+the PR's link, the model passed its owner/repo, and the tools knew only the
+project's own name. They take either now, matched against each project's own
+origin remote (so any install works, case-insensitively), with the caller's
+project access unchanged; a miss lists the project names that would work, and
+two projects on one repository is refused as ambiguous rather than guessed.
+
 ### The Windows installer looks like Tektonix
 
 The setup wizard showed the NSIS defaults: a blue sidebar with a computer

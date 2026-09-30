@@ -205,3 +205,66 @@ async def test_the_inbox_tool_lists_open_items_with_the_patched_version(monkeypa
     assert (await tool_.ainvoke({"repo": "b"})).startswith("ERROR")
     empty = await tool_.ainvoke({"repo": "a", "state": "snoozed"})
     assert "no snoozed items" in empty
+
+
+
+# ---------------------------------------------------------------------------
+# 2026-09-30: every inbox task's first GitHub call failed. The goal carries the
+# PR's link (github.com/<owner>/<repo>/pull/<n>); the model passed "<owner>/<repo>";
+# the tools only knew the project's own name.
+# ---------------------------------------------------------------------------
+
+def _two_projects(monkeypatch, allowed=None):
+    monkeypatch.setattr(gh, "PROJECTS", {"storefront": {"live": "/a"}, "internal": {"live": "/b"}, "twin": {"live": "/c"}})
+    slugs = {"storefront": "Acme/Shop", "internal": "acme/internal-tools", "twin": None}
+    monkeypatch.setattr(gh, "resolve_slug", lambda repo: slugs.get(repo))
+
+
+def test_a_project_is_found_by_name_or_by_its_github_owner_repo(monkeypatch):
+    _two_projects(monkeypatch)
+    assert gh.project_for("storefront") == ("storefront", None)
+    assert gh.project_for("Acme/Shop") == ("storefront", None)
+    assert gh.project_for("acme/shop") == ("storefront", None), "GitHub names are case-insensitive"
+    assert gh.project_for("https://github.com/acme/shop") == ("storefront", None)
+    assert gh.project_for("https://github.com/Acme/Shop.git") == ("storefront", None)
+
+
+def test_access_is_the_callers_in_either_form(monkeypatch):
+    _two_projects(monkeypatch)
+    def usable(problem):
+        return problem.split("can use:", 1)[1]
+
+    project, problem = gh.project_for("acme/internal-tools", allowed_repos=["storefront"])
+    assert project is None and "inaccessible" in problem
+    assert usable(problem).startswith(" 'storefront')"), "the list names only what the user can see"
+    project, problem = gh.project_for("internal", allowed_repos=["storefront"])
+    assert project is None and usable(problem).strip() == "'storefront'."
+
+
+def test_an_unknown_name_lists_the_valid_ones(monkeypatch):
+    _two_projects(monkeypatch)
+    project, problem = gh.project_for("someone/else")
+    assert project is None
+    assert "'internal', 'storefront', 'twin'" in problem and "owner/repo" in problem
+
+
+def test_two_projects_on_one_repository_is_ambiguous_not_a_guess(monkeypatch):
+    monkeypatch.setattr(gh, "PROJECTS", {"shop-a": {}, "shop-b": {}})
+    monkeypatch.setattr(gh, "resolve_slug", lambda repo: "acme/shop")
+    project, problem = gh.project_for("acme/shop")
+    assert project is None and "'shop-a', 'shop-b'" in problem
+
+
+def test_the_pull_request_tool_accepts_the_owner_repo_and_uses_the_projects_token(monkeypatch):
+    _two_projects(monkeypatch)
+    seen = {}
+
+    def fetch(token, slug, number):
+        seen.update(token=token, slug=slug, number=number)
+        return _data()
+
+    monkeypatch.setattr(gh, "fetch_pull_request", fetch)
+    tools = {t.name: t for t in make_github_tools(lambda repo: f"token-for-{repo}")}
+    out = tools["github_pull_request"].invoke({"repo": "Acme/Shop", "number": 12})
+    assert "Audit fixes" in out
+    assert seen == {"token": "token-for-storefront", "slug": "Acme/Shop", "number": 12}
