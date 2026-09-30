@@ -144,3 +144,14 @@ def test_duckduckgo_ads_are_dropped_by_host_and_path_not_by_substring():
     assert not ws._is_ddg_ad("https://example.com/duckduckgo.com/y.js")
     assert not ws._is_ddg_ad("https://duckduckgo.com.evil.example/y.js")
     assert not ws._is_ddg_ad("https://simplewebauthn.dev/")
+
+
+
+def test_only_duckduckgos_own_redirects_are_unwrapped():
+    """Code scanning #85: `netloc.endswith("duckduckgo.com")` also matched
+    evilduckduckgo.com, whose /l/ link would then have been unwrapped."""
+    wrapped = "//duckduckgo.com/l/?uddg=https%3A%2F%2Fsimplewebauthn.dev%2F"
+    assert ws._ddg_target(wrapped) == "https://simplewebauthn.dev/"
+    lookalike = "https://evilduckduckgo.com/l/?uddg=https%3A%2F%2Fattacker.example%2F"
+    assert ws._ddg_target(lookalike) == lookalike, "left as the lookalike link it is"
+    assert ws._is_ddg_host("html.duckduckgo.com") and not ws._is_ddg_host("duckduckgo.com.evil.example")

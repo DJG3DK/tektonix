@@ -107,13 +107,20 @@ async def _via_router(query: str, n: int, metadata: dict | None) -> list[Result]
     return parse_citations(r.json(), n)
 
 
+def _is_ddg_host(hostname: str | None) -> bool:
+    """duckduckgo.com or a subdomain of it -- never a name that only ends in
+    the same letters (evilduckduckgo.com). Code scanning #85."""
+    host = (hostname or "").lower().rstrip(".")
+    return host == "duckduckgo.com" or host.endswith(".duckduckgo.com")
+
+
 def _ddg_target(href: str) -> str:
     """DuckDuckGo wraps results as //duckduckgo.com/l/?uddg=<url>."""
     href = html.unescape(href)
     if href.startswith("//"):
         href = "https:" + href
     parsed = urlparse(href)
-    if parsed.netloc.endswith("duckduckgo.com") and parsed.path.startswith("/l/"):
+    if _is_ddg_host(parsed.hostname) and parsed.path.startswith("/l/"):
         target = parse_qs(parsed.query).get("uddg", [""])[0]
         return unquote(target)
     return href
@@ -124,8 +131,7 @@ def _is_ddg_ad(url: str) -> bool:
     the parsed host and path, not a substring: "duckduckgo.com/y.js" inside
     some other site's URL is that site's page, not an ad."""
     parsed = urlparse(url)
-    host = (parsed.hostname or "").lower()
-    return (host == "duckduckgo.com" or host.endswith(".duckduckgo.com")) and parsed.path == "/y.js"
+    return _is_ddg_host(parsed.hostname) and parsed.path == "/y.js"
 
 
 _DDG_RESULT = re.compile(
