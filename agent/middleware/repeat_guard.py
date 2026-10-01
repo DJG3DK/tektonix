@@ -226,6 +226,9 @@ class RepeatCallGuardMiddleware(AgentMiddleware):
                 f"arguments, act on this result, or state what it tells you and move on."
             ),
             tool_call_id=tool_call["id"],
+            # The call it stands in for: without it the reliability panel
+            # filed every loop the guard broke under "unknown" (2026-10-01).
+            name=tool_call.get("name"),
             status="error",
         )
 
@@ -240,6 +243,9 @@ class RepeatCallGuardMiddleware(AgentMiddleware):
                 f"(different command or file, an edit, a check, or finish the todo)."
             ),
             tool_call_id=tool_call["id"],
+            # The call it stands in for: without it the reliability panel
+            # filed every loop the guard broke under "unknown" (2026-10-01).
+            name=tool_call.get("name"),
             status="error",
         )
 

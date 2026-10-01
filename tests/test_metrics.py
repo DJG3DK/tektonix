@@ -375,3 +375,33 @@ def test_a_redirected_process_writes_beside_its_run_not_in_production_s_log(tmp_
     assert mine.is_file() and not prod.exists()
     tool_events.record(tool="bash", ok=True, task_id="P1")
     assert prod.is_file()
+
+
+def test_a_repeat_guard_row_is_filed_under_the_tool_it_blocked(tmp_path, monkeypatch):
+    """Before 2026-10-01 the guard's results carried no name and the panel
+    showed them as "unknown"; old rows are read back by their message."""
+    import json
+    from agent import metrics
+    log = tmp_path / "events.jsonl"
+    now = 1_800_000_000.0
+    rows = [
+        {"ts": now - 60, "tool": "unknown", "ok": False,
+         "detail": "[Tektonix harness] ERROR: `bash` with these exact arguments has now been requested 4 times"},
+        {"ts": now - 50, "tool": "unknown", "ok": False,
+         "detail": "[Tektonix harness] REPEATED CALL: this is the 3rd identical `read` call in a row"},
+        {"ts": now - 40, "tool": "unknown", "ok": False, "detail": "something else"},
+    ]
+    log.write_text("".join(json.dumps(r) + "\n" for r in rows))
+    monkeypatch.setattr(metrics, "TOOL_EVENTS_LOG", log)
+    tools = {t["tool"]: t["errors"] for t in metrics.tool_reliability(window_days=1, now=now)["tools"]}
+    assert tools == {"bash": 1, "read": 1, "unknown": 1}
+
+
+def test_the_repeat_guard_names_the_call_it_answers():
+    from agent.middleware.repeat_guard import RepeatCallGuardMiddleware
+    guard = RepeatCallGuardMiddleware.__new__(RepeatCallGuardMiddleware)
+    call = {"name": "bash", "id": "c1", "args": {}}
+    from langchain_core.messages import ToolMessage
+    run = {"n": 4, "last": ToolMessage(content="same", tool_call_id="c0", name="bash")}
+    assert guard._refusal(call, run).name == "bash"
+    assert guard._cached(call, run).name == "bash"

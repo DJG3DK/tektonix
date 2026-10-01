@@ -141,3 +141,13 @@ def _retrieval_log_in_tmp(monkeypatch, tmp_path):
     closely. Every test writes to its own scratch file instead."""
     from agent import episode_recall
     monkeypatch.setattr(episode_recall, "LOG_PATH", tmp_path / "retrieval_events.jsonl")
+
+
+@pytest.fixture(autouse=True)
+def _tool_events_off_the_live_log(tmp_path, monkeypatch):
+    """Every tool result a test drives through the work node is logged by
+    agent/tool_events.py. Without this they landed in the production log the
+    reliability panel reads: one full run added 66 nameless "t1" rows
+    (2026-10-01). A test that wants its own file still sets LOG_PATH itself."""
+    from agent import tool_events
+    monkeypatch.setattr(tool_events, "LOG_PATH", tmp_path / "tool_events.jsonl")

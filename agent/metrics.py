@@ -28,6 +28,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import time
 from collections import defaultdict
 from pathlib import Path
@@ -44,6 +45,7 @@ ROUTING_LOG = Path(
 # copies of "AGENT_TOOL_EVENTS_LOG or logs/tool_events.jsonl" can drift, and a
 # reader pointed somewhere the writer is not reports zero tool calls.
 TOOL_EVENTS_LOG = tool_events.LOG_PATH
+_HARNESS_TOOL = re.compile(r"^\[Tektonix harness\][^`]*`([A-Za-z0-9_\-]+)`")
 
 
 def _rows(path: Path, since: float) -> list[dict]:
@@ -164,6 +166,12 @@ def tool_reliability(window_days: int = 7, now: float | None = None) -> dict:
     nudges: dict[str, int] = defaultdict(int)
     for row in _rows(TOOL_EVENTS_LOG, since):
         name = str(row.get("tool") or "unknown")
+        if name == "unknown":
+            # Rows the repeat guard wrote before its results carried a name:
+            # the tool is the first `quoted` word of its message.
+            named = _HARNESS_TOOL.search(str(row.get("detail") or ""))
+            if named:
+                name = named.group(1)
         # A shell command the harness pointed at a cheaper tool. Counted on
         # the call it belongs to rather than as a tool of its own -- see
         # agent/tool_events.py -- so a flagged bash call is one bash call
