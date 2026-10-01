@@ -29,7 +29,7 @@ thiserror = "2"
 url = "2"
 # The release's image manifest is signed with the updater's key; these are
 # what the updater itself verifies with.
-minisign-verify = "0.2"
+minisign-verify = "0.3"
 base64 = "0.22"
 
 [dev-dependencies]
