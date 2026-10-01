@@ -14,7 +14,24 @@ import "./ConsolidationStatusPanel.css";
  *  day at the first quiet moment after they are due. The panel shows when
  *  each is next due and lets an admin run one now.
  */
+// Collapsed by default on a phone (2026-10-01): the card sits above the model
+// list, which scrolls inside its own pane, so open it held some 40% of the
+// screen the whole time. The choice is remembered per browser.
+const OPEN_KEY = "consolidation.open";
+const NARROW = "(max-width: 760px)";
+
+function initiallyOpen(): boolean {
+  try {
+    const saved = window.localStorage.getItem(OPEN_KEY);
+    if (saved === "1" || saved === "0") return saved === "1";
+  } catch {
+    // storage blocked: fall through to the screen-size default
+  }
+  return !(typeof window.matchMedia === "function" && window.matchMedia(NARROW).matches);
+}
+
 export function ConsolidationStatusPanel() {
+  const [open, setOpen] = useState<boolean>(initiallyOpen);
   const [status, setStatus] = useState<ConsolidationStatus | null>(null);
   const [jobs, setJobs] = useState<JobStatus[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -81,14 +98,28 @@ export function ConsolidationStatusPanel() {
           ? "Stale"
           : "Healthy";
   const fmt = (ts: string | null | undefined) => (ts ? ts.replace("T", " ").replace("Z", " UTC") : "");
+  // The one line a collapsed card keeps: when the next run is.
+  const nextShort = status.running ? "running now" : status.due ? "due now"
+    : status.due_at ? `next ${fmt(status.due_at).slice(11, 16)} UTC` : "";
+
+  function toggle() {
+    setOpen((v) => {
+      try { window.localStorage.setItem(OPEN_KEY, v ? "0" : "1"); } catch { /* a convenience only */ }
+      return !v;
+    });
+  }
 
   return (
-    <div className={`consol-panel consol-panel--${tone}`}>
-      <div className="consol-head">
+    <div className={`consol-panel consol-panel--${tone}${open ? "" : " consol-panel--collapsed"}`}>
+      <button type="button" className="consol-head" onClick={toggle} aria-expanded={open}
+              aria-label={`Memory consolidation: ${headline}${open ? "" : `, ${nextShort}`}. ${open ? "Collapse" : "Expand"}`}>
         <span className="consol-dot" />
         <span className="consol-title">Memory consolidation</span>
+        {!open && nextShort && <span className="consol-next">{nextShort.replace(" UTC", "")}</span>}
         <span className="consol-headline">{headline}</span>
-      </div>
+        <span className={`consol-chevron${open ? " consol-chevron--open" : ""}`} aria-hidden="true">▾</span>
+      </button>
+      {open && (<>
       <div className="consol-meta">
         {neverRan ? (
           <>No run recorded yet. The agent runs it once a day at the first quiet moment
@@ -138,6 +169,7 @@ export function ConsolidationStatusPanel() {
           {showLog && <pre className="consol-log">{status.tail}</pre>}
         </>
       )}
+      </>)}
     </div>
   );
 }

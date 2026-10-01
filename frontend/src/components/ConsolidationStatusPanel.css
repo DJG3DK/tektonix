@@ -8,12 +8,21 @@
      The log is the only thing allowed to grow, and only when opened. */
   flex: 0 0 auto;
 }
-.consol-head { display: flex; align-items: center; gap: 9px; }
+.consol-head {
+  display: flex; align-items: center; gap: 9px; width: 100%;
+  background: none; border: none; padding: 0; margin: 0; color: inherit; font: inherit;
+  text-align: left; cursor: pointer;
+}
+.consol-head:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 4px; }
+.consol-next { margin-left: auto; font-size: 12px; color: var(--text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.consol-chevron { flex: 0 0 auto; font-size: 12px; color: var(--text-dim); transition: transform .15s ease; transform: rotate(-90deg); }
+.consol-chevron--open { transform: none; }
+.consol-panel--collapsed { padding-top: 9px; padding-bottom: 9px; margin-bottom: 6px; }
 .consol-dot { width: 9px; height: 9px; border-radius: 50%; flex: 0 0 auto; background: var(--text-faint); }
 .consol-panel--good .consol-dot { background: #4ea96b; }
 .consol-panel--warn .consol-dot { background: #e5a50a; }
 .consol-panel--bad  .consol-dot { background: #f26d6d; }
-.consol-title { font-weight: 650; font-size: 14px; }
+.consol-title { font-weight: 650; font-size: 14px; white-space: nowrap; }
 .consol-headline { margin-left: auto; font-size: 12px; font-weight: 650; text-transform: uppercase; letter-spacing: .05em; color: var(--text-dim); }
 .consol-panel--good .consol-headline { color: #4ea96b; }
 .consol-panel--warn .consol-headline { color: #e5a50a; }
@@ -44,3 +53,5 @@
   border: 1px solid currentColor; background: transparent; color: inherit; cursor: pointer; }
 .consol-run-btn:disabled { opacity: 0.5; cursor: default; }
 .consol-run-error { margin-top: 0.4rem; font-size: 0.85rem; color: var(--danger, #c0392b); }
+
+.consol-next + .consol-headline { margin-left: 0; }

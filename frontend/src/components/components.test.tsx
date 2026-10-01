@@ -79,6 +79,49 @@ describe("ConsolidationStatusPanel", () => {
   });
 });
 
+describe("ConsolidationStatusPanel — collapsing", () => {
+  const healthy = { ran_at: "2026-09-30T04:15:01Z", ok: true, stale: false, due_at: "2026-10-01T04:15:01Z", due: false, tail: "log" };
+
+  function phone(narrow: boolean) {
+    window.localStorage.removeItem("consolidation.open");
+    vi.stubGlobal("matchMedia", (q: string) => ({ matches: narrow && q.includes("max-width"), media: q,
+      addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, onchange: null, dispatchEvent: () => false }));
+  }
+
+  it("starts as one line on a phone, with the status and the next run", async () => {
+    phone(true);
+    getConsolidationStatus.mockResolvedValue(healthy);
+    render(<ConsolidationStatusPanel />);
+    const head = await screen.findByRole("button", { name: /memory consolidation: healthy, next 04:15 utc\. expand/i });
+    expect(head).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText(/last run/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /show log/i })).not.toBeInTheDocument();
+    await userEvent.click(head);
+    expect(screen.getByText(/last run 2026-09-30 04:15:01 UTC/i)).toBeInTheDocument();
+    expect(window.localStorage.getItem("consolidation.open")).toBe("1");
+  });
+
+  it("starts open on a wide screen, and the choice is remembered", async () => {
+    phone(false);
+    getConsolidationStatus.mockResolvedValue(healthy);
+    render(<ConsolidationStatusPanel />);
+    const head = await screen.findByRole("button", { name: /collapse/i });
+    expect(screen.getByText(/last run/i)).toBeInTheDocument();
+    await userEvent.click(head);
+    expect(screen.queryByText(/last run/i)).not.toBeInTheDocument();
+    cleanup();
+    render(<ConsolidationStatusPanel />);
+    expect(await screen.findByRole("button", { name: /expand/i })).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("a failure still shows on the collapsed line", async () => {
+    phone(true);
+    getConsolidationStatus.mockResolvedValue({ ...healthy, ok: false, exit_code: 3 });
+    render(<ConsolidationStatusPanel />);
+    expect(await screen.findByText(/failed \(exit 3\)/i)).toBeInTheDocument();
+  });
+});
+
 describe("MobileNav", () => {
   const handlers = () => ({
     onTasks: vi.fn(),
