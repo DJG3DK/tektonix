@@ -6,6 +6,6 @@
 # internals, so a bump is expected to be routine. CI installs exactly this
 # file into its own venv and runs the router's tests with it.
 fastapi==0.141.1
-uvicorn[standard]==0.53.0
+uvicorn[standard]==0.54.0
 httpx==0.28.1
 pyyaml==6.0.3
