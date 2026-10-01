@@ -44,6 +44,9 @@ export function LoginPage({ onLoggedIn }: Props) {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  // Separate from `submitting`: while the browser's passkey prompt is open,
+  // the password button must not also read "Signing in..." (2026-10-01).
+  const [passkeyWaiting, setPasskeyWaiting] = useState(false);
 
   async function handleLogin() {
     if (!email.trim() || !password) return;
@@ -68,7 +71,7 @@ export function LoginPage({ onLoggedIn }: Props) {
      or PIN is the second factor, so there is no code step after it. The
      password + code form below stays as the way in without one. */
   async function handlePasskey() {
-    setSubmitting(true);
+    setPasskeyWaiting(true);
     setError(null);
     try {
       const { challenge_id, options } = await passkeyLoginOptions();
@@ -79,7 +82,7 @@ export function LoginPage({ onLoggedIn }: Props) {
     } catch (err) {
       setError(passkeyErrorText(err, "passkey sign-in failed"));
     } finally {
-      setSubmitting(false);
+      setPasskeyWaiting(false);
     }
   }
 
@@ -288,9 +291,10 @@ export function LoginPage({ onLoggedIn }: Props) {
         <h1>Sign in</h1>
         {passkeysSupported() && (
           <>
-            <button className="btn btn-primary btn-block login-passkey" disabled={submitting} onClick={handlePasskey}>
-              {submitting ? "Waiting for your passkey..." : "Sign in with a passkey"}
+            <button className="btn btn-primary btn-block login-passkey" disabled={submitting || passkeyWaiting} onClick={handlePasskey}>
+              {passkeyWaiting ? "Waiting for your passkey..." : "Sign in with a passkey"}
             </button>
+            <p className="login-passkey-hint">No passkey yet? Sign in below, then add one in Settings → Account.</p>
             <div className="login-or" role="separator"><span>or use your password</span></div>
           </>
         )}
@@ -316,7 +320,7 @@ export function LoginPage({ onLoggedIn }: Props) {
           />
         </label>
         {error && <div className="error-banner">{error}</div>}
-        <button className={`btn btn-block ${passkeysSupported() ? "btn-secondary" : "btn-primary"}`} disabled={submitting || !email.trim() || !password} onClick={handleLogin}>
+        <button className={`btn btn-block ${passkeysSupported() ? "btn-secondary" : "btn-primary"}`} disabled={submitting || passkeyWaiting || !email.trim() || !password} onClick={handleLogin}>
           {submitting ? "Signing in..." : "Sign in"}
         </button>
         <button

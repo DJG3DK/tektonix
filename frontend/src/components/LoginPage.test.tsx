@@ -264,6 +264,16 @@ describe("LoginPage — passkeys", () => {
     expect(passwordBox()).toBeInTheDocument();
   });
 
+  it("while the passkey prompt is open only the passkey button says it is waiting", async () => {
+    fakeBrowser(() => new Promise(() => {}));
+    passkeyLoginOptions.mockResolvedValue({ challenge_id: "c1", options: { challenge: "AQID", rpId: "agent.example.com" } });
+    renderLogin();
+    await userEvent.click(screen.getByRole("button", { name: /sign in with a passkey/i }));
+    expect(await screen.findByRole("button", { name: /waiting for your passkey/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /^sign in$/i })).toBeInTheDocument();
+    expect(screen.queryByText(/signing in\.\.\./i)).not.toBeInTheDocument();
+  });
+
   it("offers no passkey button in a browser without them", () => {
     vi.stubGlobal("PublicKeyCredential", undefined);
     renderLogin();

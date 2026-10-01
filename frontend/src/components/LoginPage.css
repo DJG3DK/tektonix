@@ -233,3 +233,5 @@
   border: 1px solid var(--border-soft, var(--border));
 }
 .login-page .btn-secondary:hover:not(:disabled) { filter: brightness(1.15); }
+
+.login-passkey-hint { margin: 6px 0 0; font-size: 12px; color: var(--text-dim); text-align: center; }
