@@ -414,7 +414,7 @@ services:
     restart: unless-stopped
 
   checks-redis:
-    image: redis:7-alpine
+    image: redis:8-alpine
     container_name: tektonix-checks-redis
     # One user, every check: Redis cannot bind a user to a database index,
     # so a run's own index is a convention (agent/review_sandbox.py). The
