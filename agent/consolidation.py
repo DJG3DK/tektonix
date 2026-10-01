@@ -74,8 +74,17 @@ EPISODE_RETENTION = 200
 # already generous. Both guards below make "runaway" cost-bounded and
 # call-bounded rather than time-bounded.
 CONSOLIDATION_BUDGET_USD = 2.0
-CONSOLIDATION_MODEL_CALL_LIMIT = 40
-CONSOLIDATION_TOOL_CALL_LIMIT = 60
+# 2026-10-01: a busy day (17 new episodes on one project) used all 40 model
+# calls reading files before writing anything. The dollar ceiling above is
+# what bounds a run's cost; these only stop a loop.
+CONSOLIDATION_MODEL_CALL_LIMIT = 80
+CONSOLIDATION_TOOL_CALL_LIMIT = 120
+# The answer carries the whole rewritten memory, and the model thinks before
+# it writes: on 2026-10-01 it spent 18,700 of the router's default 32,768
+# output tokens reasoning and ran out mid-answer ($0.44, nothing written).
+# Room for the answer, and a budget for the thinking.
+CONSOLIDATION_MAX_OUTPUT_TOKENS = 60_000
+CONSOLIDATION_REASONING_TOKENS = 8_000
 
 MAX_EPISODES_PER_RUN = 50  # backstop -- see module docstring on why this stays small by design
 
@@ -207,7 +216,9 @@ async def run_consolidation(config: Config, repo: str, checkpointer, store: Base
         base_url=config.router_base_url,
         api_key=config.router_api_key,
         temperature=0,
-        timeout=180,
+        timeout=300,
+        max_tokens=CONSOLIDATION_MAX_OUTPUT_TOKENS,
+        extra_body={"reasoning": {"max_tokens": CONSOLIDATION_REASONING_TOKENS}},
     )
     project_tools, _ = make_agent_tools(repo_root)  # read-only consolidation -- no edit-guard state to track
     read_only_tools = [t for t in project_tools if t.name in ("read", "bash")]

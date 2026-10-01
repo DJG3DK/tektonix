@@ -273,3 +273,16 @@ def test_the_loop_settles_then_ticks(data_dir, monkeypatch):
 
     asyncio.run(go())
     assert calls == ["consolidation", "cartography"], "ran once each, then not due"
+
+
+
+@pytest.mark.asyncio
+async def test_a_lock_message_does_not_outlive_the_run_it_described(monkeypatch):
+    """2026-10-01: "running in another process" stayed on the card for hours
+    after the cron run that held the lock had ended."""
+    from agent import jobs
+    name = next(iter(jobs.JOBS))
+    jobs._waiting[name] = "due, running in another process (data/x.lock is held)"
+    monkeypatch.setattr(jobs, "is_due", lambda job: False)
+    await jobs.run_due(None)
+    assert name not in jobs._waiting

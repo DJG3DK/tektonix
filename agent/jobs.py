@@ -292,6 +292,11 @@ async def run_due(state) -> list[str]:
     ran = []
     for name, job in JOBS.items():
         if not is_due(job) or _lock(name).locked() or name in _claimed:
+            # Whatever held it up last time is over: a stale "running in
+            # another process" outlived the cron run it described by hours
+            # (2026-10-01).
+            if not _lock(name).locked():
+                _waiting.pop(name, None)
             continue
         if not quiet():
             _waiting[name] = "due, waiting for the agent to be idle"
