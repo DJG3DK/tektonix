@@ -27,6 +27,11 @@ import agent.server as srv
 PUBLIC_ROUTES = {
     ("POST", "/api/auth/login"),            # the entry point itself
     ("POST", "/api/auth/2fa/verify"),       # second factor, mid-login
+    # Passkey sign-in: the options carry only a fresh challenge and the site
+    # id; the verify step is the login itself, guarded by the authenticator's
+    # signature and rate-limited like the password (agent/routers/passkeys.py).
+    ("POST", "/api/auth/passkeys/login/options"),
+    ("POST", "/api/auth/passkeys/login/verify"),
     ("POST", "/api/auth/logout"),           # must work with a dead session
     ("POST", "/api/auth/forgot-password"),  # by definition pre-auth
     ("POST", "/api/auth/reset-password"),   # ditto, guarded by the emailed code
@@ -191,6 +196,7 @@ def test_the_route_surface_has_not_silently_changed():
 #   python -c "import tests.test_route_inventory as t; print(t._inventory())"
 EXPECTED: list[tuple[str, str, str | None]] = [
     ('DELETE', '/_review/{path:path}', 'require_full_auth'),
+    ('DELETE', '/api/auth/passkeys/{passkey_id}', 'require_full_auth'),
     ('DELETE', '/api/auth/users/{user_id}', 'require_full_auth'),
     ('DELETE', '/api/planning/sessions/{session_id}', 'require_full_auth'),
     ('DELETE', '/api/projects/archives/{filename}', 'require_full_auth'),
@@ -207,6 +213,7 @@ EXPECTED: list[tuple[str, str, str | None]] = [
     ('GET', '/api/audit', 'require_full_auth'),
     ('GET', '/api/auth/me', 'get_current_user'),
     ('GET', '/api/auth/me/telegram', 'require_full_auth'),
+    ('GET', '/api/auth/passkeys', 'require_full_auth'),
     ('GET', '/api/auth/users', 'require_full_auth'),
     ('GET', '/api/consolidation/status', 'require_full_auth'),
     ('GET', '/api/env-config', 'require_full_auth'),
@@ -241,6 +248,7 @@ EXPECTED: list[tuple[str, str, str | None]] = [
     ('GET', '/api/tasks/{task_id}/diff', 'require_full_auth'),
     ('GET', '/api/tasks/{task_id}/file', 'require_full_auth'),
     ('PATCH', '/_review/{path:path}', 'require_full_auth'),
+    ('PATCH', '/api/auth/passkeys/{passkey_id}', 'require_full_auth'),
     ('PATCH', '/api/auth/users/{user_id}', 'require_full_auth'),
     ('POST', '/_review/{path:path}', 'require_full_auth'),
     ('POST', '/api/auth/2fa/confirm', 'get_current_user'),
@@ -256,6 +264,10 @@ EXPECTED: list[tuple[str, str, str | None]] = [
     ('POST', '/api/auth/me/telegram', 'require_full_auth'),
     ('POST', '/api/auth/me/telegram/test', 'require_full_auth'),
     ('POST', '/api/auth/me/theme', 'require_full_auth'),
+    ('POST', '/api/auth/passkeys/login/options', None),
+    ('POST', '/api/auth/passkeys/login/verify', None),
+    ('POST', '/api/auth/passkeys/register/options', 'require_full_auth'),
+    ('POST', '/api/auth/passkeys/register/verify', 'require_full_auth'),
     ('POST', '/api/auth/reset-password', None),
     ('POST', '/api/auth/users', 'require_full_auth'),
     ('POST', '/api/env-config', 'require_full_auth'),
@@ -305,4 +317,5 @@ EXPECTED: list[tuple[str, str, str | None]] = [
     ('POST', '/api/uploads', 'require_full_auth'),
     ('PUT', '/_review/{path:path}', 'require_full_auth'),
     ('WS', '/api/planning/sessions/{session_id}/stream', 'get_user_from_ws_cookie (in-body, pre-handshake)'),
-    ('WS', '/api/tasks/{task_id}/stream', 'get_user_from_ws_cookie (in-body, pre-handshake)')]
+    ('WS', '/api/tasks/{task_id}/stream', 'get_user_from_ws_cookie (in-body, pre-handshake)'),
+]

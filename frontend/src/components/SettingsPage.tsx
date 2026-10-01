@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { SetupTotpPage } from "./SetupTotpPage";
 import { RuntimeLimitsPanel } from "./RuntimeLimitsPanel";
 import { SettingsSaveBar, SettingsSaveProvider } from "./SettingsSaveBar";
+import { PasskeysCard } from "./PasskeysCard";
 import { changePassword, disable2FA, setAutoApprove, setMergeReview, getTelegramSettings, setTelegramSettings, sendTelegramTest, listProjectsConfig } from "../api";
 import type { CurrentUser } from "../types";
 import "./SettingsPage.css";
@@ -327,6 +328,8 @@ export function SettingsPage({ user, onUserChanged, onProjectsChanged }: Props) 
                 </>
               )}
             </section>
+
+            <PasskeysCard />
           </div>
         )}
 

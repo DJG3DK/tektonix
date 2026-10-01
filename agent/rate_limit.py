@@ -57,6 +57,10 @@ _LIMITS = {
     # at full speed, and the password is what turns that session into
     # everything else. Same brake as login.
     "password-recheck": (5, 60, 300),
+    # Passkey sign-in (agent/routers/passkeys.py): each try needs the
+    # device's own unlock, so guessing is not the threat a password brake is
+    # for; this bounds the options-and-verify pairs anyone can churn through.
+    "passkey-login": (10, 60, 300),
 }
 
 # (ip, action) -> list[timestamp]  and  (ip, action) -> locked_until

@@ -8,6 +8,8 @@ const login = vi.fn();
 const verify2FA = vi.fn();
 const forgotPassword = vi.fn();
 const resetPassword = vi.fn();
+const passkeyLoginOptions = vi.fn();
+const passkeyLoginVerify = vi.fn();
 
 vi.mock("../api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../api")>();
@@ -17,6 +19,8 @@ vi.mock("../api", async (importOriginal) => {
     verify2FA: (...a: unknown[]) => verify2FA(...a),
     forgotPassword: (...a: unknown[]) => forgotPassword(...a),
     resetPassword: (...a: unknown[]) => resetPassword(...a),
+    passkeyLoginOptions: (...a: unknown[]) => passkeyLoginOptions(...a),
+    passkeyLoginVerify: (...a: unknown[]) => passkeyLoginVerify(...a),
   };
 });
 
@@ -228,5 +232,42 @@ describe("LoginPage — navigation", () => {
     const links = screen.getAllByRole("link");
     expect(links).toHaveLength(1);
     expect(links[0]).toHaveAttribute("href", "https://tektonix.io");
+  });
+});
+
+
+describe("LoginPage — passkeys", () => {
+  function fakeBrowser(get: () => Promise<unknown>) {
+    vi.stubGlobal("PublicKeyCredential", function PublicKeyCredential() {});
+    Object.defineProperty(navigator, "credentials", { configurable: true, value: { get, create: vi.fn() } });
+  }
+
+  it("signs in with a passkey alone, no password and no code", async () => {
+    const cred = { toJSON: () => ({ id: "abc", rawId: "abc", type: "public-key", response: {} }) };
+    fakeBrowser(() => Promise.resolve(cred));
+    passkeyLoginOptions.mockResolvedValue({ challenge_id: "c1", options: { challenge: "AQID", rpId: "agent.example.com" } });
+    passkeyLoginVerify.mockResolvedValue({ user });
+    const { onLoggedIn } = renderLogin();
+    await userEvent.click(screen.getByRole("button", { name: /sign in with a passkey/i }));
+    expect(passkeyLoginVerify).toHaveBeenCalledWith("c1", expect.objectContaining({ id: "abc" }));
+    expect(onLoggedIn).toHaveBeenCalledWith(user);
+    expect(login).not.toHaveBeenCalled();
+  });
+
+  it("a cancelled prompt is said plainly and the password form is still there", async () => {
+    fakeBrowser(() => Promise.reject(new DOMException("no", "NotAllowedError")));
+    passkeyLoginOptions.mockResolvedValue({ challenge_id: "c1", options: { challenge: "AQID", rpId: "agent.example.com" } });
+    renderLogin();
+    await userEvent.click(screen.getByRole("button", { name: /sign in with a passkey/i }));
+    expect(await screen.findByText(/cancelled or timed out/i)).toBeInTheDocument();
+    expect(emailBox()).toBeInTheDocument();
+    expect(passwordBox()).toBeInTheDocument();
+  });
+
+  it("offers no passkey button in a browser without them", () => {
+    vi.stubGlobal("PublicKeyCredential", undefined);
+    renderLogin();
+    expect(screen.queryByRole("button", { name: /passkey/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^sign in$/i })).toBeInTheDocument();
   });
 });

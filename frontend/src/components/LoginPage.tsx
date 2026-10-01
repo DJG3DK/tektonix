@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { forgotPassword, login, resetPassword, verify2FA } from "../api";
+import { forgotPassword, login, passkeyLoginOptions, passkeyLoginVerify, resetPassword, verify2FA } from "../api";
+import { credentialJSON, passkeyErrorText, passkeysSupported, requestOptions } from "../passkeys";
 import type { CurrentUser } from "../types";
 import logoUrl from "../assets/tektonix-logo.png";
 import "./LoginPage.css";
@@ -58,6 +59,25 @@ export function LoginPage({ onLoggedIn }: Props) {
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "login failed");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  /* A passkey is a whole sign-in on its own: the device's fingerprint, face
+     or PIN is the second factor, so there is no code step after it. The
+     password + code form below stays as the way in without one. */
+  async function handlePasskey() {
+    setSubmitting(true);
+    setError(null);
+    try {
+      const { challenge_id, options } = await passkeyLoginOptions();
+      const cred = await navigator.credentials.get({ publicKey: requestOptions(options) });
+      if (!cred) throw new Error("no passkey was chosen");
+      const result = await passkeyLoginVerify(challenge_id, credentialJSON(cred as PublicKeyCredential));
+      onLoggedIn(result.user);
+    } catch (err) {
+      setError(passkeyErrorText(err, "passkey sign-in failed"));
     } finally {
       setSubmitting(false);
     }
@@ -266,6 +286,14 @@ export function LoginPage({ onLoggedIn }: Props) {
       <div className="login-card">
         <LoginMark />
         <h1>Sign in</h1>
+        {passkeysSupported() && (
+          <>
+            <button className="btn btn-primary btn-block login-passkey" disabled={submitting} onClick={handlePasskey}>
+              {submitting ? "Waiting for your passkey..." : "Sign in with a passkey"}
+            </button>
+            <div className="login-or" role="separator"><span>or use your password</span></div>
+          </>
+        )}
         <label className="form-field">
           <span>Email</span>
           <input
@@ -288,7 +316,7 @@ export function LoginPage({ onLoggedIn }: Props) {
           />
         </label>
         {error && <div className="error-banner">{error}</div>}
-        <button className="btn btn-primary btn-block" disabled={submitting || !email.trim() || !password} onClick={handleLogin}>
+        <button className={`btn btn-block ${passkeysSupported() ? "btn-secondary" : "btn-primary"}`} disabled={submitting || !email.trim() || !password} onClick={handleLogin}>
           {submitting ? "Signing in..." : "Sign in"}
         </button>
         <button

@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Sign in with a passkey
+
+The sign-in page has a "Sign in with a passkey" button above the password
+form. A passkey on your phone, laptop or security key signs you in on its
+own: the device's fingerprint, face or PIN is the second factor, so there is
+no code to type. Settings > Account lists your passkeys, adds one (after your
+password) and renames or removes them. The password and authenticator code
+keep working as the backup, unchanged. Passkeys are bound to the host the
+dashboard is on; `WEBAUTHN_RP_ID` names a parent domain to share them across
+subdomains.
+
 ### The inbox never offers Tektonix its own pull requests
 
 With the inbox's PR authors set to "anyone", every pull request a task

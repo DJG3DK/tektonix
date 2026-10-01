@@ -68,6 +68,8 @@ ACTIONS: dict[str, str] = {
     "swebench.stop": "stopped a SWE-bench run",
     "settings.auto_approve": "changed auto-approve of commands",
     "settings.merge_review": "changed the final merge review",
+    "auth.passkey_add": "added a passkey to their account",
+    "auth.passkey_remove": "removed a passkey from their account",
     "settings.auto_approve_repos": "changed which projects auto-approve covers",
     "github.source_policy": "changed a GitHub inbox source",
     "inbox.auto_start": "started a task from the inbox automatically (policy: auto)",

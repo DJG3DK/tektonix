@@ -90,6 +90,64 @@ export async function verify2FA(tempToken: string, code: string): Promise<{ user
   return res.json();
 }
 
+// --- passkeys (agent/routers/passkeys.py) -------------------------------------
+
+export interface Passkey {
+  id: number;
+  name: string;
+  site: string;
+  synced: boolean;
+  created_at: string;
+  last_used_at: string | null;
+}
+
+interface PasskeyChallenge {
+  challenge_id: string;
+  options: Record<string, unknown>;
+}
+
+async function passkeyCall<T>(path: string, init: RequestInit, fallback: string): Promise<T> {
+  const res = await fetch(`${API_BASE}/auth/passkeys${path}`, {
+    ...init,
+    headers: { "Content-Type": "application/json", ...(init.headers || {}) },
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.detail || `${fallback}: ${res.status}`);
+  }
+  return res.json();
+}
+
+export function passkeyLoginOptions(): Promise<PasskeyChallenge> {
+  return passkeyCall("/login/options", { method: "POST" }, "passkey sign-in failed");
+}
+
+export function passkeyLoginVerify(challengeId: string, credential: Record<string, unknown>): Promise<{ user: CurrentUser }> {
+  return passkeyCall("/login/verify", { method: "POST", body: JSON.stringify({ challenge_id: challengeId, credential }) },
+    "passkey sign-in failed");
+}
+
+export async function listPasskeys(): Promise<Passkey[]> {
+  return (await passkeyCall<{ passkeys: Passkey[] }>("", { method: "GET" }, "could not load passkeys")).passkeys;
+}
+
+export function passkeyRegisterOptions(password: string): Promise<PasskeyChallenge> {
+  return passkeyCall("/register/options", { method: "POST", body: JSON.stringify({ password }) }, "could not start");
+}
+
+export function passkeyRegisterVerify(challengeId: string, credential: Record<string, unknown>, name: string): Promise<Passkey> {
+  return passkeyCall("/register/verify", { method: "POST", body: JSON.stringify({ challenge_id: challengeId, credential, name }) },
+    "could not save the passkey");
+}
+
+export function renamePasskey(id: number, name: string): Promise<{ id: number; name: string }> {
+  return passkeyCall(`/${id}`, { method: "PATCH", body: JSON.stringify({ name }) }, "could not rename");
+}
+
+export function deletePasskey(id: number): Promise<{ ok: boolean }> {
+  return passkeyCall(`/${id}`, { method: "DELETE" }, "could not remove");
+}
+
 export async function logout(): Promise<void> {
   await fetch(`${API_BASE}/auth/logout`, { method: "POST" });
 }

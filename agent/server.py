@@ -36,6 +36,7 @@ from agent import task_runtime
 from agent.outer_graph import build_outer_graph, open_checkpointer, open_store
 from agent.graph import project_slot
 from agent.routers import auth as auth_routes
+from agent.routers import passkeys as passkeys_routes
 from agent.routers import env_config as env_config_routes
 from agent.routers import github as github_routes
 from agent.routers import tasks as tasks_routes
@@ -306,6 +307,8 @@ async def lifespan(app: FastAPI):
         app.state.checkpointer = checkpointer
         app.state.store = store
         app.state.auth_pool = auth_pool
+        from agent import passkeys as _passkeys  # noqa: PLC0415
+        await _passkeys.ensure_schema(auth_pool)
         generated_password = await auth.seed_admin_if_none(auth_pool, config.admin_email)
         if generated_password:
             # Only ever printed once, the very first time this deployment
@@ -465,6 +468,7 @@ if config.cors_allow_origins:
 # Included here, after the middleware and before the routes that are still in
 # this file, so the order a request passes through is unchanged.
 app.include_router(auth_routes.router)
+app.include_router(passkeys_routes.router)
 app.include_router(jobs_routes.router)
 app.include_router(push_routes.router)
 app.include_router(analytics_routes.router)
