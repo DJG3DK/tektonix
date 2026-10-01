@@ -18,6 +18,14 @@ updates:
         patterns: ["langchain*", "langgraph*", "deepagents"]
       python-minor:
         update-types: ["minor", "patch"]
+    # Majors that need a migration, not a bump (2026-10-01): pydantic-core
+    # is pinned to what pydantic requires and moves with it; anthropic 1.x
+    # moves with langchain-anthropic after a test pass.
+    ignore:
+      - dependency-name: "pydantic-core"
+      - dependency-name: "anthropic"
+        update-types: ["version-update:semver-major"]
+
   - package-ecosystem: pip
     directory: /services/model-router
     schedule:
@@ -45,6 +53,11 @@ updates:
     groups:
       agent-review:
         patterns: ["*"]
+    # Express 5 changes route matching; an upgrade with its own test pass.
+    ignore:
+      - dependency-name: "express"
+        update-types: ["version-update:semver-major"]
+
   - package-ecosystem: npm
     directory: /app
     schedule:
@@ -88,8 +101,20 @@ updates:
     groups:
       base-images:
         patterns: ["*"]
+    # A new Python or Node major in the images changes the runtime projects'
+    # checks run on: deliberate, with its own test pass (2026-10-01).
+    ignore:
+      - dependency-name: "python"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: "node"
+        update-types: ["version-update:semver-major"]
+
   - package-ecosystem: docker-compose
     directory: /
     schedule:
       interval: weekly
     open-pull-requests-limit: 3
+    # A Postgres major needs a dump and restore of an existing volume.
+    ignore:
+      - dependency-name: "postgres"
+        update-types: ["version-update:semver-major"]
