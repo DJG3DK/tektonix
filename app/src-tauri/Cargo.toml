@@ -30,7 +30,7 @@ url = "2"
 # The release's image manifest is signed with the updater's key; these are
 # what the updater itself verifies with.
 minisign-verify = "0.3"
-base64 = "0.22"
+base64 = "0.23"
 
 [dev-dependencies]
 # Already in the tree through tauri; the tests show what its ordering
