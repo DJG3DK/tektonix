@@ -269,7 +269,16 @@ def _replicate_mounts(template: str, dest: str) -> dict:
         os.makedirs(target, exist_ok=True)
         ok, msg = _run(["mount", "--bind", point, target])
         if ok:
-            ok, msg = _run(["mount", "-o", "remount,ro,bind", target])
+            # PRIVATE before anything else. `/` is a shared mount here, and a
+            # bind of a shared mount joins its peer group, so mount events then
+            # propagate between this workspace and the LIVE tree. From
+            # 2026-09-26 that left a read-only mount on a live checkout's own
+            # data directory for days at a time (the running app's writes
+            # there failed with EROFS) whenever a task or a review had its
+            # copy mounted. A private mount neither sends nor receives events.
+            ok, msg = _run(["mount", "--make-private", target])
+            if ok:
+                ok, msg = _run(["mount", "-o", "remount,ro,bind", target])
             if not ok:
                 _run(["umount", target])
         (done if ok else failed).append(rel if ok else f"{rel}: {msg[:200]}")

@@ -164,6 +164,21 @@ function detectNodeModulesDirs(root) {
 }
 
 /**
+ * Make a fresh bind mount PRIVATE — call right after every `mount --bind`.
+ * `/` is a shared mount on this host, and a bind of it joins its peer group,
+ * so mount events then propagate between a review worktree and the LIVE
+ * checkout. From 2026-09-26 that repeatedly left a read-only mount on a live
+ * checkout's own data directory, and the running app's writes there failed
+ * with EROFS for days. A private mount neither sends nor receives propagation.
+ * On failure the bind is unmounted — never left shared.
+ */
+async function makePrivate(runCmd, dest) {
+  const r = await runCmd('mount', ['--make-private', dest], '/');
+  if (!r.ok) await runCmd('umount', [dest], '/');
+  return r;
+}
+
+/**
  * Dependency trees the review checkout needs but git does not carry.
  *
  * PHP keeps its dependencies in `vendor/`, Elixir in `deps/`, Ruby (when
@@ -224,6 +239,15 @@ async function materializeDependencyDirs(
     const m = await runCmd('mount', ['--bind', src, dest], '/');
     if (!m.ok) {
       issues.push({ name: `deps (${rel})`, ok: false, output: m.output.slice(-2000) });
+      continue;
+    }
+    const priv = await makePrivate(runCmd, dest);
+    if (!priv.ok) {
+      issues.push({
+        name: `deps (${rel})`, ok: false,
+        output: `could not make the bind private; unmounted rather than leave a mount that `
+              + `propagates into the live checkout.\n${priv.output.slice(-1000)}`,
+      });
       continue;
     }
     const ro = await runCmd('mount', ['-o', 'remount,ro,bind', dest], '/');
@@ -537,6 +561,8 @@ async function setupWorktree(project, cfg, sha, base, { depsChangedOverride = nu
         fs.mkdirSync(targetNodeModules, { recursive: true });
         const mount = await run('mount', ['--bind', liveNodeModules, targetNodeModules], '/');
         if (!mount.ok) throw new Error(`bind mount failed for ${rel}: ${mount.output.slice(0, 500)}`);
+        const priv = await makePrivate(run, targetNodeModules);
+        if (!priv.ok) throw new Error(`could not make the ${rel} node_modules bind private (unmounted): ${priv.output.slice(0, 500)}`);
         // audit C-2 path 3: remount READ-ONLY. The reviewer only reads deps;
         // a writable bind mount of LIVE's node_modules let a test/build script in
         // the untrusted worktree write through to the running production app.
@@ -638,6 +664,11 @@ async function setupWorktree(project, cfg, sha, base, { depsChangedOverride = nu
     const m = await run('mount', ['--bind', src, dest], '/');
     if (!m.ok) {
       setupIssues.push({ name: `mount (${rel})`, ok: false, output: m.output.slice(-2000) });
+      continue;
+    }
+    const priv = await makePrivate(run, dest);
+    if (!priv.ok) {
+      setupIssues.push({ name: `mount (${rel})`, ok: false, output: `could not make the bind private; unmounted rather than leave a mount that propagates into the live checkout.\n${priv.output.slice(-1000)}` });
       continue;
     }
     const ro = await run('mount', ['-o', 'remount,ro,bind', dest], '/');

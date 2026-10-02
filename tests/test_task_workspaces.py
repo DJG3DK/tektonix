@@ -182,6 +182,12 @@ async def test_a_mount_is_never_copied_and_never_deleted_through(project, monkey
     assert not os.path.exists(os.path.join(path, "dist", "data", "big.json"))
     assert ["mount", "--bind", os.path.join(real_template, "dist", "data"),
             os.path.join(path, "dist", "data")] in mounted
+    # Private before the read-only remount: a bind of the shared `/` joins its
+    # peer group and propagates mount events into the live checkout.
+    target = os.path.join(path, "dist", "data")
+    i_bind = mounted.index(["mount", "--bind", os.path.join(real_template, "dist", "data"), target])
+    assert mounted[i_bind + 1] == ["mount", "--make-private", target]
+    assert mounted[i_bind + 2] == ["mount", "-o", "remount,ro,bind", target]
 
     # Removal: the mount will not go away, so the workspace stays.
     monkeypatch.setattr(ws, "mounts_under", lambda p: [os.path.join(path, "dist", "data")])

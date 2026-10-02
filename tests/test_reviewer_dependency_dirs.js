@@ -152,7 +152,7 @@ async function main() {
   // any machine: a bind, then a read-only remount, and an unmount rather
   // than a writable mount left behind if the remount fails.
 
-  await test('a bind is always followed by a read-only remount', async ({ live, worktree }) => {
+  await test('a bind is made private, then remounted read-only', async ({ live, worktree }) => {
     fs.mkdirSync(path.join(live, 'vendor'), { recursive: true });
     const calls = [];
     const fakeRun = async (cmd, args) => { calls.push([cmd, ...args.slice(0, 2)]); return { ok: true, output: '' }; };
@@ -163,10 +163,32 @@ async function main() {
     assert.deepEqual(mounted, ['vendor']);
     assert.equal(calls[0][0], 'mount');
     assert.equal(calls[0][1], '--bind');
-    assert.deepEqual(calls[1].slice(0, 2), ['mount', '-o'], 'the remount must follow the bind');
-    assert.match(calls[1][2], /remount,ro,bind/);
-    ok('a bind is always followed by a read-only remount');
+    // Private FIRST: a bind of the shared `/` joins its peer group, and mount
+    // events then propagate into the live checkout (2026-09-26: a read-only
+    // mount landed on a live checkout's own data directory).
+    assert.deepEqual(calls[1], ['mount', '--make-private', path.join(worktree, 'vendor')], 'the bind is made private before anything else');
+    assert.deepEqual(calls[2].slice(0, 2), ['mount', '-o'], 'the remount follows');
+    assert.match(calls[2][2], /remount,ro,bind/);
+    ok('a bind is made private, then remounted read-only');
   });
+
+  await test('a bind that cannot be made private is unmounted, never left shared',
+    async ({ live, worktree }) => {
+      fs.mkdirSync(path.join(live, 'vendor'), { recursive: true });
+      const calls = [];
+      const fakeRun = async (cmd, args) => {
+        calls.push([cmd, args[0]]);
+        return cmd === 'mount' && args[0] === '--make-private' ? { ok: false, output: 'refused' } : { ok: true, output: '' };
+      };
+      const { mounted, issues } = await materializeDependencyDirs(
+          { live, dependencyDirs: ['vendor'] }, worktree, { run: fakeRun });
+      assert.deepEqual(mounted, []);
+      assert.equal(issues.length, 1);
+      assert.match(issues[0].output, /could not make the bind private/);
+      assert.deepEqual(calls.at(-1), ['umount', path.join(worktree, 'vendor')], 'the shared bind is undone');
+      assert.ok(!calls.some(([c, a]) => c === 'mount' && a === '-o'), 'no remount is attempted on a shared bind');
+      ok('a bind that cannot be made private is unmounted, never left shared');
+    });
 
   await test('a failed read-only remount unmounts rather than leaving it writable',
     async ({ live, worktree }) => {
