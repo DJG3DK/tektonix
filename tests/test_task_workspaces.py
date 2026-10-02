@@ -197,6 +197,60 @@ async def test_a_mount_is_never_copied_and_never_deleted_through(project, monkey
     assert os.path.exists(path)
 
 
+def _can_bind_mount() -> bool:
+    return os.geteuid() == 0 and subprocess.run(["which", "mount"], capture_output=True).returncode == 0
+
+
+@pytest.mark.skipif(not _can_bind_mount(), reason="needs root to bind-mount")
+def test_a_same_filesystem_bind_is_seen_as_mounted_and_never_stacked(tmp_path):
+    """Live 2026-10-02: a restart auto-resumed a task, its workspace restore
+    re-ran _replicate_mounts, and os.path.ismount -- which compares a path's
+    device with its parent's -- called a bind of a same-filesystem directory
+    unmounted, so a second bind landed on top. mountinfo is the truth."""
+    src, template, dest = tmp_path / "src", tmp_path / "template", tmp_path / "dest"
+    for d in (src, template / "data", dest):
+        d.mkdir(parents=True)
+    (src / "f.json").write_text("live\n")
+    point = str(template / "data")
+    subprocess.run(["mount", "--bind", str(src), point], check=True)
+    subprocess.run(["mount", "--make-private", point], check=True)
+    target = str(dest / "data")
+    try:
+        assert ws._is_mount_point(point)
+        assert not ws._is_mount_point(str(template))
+        first = ws._replicate_mounts(str(template), str(dest))
+        second = ws._replicate_mounts(str(template), str(dest))
+        assert first["mounted"] == ["data"] and second["mounted"] == []
+        with open("/proc/self/mountinfo") as fh:
+            stacked = sum(1 for line in fh if line.split()[4] == os.path.realpath(target))
+        assert stacked == 1
+    finally:
+        for _ in range(3):
+            subprocess.run(["umount", target], capture_output=True)
+        subprocess.run(["umount", point], capture_output=True)
+
+
+async def test_removal_unmounts_every_mount_stacked_on_one_point(project, monkeypatch):
+    """mounts_under names a point once, however many mounts are stacked on it;
+    one umount per point left the top one behind, and the workspace was kept
+    forever for 'still mounted'."""
+    path = (await ws.ensure("demo", TASK_A))["path"]
+    point = os.path.join(path, "dist", "data")
+    stack = [point, point]      # two mounts at one point
+    monkeypatch.setattr(ws, "mounts_under", lambda p: [point] if stack and os.path.realpath(p) == os.path.realpath(path) else [])
+    calls = []
+
+    def fake_run(cmd, timeout=60):
+        calls.append(cmd)
+        if cmd[:1] == ["umount"] and stack:
+            stack.pop()
+        return True, ""
+    monkeypatch.setattr(ws, "_run", fake_run)
+    out = await ws.remove("demo", TASK_A)
+    assert out["ok"] is True and not os.path.exists(path)
+    assert calls.count(["umount", point]) == 2
+
+
 async def test_generated_code_is_regenerated_once_per_schema(project, monkeypatch):
     """A client generated from an older schema is regenerated, in the sandbox,
     and stamped with the schema's hash -- so the next look is free, and a

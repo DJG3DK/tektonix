@@ -247,6 +247,24 @@ def mounts_under(path: str) -> list[str]:
     return sorted(set(found), key=lambda p: p.count(os.sep), reverse=True)
 
 
+def _is_mount_point(path: str) -> bool:
+    """True when something is mounted AT `path`, read from mountinfo.
+
+    Not os.path.ismount: that compares the path's device with its parent's,
+    and a bind of a directory on the same filesystem (a live checkout's data
+    dir bound into a workspace, both on /) has the parent's device -- so it
+    reported a mounted directory as unmounted, and every workspace restore
+    stacked another bind on top (seen live 2026-10-02 after a restart
+    auto-resumed a task)."""
+    want = os.path.realpath(path)
+    try:
+        with open("/proc/self/mountinfo") as fh:
+            return any(len(parts) > 4 and _unescape_mount(parts[4]) == want
+                       for parts in (line.split() for line in fh))
+    except OSError:
+        return False
+
+
 def _run(cmd: list[str], timeout: int = 60) -> tuple[bool, str]:
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
@@ -264,7 +282,7 @@ def _replicate_mounts(template: str, dest: str) -> dict:
     for point in sorted(mounts_under(template), key=lambda p: p.count(os.sep)):
         rel = os.path.relpath(point, real_template)
         target = os.path.join(dest, rel)
-        if os.path.ismount(target):
+        if _is_mount_point(target):
             continue
         os.makedirs(target, exist_ok=True)
         ok, msg = _run(["mount", "--bind", point, target])
@@ -517,10 +535,18 @@ def remove_sync(repo: str, task_id: str) -> dict:
         return {"ok": True, "removed": False}
     # Unmount first, and refuse to delete anything while a mount remains: the
     # delete below would go straight through a bind mount into what it shows.
-    for point in mounts_under(path):
-        ok, _ = _run(["umount", point])
-        if not ok:
-            _run(["umount", "-l", point])
+    # A few passes, not one: mounts_under lists each point ONCE, and a point
+    # can carry stacked mounts (a restore that re-bound it), each of which
+    # needs its own umount. One pass left the top of the stack behind and
+    # the guard below then kept the workspace forever.
+    for _ in range(5):
+        points = mounts_under(path)
+        if not points:
+            break
+        for point in points:
+            ok, _ = _run(["umount", point])
+            if not ok:
+                _run(["umount", "-l", point])
     left = mounts_under(path)
     if left:
         logger.error("not removing %s: still mounted at %s", path, ", ".join(left))
