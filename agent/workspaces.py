@@ -265,6 +265,17 @@ def _is_mount_point(path: str) -> bool:
         return False
 
 
+def _mount_count_under(path: str) -> int:
+    """Mounts strictly inside `path`, counting each one stacked on a point."""
+    root = os.path.realpath(path) + os.sep
+    try:
+        with open("/proc/self/mountinfo") as fh:
+            return sum(1 for parts in (line.split() for line in fh)
+                       if len(parts) > 4 and _unescape_mount(parts[4]).startswith(root))
+    except OSError:
+        return 0
+
+
 def _run(cmd: list[str], timeout: int = 60) -> tuple[bool, str]:
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
@@ -535,11 +546,13 @@ def remove_sync(repo: str, task_id: str) -> dict:
         return {"ok": True, "removed": False}
     # Unmount first, and refuse to delete anything while a mount remains: the
     # delete below would go straight through a bind mount into what it shows.
-    # A few passes, not one: mounts_under lists each point ONCE, and a point
-    # can carry stacked mounts (a restore that re-bound it), each of which
-    # needs its own umount. One pass left the top of the stack behind and
-    # the guard below then kept the workspace forever.
-    for _ in range(5):
+    # Repeated passes, not one: mounts_under lists each point ONCE, and a
+    # point can carry stacked mounts (every restore re-bound it -- five deep
+    # on one task, 2026-10-02), each needing its own umount. One pass left
+    # the top of the stack behind and the guard below kept the workspace
+    # forever. Stop when nothing is left or a pass removes nothing.
+    stack = _mount_count_under(path)
+    for _ in range(64):
         points = mounts_under(path)
         if not points:
             break
@@ -547,6 +560,10 @@ def remove_sync(repo: str, task_id: str) -> dict:
             ok, _ = _run(["umount", point])
             if not ok:
                 _run(["umount", "-l", point])
+        now = _mount_count_under(path)
+        if now >= stack:
+            break
+        stack = now
     left = mounts_under(path)
     if left:
         logger.error("not removing %s: still mounted at %s", path, ", ".join(left))

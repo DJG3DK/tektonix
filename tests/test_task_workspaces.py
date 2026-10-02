@@ -236,8 +236,9 @@ async def test_removal_unmounts_every_mount_stacked_on_one_point(project, monkey
     forever for 'still mounted'."""
     path = (await ws.ensure("demo", TASK_A))["path"]
     point = os.path.join(path, "dist", "data")
-    stack = [point, point]      # two mounts at one point
+    stack = [point] * 7         # seven mounts at one point (five seen live)
     monkeypatch.setattr(ws, "mounts_under", lambda p: [point] if stack and os.path.realpath(p) == os.path.realpath(path) else [])
+    monkeypatch.setattr(ws, "_mount_count_under", lambda p: len(stack))
     calls = []
 
     def fake_run(cmd, timeout=60):
@@ -248,7 +249,19 @@ async def test_removal_unmounts_every_mount_stacked_on_one_point(project, monkey
     monkeypatch.setattr(ws, "_run", fake_run)
     out = await ws.remove("demo", TASK_A)
     assert out["ok"] is True and not os.path.exists(path)
-    assert calls.count(["umount", point]) == 2
+    assert calls.count(["umount", point]) == 7
+
+
+async def test_removal_stops_when_a_pass_unmounts_nothing(project, monkeypatch):
+    path = (await ws.ensure("demo", TASK_A))["path"]
+    point = os.path.join(path, "dist", "data")
+    monkeypatch.setattr(ws, "mounts_under", lambda p: [point] if os.path.realpath(p) == os.path.realpath(path) else [])
+    monkeypatch.setattr(ws, "_mount_count_under", lambda p: 1)
+    calls = []
+    monkeypatch.setattr(ws, "_run", lambda cmd, timeout=60: (calls.append(cmd) or (False, "busy")))
+    out = await ws.remove("demo", TASK_A)
+    assert out["ok"] is False and "still mounted" in out["reason"] and os.path.exists(path)
+    assert calls.count(["umount", point]) == 1
 
 
 async def test_generated_code_is_regenerated_once_per_schema(project, monkeypatch):
