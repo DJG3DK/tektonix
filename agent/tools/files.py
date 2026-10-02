@@ -26,6 +26,33 @@ def _looks_binary(raw: bytes, sniff_bytes: int = 8192) -> bool:
     return b"\x00" in raw[:sniff_bytes]
 
 
+# The agent's OWN file space (store-backed, served by the built-in
+# read_file/write_file/edit_file/ls tools) -- never part of any repo.
+OWN_SPACE_PREFIXES = ("/skills/", "/memories/", "/org-memory/", "/episodes/")
+
+
+def own_space_redirect(path: str, builtin: str = "read_file") -> str | None:
+    """A path into the agent's OWN file space aimed at a repo tool gets a
+    redirect naming the right tool, not the generic escape error below.
+    Observed live 2026-08-28 (planning: read_project_file) and 2026-10-02
+    (a coder's repo `read` on /skills/<name>/SKILL.md): "paths must be
+    RELATIVE" sent the model hunting for a relative spelling of a file that
+    was never in the repo at all.
+
+    Absolute-prefixed only: a leading-slash own-space path is never a valid
+    repo path (repo paths are relative), so the redirect is unambiguous. A
+    RELATIVE "skills/..." is left alone -- a repo can legitimately contain a
+    top-level skills/ directory of its own."""
+    for prefix in OWN_SPACE_PREFIXES:
+        if path.startswith(prefix):
+            return (
+                f"ERROR: {path!r} is in YOUR OWN file space, not the repo -- this tool only reaches "
+                f"repo files. Call your built-in {builtin} tool with file_path='{path}' "
+                f"instead (same path, different tool)."
+            )
+    return None
+
+
 def _resolve(repo_root: str, rel_path: str) -> Path:
     root = Path(repo_root).resolve()
     target = (root / rel_path).resolve()

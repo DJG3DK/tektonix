@@ -67,3 +67,42 @@ async def test_an_unexpected_read_failure_returns_a_string_instead_of_raising(tm
     result = await _tools(tmp_path)["read"].ainvoke({"path": "a.txt"})
     assert result.startswith("ERROR:")
     assert "something nobody predicted" in result
+
+
+# ---------------------------------------------------------------------------
+# own-space redirect -- wrong tool, right correction (2026-10-02, live: a coder
+# called `read` on /skills/cta-architecture/SKILL.md and got the generic
+# "paths must be RELATIVE" escape error, which names no way forward).
+# ---------------------------------------------------------------------------
+
+
+async def test_an_own_space_path_names_the_matching_builtin_tool(tmp_path):
+    tools = _tools(tmp_path)
+    for path in ("/skills/cta-architecture/SKILL.md", "/memories/AGENTS.md", "/org-memory/AGENTS.md",
+                 "/episodes/x.md"):
+        result = await tools["read"].ainvoke({"path": path})
+        assert result.startswith("ERROR:") and "YOUR OWN file space" in result and "read_file" in result
+        assert "RELATIVE" not in result
+        assert str(tmp_path) not in result
+    # `file_path` spelling too
+    result = await tools["read"].ainvoke({"file_path": "/skills/codebase-map/SKILL.md"})
+    assert "YOUR OWN file space" in result
+    assert "write_file" in tools["write"].invoke({"path": "/memories/notes.md", "content": "x"})
+    assert "edit_file" in tools["edit"].invoke({"path": "/memories/notes.md", "old_string": "a", "new_string": "b"})
+    assert "YOUR OWN file space" in await tools["describe_image"].ainvoke({"path": "/skills/x/shot.png"})
+    # Nothing was written into the repo.
+    assert not (tmp_path / "memories").exists()
+
+
+async def test_a_relative_skills_dir_in_the_repo_is_still_readable(tmp_path):
+    """Only ABSOLUTE own-space prefixes redirect -- a repo may have its own skills/."""
+    (tmp_path / "skills").mkdir()
+    (tmp_path / "skills" / "notes.md").write_text("repo skill notes", encoding="utf-8")
+    tools = _tools(tmp_path)
+    assert await tools["read"].ainvoke({"path": "skills/notes.md"}) == "repo skill notes"
+    assert await tools["read"].ainvoke({"path": "/workspace/skills/notes.md"}) == "repo skill notes"
+
+
+async def test_a_real_escape_still_gets_the_escape_error(tmp_path):
+    result = await _tools(tmp_path)["read"].ainvoke({"path": "/etc/passwd"})
+    assert result.startswith("ERROR:") and "RELATIVE" in result

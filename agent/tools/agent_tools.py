@@ -34,8 +34,8 @@ from langchain_core.tools import tool
 from deepagents.backends.protocol import BackendProtocol
 from deepagents.middleware._message_eviction import _create_content_preview
 
-from agent.tools.files import (BinaryFileError, PathEscapeError, _resolve, read_bytes, read_file,
-                               str_replace, write_file)
+from agent.tools.files import (BinaryFileError, PathEscapeError, _resolve, own_space_redirect, read_bytes,
+                               read_file, str_replace, write_file)
 from agent.tools import bash_advice
 from agent.tools.sandbox import run_shell_sandboxed
 from agent.tools.tool_errors import tool_errors_to_text
@@ -253,6 +253,8 @@ def make_agent_tools(
         path = _one_path(path, file_path)
         if not path:
             return _NO_PATH
+        if (redirect := own_space_redirect(path, "read_file")):
+            return redirect
         # _resolve (same guard read/write/edit use), NOT os.path.join: join
         # DISCARDS repo_root entirely when handed an absolute path, so
         # describe_image("/home/tektonix/.env") read that file straight off
@@ -432,6 +434,8 @@ def make_agent_tools(
         path = _one_path(path, file_path)
         if not path:
             return _NO_PATH
+        if (redirect := own_space_redirect(path, "read_file")):
+            return redirect
         try:
             content = read_file(repo_root, _repo_path(path), max_chars=READ_HARD_CAP_CHARS)
         except (FileNotFoundError, PathEscapeError, BinaryFileError) as e:
@@ -503,6 +507,8 @@ def make_agent_tools(
         path = _one_path(path, file_path)
         if not path:
             return _NO_PATH
+        if (redirect := own_space_redirect(path, "write_file")):
+            return redirect
         try:
             write_file(repo_root, _repo_path(path), content)
             _last_failed_edit["signature"] = None  # this path's content may have just changed
@@ -531,6 +537,8 @@ def make_agent_tools(
         path = _one_path(path, file_path)
         if not path:
             return _NO_PATH
+        if (redirect := own_space_redirect(path, "edit_file")):
+            return redirect
         if not old_string:
             # Both spellings of the path had to become optional for either
             # alone to validate (see _one_path), which made every argument

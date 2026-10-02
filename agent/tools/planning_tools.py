@@ -41,7 +41,7 @@ from agent.tools.url_guard import UnsafeUrlError, assert_public_url, make_route_
 from agent import runtime_settings as _rs
 from agent.config import PROJECTS
 from agent.tools.files import BinaryFileError, PathEscapeError, read_file
-from agent.tools.files import _resolve
+from agent.tools.files import _resolve, own_space_redirect
 from agent.tools.tool_errors import tool_errors_to_text
 from agent.tools.vision import describe_image_bytes
 
@@ -286,28 +286,8 @@ async def _page_links(page) -> list[str]:
     return out
 
 
-_OWN_SPACE_PREFIXES = ("/skills/", "/memories/", "/org-memory/", "/episodes/")
-
-
 def _own_space_redirect(path: str) -> str | None:
-    """A path into the agent's OWN file space aimed at the repo tools gets a
-    redirect naming the right tool, not a generic path error. Observed live
-    2026-08-28: the prompt says to read /skills/codebase-map/SKILL.md with
-    built-in read_file, the model called read_project_file with it instead,
-    and the escape-guard's "paths must be RELATIVE" reply sent it hunting for
-    a relative spelling of a file that was never in the repo at all."""
-    # Absolute-prefixed only: a leading-slash own-space path is never a valid
-    # repo path (repo paths are relative), so the redirect is unambiguous. A
-    # RELATIVE "skills/..." is left alone -- a repo can legitimately contain
-    # a top-level skills/ directory of its own.
-    for prefix in _OWN_SPACE_PREFIXES:
-        if path.startswith(prefix):
-            return (
-                f"ERROR: {path!r} is in YOUR OWN file space, not the repo -- this tool only reads "
-                f"repo files. Call your built-in read_file tool with file_path='{path}' "
-                f"instead (same path, different tool)."
-            )
-    return None
+    return own_space_redirect(path, "read_file")
 
 
 def _reread_note(path: str, seen: int) -> str:
