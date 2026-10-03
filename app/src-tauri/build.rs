@@ -20,6 +20,8 @@ const COMMANDS: &[&str] = &[
     "stack_update",
     "prefs_get",
     "prefs_set",
+    "prefs_set_close",
+    "quit_app",
     "app_version",
     "app_update_check",
     "app_update_install",

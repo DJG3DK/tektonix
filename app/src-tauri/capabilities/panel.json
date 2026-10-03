@@ -35,6 +35,8 @@
     "allow-stack-update",
     "allow-prefs-get",
     "allow-prefs-set",
+    "allow-prefs-set-close",
+    "allow-quit-app",
     "allow-app-version",
     "allow-app-update-check",
     "allow-app-update-install",

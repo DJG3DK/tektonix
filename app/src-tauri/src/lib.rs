@@ -6,9 +6,11 @@
 
 mod docker;
 mod proc;
+mod quit;
 mod stack;
 mod update;
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
@@ -141,6 +143,141 @@ fn prefs_set(
     }
     stack::write_prefs(&app, &prefs)?;
     Ok(stack::read_prefs_view(&app))
+}
+
+/// The close button's choice, from the control panel.
+#[tauri::command]
+fn prefs_set_close(app: AppHandle, action: String) -> Result<stack::PrefsView, String> {
+    let action = quit::CloseAction::parse(&action).ok_or("unknown close action")?;
+    let mut prefs = stack::read_prefs(&app);
+    prefs.close_action = action;
+    stack::write_prefs(&app, &prefs)?;
+    Ok(stack::read_prefs_view(&app))
+}
+
+/// Quit from the control panel: the same as the tray's Quit.
+#[tauri::command]
+fn quit_app(app: AppHandle) {
+    shutdown(app);
+}
+
+/// A two-button question; true for the first button. Esc or the window's
+/// own close counts as the second.
+async fn ask(app: &AppHandle, title: &str, text: &str, yes: &str, no: &str) -> bool {
+    use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    app.dialog()
+        .message(text)
+        .title(title)
+        .kind(MessageDialogKind::Info)
+        .buttons(MessageDialogButtons::OkCancelCustom(yes.into(), no.into()))
+        .show(move |first| {
+            let _ = tx.send(first);
+        });
+    rx.await.unwrap_or(false)
+}
+
+fn log_line(app: &AppHandle, line: impl Into<String>) {
+    let _ = app.emit(
+        proc::LOG_EVENT,
+        proc::LogLine {
+            stream: "app".into(),
+            line: line.into(),
+        },
+    );
+}
+
+static QUITTING: AtomicBool = AtomicBool::new(false);
+
+/// Quit Tektonix (quit.rs): ask first when a task is running, stop the
+/// stack, stop Docker Desktop when this app started it, then exit. A
+/// second Quit while one is under way does nothing.
+fn shutdown(app: AppHandle) {
+    if QUITTING.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    tauri::async_runtime::spawn(async move {
+        let started_docker = app
+            .try_state::<docker::StartedHere>()
+            .is_some_and(|s| s.0.load(Ordering::SeqCst));
+        let plan = quit::plan(
+            stack::agent_state().await,
+            stack::installed_version(&app).is_some(),
+            started_docker,
+        );
+        if plan.confirm
+            && !ask(
+                &app,
+                "A task is running",
+                "Quitting stops Tektonix, and the running task stops with it.",
+                "Quit anyway",
+                "Keep running",
+            )
+            .await
+        {
+            QUITTING.store(false, Ordering::SeqCst);
+            return;
+        }
+        if let Some(w) = app.get_webview_window("main") {
+            let _ = w.hide();
+        }
+        if let Some(tray) = app.tray_by_id("tektonix") {
+            let _ = tray.set_tooltip(Some("Tektonix: stopping..."));
+        }
+        if plan.stop_stack {
+            // A Start or an update under way gets two minutes to finish; the
+            // stop goes ahead either way.
+            let lock = app.state::<stack::StackLock>();
+            let _one_at_a_time =
+                tokio::time::timeout(std::time::Duration::from_secs(120), lock.0.lock()).await;
+            if let Err(e) = stack::down(&app).await {
+                log_line(&app, format!("Stopping the stack failed: {e}"));
+            }
+        }
+        if plan.stop_docker {
+            docker::stop_desktop(&app).await;
+        }
+        stop_follow_on_exit(&app);
+        app.exit(0);
+    });
+}
+
+/// The window's close button, by the person's choice: hide to the tray, or
+/// quit. Asked the first time and remembered; the panel changes it.
+fn on_close(window: &tauri::Window) {
+    let app = window.app_handle().clone();
+    match stack::read_prefs(&app).close_action {
+        quit::CloseAction::Tray => {
+            let _ = window.hide();
+        }
+        quit::CloseAction::Quit => shutdown(app),
+        quit::CloseAction::Ask => {
+            tauri::async_runtime::spawn(async move {
+                let quit = ask(
+                    &app,
+                    "Close Tektonix",
+                    "Quit stops the agent and its containers and frees their memory. \
+                     Keep running leaves them working in the tray, where Quit stops everything later.\n\n\
+                     This is remembered; change it in the control panel.",
+                    "Quit and stop",
+                    "Keep running",
+                )
+                .await;
+                let mut prefs = stack::read_prefs(&app);
+                prefs.close_action = if quit {
+                    quit::CloseAction::Quit
+                } else {
+                    quit::CloseAction::Tray
+                };
+                let _ = stack::write_prefs(&app, &prefs);
+                if quit {
+                    shutdown(app);
+                } else if let Some(w) = app.get_webview_window("main") {
+                    let _ = w.hide();
+                }
+            });
+        }
+    }
 }
 
 #[tauri::command]
@@ -334,13 +471,7 @@ fn restore_last_page(app: AppHandle) {
 fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     let open = MenuItem::with_id(app, "open", "Open console", true, None::<&str>)?;
     let panel = MenuItem::with_id(app, "panel", "Control panel", true, None::<&str>)?;
-    let quit = MenuItem::with_id(
-        app,
-        "quit",
-        "Quit (the stack keeps running)",
-        true,
-        None::<&str>,
-    )?;
+    let quit = MenuItem::with_id(app, "quit", "Quit (stops Tektonix)", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&open, &panel, &quit])?;
     let icon = app
         .default_window_icon()
@@ -356,7 +487,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
                 let _ = show_console(app);
             }
             "panel" => show_panel(app),
-            "quit" => app.exit(0),
+            "quit" => shutdown(app.clone()),
             _ => {}
         })
         .build(app)?;
@@ -453,6 +584,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .manage(Arc::new(LogFollow(Mutex::new(None))))
         .manage(stack::StackLock::default())
+        .manage(docker::StartedHere::default())
         .setup(|app| {
             build_main_window(app.handle())?;
             build_tray(app.handle())?;
@@ -461,12 +593,12 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            // Closing the panel hides it; the tray keeps the app alive, and
-            // the stack runs regardless. Quit is in the tray menu.
+            // The close button hides to the tray or quits, as the person
+            // chose (on_close). The window itself is never destroyed here.
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 if window.label() == "main" {
                     api.prevent_close();
-                    let _ = window.hide();
+                    on_close(window);
                 }
             }
         })
@@ -487,6 +619,8 @@ pub fn run() {
             stack_update,
             prefs_get,
             prefs_set,
+            prefs_set_close,
+            quit_app,
             app_version,
             app_update_check,
             app_update_install,

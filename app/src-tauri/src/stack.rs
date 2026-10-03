@@ -21,6 +21,7 @@
 //! source checkout's `--build` would.
 
 use crate::proc;
+use crate::quit::CloseAction;
 use crate::update::{self, Agent, StackMove};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -95,6 +96,10 @@ pub struct Prefs {
     /// (an update's, most of all) comes back to it.
     #[serde(default)]
     pub last_page: String,
+    /// What the window's close button does (quit.rs). Absent in a
+    /// preferences file from before 2026-10-03: the first close asks.
+    #[serde(default)]
+    pub close_action: CloseAction,
 }
 
 impl Default for Prefs {
@@ -103,6 +108,7 @@ impl Default for Prefs {
             auto_update: true,
             include_prereleases: false,
             last_page: String::new(),
+            close_action: CloseAction::Ask,
         }
     }
 }
@@ -133,6 +139,7 @@ pub struct PrefsView {
     pub include_prereleases: bool,
     pub prereleases_forced: bool,
     pub last_page: String,
+    pub close_action: CloseAction,
 }
 
 pub fn prefs_view(prefs: &Prefs, app_tag: &str) -> PrefsView {
@@ -142,6 +149,7 @@ pub fn prefs_view(prefs: &Prefs, app_tag: &str) -> PrefsView {
         include_prereleases: prefs.include_prereleases || forced,
         prereleases_forced: forced,
         last_page: prefs.last_page.clone(),
+        close_action: prefs.close_action,
     }
 }
 

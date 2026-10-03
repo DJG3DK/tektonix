@@ -215,6 +215,12 @@ async function runStack(command, args) {
 }
 $("btn-start").onclick = () => runStack("stack_up");
 $("btn-stop").onclick = () => runStack("stack_down");
+// Quit stops the stack (and Docker Desktop, when this app started it) and
+// closes the app; the app side asks first when a task is running.
+$("btn-quit").onclick = () => invoke("quit_app").catch(fail);
+$("close-action").onchange = async () => {
+  try { await invoke("prefs_set_close", { action: $("close-action").value }); } catch (e) { fail(e); }
+};
 $("btn-open").onclick = () => invoke("open_console").catch(fail);
 $("btn-settings").onclick = () => { void showSetup(true); };
 $("btn-folder").onclick = () => invoke("open_projects_dir").catch(fail);
@@ -235,6 +241,7 @@ async function showAutoStatus() {
     const prefs = await invoke("prefs_get");
     $("pre-inline").checked = !!prefs.include_prereleases;
     $("pre-inline").disabled = !!prefs.prereleases_forced;
+    $("close-action").value = prefs.close_action || "ask";
     $("pre-inline").parentElement.title = prefs.prereleases_forced ? FORCED_NOTE : "";
     $("update-auto").textContent = prefs.auto_update
       ? `Automatic: on start and every six hours, when the agent is idle${prefs.include_prereleases ? ", pre-releases included" : ""}. The stack follows this app's release.`

@@ -18,7 +18,11 @@ What it does that the console installer did not:
   can show the one-time password if it was never used);
 * keeps the stack on the app's own release, updates the stack in one click
   when the operator asks for a newer one, and updates itself through Tauri's
-  signed updater.
+  signed updater;
+* shuts down when you quit: Quit (tray or panel) stops the stack's
+  containers, and Docker Desktop too when the app started it. The window's
+  close button asks once whether to quit or keep running in the tray, and
+  the panel changes that later. An update's restart leaves the stack alone.
 
 ## Layout on the machine
 

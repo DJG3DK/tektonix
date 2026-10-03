@@ -109,6 +109,15 @@
         <button id="btn-password" class="btn">Show first password</button>
         <button id="btn-settings" class="btn">Settings</button>
         <button id="btn-folder" class="btn">Open projects folder</button>
+        <button id="btn-quit" class="btn" title="Stop the stack and close the app">Quit</button>
+      </div>
+      <div class="row wrap">
+        <label class="muted" for="close-action">Closing the window</label>
+        <select id="close-action">
+          <option value="ask">asks what to do</option>
+          <option value="tray">keeps Tektonix running in the tray</option>
+          <option value="quit">quits and stops Tektonix</option>
+        </select>
       </div>
       <div id="password-box" class="callout hidden">
         <strong>One-time password:</strong> <code id="password-value"></code>

@@ -45,6 +45,21 @@ fn note(app: &AppHandle, line: impl Into<String>) {
     );
 }
 
+/// Set when this app started Docker Desktop, so Quit stops it again
+/// (quit.rs). Docker Desktop the person started, or that starts with
+/// Windows, is theirs and is left running.
+#[derive(Default)]
+pub struct StartedHere(pub std::sync::atomic::AtomicBool);
+
+/// Stop Docker Desktop: `docker desktop stop`, Docker Desktop 4.37 and
+/// later. An older one has no such command, and stays running.
+pub async fn stop_desktop(app: &AppHandle) {
+    note(app, "Stopping Docker Desktop...");
+    if !proc::succeeds("docker", &["desktop", "stop"]).await {
+        note(app, "Docker Desktop did not stop (it needs version 4.37 or later); quit it from its own tray icon.");
+    }
+}
+
 /// Start Docker Desktop and wait for the daemon, up to two minutes.
 pub async fn start_and_wait(app: &AppHandle) -> Result<(), String> {
     #[cfg(windows)]
@@ -55,6 +70,9 @@ pub async fn start_and_wait(app: &AppHandle) -> Result<(), String> {
             .find(|p| std::path::Path::new(p).exists())
             .ok_or("Docker Desktop is installed but its program was not found; start it yourself and try again")?;
         note(app, "Starting Docker Desktop...");
+        if let Some(flag) = tauri::Manager::try_state::<StartedHere>(app) {
+            flag.0.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
         proc::capture(
             "powershell",
             &[
