@@ -82,6 +82,12 @@ $("docker-install").onclick = async () => {
   $("docker-install").disabled = true;
   try {
     const next = await invoke("docker_install");
+    // Done: the heading said "not installed" over a message saying it was
+    // (2026-10-04). What is left is the person's step, so no button.
+    if (!/^Nothing to install/.test(next)) {
+      $("docker-title").textContent = "Docker is set up";
+      $("docker-install").classList.add("hidden");
+    }
     $("docker-text").textContent = next;
     say(next);
   } catch (e) { fail(e); } finally { $("docker-install").disabled = false; }
@@ -230,6 +236,9 @@ async function runStack(command, args) {
   } finally {
     busy = false;
     await refreshStatus();
+    // The first install changes the stack's version line ("stack not
+    // installed" stayed up after it, 2026-10-04).
+    void showAutoStatus();
   }
   return result;
 }

@@ -266,7 +266,8 @@ pub fn prepare(app: &AppHandle) -> Result<PathBuf, String> {
     // becomes an empty directory docker creates as root. Make it ourselves.
     std::fs::create_dir_all(dst.join("docker/agent-sandbox")).map_err(|e| e.to_string())?;
     let env = dst.join(".env");
-    if !env.exists() {
+    let fresh = !env.exists();
+    if fresh {
         std::fs::copy(dst.join(".env.example"), &env).map_err(|e| e.to_string())?;
     }
     // This is the desktop app: the single-user sign-in rules (agent/auth.py,
@@ -276,15 +277,18 @@ pub fn prepare(app: &AppHandle) -> Result<PathBuf, String> {
         content = set_env_line(&content, "TEKTONIX_DESKTOP", "1");
     }
     // A machine of its own: checks get half its cores and four gigabytes,
-    // written once so the operator can change them in the file.
-    if get_env_value(&content, "SANDBOX_CPUS").is_none() {
+    // written once so the operator can change them in the file. The example
+    // file carries the small-server values (2 and 2g), so "absent" never
+    // happened on a fresh install and every desktop ran its checks at 2 and
+    // 2g (found 2026-10-04 in an Ubuntu VM): a new .env is sized here too.
+    if fresh || get_env_value(&content, "SANDBOX_CPUS").is_none() {
         content = set_env_line(
             &content,
             "SANDBOX_CPUS",
             &sandbox_cpus(machine_cores()).to_string(),
         );
     }
-    if get_env_value(&content, "SANDBOX_MEMORY").is_none() {
+    if fresh || get_env_value(&content, "SANDBOX_MEMORY").is_none() {
         content = set_env_line(&content, "SANDBOX_MEMORY", "4g");
     }
     // Linux: the stack runs as this account (docker/agent/entrypoint.sh,

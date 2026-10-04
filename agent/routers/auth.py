@@ -135,7 +135,31 @@ def _user_public(user: User) -> dict:
     }
 
 
-def _set_session_cookie(response: Response, token: str) -> None:
+_LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "[::1]", "::1"}
+
+
+def cookie_secure(request: Request | None) -> bool:
+    """Whether the session cookie carries Secure: always, except over plain
+    http to this machine's own loopback with no proxy in front.
+
+    The desktop app talks to the agent at http://localhost:8100. Chromium
+    (the Windows app's WebView2) treats localhost as a secure origin and
+    keeps a Secure cookie there; WebKitGTK (the Linux app) does not, and
+    dropped it -- every Linux sign-in answered 200 and landed back on the
+    sign-in page (2026-10-04, found in an Ubuntu 24.04 VM). Loopback traffic
+    never leaves the machine, so Secure protects nothing there. Anything
+    behind a proxy (nginx sets Host to the public name, and says https in
+    X-Forwarded-Proto) keeps Secure."""
+    if request is None:
+        return True
+    host = (request.headers.get("host") or "").strip().lower()
+    hostname = host.rsplit(":", 1)[0] if not host.startswith("[") else host.split("]")[0] + "]"
+    forwarded = (request.headers.get("x-forwarded-proto") or "").lower()
+    return not (request.url.scheme == "http" and hostname in _LOOPBACK_HOSTS
+                and forwarded in ("", "http"))
+
+
+def _set_session_cookie(response: Response, token: str, request: Request | None = None) -> None:
     # SameSite=strict is this app's whole CSRF defence for the session API:
     # there are no CSRF tokens, because a strict cookie is never sent on a
     # request another site starts, and the SPA only ever calls same-origin.
@@ -146,7 +170,7 @@ def _set_session_cookie(response: Response, token: str) -> None:
     # own Sec-Fetch-Site check (_approve_is_cross_site) for this reason.
     response.set_cookie(
         SESSION_COOKIE_NAME, token, max_age=auth.session_ttl_seconds(),
-        httponly=True, samesite="strict", secure=True, path="/",
+        httponly=True, samesite="strict", secure=cookie_secure(request), path="/",
     )
 
 
@@ -172,7 +196,7 @@ async def login(req: LoginRequest, response: Response, request: Request):
         temp_token = await auth.create_pending_2fa(request.app.state.auth_pool, row["id"])
         return {"requires_2fa": True, "temp_token": temp_token}
     token = await auth.create_session(request.app.state.auth_pool, row["id"])
-    _set_session_cookie(response, token)
+    _set_session_cookie(response, token, request)
     return {"requires_2fa": False, "user": _user_public(auth._row_to_user(row))}
 
 
@@ -187,7 +211,7 @@ async def verify_2fa(req: Verify2FARequest, response: Response, request: Request
         raise HTTPException(400, "invalid code")
     rate_limit.clear_rate_limit(request, "verify-2fa")
     token = await auth.create_session(request.app.state.auth_pool, pending["user_id"])
-    _set_session_cookie(response, token)
+    _set_session_cookie(response, token, request)
     row = await auth.get_user_by_id(request.app.state.auth_pool, pending["user_id"])
     return {"user": _user_public(auth._row_to_user(row))}
 

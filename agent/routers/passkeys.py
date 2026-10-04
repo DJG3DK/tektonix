@@ -113,6 +113,6 @@ async def login_verify(request: Request, req: LoginVerifyRequest, response: Resp
         raise HTTPException(401, str(e)) from e
     rate_limit.clear_rate_limit(request, "passkey-login")
     token = await auth.create_session(pool, user_id)
-    _set_session_cookie(response, token)
+    _set_session_cookie(response, token, request)
     row = await auth.get_user_by_id(pool, user_id)
     return {"requires_2fa": False, "user": _user_public(auth._row_to_user(row))}

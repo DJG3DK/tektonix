@@ -13,6 +13,16 @@ once, and a log out and back in finishes it. The stack runs as your account,
 so your projects folder stays yours. Releases now carry both apps; the
 release publishes once both are attached.
 
+Tested end to end in an Ubuntu 24.04 desktop VM, which turned up four
+things now fixed: sign-in never stuck in the Linux app (its WebKit drops a
+Secure cookie on http://localhost, so the session cookie is no longer
+marked Secure over plain http to loopback; anything behind a proxy keeps
+it); the AppImage aborted on a desktop without libgles2 (the app now turns
+off WebKit's DMA-BUF renderer unless you set it yourself); every dropdown
+rendered white (they draw themselves now, everywhere); and a fresh desktop
+install ran its checks at 2 CPUs and 2 GB instead of half the machine and
+4 GB, on Windows too.
+
 ### Sandboxes leave your files yours on a Linux host
 
 With PUID set (the Linux app sets it; a Docker bundle on Linux can), a
