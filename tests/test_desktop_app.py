@@ -48,8 +48,11 @@ def test_images_are_published_once_by_digest_and_signed():
     names = [s.get("name", s.get("uses", "")) for s in app["steps"]]
     sign = next(i for i, n in enumerate(names) if n == "Write and sign the image manifest")
     attach = next(i for i, n in enumerate(names) if n == "Attach the image manifest")
-    publish = next(i for i, n in enumerate(names) if n == "Publish the release")
-    assert sign < attach < publish, "signed and attached while the release is still a draft"
+    assert sign < attach, "signed, then attached"
+    assert "Publish the release" not in names, "the publish job publishes, after both apps"
+    publish = wf["jobs"]["publish"]
+    assert set(publish["needs"]) == {"app-windows", "app-linux"}, "attached while the release is still a draft"
+    assert "--draft=false" in publish["steps"][-1]["run"]
     assert "tauri signer sign" in app["steps"][sign]["run"] and "digests.json.sig" in app["steps"][attach]["run"]
     rust = (REPO / "app/src-tauri/src/stack.rs").read_text()
     assert "releases/download/{tag}/digests.json" in rust, "the app reads the manifest from the tag's own release"
@@ -226,7 +229,7 @@ def test_the_published_installer_is_verified_from_outside_windows():
     wf = yaml.safe_load((REPO / ".github/workflows/release.yml").read_text())
     app, job = wf["jobs"]["app-windows"], wf["jobs"]["verify-published"]
     assert app["outputs"]["signed"] == "${{ steps.codesign.outputs.enabled }}"
-    assert job["needs"] == "app-windows" and "signed == 'true'" in job["if"]
+    assert set(job["needs"]) == {"app-windows", "publish"} and "signed == 'true'" in job["if"]
     assert "verify_windows_installer.sh --release" in job["steps"][-1]["run"]
     script = (REPO / "scripts/verify_windows_installer.sh").read_text()
     assert "ROOT_SHA256=\"53:67:F2:0C" in script and "-TSA-CAfile" in script
@@ -245,3 +248,28 @@ def test_the_installer_carries_the_tektonix_branding():
     for key, size in (("sidebarImage", (164, 314)), ("headerImage", (150, 57))):
         with Image.open(base / nsis[key]) as im:
             assert im.format == "BMP" and im.size == size and im.mode == "RGB", key
+
+
+def test_the_linux_app_is_built_signed_and_joins_the_release_before_it_goes_public():
+    """2026-10-04: an AppImage (self-updating) and a .deb on every release.
+    The Linux job only builds; the publish job attaches its files to the
+    Windows job's draft and adds the AppImage to latest.json, so the two
+    jobs never race to create the release or to write the manifest."""
+    wf = yaml.safe_load((REPO / ".github/workflows/release.yml").read_text())
+    linux, publish = wf["jobs"]["app-linux"], wf["jobs"]["publish"]
+    assert set(linux["needs"]) == {"check", "images"} and "published" in linux["if"]
+    assert linux["environment"] == "release", "the updater key, behind the same reviewer"
+    assert linux["permissions"] == {"contents": "read"}, "it writes nothing to the release itself"
+    build = next(s for s in linux["steps"] if s.get("name") == "Build")
+    assert build["run"] == "npx tauri build --bundles appimage,deb"
+    assert "TAURI_SIGNING_PRIVATE_KEY" in build["env"] and "TEKTONIX_RELEASE_TAG" in build["env"]
+    attach = next(s for s in publish["steps"] if s.get("name", "").startswith("Attach the Linux app"))
+    assert "add_linux_to_updater_manifest.mjs" in attach["run"]
+    assert attach["run"].index("gh release upload") < attach["run"].index("add_linux_to_updater_manifest")
+    names = [s.get("name", "") for s in publish["steps"]]
+    assert names.index(attach["name"]) < names.index("Publish the release")
+    conf = json.loads((REPO / "app/src-tauri/tauri.conf.json").read_text())
+    assert conf["bundle"]["createUpdaterArtifacts"] is True, "the AppImage's .sig"
+    # The tray's libayatana-appindicator3-1 is added to the .deb by Tauri
+    # itself (tray-icon feature); listing it again doubled it.
+    assert "depends" not in conf["bundle"]["linux"]["deb"]

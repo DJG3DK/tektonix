@@ -253,7 +253,8 @@ jobs:
           releaseName: "Tektonix ${{ github.event.inputs.tag || github.ref_name }}"
           releaseBody: "See CHANGELOG.md."
           # A draft: this repository has immutable releases, and a published
-          # release accepts no assets. The step after this publishes it.
+          # release accepts no assets. The publish job publishes it, once
+          # the Linux app is attached too.
           releaseDraft: true
           # A tag with a dash (v0.9.0-rc1) is a pre-release: an app that is
           # not one itself, and has not asked for them, reads releases/latest
@@ -310,8 +311,98 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.event.inputs.tag || github.ref_name }}
         run: gh release upload "$TAG" digests.json digests.json.sig --clobber --repo "$GITHUB_REPOSITORY"
+
+  # The Linux app: an AppImage, which updates itself like the Windows app,
+  # and a .deb, which updates by installing the next one. Built on the
+  # oldest Ubuntu the runners offer, so the AppImage's glibc is one most
+  # distributions have. Built only: the files go to the draft in `publish`,
+  # after the Windows job has made it, so the two never race to create the
+  # release or to write latest.json.
+  app-linux:
+    name: Desktop app — Linux AppImage and .deb
+    runs-on: ubuntu-22.04
+    needs: [check, images]
+    if: needs.check.outputs.published != 'true'
+    # The updater key signs the AppImage; same environment, same reviewer.
+    environment: release
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 20
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # v1
+        with:
+          toolchain: stable
+      - uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: app/src-tauri
+      # Tauri 2's Linux build dependencies (its own prerequisites list); the
+      # appindicator library is the tray icon's.
+      - name: System libraries
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libwebkit2gtk-4.1-dev build-essential curl wget file \
+            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+      - run: npm ci
+        working-directory: app
+      - name: Version the app after the tag
+        working-directory: app
+        env:
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          v="${TAG#v}"
+          node -e 'const fs=require("fs");for (const f of ["src-tauri/tauri.conf.json","package.json"]){const j=JSON.parse(fs.readFileSync(f,"utf8"));j.version=process.argv[1];fs.writeFileSync(f,JSON.stringify(j,null,2)+"\n")}' "$v"
+          sed -i "0,/^version = \".*\"/s//version = \"$v\"/" src-tauri/Cargo.toml
+          echo "app version $v"
+      - name: Build
+        working-directory: app
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          TEKTONIX_RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: npx tauri build --bundles appimage,deb
+      - name: Collect the files
+        run: |
+          mkdir linux-app
+          cp app/src-tauri/target/release/bundle/appimage/*.AppImage app/src-tauri/target/release/bundle/appimage/*.AppImage.sig linux-app/
+          cp app/src-tauri/target/release/bundle/deb/*.deb linux-app/
+          ls -la linux-app
+          test -s linux-app/*.AppImage.sig
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: linux-app
+          path: linux-app/
+          if-no-files-found: error
+
+  # Both apps are built: the Linux files join the Windows draft, latest.json
+  # gains the Linux entry the AppImage's updater reads, and only then does
+  # the release go public (immutable releases take no assets once public).
+  publish:
+    name: Publish the release
+    runs-on: ubuntu-latest
+    needs: [app-windows, app-linux]
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: linux-app
+          path: linux-app
+      - name: Attach the Linux app and add it to the update manifest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          gh release upload "$TAG" linux-app/* --clobber --repo "$GITHUB_REPOSITORY"
+          gh release download "$TAG" --pattern latest.json --dir manifest --repo "$GITHUB_REPOSITORY"
+          node scripts/add_linux_to_updater_manifest.mjs manifest/latest.json linux-app "$GITHUB_REPOSITORY" "$TAG"
+          gh release upload "$TAG" manifest/latest.json --clobber --repo "$GITHUB_REPOSITORY"
       - name: Publish the release
-        shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.event.inputs.tag || github.ref_name }}
@@ -325,7 +416,7 @@ jobs:
   verify-published:
     name: The published installer verifies from outside
     runs-on: ubuntu-latest
-    needs: app-windows
+    needs: [app-windows, publish]
     if: needs.app-windows.outputs.signed == 'true'
     timeout-minutes: 10
     permissions:

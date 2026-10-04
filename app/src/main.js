@@ -32,6 +32,29 @@ for (const a of document.querySelectorAll("a[data-open]")) {
 }
 
 // ── Docker ───────────────────────────────────────────────────────────────────
+// The Docker screen in each platform's words. Linux (2026-10-04): Docker
+// Engine, installed and started through the system's own password prompt.
+const LINUX = /Linux/.test(navigator.platform || navigator.userAgent) && !/Android/.test(navigator.userAgent);
+const DOCKER_TEXT = {
+  windows: {
+    missing: { title: "Docker Desktop is not installed", button: "install", label: "Install Docker Desktop",
+      body: "Tektonix runs in containers. This installs WSL 2 if it is missing and then Docker Desktop, from Docker's own site. Windows will ask for permission, and a restart may be needed." },
+    stopped: { title: "Docker Desktop is not running", button: "start", label: "Start Docker Desktop",
+      body: "Start it and it comes up in a minute. If Docker Desktop itself says \"Virtualization support not detected\", the CPU's virtualization is switched off in the firmware (BIOS/UEFI: Intel VT-x or AMD SVM); no installer can turn that on." },
+    denied: { title: "Docker refused this account", body: "Open Docker Desktop once, then check again." },
+    "no-compose": { title: "This Docker has no compose command", body: "Update Docker Desktop and check again." },
+  },
+  linux: {
+    missing: { title: "Docker is not installed", button: "install", label: "Install Docker",
+      body: "Tektonix runs in containers. This installs Docker Engine with Docker's own install script, starts its service, and lets your account use it. Your system asks for your password once; then log out and back in." },
+    stopped: { title: "Docker is not running", button: "start", label: "Start Docker",
+      body: "The Docker service is installed but stopped. Starting it asks for your password (or starts Docker Desktop, if that is what you use)." },
+    denied: { title: "Your account cannot use Docker yet", button: "install", label: "Give my account access",
+      body: "Docker is running, but only members of the docker group may use it. This adds you (your system asks for your password); then log out and back in. If you were just added, logging out and back in is all it takes." },
+    "no-compose": { title: "This Docker has no compose command", body: "Install the compose plugin (the docker-compose-plugin package) and check again." },
+  },
+};
+
 async function checkDocker() {
   show("page-docker");
   $("docker-install").classList.add("hidden");
@@ -40,20 +63,17 @@ async function checkDocker() {
   $("docker-text").textContent = "";
   const state = await invoke("docker_state");
   if (state === "ready") return afterDocker();
-  if (state === "missing") {
-    $("docker-title").textContent = "Docker Desktop is not installed";
-    $("docker-text").textContent = "Tektonix runs in containers. This installs WSL 2 if it is missing and then Docker Desktop, from Docker's own site. Windows will ask for permission, and a restart may be needed.";
-    $("docker-install").classList.remove("hidden");
-  } else if (state === "stopped") {
-    $("docker-title").textContent = "Docker Desktop is not running";
-    $("docker-text").textContent = "Start it and it comes up in a minute. If Docker Desktop itself says \"Virtualization support not detected\", the CPU's virtualization is switched off in the firmware (BIOS/UEFI: Intel VT-x or AMD SVM); no installer can turn that on.";
-    $("docker-start").classList.remove("hidden");
-  } else {
-    $("docker-title").textContent = "This Docker has no compose command";
-    $("docker-text").textContent = "Update Docker Desktop and check again.";
+  const text = DOCKER_TEXT[LINUX ? "linux" : "windows"][state] || DOCKER_TEXT.windows["no-compose"];
+  $("docker-title").textContent = text.title;
+  $("docker-text").textContent = text.body;
+  if (text.button) {
+    const b = $(text.button === "start" ? "docker-start" : "docker-install");
+    b.textContent = text.label;
+    b.classList.remove("hidden");
   }
 }
 $("docker-recheck").onclick = checkDocker;
+if (LINUX) $("setup-dir").placeholder = "/home/you/code";
 $("docker-start").onclick = async () => {
   $("docker-start").disabled = true;
   try { await invoke("docker_start"); await afterDocker(); } catch (e) { fail(e); } finally { $("docker-start").disabled = false; }

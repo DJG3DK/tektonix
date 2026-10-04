@@ -7,10 +7,14 @@ dashboard, the agent's web app at `localhost:8100`, takes the same window
 over once the stack answers (its title bar has a button back to the panel,
 and so does the tray). Everything that does work is Rust (`src-tauri/src/`).
 
-What it does that the console installer did not:
+Windows (an NSIS installer) and Linux (an AppImage, which updates itself,
+and a .deb). What it does that the console installer did not:
 
 * installs WSL 2 and Docker Desktop when they are missing (Windows), through
-  Windows' own permission prompt;
+  Windows' own permission prompt; on Linux, Docker Engine through Docker's
+  install script, and the docker group for an account the daemon refuses,
+  through polkit's password prompt (pkexec), and it runs the stack as your
+  account (PUID/PGID) so the projects folder stays yours;
 * asks for the settings in a form, keeps them in its own `.env`;
 * pulls the release's images from GHCR instead of building from source, with
   Docker's progress in the window, and starts the stack with `--no-build`;
@@ -27,7 +31,8 @@ What it does that the console installer did not:
 ## Layout on the machine
 
 Under the app's local data directory (`%LOCALAPPDATA%\io.tektonix.desktop`
-on Windows; the identifier in `tauri.conf.json`):
+on Windows, `~/.local/share/io.tektonix.desktop` on Linux; the identifier in
+`tauri.conf.json`):
 
 ```
 stack/docker-compose.yml           copied from the app on every launch

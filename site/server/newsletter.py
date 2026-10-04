@@ -229,21 +229,27 @@ async def health():
     return {"ok": True, "service": "newsletter"}
 
 
-# The Windows download. The installer's file name carries its version, so a
-# link on a static page would go stale with the next release; this asks
-# GitHub which full release is latest and sends the browser to that
-# release's installer. Cached so a busy day costs GitHub one call in ten
-# minutes, and it falls back to the release page rather than failing.
+# The app downloads. Each file name carries its version, so a link on a
+# static page would go stale with the next release; these ask GitHub which
+# full release is latest and send the browser to that release's file.
+# Cached so a busy day costs GitHub one call in ten minutes, and they fall
+# back to the release page rather than failing. Linux since 2026-10-04: the
+# AppImage (it updates itself) and the .deb.
 RELEASES_API = "https://api.github.com/repos/DJG3DK/tektonix/releases/latest"
 RELEASES_PAGE = "https://github.com/DJG3DK/tektonix/releases/latest"
-_WINDOWS_ASSET = re.compile(r"^Tektonix_[0-9A-Za-z.\-]+_x64-setup\.exe$")
+_ASSETS = {
+    "windows": re.compile(r"^Tektonix_[0-9A-Za-z.\-]+_x64-setup\.exe$"),
+    "linux": re.compile(r"^Tektonix_[0-9A-Za-z.\-]+_amd64\.AppImage$"),
+    "linux-deb": re.compile(r"^Tektonix_[0-9A-Za-z.\-]+_amd64\.deb$"),
+}
+_RELEASE_DOWNLOADS = "https://github.com/DJG3DK/tektonix/releases/download/"
 _DOWNLOAD_TTL_S = 600
 _download_cache: dict[str, tuple[float, str]] = {}
 
 
-async def _latest_windows_installer() -> str | None:
+async def _latest_asset(kind: str) -> str | None:
     now = time.monotonic()
-    hit = _download_cache.get("windows")
+    hit = _download_cache.get(kind)
     if hit and now - hit[0] < _DOWNLOAD_TTL_S:
         return hit[1]
     try:
@@ -256,8 +262,8 @@ async def _latest_windows_installer() -> str | None:
         return None
     for asset in release.get("assets") or []:
         url = asset.get("browser_download_url") or ""
-        if _WINDOWS_ASSET.match(asset.get("name") or "") and url.startswith("https://github.com/DJG3DK/tektonix/releases/download/"):
-            _download_cache["windows"] = (now, url)
+        if _ASSETS[kind].match(asset.get("name") or "") and url.startswith(_RELEASE_DOWNLOADS):
+            _download_cache[kind] = (now, url)
             return url
     return None
 
@@ -268,8 +274,17 @@ def reset_download_cache() -> None:
 
 @app.get("/download/windows")
 async def download_windows():
-    url = await _latest_windows_installer()
-    return RedirectResponse(url or RELEASES_PAGE, status_code=302)
+    return RedirectResponse(await _latest_asset("windows") or RELEASES_PAGE, status_code=302)
+
+
+@app.get("/download/linux")
+async def download_linux():
+    return RedirectResponse(await _latest_asset("linux") or RELEASES_PAGE, status_code=302)
+
+
+@app.get("/download/linux-deb")
+async def download_linux_deb():
+    return RedirectResponse(await _latest_asset("linux-deb") or RELEASES_PAGE, status_code=302)
 
 
 @app.post("/subscribe")

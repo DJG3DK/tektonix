@@ -91,7 +91,9 @@ def test_every_bind_mount_source_goes_through_the_map():
     import inspect
     src = inspect.getsource(sandbox)
     mounts = [ln for ln in src.split("\n") if '"-v"' in ln]
-    assert len(mounts) == 6, f"a bind mount was added or removed: {mounts}"  # + a project's read-only /baseline
+    # + a project's read-only /baseline, + the workspace for reclaim (handing
+    # a killed command's files back to PUID on a Linux host)
+    assert len(mounts) == 7, f"a bind mount was added or removed: {mounts}"
     for ln in mounts:
         assert "host_path(" in ln, f"bind mount source not mapped: {ln.strip()}"
 

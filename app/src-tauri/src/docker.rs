@@ -1,11 +1,16 @@
-//! Docker Desktop: is it there, is it running, and installing it when not.
+//! Docker: is it there, is it running, and installing it when not.
 //!
-//! The install path is Windows only and deliberately plain: Docker's own
-//! installer, from Docker's own URL, run with its documented silent flags
-//! and an elevation prompt the user sees. WSL 2 first when it is missing,
-//! because Docker Desktop's installer assumes it. Virtualization switched
-//! off in the firmware is the one thing nothing here can fix, so it is
-//! named, with the remedy, instead of guessed at.
+//! Windows: Docker's own installer, from Docker's own URL, run with its
+//! documented silent flags and an elevation prompt the user sees. WSL 2
+//! first when it is missing, because Docker Desktop's installer assumes it.
+//! Virtualization switched off in the firmware is the one thing nothing
+//! here can fix, so it is named, with the remedy, instead of guessed at.
+//!
+//! Linux (2026-10-04): Docker Engine through Docker's own install script,
+//! run as root through polkit's password prompt (pkexec), the system
+//! service enabled, and this account added to the docker group. A daemon
+//! this account may not use is a state of its own (Denied), with the same
+//! one-prompt remedy. Docker Desktop for Linux is used when it is there.
 
 use crate::proc;
 use serde::Serialize;
@@ -16,8 +21,17 @@ use tauri::{AppHandle, Emitter};
 pub enum DockerState {
     Missing,
     Stopped,
+    /// The daemon runs, but this account may not use its socket (Linux:
+    /// not in the docker group yet, or not since the last login).
+    Denied,
     NoCompose,
     Ready,
+}
+
+/// `docker info`'s complaint when the socket is there and refuses us.
+pub fn is_denied(text: &str) -> bool {
+    let t = text.to_ascii_lowercase();
+    t.contains("permission denied") && t.contains("docker")
 }
 
 pub async fn state() -> DockerState {
@@ -26,8 +40,12 @@ pub async fn state() -> DockerState {
         Err(_) => return DockerState::Missing,
         Ok(_) => {}
     }
-    if !proc::succeeds("docker", &["info"]).await {
-        return DockerState::Stopped;
+    match proc::capture("docker", &["info"], None).await {
+        Ok(_) => {}
+        Err(proc::ProcError::Failed { tail, .. }) if is_denied(&tail) => {
+            return DockerState::Denied
+        }
+        Err(_) => return DockerState::Stopped,
     }
     if !proc::succeeds("docker", &["compose", "version"]).await {
         return DockerState::NoCompose;
@@ -55,6 +73,12 @@ pub struct StartedHere(pub std::sync::atomic::AtomicBool);
 /// later. An older one has no such command, and stays running.
 pub async fn stop_desktop(app: &AppHandle) {
     note(app, "Stopping Docker Desktop...");
+    // Linux's Docker Desktop is a user service; stopping it is plain systemd.
+    if cfg!(target_os = "linux")
+        && proc::succeeds("systemctl", &["--user", "stop", "docker-desktop"]).await
+    {
+        return;
+    }
     if !proc::succeeds("docker", &["desktop", "stop"]).await {
         note(app, "Docker Desktop did not stop (it needs version 4.37 or later); quit it from its own tray icon.");
     }
@@ -70,9 +94,7 @@ pub async fn start_and_wait(app: &AppHandle) -> Result<(), String> {
             .find(|p| std::path::Path::new(p).exists())
             .ok_or("Docker Desktop is installed but its program was not found; start it yourself and try again")?;
         note(app, "Starting Docker Desktop...");
-        if let Some(flag) = tauri::Manager::try_state::<StartedHere>(app) {
-            flag.0.store(true, std::sync::atomic::Ordering::SeqCst);
-        }
+        mark_started(app);
         proc::capture(
             "powershell",
             &[
@@ -85,11 +107,29 @@ pub async fn start_and_wait(app: &AppHandle) -> Result<(), String> {
         .await
         .map_err(|e| e.to_string())?;
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
+    {
+        if proc::succeeds("systemctl", &["--user", "cat", "docker-desktop"]).await {
+            note(app, "Starting Docker Desktop...");
+            mark_started(app);
+            proc::capture("systemctl", &["--user", "start", "docker-desktop"], None)
+                .await
+                .map_err(|e| e.to_string())?;
+        } else {
+            note(
+                app,
+                "Starting the Docker service (your system asks for your password)...",
+            );
+            proc::capture("pkexec", &["systemctl", "start", "docker"], None)
+                .await
+                .map_err(|e| pkexec_failure(&e, "start the Docker service"))?;
+        }
+    }
+    #[cfg(not(any(windows, target_os = "linux")))]
     {
         note(
             app,
-            "Docker is not running. Start Docker Desktop (or the docker service) and try again.",
+            "Docker is not running. Start Docker Desktop and try again.",
         );
         return Err("Docker is not running".into());
     }
@@ -104,9 +144,87 @@ pub async fn start_and_wait(app: &AppHandle) -> Result<(), String> {
         }
         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
     }
-    Err("Docker Desktop did not come up within two minutes. Open it and look at what it says; \
-        \"Virtualization support not detected\" means the CPU's virtualization is off in the firmware."
-        .into())
+    if cfg!(windows) {
+        Err("Docker Desktop did not come up within two minutes. Open it and look at what it says; \
+            \"Virtualization support not detected\" means the CPU's virtualization is off in the firmware."
+            .into())
+    } else {
+        Err("Docker did not come up within two minutes; `systemctl status docker` says why.".into())
+    }
+}
+
+/// Docker Desktop was started by this app (StartedHere).
+#[cfg_attr(not(any(windows, target_os = "linux")), allow(dead_code))]
+fn mark_started(app: &AppHandle) {
+    if let Some(flag) = tauri::Manager::try_state::<StartedHere>(app) {
+        flag.0.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+/// A POSIX shell single-quoted literal.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub fn sh_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
+/// A login name usermod will take, and nothing that could be read as more
+/// than one: the name goes into a script that runs as root.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub fn plain_account(name: &str) -> bool {
+    let mut chars = name.chars();
+    matches!(chars.next(), Some(c) if c.is_ascii_lowercase() || c == '_')
+        && name.len() <= 32
+        && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-')
+}
+
+/// What runs as root to install Docker Engine on Linux: Docker's own
+/// install script (it adds Docker's package repository and its signing
+/// key, then installs the engine and the compose plugin from it), the
+/// service enabled and started, and this account given the socket.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub fn linux_install_script(script: &str, account: &str) -> String {
+    format!(
+        "set -e; sh {}; systemctl enable --now docker; usermod -aG docker {}",
+        sh_quote(script),
+        sh_quote(account)
+    )
+}
+
+/// pkexec's own exit codes, in words: 126 is the prompt dismissed, 127 is
+/// not authorised (or pkexec not there to ask).
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub fn pkexec_failure(e: &proc::ProcError, what: &str) -> String {
+    match e {
+        proc::ProcError::Missing(_) => format!(
+            "could not {what}: this system has no pkexec to ask for your password. \
+             Run the commands in a terminal with sudo instead (Tektonix's install guide lists them)."
+        ),
+        proc::ProcError::Failed { code: 126, .. } => {
+            format!("could not {what}: the password prompt was cancelled")
+        }
+        proc::ProcError::Failed { code: 127, .. } => {
+            format!("could not {what}: your account is not allowed to administer this system")
+        }
+        other => format!("could not {what}: {other}"),
+    }
+}
+
+/// This account's login name.
+#[cfg(target_os = "linux")]
+async fn account() -> Result<String, String> {
+    let name = match std::env::var("USER") {
+        Ok(u) if !u.is_empty() => u,
+        _ => proc::capture("id", &["-un"], None)
+            .await
+            .map_err(|e| e.to_string())?
+            .trim()
+            .to_string(),
+    };
+    if plain_account(&name) {
+        Ok(name)
+    } else {
+        Err(format!("the account name {name:?} is not one this installer will pass to usermod; add it to the docker group yourself"))
+    }
 }
 
 #[cfg(windows)]
@@ -184,15 +302,59 @@ pub async fn install(app: &AppHandle) -> Result<String, String> {
     Ok(next)
 }
 
-#[cfg(not(windows))]
-pub async fn install(_app: &AppHandle) -> Result<String, String> {
-    Err(
-        "Install Docker Desktop (macOS) or Docker Engine (Linux) yourself, then come back here."
-            .into(),
-    )
+/// Linux: Docker Engine when it is missing, the docker group when the
+/// daemon refuses this account. One password prompt either way; group
+/// membership takes effect at the next login.
+#[cfg(target_os = "linux")]
+pub async fn install(app: &AppHandle) -> Result<String, String> {
+    let user = account().await?;
+    match state().await {
+        DockerState::Denied => {
+            note(
+                app,
+                format!(
+                    "Adding {user} to the docker group (your system asks for your password)..."
+                ),
+            );
+            proc::capture("pkexec", &["usermod", "-aG", "docker", &user], None)
+                .await
+                .map_err(|e| pkexec_failure(&e, "add you to the docker group"))?;
+            Ok(
+                "Done. Log out and back in so the new group applies, then open Tektonix again."
+                    .into(),
+            )
+        }
+        DockerState::Missing => {
+            // In the app's own data directory, not /tmp: the file runs as
+            // root, and only this account can write here.
+            let dir = crate::stack::dir(app)?;
+            std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+            let path = dir.join("get-docker.sh");
+            note(
+                app,
+                "Downloading Docker's install script from get.docker.com...",
+            );
+            download(app, DOCKER_SCRIPT_URL, &path).await?;
+            note(app, "Installing Docker Engine (your system asks for your password; this takes a few minutes)...");
+            let script = linux_install_script(&path.display().to_string(), &user);
+            let r = proc::capture("pkexec", &["sh", "-c", &script], None).await;
+            let _ = std::fs::remove_file(&path);
+            r.map_err(|e| pkexec_failure(&e, "install Docker"))?;
+            Ok("Docker is installed. Log out and back in so your account can use it, then open Tektonix again.".into())
+        }
+        _ => Ok("Nothing to install.".into()),
+    }
 }
 
-#[cfg(windows)]
+#[cfg(target_os = "linux")]
+const DOCKER_SCRIPT_URL: &str = "https://get.docker.com";
+
+#[cfg(not(any(windows, target_os = "linux")))]
+pub async fn install(_app: &AppHandle) -> Result<String, String> {
+    Err("Install Docker Desktop yourself, then come back here.".into())
+}
+
+#[cfg(any(windows, target_os = "linux"))]
 async fn download(app: &AppHandle, url: &str, path: &std::path::Path) -> Result<(), String> {
     use tokio::io::AsyncWriteExt;
     let resp = reqwest::get(url)
@@ -213,8 +375,7 @@ async fn download(app: &AppHandle, url: &str, path: &std::path::Path) -> Result<
         let chunk = chunk.map_err(|e| format!("download failed: {e}"))?;
         file.write_all(&chunk).await.map_err(|e| e.to_string())?;
         got += chunk.len() as u64;
-        if total > 0 {
-            let pct = (got * 100 / total) as u32;
+        if let Some(pct) = (got * 100).checked_div(total).map(|p| p as u32) {
             if pct >= last_pct + 10 {
                 last_pct = pct;
                 note(app, format!("Downloaded {pct}%"));
@@ -228,6 +389,48 @@ async fn download(app: &AppHandle, url: &str, path: &std::path::Path) -> Result<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_refused_socket_is_denied_and_a_stopped_daemon_is_not() {
+        assert!(is_denied(
+            "permission denied while trying to connect to the Docker daemon socket at unix:///var/run/docker.sock"
+        ));
+        assert!(!is_denied(
+            "Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?"
+        ));
+    }
+
+    #[test]
+    fn only_a_plain_login_name_reaches_the_root_script() {
+        for ok in ["danny", "_svc", "dev-1", "a_b"] {
+            assert!(plain_account(ok), "{ok}");
+        }
+        for bad in ["", "Danny", "1abc", "a b", "x;reboot", "x'y", "$(id)"] {
+            assert!(!plain_account(bad), "{bad}");
+        }
+    }
+
+    #[test]
+    fn the_linux_install_script_quotes_what_it_is_given() {
+        let s = linux_install_script("/home/o'brien/.local/share/x/get-docker.sh", "danny");
+        assert!(s.starts_with("set -e; sh '/home/o'\\''brien/.local/share/x/get-docker.sh';"));
+        assert!(s.contains("systemctl enable --now docker"));
+        assert!(s.ends_with("usermod -aG docker 'danny'"));
+    }
+
+    #[test]
+    fn pkexecs_own_codes_read_as_words() {
+        let failed = |code| proc::ProcError::Failed {
+            program: "pkexec".into(),
+            code,
+            tail: String::new(),
+        };
+        assert!(pkexec_failure(&failed(126), "x").contains("cancelled"));
+        assert!(pkexec_failure(&failed(127), "x").contains("not allowed"));
+        assert!(
+            pkexec_failure(&proc::ProcError::Missing("pkexec".into()), "x").contains("no pkexec")
+        );
+    }
 
     #[test]
     fn a_path_with_an_apostrophe_survives_powershell() {

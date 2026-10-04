@@ -287,8 +287,31 @@ pub fn prepare(app: &AppHandle) -> Result<PathBuf, String> {
     if get_env_value(&content, "SANDBOX_MEMORY").is_none() {
         content = set_env_line(&content, "SANDBOX_MEMORY", "4g");
     }
+    // Linux: the stack runs as this account (docker/agent/entrypoint.sh,
+    // step 5), so the projects folder stays the operator's own; Docker
+    // Desktop ignores ownership and leaves these empty. The data directory
+    // was just made by this process, so its owner is this account.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if let Ok(meta) = std::fs::metadata(&dst) {
+            content = fill_owner(&content, meta.uid(), meta.gid());
+        }
+    }
     write_atomic(&env, content.as_bytes())?;
     Ok(dst)
+}
+
+/// PUID and PGID when the file has none (an empty `PUID=` from the example
+/// counts as none); an operator's own values stay.
+#[cfg_attr(not(unix), allow(dead_code))]
+pub fn fill_owner(content: &str, uid: u32, gid: u32) -> String {
+    let unset = |k| get_env_value(content, k).map_or(true, |v| v.is_empty());
+    if !unset("PUID") {
+        return content.to_string();
+    }
+    let c = set_env_line(content, "PUID", &uid.to_string());
+    set_env_line(&c, "PGID", &gid.to_string())
 }
 
 fn machine_cores() -> usize {
@@ -458,9 +481,11 @@ pub fn save_settings(
 ) -> Result<Settings, String> {
     let projects_dir = normalize_projects_dir(&projects_dir);
     if projects_dir.is_empty() || !Path::new(&projects_dir).is_absolute() {
-        return Err(
-            "the projects folder must be a full path, for example C:\\Users\\you\\code".into(),
-        );
+        return Err(if cfg!(windows) {
+            "the projects folder must be a full path, for example C:\\Users\\you\\code".into()
+        } else {
+            "the projects folder must be a full path, for example /home/you/code".into()
+        });
     }
     std::fs::create_dir_all(&projects_dir)
         .map_err(|e| format!("could not create {projects_dir}: {e}"))?;
@@ -1081,9 +1106,28 @@ pub async fn check_app_update(app: &AppHandle) -> Result<AppUpdate, String> {
     }
 }
 
+/// Whether this copy of the app can replace itself. Tauri's updater
+/// installs an AppImage on Linux and nothing else; a copy installed from
+/// the .deb is the package manager's, and its update is the next .deb.
+/// `appimage` is the APPIMAGE variable the AppImage runtime sets.
+pub fn self_updating(linux: bool, appimage: Option<&str>) -> bool {
+    !linux || appimage.is_some_and(|p| !p.is_empty())
+}
+
 /// Download and install the newest app, then restart into it.
 pub async fn install_app_update(app: &AppHandle) -> Result<(), String> {
     let latest = latest_release(wants_prereleases(app)).await?;
+    if !self_updating(
+        cfg!(target_os = "linux"),
+        std::env::var("APPIMAGE").ok().as_deref(),
+    ) {
+        let page = format!("https://github.com/{REPO}/releases/tag/{}", latest.tag_name);
+        let _ = tauri_plugin_opener::open_url(&page, None::<&str>);
+        return Err(format!(
+            "this copy was installed from the .deb package, which updates by installing the new \
+             one: the release page is open in your browser ({page})"
+        ));
+    }
     let updater = updater(app, &latest.tag_name)?;
     let Some(update) = updater.check().await.map_err(|e| e.to_string())? else {
         return Err("this app is already the newest".into());
@@ -1568,6 +1612,32 @@ mod tests {
             v.include_prereleases && !v.prereleases_forced,
             "the operator's own choice is not forced"
         );
+    }
+
+    #[test]
+    fn the_owner_is_filled_once_and_an_operators_own_is_kept() {
+        let example = "PUID=\nPGID=\nOTHER=1\n";
+        let filled = fill_owner(example, 1000, 1001);
+        assert_eq!(get_env_value(&filled, "PUID").as_deref(), Some("1000"));
+        assert_eq!(get_env_value(&filled, "PGID").as_deref(), Some("1001"));
+        assert_eq!(
+            fill_owner(&filled, 5, 5),
+            filled,
+            "a set owner is left alone"
+        );
+        let absent = fill_owner("OTHER=1\n", 1000, 1000);
+        assert_eq!(get_env_value(&absent, "PUID").as_deref(), Some("1000"));
+    }
+
+    #[test]
+    fn only_an_appimage_replaces_itself_on_linux() {
+        assert!(
+            self_updating(false, None),
+            "Windows and macOS update themselves"
+        );
+        assert!(self_updating(true, Some("/home/u/Tektonix.AppImage")));
+        assert!(!self_updating(true, None), "a .deb install");
+        assert!(!self_updating(true, Some("")));
     }
 
     #[test]

@@ -272,16 +272,79 @@ def sandbox_layout_for(cwd: str) -> dict:
             "readonly": readonly}
 
 
-def _shell(cmd: str) -> list[str]:
+def sandbox_owner() -> str | None:
+    """`uid:gid` that files a sandbox leaves in the workspace are handed back
+    to, or None for nobody.
+
+    A sandbox runs as root, because a toolchain image installs into its own
+    system paths. On a Linux host everything it creates in the bind-mounted
+    worktree -- build output, node_modules, caches -- is then root's, and the
+    agent, running as PUID (docker/agent/entrypoint.sh, step 5), can neither
+    rewrite nor remove it: the next checkout, merge or worktree cleanup fails
+    on a permission error. Docker Desktop's file sharing ignores ownership,
+    so there PUID is unset and nothing here changes (2026-10-04, the Linux
+    desktop app)."""
+    uid = os.environ.get("PUID", "").strip()
+    gid = os.environ.get("PGID", "").strip()
+    if not (uid.isdigit() and gid.isdigit()) or uid == "0":
+        return None
+    return f"{uid}:{gid}"
+
+
+def give_back_line(owner: str, root: str = "/workspace") -> str:
+    """A shell line handing root's files under `root` to `owner`. Only what
+    root owns is touched, so a pass over an untouched tree changes nothing."""
+    return (f"find {root} -xdev \\( -uid 0 -o -gid 0 \\) "
+            f"-exec chown -h {owner} {{}} + 2>/dev/null")
+
+
+def owner_args(owner: str | None) -> list[str]:
+    """The file capabilities a root sandbox needs in a workspace it does not
+    own, only when there is an owner (a Linux host with PUID set). With all
+    capabilities dropped, root is just another user to the kernel's
+    permission checks: it could not create a file in the operator's own
+    worktree at all (found 2026-10-04 -- every Linux bundle install with
+    PUID set). DAC_OVERRIDE to write there, FOWNER to chmod the operator's
+    files, CHOWN to hand its own back. All three are in Docker's default
+    set; the rest stay dropped."""
+    if not owner:
+        return []
+    return ["--cap-add", "CHOWN", "--cap-add", "DAC_OVERRIDE", "--cap-add", "FOWNER"]
+
+
+def _shell(cmd: str, owner: str | None = None) -> list[str]:
     """bash where the image has it, sh where it does not.
 
     The shared image has bash and every command the agent writes assumes it.
     A toolchain image from a stack may not -- the Alpine ones ship only sh --
     and `bash -c` there fails every command before it starts. sh is in every
-    image, so it starts the command and hands it to bash when bash exists."""
-    return ["sh", "-c",
-            'if command -v bash >/dev/null 2>&1; then exec bash -c "$0"; else exec sh -c "$0"; fi',
-            cmd]
+    image, so it starts the command and hands it to bash when bash exists.
+
+    With an owner (sandbox_owner) the command is not exec'd: sh waits for it,
+    hands root's files back, and exits with the command's own code."""
+    pick = 'if command -v bash >/dev/null 2>&1; then {x}bash -c "$0"; else {x}sh -c "$0"; fi'
+    if not owner:
+        return ["sh", "-c", pick.format(x="exec "), cmd]
+    return ["sh", "-c", f"{pick.format(x='')}; rc=$?; {give_back_line(owner)}; exit $rc", cmd]
+
+
+async def reclaim(cwd: str, image: str | None = None) -> None:
+    """Hand root's files in `cwd` back after a command that never got to do
+    it itself: killed on a timeout, or by the operator's Stop. Best effort,
+    a minute at most; nothing to do without an owner."""
+    owner = sandbox_owner()
+    if not owner:
+        return
+    argv = ["docker", "run", "--rm", "--network", "none", "--cap-drop", "ALL",
+            *owner_args(owner), "--security-opt", "no-new-privileges",
+            "-v", f"{host_path(cwd)}:/workspace", image or sandbox_image_for(cwd),
+            "sh", "-c", give_back_line(owner)]
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *argv, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+        await asyncio.wait_for(proc.wait(), timeout=60)
+    except Exception:  # noqa: BLE001 -- cleanup; the caller's own outcome stands
+        logger.warning("could not hand files in %s back to %s", cwd, owner)
 
 
 def _mount_target_allowed(target: str, allow_roots: list[str]) -> bool:
@@ -412,6 +475,7 @@ async def run_shell_sandboxed(
 
     nm_mount_args = _node_modules_mounts(cwd)
     net_args = ["--network", network] if network else []
+    owner = sandbox_owner()
 
     docker_args = [
         "docker", "run", "--rm", "--name", container_name,
@@ -436,10 +500,11 @@ async def run_shell_sandboxed(
         # authenticated, not open.
         "--pids-limit", SANDBOX_PIDS_LIMIT,
         "--cap-drop", "ALL",
+        *owner_args(owner),
         "--security-opt", "no-new-privileges",
         *env_args,
         image,
-        *_shell(cmd),
+        *_shell(cmd, owner),
     ]
     proc = await asyncio.create_subprocess_exec(
         *docker_args,
@@ -453,6 +518,7 @@ async def run_shell_sandboxed(
     except TimeoutError:
         await _kill_container(container_name)
         await proc.wait()
+        await reclaim(cwd, image)
         # _timeout, not timeout: the latter is None when the caller took the
         # operator default, which would report "timed out after None seconds".
         raise ShellTimeout(cmd, _timeout)
@@ -463,6 +529,7 @@ async def run_shell_sandboxed(
         # anything running inside it) would keep running orphaned.
         await _kill_container(container_name)
         await proc.wait()
+        await reclaim(cwd, image)
         raise
 
     output = stdout.decode("utf-8", errors="replace")
@@ -517,6 +584,9 @@ async def start_preview_container(cmd: str, cwd: str, container_port: int,
         *git_identity_args(),
         "--pids-limit", SANDBOX_PIDS_LIMIT,
         "--cap-drop", "ALL",
+        # A dev server is stopped, never finishes: stop_preview_container
+        # hands its files back from inside, before the kill.
+        *owner_args(sandbox_owner()),
         "--security-opt", "no-new-privileges",
         "-e", "CI=true",
         *env_args,
@@ -590,4 +660,15 @@ async def preview_logs(container: str, tail: int = 60) -> str:
 
 
 async def stop_preview_container(name: str) -> None:
+    owner = sandbox_owner()
+    if owner:
+        # What the dev server wrote (.next, a cache) goes back to the owner
+        # while the container still runs; after the kill there is no shell.
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "docker", "exec", name, "sh", "-c", give_back_line(owner),
+                stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+            await asyncio.wait_for(proc.wait(), timeout=60)
+        except Exception:  # noqa: BLE001 -- the kill below happens regardless
+            logger.warning("could not hand the preview's files back in %s", name)
     await _kill_container(name)

@@ -164,10 +164,19 @@ describe("LandingPage — 0.9 install paths", () => {
     buttons.forEach((a) => expect(a).toHaveAttribute("href", "/download/windows"));
   });
 
+  it("offers the Linux app through the same redirects, AppImage first", () => {
+    render(<LandingPage />);
+    const appimage = screen.getAllByRole("link", { name: /download (for linux|the appimage)/i });
+    expect(appimage.length).toBe(2);
+    appimage.forEach((a) => expect(a).toHaveAttribute("href", "/download/linux"));
+    expect(screen.getByRole("link", { name: /\.deb for debian/i })).toHaveAttribute("href", "/download/linux-deb");
+  });
+
   it("covers Windows and Linux, and is honest that there is no Mac build", () => {
     render(<LandingPage />);
     const text = document.body.textContent ?? "";
     expect(text).toMatch(/the windows app/i);
+    expect(text).toMatch(/the linux app/i);
     expect(text).toMatch(/linux, on the host/i);
     expect(text).toMatch(/linux, as a bundle/i);
     expect(text).toMatch(/mac:\s*not yet/i);

@@ -52,6 +52,8 @@ const PIPELINE = [
 // Same host as this page; site/server answers with the latest full
 // release's installer, so the link never names a version that goes stale.
 const WINDOWS_DOWNLOAD = "/download/windows";
+const LINUX_DOWNLOAD = "/download/linux";
+const LINUX_DEB_DOWNLOAD = "/download/linux-deb";
 
 const STAGES = [
   {
@@ -218,8 +220,9 @@ export function LandingPage() {
               <DownloadMark />
               Download for Windows
             </a>
-            <a className="lp-btn lp-btn-quiet" href="#install">
-              Linux, or from source
+            <a className="lp-btn lp-btn-primary" href={LINUX_DOWNLOAD}>
+              <DownloadMark />
+              Download for Linux
             </a>
             <a className="lp-btn lp-btn-quiet" href={REPO} target="_blank" rel="noopener noreferrer">
               <GitHubMark />
@@ -385,9 +388,8 @@ export function LandingPage() {
         <section id="install" className="lp-section lp-close">
           <h2 className="lp-h2">Run it yourself</h2>
           <p className="lp-sub">
-            Windows gets an app. On Linux you run it straight on the host or as a Docker bundle.
-            Every path ends at the same dashboard, and running the installer again is how you
-            upgrade.
+            Windows and Linux both get an app. On Linux you can also run it straight on the host
+            or as a Docker bundle. Every path ends at the same dashboard.
           </p>
           <div className="lp-installs">
             <article className="lp-install">
@@ -412,6 +414,32 @@ export function LandingPage() {
                 </a>
               </div>
               <p className="lp-reqs">Windows 10 or 11, 64-bit &middot; an OpenRouter API key</p>
+            </article>
+            <article className="lp-install">
+              <code className="lp-kicker">appimage / .deb</code>
+              <h3>The Linux app</h3>
+              <p>
+                Same app, same setup. If Docker isn&rsquo;t installed it installs it for you, asking
+                for your password once, and if your account can&rsquo;t use Docker yet it fixes
+                that too. Your projects stay owned by you, not root. The AppImage updates itself;
+                the .deb updates when you install the next one.
+              </p>
+              <ol className="lp-steps">
+                <li>Download the AppImage, make it executable, run it</li>
+                <li>Let it set up Docker if it asks, then log out and back in</li>
+                <li>Enter your OpenRouter key and projects folder</li>
+                <li>Pick your password and sign in</li>
+              </ol>
+              <div className="lp-cta lp-cta-left">
+                <a className="lp-btn lp-btn-primary" href={LINUX_DOWNLOAD}>
+                  <DownloadMark />
+                  Download the AppImage
+                </a>
+                <a className="lp-btn lp-btn-quiet" href={LINUX_DEB_DOWNLOAD}>
+                  .deb for Debian / Ubuntu
+                </a>
+              </div>
+              <p className="lp-reqs">64-bit Linux with a desktop &middot; an OpenRouter API key</p>
             </article>
             <article className="lp-install">
               <code className="lp-kicker">./install.sh</code>

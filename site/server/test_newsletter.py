@@ -380,3 +380,28 @@ def test_the_windows_download_falls_back_to_the_release_page(monkeypatch):
     with TestClient(newsletter.app) as c:
         r = c.get("/download/windows", follow_redirects=False)
     assert r.headers["location"] == newsletter.RELEASES_PAGE, "only this repository's release URLs"
+
+
+def test_the_linux_downloads_follow_the_latest_full_release(monkeypatch):
+    base = "https://github.com/DJG3DK/tektonix/releases/download/v0.9.2/"
+    newsletter.reset_download_cache()
+    fake = _FakeGitHub({"assets": [
+        {"name": n, "browser_download_url": base + n} for n in (
+            "Tektonix_0.9.2_x64-setup.exe", "Tektonix_0.9.2_amd64.AppImage",
+            "Tektonix_0.9.2_amd64.AppImage.sig", "Tektonix_0.9.2_amd64.deb", "latest.json")
+    ]})
+    monkeypatch.setattr(newsletter.httpx, "AsyncClient", fake)
+    with TestClient(newsletter.app) as c:
+        assert c.get("/download/linux", follow_redirects=False).headers["location"] == base + "Tektonix_0.9.2_amd64.AppImage"
+        assert c.get("/download/linux-deb", follow_redirects=False).headers["location"] == base + "Tektonix_0.9.2_amd64.deb"
+        assert c.get("/download/windows", follow_redirects=False).headers["location"] == base + "Tektonix_0.9.2_x64-setup.exe"
+
+
+def test_a_release_without_a_linux_app_sends_linux_to_the_release_page(monkeypatch):
+    newsletter.reset_download_cache()
+    monkeypatch.setattr(newsletter.httpx, "AsyncClient", _FakeGitHub({"assets": [
+        {"name": "Tektonix_0.9.1_x64-setup.exe",
+         "browser_download_url": "https://github.com/DJG3DK/tektonix/releases/download/v0.9.1/Tektonix_0.9.1_x64-setup.exe"}]}))
+    with TestClient(newsletter.app) as c:
+        r = c.get("/download/linux", follow_redirects=False)
+    assert r.headers["location"] == newsletter.RELEASES_PAGE

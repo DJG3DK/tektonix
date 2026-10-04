@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+### The desktop app on Linux
+
+The Linux app is the Windows app's twin: the same control panel, setup and
+self-updates, as an AppImage (it updates itself) and a .deb (it updates when
+you install the next one). When Docker is missing it installs Docker Engine
+with Docker's own install script; when your account cannot use Docker yet it
+adds you to the docker group. Either way your system asks for your password
+once, and a log out and back in finishes it. The stack runs as your account,
+so your projects folder stays yours. Releases now carry both apps; the
+release publishes once both are attached.
+
+### Sandboxes leave your files yours on a Linux host
+
+With PUID set (the Linux app sets it; a Docker bundle on Linux can), a
+sandbox's root could not write into the worktree at all, since every
+capability was dropped and the worktree is yours. It now keeps the three
+file capabilities it needs there, and whatever a command creates is handed
+back to you when it finishes, or after it is stopped. Docker Desktop, which
+ignores ownership, is unchanged.
+
+### Quitting the desktop app stops Tektonix
+
+Quit, from the tray or the control panel, stops the stack's containers, and
+Docker Desktop too when the app started it, instead of leaving them holding
+memory. It asks first when a task is running. The window's close button asks
+once whether to quit or keep running in the tray; the control panel changes
+that later. An update's restart leaves the stack running.
+
 ### Sign in with a passkey
 
 The sign-in page has a "Sign in with a passkey" button above the password

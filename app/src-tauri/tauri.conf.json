@@ -43,7 +43,18 @@
         "sidebarImage": "icons/installer/sidebar.bmp"
       }
     },
-    "createUpdaterArtifacts": true
+    "createUpdaterArtifacts": true,
+    "linux": {
+      "deb": {
+        "section": "devel"
+      },
+      "appimage": {
+        "bundleMediaFramework": false
+      }
+    },
+    "category": "DeveloperTool",
+    "shortDescription": "A self-hosted coding agent",
+    "homepage": "https://tektonix.io"
   },
   "plugins": {
     "updater": {

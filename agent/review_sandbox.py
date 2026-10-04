@@ -238,6 +238,16 @@ def _image_and_env(req: CheckRequest, cfg: dict) -> tuple[str, dict]:
     return str(image), dict(entry.get("env") or {})
 
 
+async def _reclaim(req: CheckRequest, image: str) -> None:
+    """A killed check never reached its own hand-back (build_docker_argv);
+    do it for the worktree from outside."""
+    try:
+        wt = _checked_worktree(req, _project_live(req.project)[0])
+    except Exception:  # noqa: BLE001 -- the request was valid once; nothing to clean if not
+        return
+    await sb.reclaim(wt, image)
+
+
 def build_docker_argv(req: CheckRequest, container_name: str) -> tuple[list[str], str]:
     """The full `docker run` argv for one check, and the image it runs in.
 
@@ -265,6 +275,15 @@ def build_docker_argv(req: CheckRequest, container_name: str) -> tuple[list[str]
 
     mounts = _checked_mounts(req.mounts or [], live, _generated_dirs(req.project))
 
+    # Files the check leaves in the worktree go back to the agent's user on
+    # a Linux host (sandbox.sandbox_owner): sh runs the command, hands
+    # root's files back, and exits with the command's code.
+    owner = sb.sandbox_owner()
+    entry = ["--entrypoint", cmd]
+    run_args = list(args)
+    if owner:
+        entry = ["--entrypoint", "sh"]
+        run_args = ["-c", f'"$0" "$@"; rc=$?; {sb.give_back_line(owner)}; exit $rc', cmd, *args]
     argv = [
         "docker", "run", "--rm", "--name", container_name,
         "-v", f"{sb.host_path(wt)}:/workspace",
@@ -276,11 +295,12 @@ def build_docker_argv(req: CheckRequest, container_name: str) -> tuple[list[str]
         "--cpus", sb.SANDBOX_CPU_LIMIT,
         "--pids-limit", sb.SANDBOX_PIDS_LIMIT,
         "--cap-drop", "ALL",
+        *sb.owner_args(owner),
         "--security-opt", "no-new-privileges",
-        "--entrypoint", cmd,
+        *entry,
         *[a for k, v in env.items() for a in ("-e", f"{k}={v}")],
         image,
-        *args,
+        *run_args,
     ]
     return argv, image
 
@@ -405,6 +425,7 @@ async def run_check(req: CheckRequest) -> dict:
     except TimeoutError:
         await sb._kill_container(name)
         await proc.wait()
+        await _reclaim(req, image)
         logging.getLogger("tektonix").warning("review-sandbox: %s %s timed out after %ds", req.project, req.cmd, int(timeout_s))
         # Flagged as the harness's failure: a check that did not finish says
         # nothing about the code, and counted as a plain failure it was
@@ -417,6 +438,7 @@ async def run_check(req: CheckRequest) -> dict:
     except asyncio.CancelledError:
         await sb._kill_container(name)
         await proc.wait()
+        await _reclaim(req, image)
         raise
     text = (out or b"").decode("utf-8", errors="replace")[-MAX_OUTPUT_CHARS:]
     return {"ok": proc.returncode == 0, "code": proc.returncode, "output": text, "image": image}
