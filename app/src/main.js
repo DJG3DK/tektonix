@@ -46,7 +46,7 @@ const DOCKER_TEXT = {
   },
   linux: {
     missing: { title: "Docker is not installed", button: "install", label: "Install Docker",
-      body: "Tektonix runs in containers. This installs Docker Engine with Docker's own install script, starts its service, and lets your account use it. Your system asks for your password once; then log out and back in." },
+      body: "Tektonix runs in containers. This installs Docker Engine (with Docker's own install script, or from your distribution's packages on Arch-based systems like CachyOS), starts its service, and lets your account use it. Your system asks for your password once; then log out and back in." },
     stopped: { title: "Docker is not running", button: "start", label: "Start Docker",
       body: "The Docker service is installed but stopped. Starting it asks for your password (or starts Docker Desktop, if that is what you use)." },
     denied: { title: "Your account cannot use Docker yet", button: "install", label: "Give my account access",

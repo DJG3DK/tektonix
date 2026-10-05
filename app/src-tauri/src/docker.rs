@@ -190,6 +190,36 @@ pub fn linux_install_script(script: &str, account: &str) -> String {
     )
 }
 
+/// Arch Linux or a distribution built on it, from /etc/os-release: its ID,
+/// or Arch among the IDs it says it is like.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub fn arch_family(os_release: &str) -> bool {
+    os_release.lines().any(|line| {
+        let Some((key, value)) = line.split_once('=') else {
+            return false;
+        };
+        let value = value.trim().trim_matches('"');
+        match key.trim() {
+            "ID" => value == "arch",
+            "ID_LIKE" => value.split_whitespace().any(|v| v == "arch"),
+            _ => false,
+        }
+    })
+}
+
+/// What runs as root to install Docker on an Arch-family system: the
+/// engine and compose from the distribution's own repositories (no -y: a
+/// sync without the upgrade is a partial upgrade, which Arch does not
+/// support), the service enabled, and this account given the socket.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub fn pacman_install_script(account: &str) -> String {
+    format!(
+        "set -e; pacman -S --needed --noconfirm docker docker-compose; \
+         systemctl enable --now docker; usermod -aG docker {}",
+        sh_quote(account)
+    )
+}
+
 /// pkexec's own exit codes, in words: 126 is the prompt dismissed, 127 is
 /// not authorised (or pkexec not there to ask).
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
@@ -324,6 +354,19 @@ pub async fn install(app: &AppHandle) -> Result<String, String> {
                     .into(),
             )
         }
+        DockerState::Missing
+            if arch_family(&std::fs::read_to_string("/etc/os-release").unwrap_or_default()) =>
+        {
+            // Docker's install script refuses Arch and its derivatives
+            // (CachyOS, Manjaro, EndeavourOS: "Unsupported distribution",
+            // 2026-10-05); their own repositories carry Docker.
+            note(app, "Installing Docker from your distribution's packages (your system asks for your password)...");
+            let script = pacman_install_script(&user);
+            proc::capture("pkexec", &["sh", "-c", &script], None)
+                .await
+                .map_err(|e| pkexec_failure(&e, "install Docker"))?;
+            Ok("Docker is installed. Log out and back in so your account can use it, then open Tektonix again.".into())
+        }
         DockerState::Missing => {
             // In the app's own data directory, not /tmp: the file runs as
             // root, and only this account can write here.
@@ -415,6 +458,27 @@ mod tests {
         let s = linux_install_script("/home/o'brien/.local/share/x/get-docker.sh", "danny");
         assert!(s.starts_with("set -e; sh '/home/o'\\''brien/.local/share/x/get-docker.sh';"));
         assert!(s.contains("systemctl enable --now docker"));
+        assert!(s.ends_with("usermod -aG docker 'danny'"));
+    }
+
+    #[test]
+    fn arch_and_its_derivatives_use_pacman() {
+        let cachyos = "NAME=\"CachyOS Linux\"\nID=cachyos\nID_LIKE=\"arch\"\n";
+        let manjaro = "ID=manjaro\nID_LIKE=arch\n";
+        let endeavour = "ID=endeavouros\nID_LIKE=\"arch\"\n";
+        assert!(arch_family("ID=arch\n") && arch_family(cachyos));
+        assert!(arch_family(manjaro) && arch_family(endeavour));
+        for other in [
+            "ID=ubuntu\nID_LIKE=debian\n",
+            "ID=fedora\n",
+            "ID=archery\n",
+            "",
+        ] {
+            assert!(!arch_family(other), "{other}");
+        }
+        let s = pacman_install_script("danny");
+        assert!(s.contains("pacman -S --needed --noconfirm docker docker-compose"));
+        assert!(!s.contains("-Sy"), "no partial upgrade");
         assert!(s.ends_with("usermod -aG docker 'danny'"));
     }
 
