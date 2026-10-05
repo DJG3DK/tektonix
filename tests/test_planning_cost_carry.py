@@ -147,15 +147,20 @@ def test_the_three_totals_on_the_analytics_page_agree(monkeypatch):
     from agent.auth import User
     from agent.routers import analytics as an
 
+    # Days relative to now: the daily series covers the last 14 days, and
+    # fixed September timestamps fell out of it on 2026-10-05.
+    import time
+    made_ts = int(time.time()) - 3 * 86400
+    touched_ts = made_ts + 86400
     store = _Store({
         (("tasks", "proj"), "t1"): {"task_id": "t1", "repo": "proj", "goal": "g", "category": "feature",
                                     "cost_so_far": 2.0, "planning_cost_usd": 0.5, "budget_usd": 5, "status": "done",
-                                    "created_at": 1_790_000_000},
+                                    "created_at": made_ts},
         (("tasks", "other"), "t2"): {"task_id": "t2", "repo": "other", "goal": "g", "category": "bugfix",
-                                     "cost_so_far": 1.0, "budget_usd": 5, "status": "done", "created_at": 1_790_000_000},
+                                     "cost_so_far": 1.0, "budget_usd": 5, "status": "done", "created_at": made_ts},
         (("planning", "proj"), "s1"): {"session_id": "s1", "repo": "proj", "cost_usd": 0.5, "carried_cost_usd": 0.5},
-        (("planning", "proj"), "s2"): {"session_id": "s2", "repo": "proj", "cost_usd": 0.8, "updated_at": 1_790_050_000},
-        (("planning", "other"), "s3"): {"session_id": "s3", "repo": "other", "cost_usd": 0.3, "created_at": 1_790_000_000},
+        (("planning", "proj"), "s2"): {"session_id": "s2", "repo": "proj", "cost_usd": 0.8, "updated_at": touched_ts},
+        (("planning", "other"), "s3"): {"session_id": "s3", "repo": "other", "cost_usd": 0.3, "created_at": made_ts},
     })
     monkeypatch.setattr(an, "PROJECTS", {"proj": {}, "other": {}})
     monkeypatch.setattr(srv.app.state, "store", store, raising=False)
@@ -170,7 +175,7 @@ def test_the_three_totals_on_the_analytics_page_agree(monkeypatch):
     assert round(body["per_repo"]["other"]["cost"], 6) == 1.0 + 0.3
     from datetime import UTC, datetime
     days = {d["date"]: d for d in body["daily"]}
-    touched = datetime.fromtimestamp(1_790_050_000, tz=UTC).strftime("%Y-%m-%d")
-    made = datetime.fromtimestamp(1_790_000_000, tz=UTC).strftime("%Y-%m-%d")
+    touched = datetime.fromtimestamp(touched_ts, tz=UTC).strftime("%Y-%m-%d")
+    made = datetime.fromtimestamp(made_ts, tz=UTC).strftime("%Y-%m-%d")
     if touched != made:
         assert round(days[touched]["cost"], 6) == 0.8, "a stranded plan lands on the day it was last touched"
