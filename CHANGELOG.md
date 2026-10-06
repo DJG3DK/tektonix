@@ -1,104 +1,43 @@
 # Changelog
 
-## Unreleased
+## v0.9.2 — Tektonix on Linux
 
-### The desktop app on Linux
+The desktop app runs on Linux now, and a few things got easier everywhere.
 
-The Linux app is the Windows app's twin: the same control panel, setup and
-self-updates, as an AppImage (it updates itself) and a .deb (it updates when
-you install the next one). When Docker is missing it installs Docker Engine
-with Docker's own install script; when your account cannot use Docker yet it
-adds you to the docker group. Either way your system asks for your password
-once, and a log out and back in finishes it. The stack runs as your account,
-so your projects folder stays yours. Releases now carry both apps; the
-release publishes once both are attached.
+### The Linux app
 
-Tested end to end in an Ubuntu 24.04 desktop VM, which turned up four
-things now fixed: sign-in never stuck in the Linux app (its WebKit drops a
-Secure cookie on http://localhost, so the session cookie is no longer
-marked Secure over plain http to loopback; anything behind a proxy keeps
-it); the AppImage aborted on a desktop without libgles2 (the app now turns
-off WebKit's DMA-BUF renderer unless you set it yourself); every dropdown
-rendered white (they draw themselves now, everywhere); and a fresh desktop
-install ran its checks at 2 CPUs and 2 GB instead of half the machine and
-4 GB, on Windows too.
+- One line installs it: `curl -fsSL https://tektonix.io/install-linux.sh | sh`.
+  It checks the download against GitHub's checksum, adds Tektonix to your app
+  menu and starts it. There's also an AppImage and a .deb on the release.
+- No Docker? It installs it for you, Arch-based distros included. You type
+  your password once and carry on. No logging out.
+- It runs as you, so your projects folder doesn't fill up with root-owned
+  files.
+- The AppImage updates itself like the Windows app. The .deb updates when you
+  install the next one.
 
-### The Linux app installs itself, and Docker access needs no logging out
+### Everywhere
 
-Run the downloaded AppImage once and it moves itself into the app's own
-data folder, adds Tektonix to your app menu with its icon, and starts again
-from there; its updates replace that copy, so the menu entry stays current.
-Getting Docker access no longer ends with "log out and back in": a new
-group only reaches new logins, so the app restarts itself under `sg docker`,
-which starts it with the group already active. Opened later from the menu
-in the same session, it does that on its own without asking anything. On
-Arch-based distributions (CachyOS, Manjaro, EndeavourOS), whose Docker
-Docker's own install script refuses, it installs Docker with pacman.
+- Sign in with a passkey. Your phone, laptop or security key is enough on its
+  own, and your password and code still work as a backup.
+- Quit actually quits. It stops the containers so they're not sitting on your
+  memory, and asks first if a task is running.
+- New installs size their sandboxes to your machine instead of 2 CPUs and 2 GB.
+- Dropdowns look right on every platform.
 
-### Sandboxes leave your files yours on a Linux host
+### Fixes
 
-With PUID set (the Linux app sets it; a Docker bundle on Linux can), a
-sandbox's root could not write into the worktree at all, since every
-capability was dropped and the worktree is yours. It now keeps the three
-file capabilities it needs there, and whatever a command creates is handed
-back to you when it finishes, or after it is stopped. Docker Desktop, which
-ignores ownership, is unchanged.
+- Web search in planning works again, and the agent stops guessing at web
+  addresses when a page won't load.
+- The GitHub inbox stopped offering Tektonix its own pull requests, and its
+  tools understand repository links.
+- The Windows installer looks like Tektonix instead of a generic setup wizard.
 
-### Quitting the desktop app stops Tektonix
+### Upgrading
 
-Quit, from the tray or the control panel, stops the stack's containers, and
-Docker Desktop too when the app started it, instead of leaving them holding
-memory. It asks first when a task is running. The window's close button asks
-once whether to quit or keep running in the tray; the control panel changes
-that later. An update's restart leaves the stack running.
-
-### Sign in with a passkey
-
-The sign-in page has a "Sign in with a passkey" button above the password
-form. A passkey on your phone, laptop or security key signs you in on its
-own: the device's fingerprint, face or PIN is the second factor, so there is
-no code to type. Settings > Account lists your passkeys, adds one (after your
-password) and renames or removes them. The password and authenticator code
-keep working as the backup, unchanged. Passkeys are bound to the host the
-dashboard is on; `WEBAUTHN_RP_ID` names a parent domain to share them across
-subdomains.
-
-### The inbox never offers Tektonix its own pull requests
-
-With the inbox's PR authors set to "anyone", every pull request a task
-opened came back as a new inbox item, and approving it opened another pull
-request for the next poll ("Land the dependency update proposed in pull
-request #42 (Land ... #37 ...)"). A pull request on a Tektonix task branch
-is skipped whatever the author setting; the items already in an inbox
-resolve on the next poll.
-
-### GitHub tools take the repository as it appears in a link
-
-Every GitHub inbox task's first pull-request call failed: the goal carries
-the PR's link, the model passed its owner/repo, and the tools knew only the
-project's own name. They take either now, matched against each project's own
-origin remote (so any install works, case-insensitively), with the caller's
-project access unchanged; a miss lists the project names that would work, and
-two projects on one repository is refused as ambiguous rather than guessed.
-
-### The Windows installer looks like Tektonix
-
-The setup wizard showed the NSIS defaults: a blue sidebar with a computer
-on it and a generic globe in the title bar. It carries the Tektonix icon,
-a sidebar with the logo on the welcome and finish pages, and the mark in the
-header of the pages between.
-
-### Web search works again, and a failed page is not an invitation to guess
-
-The planning agent scraped Bing with a headless browser, and from a
-datacenter address Bing answered with empty pages: "no results" for
-"simplewebauthn". A planning turn then invented twenty documentation URLs on
-one site, nearly all "Page Not Found". Search now goes through the router's
-new `web-search` alias (OpenRouter's web plugin, about $0.007 a search, on the
-ledger), with DuckDuckGo as a fallback and a plain "search is unavailable, do
-not guess addresses" when both fail. `browse_page` lists the real links on
-the page it loaded, and a per-turn guard closes a site after three missing
-pages and browsing after fifteen pages in all.
+The apps update themselves. Host installs: pull, run
+`pip install -r requirements.txt` (passkeys need two new packages), rebuild
+the dashboard and restart the agent.
 
 ## v0.9.1 — the Windows installer is signed
 

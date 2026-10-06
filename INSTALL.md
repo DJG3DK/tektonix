@@ -38,7 +38,9 @@ suite passes on both, against a real Postgres. `install.sh` detects `apt`,
 
 Windows, macOS, or a one-command Docker install is a different path:
 [docker/README.md](docker/README.md). On Windows, the desktop app (the
-`Tektonix_<version>_x64-setup.exe` on each release) does it all in a window;
+`Tektonix_<version>_x64-setup.exe` on each release) does it all in a window,
+and on a Linux desktop so does the Linux app
+(`curl -fsSL https://tektonix.io/install-linux.sh | sh`);
 `Install Tektonix.bat` is the same bundle from a source checkout. The bundle
 includes the review gate; deploying your app after a merge is the one thing
 it leaves to the host install.

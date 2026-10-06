@@ -744,6 +744,9 @@ On Windows, install the desktop app: the `Tektonix_<version>_x64-setup.exe`
 attached to each [release](https://github.com/DJG3DK/tektonix/releases). It
 installs Docker Desktop if it is missing, asks for your settings in a window,
 pulls the release's images and keeps them updated ([app/README.md](app/README.md)).
+On a Linux desktop, `curl -fsSL https://tektonix.io/install-linux.sh | sh`
+installs the same app (or grab the AppImage or .deb from the release). It sets
+up Docker if it's missing and adds itself to your app menu.
 `Install Tektonix.bat` and `install.ps1` still work for a source checkout
 ([docker/README.md](docker/README.md)). The bundle includes the review gate;
 what it cannot do is restart your app after a merge, because pm2 runs on the
