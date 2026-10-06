@@ -22,6 +22,7 @@
     "allow-docker-state",
     "allow-docker-start",
     "allow-docker-install",
+    "allow-docker-can-restart",
     "allow-settings-get",
     "allow-settings-save",
     "allow-machine-git-identity",

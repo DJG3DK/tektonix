@@ -46,11 +46,11 @@ const DOCKER_TEXT = {
   },
   linux: {
     missing: { title: "Docker is not installed", button: "install", label: "Install Docker",
-      body: "Tektonix runs in containers. This installs Docker Engine (with Docker's own install script, or from your distribution's packages on Arch-based systems like CachyOS), starts its service, and lets your account use it. Your system asks for your password once; then log out and back in." },
+      body: "Tektonix runs in containers. This installs Docker Engine (with Docker's own install script, or from your distribution's packages on Arch-based systems like CachyOS), starts its service, and lets your account use it. Your system asks for your password once, and Tektonix restarts itself when it is done." },
     stopped: { title: "Docker is not running", button: "start", label: "Start Docker",
       body: "The Docker service is installed but stopped. Starting it asks for your password (or starts Docker Desktop, if that is what you use)." },
     denied: { title: "Your account cannot use Docker yet", button: "install", label: "Give my account access",
-      body: "Docker is running, but only members of the docker group may use it. This adds you (your system asks for your password); then log out and back in. If you were just added, logging out and back in is all it takes." },
+      body: "Docker is running, but only members of the docker group may use it. This adds you (your system asks for your password once), and Tektonix restarts itself with access." },
     "no-compose": { title: "This Docker has no compose command", body: "Install the compose plugin (the docker-compose-plugin package) and check again." },
   },
 };
@@ -63,6 +63,14 @@ async function checkDocker() {
   $("docker-text").textContent = "";
   const state = await invoke("docker_state");
   if (state === "ready") return afterDocker();
+  // Linux: already in the docker group, from before this login. The app
+  // restarts itself into the group; there is nothing to ask (2026-10-06).
+  if (state === "denied" && LINUX && await invoke("docker_can_restart")) {
+    $("docker-title").textContent = "Getting Docker access…";
+    $("docker-text").textContent = "Your account is in the docker group already. Tektonix restarts itself with it in a moment.";
+    try { say(await invoke("docker_install")); } catch (e) { fail(e); }
+    return;
+  }
   const text = DOCKER_TEXT[LINUX ? "linux" : "windows"][state] || DOCKER_TEXT.windows["no-compose"];
   $("docker-title").textContent = text.title;
   $("docker-text").textContent = text.body;
@@ -85,7 +93,7 @@ $("docker-install").onclick = async () => {
     // Done: the heading said "not installed" over a message saying it was
     // (2026-10-04). What is left is the person's step, so no button.
     if (!/^Nothing to install/.test(next)) {
-      $("docker-title").textContent = "Docker is set up";
+      $("docker-title").textContent = /Restarting/.test(next) ? "Docker is ready" : "Docker is set up";
       $("docker-install").classList.add("hidden");
     }
     $("docker-text").textContent = next;

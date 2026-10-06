@@ -13,5 +13,16 @@ fn main() {
     if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
         std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
     }
+    // Linux: a downloaded AppImage installs itself into the app menu on its
+    // first run, then runs again from there (integrate.rs). Before any
+    // window, so nothing flashes up and is closed.
+    #[cfg(target_os = "linux")]
+    if let Some(installed) = tektonix_lib::integrate::install_appimage() {
+        use std::os::unix::process::CommandExt;
+        let err = std::process::Command::new(&installed)
+            .args(std::env::args_os().skip(1))
+            .exec();
+        eprintln!("could not run the installed copy ({err}); running from here");
+    }
     tektonix_lib::run()
 }

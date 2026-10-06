@@ -23,6 +23,18 @@ rendered white (they draw themselves now, everywhere); and a fresh desktop
 install ran its checks at 2 CPUs and 2 GB instead of half the machine and
 4 GB, on Windows too.
 
+### The Linux app installs itself, and Docker access needs no logging out
+
+Run the downloaded AppImage once and it moves itself into the app's own
+data folder, adds Tektonix to your app menu with its icon, and starts again
+from there; its updates replace that copy, so the menu entry stays current.
+Getting Docker access no longer ends with "log out and back in": a new
+group only reaches new logins, so the app restarts itself under `sg docker`,
+which starts it with the group already active. Opened later from the menu
+in the same session, it does that on its own without asking anything. On
+Arch-based distributions (CachyOS, Manjaro, EndeavourOS), whose Docker
+Docker's own install script refuses, it installs Docker with pacman.
+
 ### Sandboxes leave your files yours on a Linux host
 
 With PUID set (the Linux app sets it; a Docker bundle on Linux can), a

@@ -419,16 +419,16 @@ export function LandingPage() {
               <code className="lp-kicker">appimage / .deb</code>
               <h3>The Linux app</h3>
               <p>
-                Same app, same setup. If Docker isn&rsquo;t installed it installs it for you, asking
-                for your password once, and if your account can&rsquo;t use Docker yet it fixes
-                that too. Your projects stay owned by you, not root. The AppImage updates itself;
-                the .deb updates when you install the next one.
+                Same app, same setup. The first time you run it, it installs itself into your app
+                menu. If Docker isn&rsquo;t there it installs it (on Arch-based distros like CachyOS
+                too), asking for your password once, and then just carries on: no logging out. Your
+                projects stay owned by you, not root. It updates itself from then on.
               </p>
               <ol className="lp-steps">
-                <li>Download the AppImage, make it executable, run it</li>
-                <li>Let it set up Docker if it asks, then log out and back in</li>
+                <li>Download the AppImage, make it executable, run it once</li>
+                <li>Let it set up Docker if it asks</li>
                 <li>Enter your OpenRouter key and projects folder</li>
-                <li>Pick your password and sign in</li>
+                <li>Pick your password and sign in, and find it in your app menu after that</li>
               </ol>
               <div className="lp-cta lp-cta-left">
                 <a className="lp-btn lp-btn-primary" href={LINUX_DOWNLOAD}>

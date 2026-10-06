@@ -333,12 +333,18 @@ pub async fn install(app: &AppHandle) -> Result<String, String> {
 }
 
 /// Linux: Docker Engine when it is missing, the docker group when the
-/// daemon refuses this account. One password prompt either way; group
-/// membership takes effect at the next login.
+/// daemon refuses this account. One password prompt either way, and no
+/// logging out: a new group reaches only new logins, so the app restarts
+/// itself under `sg docker`, which starts it with the group already active
+/// (a listed member needs no password for it). The next login has the group
+/// for everything (2026-10-06; before, the app said to log out and back in).
 #[cfg(target_os = "linux")]
 pub async fn install(app: &AppHandle) -> Result<String, String> {
     let user = account().await?;
     match state().await {
+        DockerState::Denied if listed_member(&docker_group_line().await, &user) => {
+            restart_with_docker_group(app)
+        }
         DockerState::Denied => {
             note(
                 app,
@@ -349,10 +355,7 @@ pub async fn install(app: &AppHandle) -> Result<String, String> {
             proc::capture("pkexec", &["usermod", "-aG", "docker", &user], None)
                 .await
                 .map_err(|e| pkexec_failure(&e, "add you to the docker group"))?;
-            Ok(
-                "Done. Log out and back in so the new group applies, then open Tektonix again."
-                    .into(),
-            )
+            restart_with_docker_group(app)
         }
         DockerState::Missing
             if arch_family(&std::fs::read_to_string("/etc/os-release").unwrap_or_default()) =>
@@ -365,7 +368,7 @@ pub async fn install(app: &AppHandle) -> Result<String, String> {
             proc::capture("pkexec", &["sh", "-c", &script], None)
                 .await
                 .map_err(|e| pkexec_failure(&e, "install Docker"))?;
-            Ok("Docker is installed. Log out and back in so your account can use it, then open Tektonix again.".into())
+            restart_with_docker_group(app)
         }
         DockerState::Missing => {
             // In the app's own data directory, not /tmp: the file runs as
@@ -383,10 +386,89 @@ pub async fn install(app: &AppHandle) -> Result<String, String> {
             let r = proc::capture("pkexec", &["sh", "-c", &script], None).await;
             let _ = std::fs::remove_file(&path);
             r.map_err(|e| pkexec_failure(&e, "install Docker"))?;
-            Ok("Docker is installed. Log out and back in so your account can use it, then open Tektonix again.".into())
+            restart_with_docker_group(app)
         }
         _ => Ok("Nothing to install.".into()),
     }
+}
+
+/// Set on the copy `sg docker` starts, so a daemon that still refuses it
+/// is reported rather than restarted into again.
+#[cfg(target_os = "linux")]
+const RESTARTED: &str = "TEKTONIX_DOCKER_RESTARTED";
+
+/// `getent group docker`: `docker:x:988:sam,bob`, or empty.
+#[cfg(target_os = "linux")]
+async fn docker_group_line() -> String {
+    proc::capture("getent", &["group", "docker"], None)
+        .await
+        .unwrap_or_default()
+}
+
+/// Whether `user` is listed in a group line from getent.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub fn listed_member(group_line: &str, user: &str) -> bool {
+    group_line
+        .trim()
+        .rsplit(':')
+        .next()
+        .is_some_and(|members| members.split(',').any(|m| m == user))
+}
+
+/// Whether the panel may restart the app into the docker group without
+/// asking anything: the account is a member already (added earlier, not
+/// logged in since), sg is there, and this copy is not already the restart.
+#[cfg(target_os = "linux")]
+pub async fn can_restart_into_group() -> bool {
+    std::env::var_os(RESTARTED).is_none()
+        && which("sg")
+        && match account().await {
+            Ok(user) => listed_member(&docker_group_line().await, &user),
+            Err(_) => false,
+        }
+}
+
+#[cfg(not(target_os = "linux"))]
+pub async fn can_restart_into_group() -> bool {
+    false
+}
+
+#[cfg(target_os = "linux")]
+fn which(program: &str) -> bool {
+    std::env::var_os("PATH")
+        .is_some_and(|paths| std::env::split_paths(&paths).any(|dir| dir.join(program).is_file()))
+}
+
+/// Start this app again under `sg docker` and close this copy. The new copy
+/// waits a second, so this one has let go of the single-instance lock.
+#[cfg(target_os = "linux")]
+fn restart_with_docker_group(app: &AppHandle) -> Result<String, String> {
+    if std::env::var_os(RESTARTED).is_some() || !which("sg") {
+        return Ok("Docker is ready for your account. Log out and back in so it applies, then open Tektonix again.".into());
+    }
+    let exe = std::env::var_os("APPIMAGE")
+        .map(std::path::PathBuf::from)
+        .or_else(|| std::env::current_exe().ok())
+        .ok_or("could not tell where this app is running from")?;
+    let inner = sh_quote(&exe.display().to_string());
+    std::process::Command::new("sh")
+        .args(["-c", "sleep 1; exec sg docker -c \"$0\"", &inner])
+        .env(RESTARTED, "1")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map_err(|e| format!("could not restart Tektonix: {e}"))?;
+    let handle = app.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+        handle.exit(0);
+    });
+    note(
+        app,
+        "Docker is ready. Restarting Tektonix so it can use it...",
+    );
+    Ok("Docker is ready. Restarting Tektonix so it can use it...".into())
 }
 
 #[cfg(target_os = "linux")]
@@ -480,6 +562,15 @@ mod tests {
         assert!(s.contains("pacman -S --needed --noconfirm docker docker-compose"));
         assert!(!s.contains("-Sy"), "no partial upgrade");
         assert!(s.ends_with("usermod -aG docker 'danny'"));
+    }
+
+    #[test]
+    fn membership_is_read_from_the_group_line() {
+        assert!(listed_member("docker:x:988:sam,bob\n", "sam"));
+        assert!(listed_member("docker:x:988:bob,sam", "sam"));
+        assert!(!listed_member("docker:x:988:samuel,bob", "sam"));
+        assert!(!listed_member("docker:x:988:", "sam"));
+        assert!(!listed_member("", "sam"));
     }
 
     #[test]

@@ -5,6 +5,8 @@
 //! open_panel). See stack.rs for the layout.
 
 mod docker;
+#[cfg(target_os = "linux")]
+pub mod integrate;
 mod proc;
 mod quit;
 mod stack;
@@ -27,6 +29,13 @@ async fn docker_state() -> docker::DockerState {
 #[tauri::command]
 async fn docker_start(app: AppHandle) -> Result<(), String> {
     docker::start_and_wait(&app).await
+}
+
+/// Linux: the account is in the docker group but this session is older
+/// than that; the panel restarts the app into the group without asking.
+#[tauri::command]
+async fn docker_can_restart() -> bool {
+    docker::can_restart_into_group().await
 }
 
 #[tauri::command]
@@ -606,6 +615,7 @@ pub fn run() {
             docker_state,
             docker_start,
             docker_install,
+            docker_can_restart,
             settings_get,
             settings_save,
             machine_git_identity,

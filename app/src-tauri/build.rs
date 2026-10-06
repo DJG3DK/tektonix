@@ -7,6 +7,7 @@ const COMMANDS: &[&str] = &[
     "docker_state",
     "docker_start",
     "docker_install",
+    "docker_can_restart",
     "settings_get",
     "settings_save",
     "machine_git_identity",
