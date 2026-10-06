@@ -424,8 +424,9 @@ export function LandingPage() {
                 too), asking for your password once, and then just carries on: no logging out. Your
                 projects stay owned by you, not root. It updates itself from then on.
               </p>
+              <pre><code>curl -fsSL https://tektonix.io/install-linux.sh | sh</code></pre>
               <ol className="lp-steps">
-                <li>Download the AppImage, make it executable, run it once</li>
+                <li>Run that, or download the AppImage below and run it once</li>
                 <li>Let it set up Docker if it asks</li>
                 <li>Enter your OpenRouter key and projects folder</li>
                 <li>Pick your password and sign in, and find it in your app menu after that</li>

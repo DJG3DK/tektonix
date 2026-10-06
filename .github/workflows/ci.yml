@@ -508,6 +508,8 @@ jobs:
             [ -e "$f" ] || continue
             bash -n "$f"
           done
+          # The one-line Linux installer runs under plain sh (curl ... | sh).
+          sh -n site/public/install-linux.sh
       - name: The installer never installs anything unasked
         # Sources install.sh as a library, so nothing is installed and no
         # package manager is needed.

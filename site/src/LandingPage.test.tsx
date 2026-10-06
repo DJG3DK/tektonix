@@ -170,6 +170,7 @@ describe("LandingPage — 0.9 install paths", () => {
     expect(appimage.length).toBe(2);
     appimage.forEach((a) => expect(a).toHaveAttribute("href", "/download/linux"));
     expect(screen.getByRole("link", { name: /\.deb for debian/i })).toHaveAttribute("href", "/download/linux-deb");
+    expect(document.body.textContent).toContain("curl -fsSL https://tektonix.io/install-linux.sh | sh");
   });
 
   it("covers Windows and Linux, and is honest that there is no Mac build", () => {

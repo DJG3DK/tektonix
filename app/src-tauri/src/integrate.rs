@@ -122,6 +122,23 @@ fn move_file(from: &Path, to: &Path) -> std::io::Result<()> {
     std::fs::set_permissions(to, std::fs::Permissions::from_mode(0o755))
 }
 
+/// `--integrate`: the menu entry and icons for the AppImage this is, moving
+/// it into place first when it is elsewhere, and nothing else.
+pub fn integrate_only() -> Result<(), String> {
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .ok_or("HOME is not set")?;
+    let data = data_home(std::env::var("XDG_DATA_HOME").ok().as_deref(), &home);
+    let installed = installed_path(&data);
+    let running = std::env::var_os("APPIMAGE")
+        .map(PathBuf::from)
+        .ok_or("--integrate is for the AppImage; this copy is not one")?;
+    if running != installed {
+        move_file(&running, &installed).map_err(|e| format!("could not install: {e}"))?;
+    }
+    write_entry(&data, &installed).map_err(|e| format!("could not write the menu entry: {e}"))
+}
+
 /// Run at startup, before anything else. Returns the installed path when
 /// the app should run again from there; any failure leaves it running from
 /// where it is, which works, just without the menu entry.

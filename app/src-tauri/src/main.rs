@@ -16,6 +16,21 @@ fn main() {
     // Linux: a downloaded AppImage installs itself into the app menu on its
     // first run, then runs again from there (integrate.rs). Before any
     // window, so nothing flashes up and is closed.
+    // `--integrate`: only that, and no window (the one-line installer runs
+    // it, possibly over ssh with no display).
+    #[cfg(target_os = "linux")]
+    if std::env::args_os()
+        .nth(1)
+        .is_some_and(|a| a == "--integrate")
+    {
+        std::process::exit(match tektonix_lib::integrate::integrate_only() {
+            Ok(()) => 0,
+            Err(e) => {
+                eprintln!("tektonix: {e}");
+                1
+            }
+        });
+    }
     #[cfg(target_os = "linux")]
     if let Some(installed) = tektonix_lib::integrate::install_appimage() {
         use std::os::unix::process::CommandExt;
