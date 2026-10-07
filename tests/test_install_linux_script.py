@@ -18,19 +18,20 @@ pytestmark = pytest.mark.skipif(
 STUB = '#!/bin/sh\nprintf "%s\\n" "$*" > "$HOME/stub-ran-with"\n'
 
 
-def _release(tmp: Path, *, name="Tektonix_0.9.2_amd64.AppImage", body=STUB, digest=None, url=None):
+def _release(tmp: Path, *, name="Tektonix_0.9.2_amd64.AppImage", body=STUB, digest=None, url=None,
+             compact=False, notes=""):
     api = tmp / "api"
     (api / "tags").mkdir(parents=True)
     asset = tmp / name
     asset.write_text(body)
     sha = digest if digest is not None else hashlib.sha256(body.encode()).hexdigest()
-    release = {"tag_name": "v0.9.2", "name": "Tektonix v0.9.2", "assets": [
+    release = {"tag_name": "v0.9.2", "name": "Tektonix v0.9.2", "body": notes, "assets": [
         {"name": "latest.json", "digest": "sha256:" + "0" * 64,
          "browser_download_url": "https://github.com/DJG3DK/tektonix/releases/download/v0.9.2/latest.json"},
         {"name": name, "uploader": {"login": "github-actions[bot]", "url": "https://api.github.com/x"},
          "digest": f"sha256:{sha}", "browser_download_url": url or f"file://{asset}"},
     ]}
-    text = json.dumps(release, indent=2)
+    text = json.dumps(release, separators=(",", ":")) if compact else json.dumps(release, indent=2)
     (api / "latest").write_text(text)
     (api / "tags" / "v0.9.2-rc2").write_text(text)
     return api
@@ -80,3 +81,18 @@ def test_only_this_repositorys_release_downloads_are_fetched(tmp_path):
 def test_a_strange_version_is_refused_before_anything_is_fetched(tmp_path):
     r, _ = _run(tmp_path, _release(tmp_path), "--version", "latest;rm -rf ~")
     assert r.returncode == 1 and "a version looks like" in r.stderr
+
+
+def test_one_line_json_installs_too(tmp_path):
+    """GitHub sometimes answers on one line; the plain one-liner said "that
+    release has no Linux app" for v0.9.3 because of it (2026-10-07)."""
+    r, home = _run(tmp_path, _release(tmp_path, compact=True))
+    assert r.returncode == 0, r.stderr
+    assert (home / ".local/share/io.tektonix.desktop/Tektonix.AppImage").read_text() == STUB
+
+
+def test_release_notes_cannot_pose_as_an_asset(tmp_path):
+    notes = 'Get "name": "Tektonix_9.9.9_amd64.AppImage", "browser_download_url": "https://evil.example/x"'
+    r, home = _run(tmp_path, _release(tmp_path, compact=True, notes=notes))
+    assert r.returncode == 0, r.stderr
+    assert (home / ".local/share/io.tektonix.desktop/Tektonix.AppImage").read_text() == STUB

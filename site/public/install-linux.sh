@@ -50,10 +50,16 @@ say "Looking up the release..."
 JSON="$(curl -fsSL -H 'Accept: application/vnd.github+json' "$RELEASE_URL")" \
     || die "could not read the release from GitHub${VERSION:+ ($VERSION)}"
 
-# The AppImage's download URL and digest, from the release's asset list. The
-# asset fields come one per line; "name" opens each asset, and only assets
-# carry "digest" and "browser_download_url".
-FOUND="$(printf '%s\n' "$JSON" | awk '
+# The AppImage's download URL and digest, from the release's asset list.
+# GitHub sends this JSON pretty-printed or on one line, depending on the
+# server that answers (one line broke the plain one-liner, 2026-10-07), so
+# the three fields are pulled out wherever they are, one per line, in order:
+# "name" opens each asset, and only assets carry "digest" and
+# "browser_download_url". Quotes inside the release notes are escaped, so
+# nothing written there can match.
+FOUND="$(printf '%s\n' "$JSON" \
+    | grep -oE '"(name|digest|browser_download_url)": *"[^"]*"' \
+    | awk '
     /"name":/ { n = $0; sub(/.*"name": *"/, "", n); sub(/".*/, "", n); cur = n }
     cur ~ /^Tektonix_[0-9A-Za-z.-]+_amd64\.AppImage$/ && /"digest":/ {
         d = $0; sub(/.*"digest": *"sha256:/, "", d); sub(/".*/, "", d); digest = d }
