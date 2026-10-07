@@ -255,6 +255,16 @@ async def get_me(user: User = Depends(auth.get_current_user)):
     return _user_public(user)
 
 
+@router.get("/api/auth/admin-check", status_code=204)
+async def admin_check(user: User = Depends(auth.require_full_auth)):
+    """204 for a signed-in admin, 401 or 403 otherwise, and nothing more.
+    For a reverse proxy's auth_request in front of pages the agent does not
+    serve itself (an operator's own report, say), so they share the
+    dashboard's sign-in instead of a password of their own."""
+    auth.require_admin(user)
+    return Response(status_code=204)
+
+
 @router.post("/api/auth/change-password")
 async def change_password_endpoint(request: Request, req: ChangePasswordRequest, user: User = Depends(auth.get_current_user)):
     rate_limit.check_rate_limit(request, "password-recheck")

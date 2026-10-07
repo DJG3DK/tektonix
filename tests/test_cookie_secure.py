@@ -34,3 +34,23 @@ def test_everything_else_stays_secure(req):
 
 def test_no_request_means_secure():
     assert cookie_secure(None) is True
+
+
+def test_the_admin_check_answers_204_for_an_admin_and_refuses_everyone_else(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    import agent.server as srv
+    from agent.auth import User, require_full_auth
+
+    def as_role(role):
+        me = User(id=1, email="a@b.co", role=role, allowed_repos=None, totp_enabled=True,
+                  must_change_password=False)
+        monkeypatch.setitem(srv.app.dependency_overrides, require_full_auth, lambda: me)
+
+    as_role("admin")
+    r = TestClient(srv.app).get("/api/auth/admin-check")
+    assert r.status_code == 204 and r.content == b""
+    as_role("user")
+    assert TestClient(srv.app).get("/api/auth/admin-check").status_code == 403
+    monkeypatch.delitem(srv.app.dependency_overrides, require_full_auth)
+    assert TestClient(srv.app).get("/api/auth/admin-check").status_code == 401
