@@ -46,10 +46,18 @@ got="$(openssl x509 -in "$work/root.pem" -noout -fingerprint -sha256 | cut -d= -
 out="$(osslsigncode verify -in "$exe" -CAfile "$work/root.pem" -TSA-CAfile "$work/root.pem" 2>&1)" \
     || { echo "$out" >&2; die "$(basename "$exe"): signature does NOT verify"; }
 echo "$out" | grep -q "^Signature verification: ok" || die "$(basename "$exe"): no valid signature"
-echo "$out" | grep -q "^Timestamp Server Signature verification: ok" || die "$(basename "$exe"): the timestamp does not verify"
+# The timestamp, checked with OpenSSL rather than by osslsigncode: 2.8 cannot
+# read the tokens Microsoft's timestamping service has written since late
+# 2026 and says "Timestamp is not available" (v0.9.2, 2026-10-07).
+osslsigncode extract-signature -pem -in "$exe" -out "$work/sig.pem" >/dev/null 2>&1 \
+    || die "$(basename "$exe"): could not read its signature"
+openssl pkcs7 -in "$work/sig.pem" -outform DER -out "$work/sig.der" \
+    || die "$(basename "$exe"): its signature is not PKCS#7"
+stamped="$(python3 "$(dirname "$0")/verify_authenticode_timestamp.py" "$work/sig.der" "$work/root.pem")" \
+    || die "$(basename "$exe"): the timestamp does not verify"
 
 signer="$(echo "$out" | grep -m1 -E '^\s+Subject: .*/CN=' | sed -E 's/.*\/CN=//')"
 if [ -n "$publisher" ] && [ "$signer" != "$publisher" ]; then
     die "$(basename "$exe"): signed by '$signer', expected '$publisher'"
 fi
-echo "$(basename "$exe"): signed by $signer, chain and timestamp verified"
+echo "$(basename "$exe"): signed by $signer, chain verified, timestamped $stamped"
