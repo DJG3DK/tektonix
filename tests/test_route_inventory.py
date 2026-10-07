@@ -211,6 +211,7 @@ EXPECTED: list[tuple[str, str, str | None]] = [
     ('GET', '/api/analytics/trace-summary', 'require_full_auth'),
     ('GET', '/api/artifacts/{repo}/{artifact_id}', 'require_full_auth'),
     ('GET', '/api/audit', 'require_full_auth'),
+    ('GET', '/api/auth/admin-check', 'require_full_auth'),
     ('GET', '/api/auth/me', 'get_current_user'),
     ('GET', '/api/auth/me/telegram', 'require_full_auth'),
     ('GET', '/api/auth/passkeys', 'require_full_auth'),

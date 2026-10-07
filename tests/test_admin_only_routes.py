@@ -54,6 +54,7 @@ ADMIN_ONLY = [
     ('DELETE', '/api/projects/{name}/deploy-key'),
     ('GET', '/_review/{path:path}'),
     ('GET', '/api/analytics'),
+    ('GET', '/api/auth/admin-check'),
     ('GET', '/api/analytics/benchmarks'),
     ('GET', '/api/analytics/models'),
     ('GET', '/api/analytics/tool-reliability'),
