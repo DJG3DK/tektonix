@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.9.3 — a clean release
+
+A small one. Nothing changes in the apps.
+
+- The release's last check, the one that verifies the Windows installer's
+  signature, couldn't read the newer timestamps Microsoft now issues and
+  failed v0.9.2 even though its installer was signed correctly. It checks
+  them with OpenSSL now.
+- `/api/auth/admin-check` answers yes only for a signed-in admin, so your own
+  pages can sit behind the dashboard's sign-in through nginx.
+
 ## v0.9.2 — Tektonix on Linux
 
 The desktop app runs on Linux now, and a few things got easier everywhere.
